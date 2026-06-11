@@ -281,7 +281,7 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
         [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint), nameof(ProductionEventIntelligence.MoonInterference), nameof(ProductionEventIntelligence.MoonIlluminationPercent)],
         "urgent, wonder-led, practical, concise",
         ["Peak Night", "Midnight–Pre-dawn", "Low Moon", "Look East to Overhead"],
-        ["Venus", "Jupiter", "conjunction", "planet pairing", "object pairing"],
+        ["Venus", "Jupiter", "conjunction", "planet pairing", "look west", "after sunset"],
         ["Use bestViewingWindowLocal instead of a daytime localPeakTime.", "Mention no telescope needed.", "Mention dark sky and moon interference."]);
 
     public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
@@ -488,7 +488,7 @@ public sealed class GenericAstronomyEventStrategy : MediaEventStrategyBase
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "What", "When", "Where", "How", "CTA"], ["Intro", "Event context", "Best time", "Sky direction", "Viewing guide", "Scientific context", "Reminder", "CTA"], ["cinematic night sky", "local horizon", "clean astronomy labels"], [nameof(ProductionEventIntelligence.LocalPeakTime)], "clear, factual, viewer-first", ["Sky Event", "Watch Time", "Look Up"], [], ["Avoid generic-only output; use event title, objects, timing, and direction."]);
 }
 
-public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStrategyResolver sceneValidationStrategyResolver) : IProductionPipelineQualityValidator
+public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStrategyResolver sceneValidationStrategyResolver, IMediaEventStrategyResolver mediaEventStrategyResolver) : IProductionPipelineQualityValidator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -507,7 +507,16 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     {
         var warnings = new List<string>();
         var errors = new List<string>();
-        ValidateTextQuality(intelligence, outputRoot, warnings, errors);
+        var currentRunIntelligence = await LoadCurrentRunProductionEventIntelligenceAsync(outputRoot, intelligence, cancellationToken);
+        var sourceNotes = await LoadCurrentRunSourceNotesAsync(outputRoot, cancellationToken);
+        var strategy = mediaEventStrategyResolver.Resolve(currentRunIntelligence.EventType, currentRunIntelligence.Title);
+        var strategyDefinition = strategy.BuildDefinition(currentRunIntelligence);
+
+        ValidateTextQuality(currentRunIntelligence, outputRoot, warnings, errors, strategyDefinition, sourceNotes);
+        var leakageHits = FindForbiddenLeakageHits(currentRunIntelligence, outputRoot, strategyDefinition, sourceNotes);
+        foreach (var hit in leakageHits)
+            errors.Add("Forbidden leakage detected: " + JsonSerializer.Serialize(hit, JsonOptions));
+
         foreach (var profile in new[] { "short", "long" })
         {
             var sceneRoot = Path.Combine(outputRoot, "scene-approval-v3", profile);
@@ -518,13 +527,13 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         if (!File.Exists(Path.Combine(outputRoot, "hero", "hero.png"))) errors.Add("Hero image is missing from the production plan folder.");
         foreach (var file in new[] { "landscape.png", "square.png", "portrait.png" })
             if (!File.Exists(Path.Combine(outputRoot, "thumbnails", file))) errors.Add($"Thumbnail {file} is missing from the production plan folder.");
-        await WriteValidationAsync(Path.Combine(outputRoot, "production-quality-validation-final.json"), intelligence, warnings, errors, cancellationToken);
+        await WriteValidationAsync(Path.Combine(outputRoot, "production-quality-validation-final.json"), currentRunIntelligence, warnings, errors, cancellationToken, strategy.EventType, leakageHits);
         return new(errors.Count == 0, warnings, errors);
     }
 
-    private static void ValidateTextQuality(ProductionEventIntelligence intelligence, string root, List<string> warnings, List<string> errors)
+    private static void ValidateTextQuality(ProductionEventIntelligence intelligence, string root, List<string> warnings, List<string> errors, MediaEventStrategyDefinition? strategyDefinition = null, IReadOnlyList<string>? sourceNotes = null)
     {
-        var text = ReadAllText(root);
+        var text = strategyDefinition is null ? ReadAllText(root) : ReadFinalValidationText(root);
         if (string.IsNullOrWhiteSpace(text))
         {
             warnings.Add($"No readable production text was found under {root} yet.");
@@ -532,9 +541,192 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         }
         if (!ContainsToken(text, intelligence.ShortTitle) && !ContainsToken(text, intelligence.Title)) errors.Add("Output does not mention the event title or short title.");
         if (!HasBestViewingWindowEvidence(intelligence, text)) errors.Add("Output does not use bestViewingWindowLocal.");
-        foreach (var forbidden in intelligence.ForbiddenTerms.Where(f => !string.IsNullOrWhiteSpace(f)))
-            if (ContainsToken(text, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
+        if (strategyDefinition is null)
+        {
+            foreach (var forbidden in intelligence.ForbiddenTerms.Where(f => !string.IsNullOrWhiteSpace(f)))
+                if (ContainsToken(text, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
+        }
     }
+
+    private static async Task<ProductionEventIntelligence> LoadCurrentRunProductionEventIntelligenceAsync(string outputRoot, ProductionEventIntelligence fallback, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json");
+        if (!File.Exists(path)) return fallback;
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<ProductionEventIntelligence>(stream, JsonOptions, cancellationToken) ?? fallback;
+    }
+
+    private static async Task<IReadOnlyList<string>> LoadCurrentRunSourceNotesAsync(string outputRoot, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputRoot, "plan-input", "content-plan-production-request.json");
+        if (!File.Exists(path)) return [];
+        await using var stream = File.OpenRead(path);
+        var request = await JsonSerializer.DeserializeAsync<ContentPlanProductionPipelineRequest>(stream, JsonOptions, cancellationToken);
+        return request?.SourceNotes ?? [];
+    }
+
+    private static IReadOnlyList<string> ResolveForbiddenTermsForFinalValidation(ProductionEventIntelligence intelligence, MediaEventStrategyDefinition strategyDefinition, IReadOnlyList<string> sourceNotes)
+    {
+        var candidateTerms = strategyDefinition.ForbiddenUnrelatedObjects
+            .Concat(intelligence.ForbiddenTerms)
+            .Concat(intelligence.ForbiddenObjectNames ?? [])
+            .Where(term => !string.IsNullOrWhiteSpace(term))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        var allowedEvidence = intelligence.PrimaryObjects
+            .Concat(intelligence.SecondaryObjects)
+            .Concat(sourceNotes)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToArray();
+
+        return candidateTerms
+            .Where(term => !allowedEvidence.Any(evidence => ContainsToken(evidence, term)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ForbiddenLeakageHit> FindForbiddenLeakageHits(ProductionEventIntelligence intelligence, string outputRoot, MediaEventStrategyDefinition strategyDefinition, IReadOnlyList<string> sourceNotes)
+    {
+        var forbiddenTerms = ResolveForbiddenTermsForFinalValidation(intelligence, strategyDefinition, sourceNotes);
+        if (forbiddenTerms.Count == 0) return [];
+
+        var hits = new List<ForbiddenLeakageHit>();
+        foreach (var file in EnumerateFinalValidationScanFiles(outputRoot))
+        {
+            var text = File.ReadAllText(file);
+            foreach (var term in forbiddenTerms)
+            {
+                foreach (var hit in FindTermHits(file, text, term))
+                    hits.Add(hit);
+            }
+        }
+
+        return hits
+            .GroupBy(hit => $"{hit.Term.ToLowerInvariant()}|{Path.GetFullPath(hit.File).ToLowerInvariant()}|{hit.Field}|{hit.Snippet}", StringComparer.Ordinal)
+            .Select(group => group.First())
+            .OrderBy(hit => hit.File, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(hit => hit.Term, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IEnumerable<string> EnumerateFinalValidationScanFiles(string outputRoot)
+    {
+        if (!Directory.Exists(outputRoot)) return [];
+        var includedRoots = new[]
+        {
+            Path.Combine(outputRoot, "plan-input"),
+            Path.Combine(outputRoot, "question-engine"),
+            Path.Combine(outputRoot, "scene-approval-v3"),
+            Path.Combine(outputRoot, "hero"),
+            Path.Combine(outputRoot, "thumbnails"),
+            Path.Combine(outputRoot, "narration"),
+            Path.Combine(outputRoot, "tts"),
+            Path.Combine(outputRoot, "video-assembly"),
+            Path.Combine(outputRoot, "validation")
+        };
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".json", ".txt", ".md", ".srt", ".vtt", ".csv" };
+        return includedRoots
+            .Where(Directory.Exists)
+            .SelectMany(root => Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
+            .Where(path => extensions.Contains(Path.GetExtension(path)))
+            .Where(IsFinalValidationScanFile)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsFinalValidationScanFile(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (fileName.Equals("production-quality-validation-final.json", StringComparison.OrdinalIgnoreCase)) return false;
+        if (fileName.Equals("phase-manifest.json", StringComparison.OrdinalIgnoreCase)) return false;
+        if (Regex.IsMatch(fileName, @"^phase-\d{2}-validation\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return false;
+        if (fileName.Contains("fallback-template", StringComparison.OrdinalIgnoreCase)) return false;
+        if (fileName.Contains("cached", StringComparison.OrdinalIgnoreCase)) return false;
+        if (path.Contains($"{Path.DirectorySeparatorChar}cache{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)) return false;
+        if (path.Contains($"{Path.DirectorySeparatorChar}fallback-templates{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    private static IEnumerable<ForbiddenLeakageHit> FindTermHits(string file, string text, string term)
+    {
+        if (string.IsNullOrWhiteSpace(text)) yield break;
+        using var doc = TryParseJson(text);
+        if (doc is not null)
+        {
+            foreach (var hit in FindJsonTermHits(file, doc.RootElement, "$", term))
+                yield return hit;
+            yield break;
+        }
+
+        foreach (Match match in TokenMatches(text, term))
+            yield return new ForbiddenLeakageHit(term, NormalizePath(file), "text", BuildSnippet(text, match.Index, match.Length));
+    }
+
+    private static JsonDocument? TryParseJson(string text)
+    {
+        try { return JsonDocument.Parse(text); }
+        catch (JsonException) { return null; }
+    }
+
+    private static IEnumerable<ForbiddenLeakageHit> FindJsonTermHits(string file, JsonElement element, string field, string term)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (IsForbiddenLeakageMetadataField(property.Name)) continue;
+                    var childField = field == "$" ? property.Name : $"{field}.{property.Name}";
+                    foreach (var hit in FindJsonTermHits(file, property.Value, childField, term))
+                        yield return hit;
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    foreach (var hit in FindJsonTermHits(file, item, $"{field}[{index}]", term))
+                        yield return hit;
+                    index++;
+                }
+                break;
+            case JsonValueKind.String:
+                var value = element.GetString() ?? string.Empty;
+                foreach (Match match in TokenMatches(value, term))
+                    yield return new ForbiddenLeakageHit(term, NormalizePath(file), field, BuildSnippet(value, match.Index, match.Length));
+                break;
+        }
+    }
+
+    private static bool IsForbiddenLeakageMetadataField(string propertyName)
+        => propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenObjectNames", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenUnrelatedObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("validationRules", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenLeakageHits", StringComparison.OrdinalIgnoreCase);
+
+    private static MatchCollection TokenMatches(string haystack, string needle)
+    {
+        var trimmed = needle.Trim();
+        var escaped = Regex.Escape(trimmed);
+        escaped = Regex.Replace(escaped, @"\s+", @"\s+");
+        var startsWithToken = char.IsLetterOrDigit(trimmed[0]) || trimmed[0] == '_';
+        var endsWithToken = char.IsLetterOrDigit(trimmed[^1]) || trimmed[^1] == '_';
+        var pattern = $"{(startsWithToken ? @"(?<![\p{L}\p{N}_])" : string.Empty)}{escaped}{(endsWithToken ? @"(?![\p{L}\p{N}_])" : string.Empty)}";
+        return Regex.Matches(haystack, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string BuildSnippet(string text, int index, int length)
+    {
+        const int context = 60;
+        var start = Math.Max(0, index - context);
+        var end = Math.Min(text.Length, index + length + context);
+        var snippet = text[start..end].Replace("\r", " ").Replace("\n", " ");
+        snippet = Regex.Replace(snippet, @"\s+", " ").Trim();
+        return (start > 0 ? "…" : string.Empty) + snippet + (end < text.Length ? "…" : string.Empty);
+    }
+
+    private sealed record ForbiddenLeakageHit(string Term, string File, string Field, string Snippet);
 
     private static void ValidateScenePlan(ProductionEventIntelligence intelligence, string eventWorkingRoot, List<string> warnings, List<string> errors)
     {
@@ -703,6 +895,11 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     private static bool ContainsAnyToken(string haystack, params string[] needles)
         => needles.Any(needle => ContainsToken(haystack, needle));
 
+    private static string ReadFinalValidationText(string root)
+        => Directory.Exists(root)
+            ? string.Join('\n', EnumerateFinalValidationScanFiles(root).Take(300).Select(File.ReadAllText))
+            : string.Empty;
+
     private static string ReadAllText(string root)
     {
         if (!Directory.Exists(root)) return string.Empty;
@@ -720,6 +917,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var fileName = Path.GetFileName(path);
         if (fileName.Contains("validation", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Equals("phase-manifest.json", StringComparison.OrdinalIgnoreCase)) return false;
+        if (Regex.IsMatch(fileName, @"^phase-\d{2}-validation\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return false;
         if (fileName.Equals("production-quality-validation-before-assembly.json", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Equals("production-quality-validation-final.json", StringComparison.OrdinalIgnoreCase)) return false;
         return true;
@@ -739,9 +937,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         return Regex.IsMatch(haystack, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken)
+    private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken, string? strategyId = null, IReadOnlyList<ForbiddenLeakageHit>? forbiddenLeakageHits = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { generatedUtc = DateTimeOffset.UtcNow, intelligence.Title, intelligence.EventType, isValid = errors.Count == 0, warnings, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { generatedUtc = DateTimeOffset.UtcNow, intelligence.Title, intelligence.EventType, strategyId = strategyId ?? intelligence.StrategyId, isValid = errors.Count == 0, warnings, errors, forbiddenLeakageHits = forbiddenLeakageHits ?? [] }, JsonOptions), cancellationToken);
     }
 }

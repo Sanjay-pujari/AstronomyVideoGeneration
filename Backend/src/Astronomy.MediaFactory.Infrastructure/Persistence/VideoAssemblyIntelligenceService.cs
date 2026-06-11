@@ -1175,22 +1175,23 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private async Task<VideoTtsAudioValidationDto> ValidateMp3AudioAsync(string audioPath, bool enforceNonSilent, CancellationToken cancellationToken)
     {
         if (!File.Exists(audioPath))
-            return new VideoTtsAudioValidationDto(true, -120, -120, false);
+            return new VideoTtsAudioValidationDto(true, -120, -120, false, 0, 0);
 
-        if (new FileInfo(audioPath).Length < MinimumMp3FileSizeBytes)
-            return new VideoTtsAudioValidationDto(true, -120, -120, false);
+        var fileSizeBytes = new FileInfo(audioPath).Length;
+        if (fileSizeBytes < MinimumMp3FileSizeBytes)
+            return new VideoTtsAudioValidationDto(true, -120, -120, false, 0, fileSizeBytes);
 
         var duration = await ProbeDurationSecondsAsync(audioPath, cancellationToken);
         if (duration <= 0)
-            return new VideoTtsAudioValidationDto(true, -120, -120, false);
+            return new VideoTtsAudioValidationDto(true, -120, -120, false, 0, fileSizeBytes);
 
         var (peakDb, rmsDb) = await ProbeAudioLevelsAsync(audioPath, cancellationToken);
         var isSilent = double.IsNegativeInfinity(peakDb)
             || double.IsNegativeInfinity(rmsDb)
             || peakDb < SilencePeakThresholdDb
             || rmsDb < SilenceRmsThresholdDb;
-        var passed = !isSilent;
-        return new VideoTtsAudioValidationDto(isSilent, RoundDb(peakDb), RoundDb(rmsDb), passed);
+        var passed = enforceNonSilent ? !isSilent : true;
+        return new VideoTtsAudioValidationDto(isSilent, RoundDb(peakDb), RoundDb(rmsDb), passed, Math.Round(duration, 3, MidpointRounding.AwayFromZero), fileSizeBytes);
     }
 
     private async Task<double> ProbeDurationSecondsAsync(string audioPath, CancellationToken cancellationToken)

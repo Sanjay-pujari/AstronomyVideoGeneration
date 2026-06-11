@@ -248,7 +248,9 @@ public sealed record VideoTtsAudioValidationDto(
     bool IsSilentAudio,
     double AudioPeakDb,
     double AudioRmsDb,
-    bool AudioValidationPassed = true);
+    bool AudioValidationPassed = true,
+    double AudioDurationSeconds = 0,
+    long AudioFileSizeBytes = 0);
 
 public sealed record VideoTtsSceneTimingDto(
     string SceneKey,

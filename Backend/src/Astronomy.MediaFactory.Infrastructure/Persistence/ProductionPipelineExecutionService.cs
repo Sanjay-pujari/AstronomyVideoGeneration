@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
@@ -352,11 +354,177 @@ public sealed class ProductionPipelineExecutionService(
     {
         var response = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Tts" : "LongFormTts"), cancellationToken);
         var outputs = new List<string>(response.GeneratedFiles);
+        var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
         var source = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-tts-audio.mp3") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-tts-audio.mp3");
-        var target = Path.Combine(context.ExecutionContext.TtsRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.mp3");
+        var target = Path.Combine(context.ExecutionContext.TtsRoot!, profileFolder, "narration.mp3");
         CopyFile(source, target, outputs);
-        return outputs;
+
+        var timingsPath = profile == ScenePresentationProfile.ShortForm
+            ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-tts-timings.json")
+            : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-tts-timings.json");
+        var scriptPath = profile == ScenePresentationProfile.ShortForm
+            ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-narration-script.json")
+            : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-narration-script.json");
+        var reportPath = Path.Combine(context.ExecutionContext.TtsRoot!, profileFolder, "tts-validation-report.json");
+        var report = await ValidateTtsOutputAsync(target, scriptPath, timingsPath, reportPath, profile, cancellationToken);
+        outputs.Add(reportPath);
+
+        if (!report.IsValid)
+            throw new InvalidOperationException($"{profile} TTS validation failed: " + string.Join("; ", report.Errors));
+
+        return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
+
+    private async Task<TtsValidationReport> ValidateTtsOutputAsync(string audioPath, string scriptPath, string timingsPath, string reportPath, ScenePresentationProfile profile, CancellationToken cancellationToken)
+    {
+        const long minimumAudioFileSizeBytes = 1024;
+        const double silencePeakThresholdDb = -55.0;
+        const double silenceRmsThresholdDb = -60.0;
+
+        var errors = new List<string>();
+        var normalizedAudioPath = NormalizePath(audioPath);
+        var fileSizeBytes = File.Exists(audioPath) ? new FileInfo(audioPath).Length : 0;
+        var durationSeconds = File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : 0;
+        var (peakDb, rmsDb) = File.Exists(audioPath) && fileSizeBytes >= minimumAudioFileSizeBytes && durationSeconds > 0
+            ? await ProbeAudioLevelsAsync(audioPath, cancellationToken)
+            : (-120d, -120d);
+        var isSilent = peakDb <= silencePeakThresholdDb || rmsDb <= silenceRmsThresholdDb;
+
+        if (!File.Exists(audioPath)) errors.Add($"Audio file is missing: {normalizedAudioPath}.");
+        if (fileSizeBytes <= minimumAudioFileSizeBytes) errors.Add($"Audio file size {fileSizeBytes} bytes is at or below minimum threshold {minimumAudioFileSizeBytes} bytes.");
+        if (durationSeconds <= 0) errors.Add("Audio duration must be greater than 0 seconds.");
+        if (isSilent) errors.Add($"Audio is silent or below threshold: peakDb={RoundDb(peakDb)}, rmsDb={RoundDb(rmsDb)}.");
+
+        var narrationText = File.Exists(scriptPath) ? ExtractNarrationText(await File.ReadAllTextAsync(scriptPath, cancellationToken)) : string.Empty;
+        if (string.IsNullOrWhiteSpace(narrationText)) errors.Add($"Narration text is empty or missing: {NormalizePath(scriptPath)}.");
+
+        var timingIssue = string.Empty;
+        var usableSegments = File.Exists(timingsPath) && HasUsableTtsTimingSegments(await File.ReadAllTextAsync(timingsPath, cancellationToken), profile, out timingIssue);
+        if (!usableSegments) errors.Add($"TTS timing JSON has no usable segments: {NormalizePath(timingsPath)}{(string.IsNullOrWhiteSpace(timingIssue) ? string.Empty : " (" + timingIssue + ")")}.");
+
+        var report = new TtsValidationReport(
+            AudioPath: normalizedAudioPath,
+            DurationSeconds: Math.Round(durationSeconds, 3, MidpointRounding.AwayFromZero),
+            FileSizeBytes: fileSizeBytes,
+            PeakDb: RoundDb(peakDb),
+            RmsDb: RoundDb(rmsDb),
+            IsSilent: isSilent,
+            IsValid: errors.Count == 0,
+            NarrationTextPresent: !string.IsNullOrWhiteSpace(narrationText),
+            TimingSegmentsUsable: usableSegments,
+            Errors: errors);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
+        await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+        return report;
+    }
+
+    private async Task<double> ProbeAudioDurationSecondsAsync(string audioPath, CancellationToken cancellationToken)
+    {
+        var ffprobePath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfprobePath) ? "ffprobe" : renderingOptions.Value.FfprobePath;
+        var result = await RunProcessAsync(ffprobePath, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audioPath], cancellationToken);
+        return result.ExitCode == 0 && double.TryParse(result.Output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration) ? duration : 0;
+    }
+
+    private async Task<(double PeakDb, double RmsDb)> ProbeAudioLevelsAsync(string audioPath, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, ["-hide_banner", "-i", audioPath, "-af", "astats=metadata=1:reset=0", "-f", "null", "-"], cancellationToken);
+        var output = result.Output + "\n" + result.Error;
+        return (ParseLastDbValue(output, "Peak level dB"), ParseLastDbValue(output, "RMS level dB"));
+    }
+
+    private static bool HasUsableTtsTimingSegments(string json, ScenePresentationProfile profile, out string issue)
+    {
+        issue = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var propertyName = profile == ScenePresentationProfile.LongForm && root.TryGetProperty("sectionTimings", out _) ? "sectionTimings" : "sceneTimings";
+            if (!root.TryGetProperty(propertyName, out var segments) || segments.ValueKind != JsonValueKind.Array)
+            {
+                issue = $"missing {propertyName} array";
+                return false;
+            }
+
+            var usable = 0;
+            foreach (var segment in segments.EnumerateArray())
+            {
+                if (!segment.TryGetProperty("startSeconds", out var start) || !segment.TryGetProperty("endSeconds", out var end)) continue;
+                if (!start.TryGetDouble(out var startSeconds) || !end.TryGetDouble(out var endSeconds)) continue;
+                if (endSeconds > startSeconds) usable++;
+            }
+
+            if (usable == 0) issue = $"{propertyName} contains no positive-duration entries";
+            return usable > 0;
+        }
+        catch (JsonException ex)
+        {
+            issue = ex.Message;
+            return false;
+        }
+    }
+
+    private static async Task<ProcessResult> RunProcessAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+            foreach (var argument in arguments)
+                startInfo.ArgumentList.Add(argument);
+
+            using var process = Process.Start(startInfo);
+            if (process is null) return new ProcessResult(-1, string.Empty, string.Empty);
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            return new ProcessResult(process.ExitCode, await outputTask, await errorTask);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new ProcessResult(-1, string.Empty, string.Empty);
+        }
+    }
+
+    private static double ParseLastDbValue(string output, string label)
+    {
+        var value = double.NegativeInfinity;
+        foreach (var line in output.Split('\n'))
+        {
+            var index = line.IndexOf(label, StringComparison.OrdinalIgnoreCase);
+            if (index < 0) continue;
+            var colon = line.IndexOf(':', index);
+            if (colon < 0) continue;
+            var raw = line[(colon + 1)..].Trim();
+            if (raw.Equals("-inf", StringComparison.OrdinalIgnoreCase)) value = double.NegativeInfinity;
+            else if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) value = parsed;
+        }
+        return value;
+    }
+
+    private static double RoundDb(double value)
+        => double.IsNegativeInfinity(value) || double.IsNaN(value) ? -120 : double.IsPositiveInfinity(value) ? 0 : Math.Round(value, 3, MidpointRounding.AwayFromZero);
+
+    private sealed record TtsValidationReport(
+        string AudioPath,
+        double DurationSeconds,
+        long FileSizeBytes,
+        double PeakDb,
+        double RmsDb,
+        bool IsSilent,
+        bool IsValid,
+        bool NarrationTextPresent,
+        bool TimingSegmentsUsable,
+        IReadOnlyList<string> Errors);
+
+    private sealed record ProcessResult(int ExitCode, string Output, string Error);
 
     private async Task<IReadOnlyList<string>> PhaseAssembleVideoAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
@@ -389,7 +557,7 @@ public sealed class ProductionPipelineExecutionService(
             DryRun = false,
             OverwriteExisting = context.OverwriteExisting,
             OutputMode = profile == ScenePresentationProfile.ShortForm ? "ShortFormOnly" : "LongFormOnly",
-            AllowSyntheticSilentTts = true,
+            AllowSyntheticSilentTts = false,
             ShortForm = new VideoAssemblyFormRequest { Enabled = profile == ScenePresentationProfile.ShortForm, Platform = "YouTubeShort", ScenePresentationProfile = ScenePresentationProfile.ShortForm, TargetDurationSeconds = 60, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 12, DuckMusicUnderNarration = true },
             LongForm = new VideoAssemblyFormRequest { Enabled = profile == ScenePresentationProfile.LongForm, Platform = "YouTubeLong", ScenePresentationProfile = ScenePresentationProfile.LongForm, TargetDurationSeconds = 360, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 10, DuckMusicUnderNarration = true },
             ScenePresentationProfile = profile,
