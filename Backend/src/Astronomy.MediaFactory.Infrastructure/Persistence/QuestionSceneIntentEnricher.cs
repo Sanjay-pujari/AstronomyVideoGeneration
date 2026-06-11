@@ -126,10 +126,12 @@ public sealed class QuestionSceneIntentEnricher(
 
     private static EnrichedQuestionScenePlanDto BuildEnrichedPlan(QuestionDrivenScenePlanDto sourcePlan, QuestionSceneIntentEnrichmentRequest request)
     {
+        var isMeteorShower = sourcePlan.Scenes.Any(scene => ContainsMeteorContext(scene.SourceAnswer) || ContainsMeteorContext(scene.ViewerTakeaway) || ContainsMeteorContext(scene.VisualIntent));
         var scenes = sourcePlan.Scenes.Select(scene =>
         {
-            if (!Templates.TryGetValue(scene.QuestionType, out var template))
+            if (!Templates.TryGetValue(scene.QuestionType, out var defaultTemplate))
                 throw new ArgumentException($"No scene intent enrichment template exists for questionType '{scene.QuestionType}'.");
+            var template = isMeteorShower ? BuildMeteorTemplate(scene) : defaultTemplate;
 
             return new EnrichedQuestionSceneDto(
                 scene.SceneNumber,
@@ -158,6 +160,24 @@ public sealed class QuestionSceneIntentEnricher(
             true,
             DateTimeOffset.UtcNow);
     }
+
+    private static IntentTemplate BuildMeteorTemplate(QuestionDrivenSceneDto scene)
+    {
+        var answer = Clean(scene.SourceAnswer);
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the Geminids peak-night alert.", "Create urgency for the Geminids meteor shower peak night.", "Show Geminids meteor streaks radiating from Gemini over a dark Udaipur night sky.", "Generate a cinematic dark night sky over Udaipur with meteor streaks and a subtle Gemini radiant hint.", "Use event title and peak-night cue, not generic Rare Event text.", "Muted viewers should know this is the Geminids meteor shower peak."),
+            AstronomyQuestionTypes.Where => new("Know where to look for meteors.", "Orient viewers to east-to-overhead dark open sky viewing.", "Show east-to-overhead sky direction with dark open-sky context and Gemini radiant hint.", "Generate a dark open sky over Udaipur with east-to-overhead direction cue, meteor streaks, and subtle constellation guide.", "Use East to overhead and dark sky cues.", "Muted viewers should understand where to look."),
+            AstronomyQuestionTypes.When => new("Know the midnight-to-pre-dawn viewing window.", "Explain the best local night window, not daytime peak time.", "Show midnight to pre-dawn timeline with dark sky and meteor activity.", "Generate a night timing visual with meteor streaks and the 00:00–05:00 IST viewing window.", "Show 2026-12-14 00:00–05:00 IST.", "Muted viewers should know when to watch."),
+            AstronomyQuestionTypes.How => new("Know how to observe without equipment.", "Give simple meteor-shower watching steps.", "Show a viewer under dark sky, no telescope, avoiding city lights, eyes adapting.", "Generate an observer-friendly meteor shower scene with dark sky, no telescope, and low light pollution.", "Use no telescope, dark location, eyes 20 minutes.", "Muted viewers should know how to watch."),
+            AstronomyQuestionTypes.Why => new("Understand why Geminids are worth seeing.", "Explain strong annual shower and low moon interference.", "Show abundant Geminids meteor streaks with a low-moon-interference quality cue.", "Generate a premium editorial meteor shower sky with many streaks, Gemini radiant hint, and low moon interference mood.", "Use strongest annual shower and low moon interference.", "Muted viewers should know why it matters."),
+            AstronomyQuestionTypes.Action => new("Know the next action.", "Close with save-date reminder and weather/dark-location checklist.", "Show a save-date reminder mood for Dec 13/14 under a meteor-filled Udaipur sky.", "Generate an inspirational Geminids meteor shower CTA image with dark night sky, meteor streaks, and Udaipur viewing context.", "Use reminder, weather check, dark location.", "Muted viewers should save the Dec 13/14 night."),
+            _ => new("Understand the meteor shower.", "Support the meteor shower viewing plan.", $"Show meteor shower visuals based on: {answer}", "Generate a dark night meteor shower scene with streaks and constellation context.", "Use concise meteor-specific overlay text.", "Muted viewers should understand the meteor shower scene.")
+        };
+    }
+
+    private static bool ContainsMeteorContext(string? value)
+        => !string.IsNullOrWhiteSpace(value) && (value.Contains("meteor", StringComparison.OrdinalIgnoreCase) || value.Contains("Geminids", StringComparison.OrdinalIgnoreCase) || value.Contains("radiant", StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<string> ValidateEnrichedPlan(EnrichedQuestionScenePlanDto plan)
     {
