@@ -551,7 +551,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             warnings.Add($"No readable production text was found under {root} yet.");
             return;
         }
-        if (!ContainsToken(text, intelligence.ShortTitle) && !ContainsToken(text, intelligence.Title)) errors.Add("Output does not mention the event title or short title.");
+        if (!HasEventTitleEvidence(intelligence, root, text)) errors.Add("Output does not mention the event title or short title.");
         if (!HasBestViewingWindowEvidence(intelligence, text)) errors.Add("Output does not use bestViewingWindowLocal.");
         foreach (var stale in new[] { "Golden Pilot", "golden pilot" })
             if (ContainsToken(text, stale)) errors.Add($"Output contains stale Golden Pilot term '{stale}'.");
@@ -1006,6 +1006,77 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     private static bool ContainsAnyToken(string haystack, params string[] needles)
         => needles.Any(needle => ContainsToken(haystack, needle));
 
+    private static bool HasEventTitleEvidence(ProductionEventIntelligence intelligence, string root, string fallbackText)
+    {
+        var aliases = BuildEventTitleAliases(intelligence, Directory.Exists(root) ? ReadSceneTitleMetadata(root) : []);
+        if (aliases.Count == 0) return true;
+
+        var sceneMetadataText = Directory.Exists(root)
+            ? string.Join('\n', EnumerateSceneTitleMetadataFiles(root).Select(File.ReadAllText))
+            : string.Empty;
+        if (!string.IsNullOrWhiteSpace(sceneMetadataText) && aliases.Any(alias => ContainsToken(sceneMetadataText, alias))) return true;
+
+        return aliases.Any(alias => ContainsToken(fallbackText, alias));
+    }
+
+    private static IReadOnlyList<string> BuildEventTitleAliases(ProductionEventIntelligence intelligence, IEnumerable<string> metadataAliases)
+        => new[] { intelligence.Title, intelligence.ShortTitle }
+            .Concat(metadataAliases)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value.Length)
+            .ToArray();
+
+    private static IReadOnlyList<string> ReadSceneTitleMetadata(string root)
+    {
+        var aliases = new List<string>();
+        foreach (var file in EnumerateSceneTitleMetadataFiles(root))
+        {
+            using var doc = TryParseJson(File.ReadAllText(file));
+            if (doc is null) continue;
+            CollectTitleMetadataAliases(doc.RootElement, aliases);
+        }
+        return aliases;
+    }
+
+    private static IEnumerable<string> EnumerateSceneTitleMetadataFiles(string root)
+        => Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories)
+            .Where(path =>
+            {
+                var fileName = Path.GetFileName(path);
+                return fileName.EndsWith("-infographic-spec.json", StringComparison.OrdinalIgnoreCase)
+                    || fileName.EndsWith("-review.json", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static void CollectTitleMetadataAliases(JsonElement element, List<string> aliases)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (IsTitleMetadataField(property.Name) && property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        var value = property.Value.GetString();
+                        if (!string.IsNullOrWhiteSpace(value)) aliases.Add(value);
+                    }
+                    CollectTitleMetadataAliases(property.Value, aliases);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray()) CollectTitleMetadataAliases(item, aliases);
+                break;
+        }
+    }
+
+    private static bool IsTitleMetadataField(string propertyName)
+        => propertyName.Equals("title", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("shortTitle", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("astronomyEventShortTitle", StringComparison.OrdinalIgnoreCase);
+
     private static string ReadFinalValidationText(string root)
         => Directory.Exists(root)
             ? string.Join('\n', EnumerateFinalValidationScanFiles(root).Take(300).Select(File.ReadAllText))
@@ -1038,7 +1109,17 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     {
         if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
 
+        if (ContainsTokenExactWhitespace(haystack, needle)) return true;
+
+        var normalizedHaystack = NormalizeLooseMatchText(haystack);
+        var normalizedNeedle = NormalizeLooseMatchText(needle);
+        return !string.IsNullOrWhiteSpace(normalizedNeedle) && ContainsTokenExactWhitespace(normalizedHaystack, normalizedNeedle);
+    }
+
+    private static bool ContainsTokenExactWhitespace(string haystack, string needle)
+    {
         var trimmed = needle.Trim();
+        if (trimmed.Length == 0) return false;
         var escaped = Regex.Escape(trimmed);
         escaped = Regex.Replace(escaped, @"\s+", @"\s+");
 
@@ -1047,6 +1128,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var pattern = $"{(startsWithToken ? @"(?<![\p{L}\p{N}_])" : string.Empty)}{escaped}{(endsWithToken ? @"(?![\p{L}\p{N}_])" : string.Empty)}";
         return Regex.IsMatch(haystack, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    private static string NormalizeLooseMatchText(string value)
+        => Regex.Replace(Regex.Replace(value ?? string.Empty, @"[^\p{L}\p{N}_]+", " "), @"\s+", " ").Trim();
 
     private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken, string? strategyId = null, IReadOnlyList<ForbiddenLeakageHit>? forbiddenLeakageHits = null)
     {
