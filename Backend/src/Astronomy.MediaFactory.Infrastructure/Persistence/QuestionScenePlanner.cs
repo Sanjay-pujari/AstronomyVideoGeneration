@@ -277,6 +277,13 @@ public sealed class QuestionScenePlanner(
     private static bool StartsWithAny(string text, params string[] terms)
         => terms.Any(term => text.StartsWith(term, StringComparison.OrdinalIgnoreCase));
 
+    private static bool TokenContains(string text, string term)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(term)) return false;
+        var escaped = Regex.Escape(term.Trim()).Replace("\\ ", @"\s+");
+        return Regex.IsMatch(text, $@"(?<![\p{{L}}\p{{N}}_]){escaped}(?![\p{{L}}\p{{N}}_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
     private static bool TryMatchForbiddenTerm(string answerText, out string forbiddenTerm, out string matchedText)
     {
         var guidMatch = GuidPattern.Match(answerText);
