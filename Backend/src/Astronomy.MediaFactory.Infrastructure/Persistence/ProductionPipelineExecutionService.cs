@@ -357,7 +357,6 @@ public sealed class ProductionPipelineExecutionService(
         var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
         var source = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-tts-audio.mp3") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-tts-audio.mp3");
         var target = Path.Combine(context.ExecutionContext.TtsRoot!, profileFolder, "narration.mp3");
-        CopyFile(source, target, outputs);
 
         var timingsPath = profile == ScenePresentationProfile.ShortForm
             ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-tts-timings.json")
@@ -366,11 +365,24 @@ public sealed class ProductionPipelineExecutionService(
             ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-narration-script.json")
             : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-narration-script.json");
         var reportPath = Path.Combine(context.ExecutionContext.TtsRoot!, profileFolder, "tts-validation-report.json");
-        var report = await ValidateTtsOutputAsync(target, scriptPath, timingsPath, reportPath, profile, cancellationToken);
+        var sourceReportPath = Path.Combine(context.ExecutionContext.TtsRoot!, profileFolder, "tts-source-validation-report.json");
+
+        var sourceReport = await ValidateTtsOutputAsync(source, scriptPath, timingsPath, sourceReportPath, profile, cancellationToken);
+        outputs.Add(sourceReportPath);
+        if (!sourceReport.IsValid)
+            throw new InvalidOperationException($"{profile} TTS validation failed before final TTS copy: " + string.Join("; ", sourceReport.Errors));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        var tempTarget = Path.Combine(Path.GetDirectoryName(target)!, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
+        File.Copy(source, tempTarget, overwrite: true);
+        var report = await ValidateTtsOutputAsync(tempTarget, scriptPath, timingsPath, reportPath, profile, cancellationToken);
         outputs.Add(reportPath);
 
         if (!report.IsValid)
             throw new InvalidOperationException($"{profile} TTS validation failed: " + string.Join("; ", report.Errors));
+
+        File.Move(tempTarget, target, overwrite: true);
+        outputs.Add(target);
 
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

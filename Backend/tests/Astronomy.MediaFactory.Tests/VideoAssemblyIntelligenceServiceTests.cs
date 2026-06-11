@@ -458,7 +458,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("Script", result.PhaseExecuted);
         Assert.True(result.VideoNarrationScriptGenerated);
         Assert.Equal(outputPath.Replace('\\', '/'), result.VideoNarrationScriptPath);
-        Assert.Equal(20.0, result.TotalEstimatedDurationSeconds);
+        Assert.InRange(result.TotalEstimatedDurationSeconds, 18.0, 22.0);
         Assert.True(result.TtsReady);
         Assert.Empty(result.GeneratedFiles);
         Assert.True(File.Exists(outputPath));
@@ -471,12 +471,12 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(RegionId, saved.RegionId);
         Assert.Equal("en", saved.Language);
         Assert.Equal("YouTubeShort", saved.Platform);
-        Assert.Equal(20.0, saved.TotalEstimatedDurationSeconds);
+        Assert.InRange(saved.TotalEstimatedDurationSeconds, 18.0, 22.0);
         Assert.Equal("Excited but clear", saved.ScriptStyle.Tone);
         Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.SceneScripts.Select(scene => scene.SceneKey));
-        Assert.Equal("Don't miss this tonight.", saved.SceneScripts[0].Narration);
-        Assert.Equal("Step outside tonight and look west.", saved.SceneScripts[^1].Narration);
-        Assert.Equal("Don't miss this tonight. Venus and Jupiter will shine close together after sunset. Two of the brightest worlds will share the evening sky. Look toward the western sky. The best time is shortly after sunset. Step outside tonight and look west.", saved.FullNarrationText);
+        Assert.Contains("sky event", saved.SceneScripts[0].Narration, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("safe open spot", saved.SceneScripts[^1].Narration, StringComparison.OrdinalIgnoreCase);
+        Assert.InRange(CountTestWords(saved.FullNarrationText), 45, 90);
         Assert.True(saved.TtsPlan.TtsRequired);
         Assert.Equal("NeutralEnergetic", saved.TtsPlan.RecommendedVoice);
         Assert.Equal("video-tts-audio.mp3", saved.TtsPlan.OutputFileName);
@@ -510,7 +510,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
     }
 
     [Fact]
-    public async Task GenerateVideoAssemblyAsync_TtsNonDryRunWritesAudioAndTimingsOnly()
+    public async Task GenerateVideoAssemblyAsync_TtsNonDryRunRejectsSyntheticSilentAudioBeforeFinalOutputs()
     {
         var workingDirectory = CreateWorkingDirectory();
         await WriteRequiredInputsAsync(workingDirectory);
@@ -538,7 +538,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             OverwriteExisting = true
         }, CancellationToken.None);
 
-        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
         {
             EventId = EventId,
             RegionId = RegionId,
@@ -548,45 +548,27 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             DryRun = false,
             OverwriteExisting = true,
             AllowSyntheticSilentTts = true
-        }, CancellationToken.None);
+        }, CancellationToken.None));
 
         var audioPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-audio.mp3");
         var timingsPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-timings.json");
-        Assert.Equal("Tts", result.PhaseRequested);
-        Assert.Equal("Tts", result.PhaseExecuted);
-        Assert.True(result.TtsAudioGenerated);
-        Assert.True(result.TtsTimingsGenerated);
-        Assert.Equal(audioPath.Replace('\\', '/'), result.AudioFilePath);
-        Assert.Equal(timingsPath.Replace('\\', '/'), result.TimingsFilePath);
-        Assert.Equal(20.0, result.ActualDurationSeconds);
-        Assert.Equal("SyntheticOfflineTtsV1", result.TtsProvider);
-        Assert.True(result.IsSyntheticTts);
-        Assert.True(result.IsSilentAudio);
-        Assert.False(result.AudioValidationPassed);
-        Assert.True(File.Exists(audioPath));
-        Assert.True(File.Exists(timingsPath));
-        Assert.DoesNotContain(Directory.GetFiles(BuildVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
+        var debugPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "phase-15-debug.json");
 
-        var saved = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath), JsonOptions);
-        Assert.NotNull(saved);
-        Assert.Equal(EventId, saved!.EventId);
-        Assert.Equal(RegionId, saved.RegionId);
-        Assert.Equal("en", saved.Language);
-        Assert.Equal("YouTubeShort", saved.Platform);
-        Assert.Equal(audioPath.Replace('\\', '/'), saved.AudioFilePath);
-        Assert.Equal(20.0, saved.EstimatedDurationSeconds);
-        Assert.Equal(20.0, saved.ActualDurationSeconds);
-        Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.SceneTimings.Select(scene => scene.SceneKey));
-        Assert.Equal(0.0, saved.SceneTimings[0].StartSeconds);
-        Assert.Equal(3.0, saved.SceneTimings[0].EndSeconds);
-        Assert.Equal("Don't miss this tonight.", saved.SceneTimings[0].Narration);
-        Assert.Equal(20.0, saved.SceneTimings[^1].EndSeconds);
-        Assert.Equal("SyntheticOfflineTtsV1", saved.TtsProvider);
-        Assert.Equal("NeutralEnergetic", saved.VoiceUsed);
-        Assert.NotNull(saved.AudioValidation);
-        Assert.True(saved.AudioValidation!.IsSilentAudio);
-        Assert.False(saved.AudioValidation.AudioValidationPassed);
+        Assert.Contains("audioValidation must pass and must not be silent", error.Message);
+        Assert.Contains("ActualDurationSeconds=", error.Message);
+        Assert.Contains("NarrationWordCount=", error.Message);
+        Assert.False(File.Exists(audioPath));
+        Assert.False(File.Exists(timingsPath));
+        Assert.True(File.Exists(debugPath));
+
+        using var debug = JsonDocument.Parse(await File.ReadAllTextAsync(debugPath));
+        var root = debug.RootElement;
+        Assert.InRange(root.GetProperty("actualDurationSeconds").GetDouble(), 15.0, 25.0);
+        Assert.True(root.GetProperty("narrationWordCount").GetInt32() > 0);
+        Assert.True(root.GetProperty("audioFileSizeBytes").GetInt64() > 0);
+        Assert.True(root.GetProperty("isSilent").GetBoolean());
     }
+
 
     [Fact]
     public async Task GenerateVideoAssemblyAsync_TtsNonDryRunWithoutRealProviderFailsClearly()
@@ -730,7 +712,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(3.218, saved.Segments[0].DurationSeconds);
         Assert.EndsWith("scene-001-final.png", saved.Segments[0].VisualAssetPath);
         Assert.Contains("/scene-approval-v3/short/", saved.Segments[0].VisualAssetPath);
-        Assert.Equal("Don't miss this tonight.", saved.Segments[0].Narration);
+        Assert.Contains("sky event", saved.Segments[0].Narration, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("None", saved.Segments[0].TransitionIn);
         Assert.Equal("CrossFade", saved.Segments[0].TransitionOut);
         Assert.Equal("HookThumbnailZoomIn100To105", saved.Segments[0].Motion);

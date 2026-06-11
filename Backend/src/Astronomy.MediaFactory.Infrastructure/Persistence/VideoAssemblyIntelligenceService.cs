@@ -51,6 +51,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const double LongFormCrossFadeDurationSeconds = 0.6;
     private const double HookOptimizationDurationSeconds = 3.218;
     private const double LongFormNarrationWordsPerMinute = 150.0;
+    private const double ShortFormTargetMinimumEstimatedDurationSeconds = 18.0;
+    private const double ShortFormTargetMaximumEstimatedDurationSeconds = 22.0;
     private const double LongFormMinimumEstimatedDurationSeconds = 120.0;
     private const double LongFormMaximumEstimatedDurationSeconds = 180.0;
     private const string SelectedOpeningHook = "TONIGHT'S SKY EVENT";
@@ -315,8 +317,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
         if (IsLongFormRequest(request))
             return await GenerateLongFormTtsAudioAsync(CloneRequest(request, "LongFormTts", ScenePresentationProfile.LongForm, request.LongForm), cancellationToken);
 
-        var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
-        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
+        var profile = ResolveRequestProfile(request);
+        var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId, profile);
+        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, profile);
 
         var syntheticTtsAllowed = request.DryRun || request.AllowSyntheticSilentTts;
 
@@ -328,44 +331,75 @@ public sealed partial class VideoAssemblyIntelligenceService(
             if (IsSyntheticProvider(existing.TtsProvider) && !syntheticTtsAllowed)
                 throw new InvalidOperationException("Real TTS provider is not configured. SyntheticOfflineTtsV1 is disabled for dryRun=false.");
 
-            var existingValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: !IsSyntheticProvider(existing.TtsProvider), cancellationToken);
-            if (!existingValidation.AudioValidationPassed && !IsSyntheticProvider(existing.TtsProvider))
+            var existingValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: true, cancellationToken);
+            if (!existingValidation.AudioValidationPassed)
                 throw new InvalidOperationException("Generated TTS audio validation failed: audio is silent or invalid.");
 
             return BuildTtsResponse(request.Phase, audioPath, timingsPath, existing.ActualDurationSeconds, [], existing.TtsProvider, IsSyntheticProvider(existing.TtsProvider), existingValidation);
         }
 
-        var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, ResolveRequestProfile(request), cancellationToken);
+        var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, profile, cancellationToken);
+        var narrationText = await ReadRequiredNarrationTextAsync(request, profile, script, cancellationToken);
+        script = script with { FullNarrationText = narrationText };
         var provider = ResolveTtsProvider(request, script);
         var actualDurationSeconds = NormalizeTtsDuration(script.TotalEstimatedDurationSeconds);
+        var narrationWordCount = CountSpokenWords(narrationText);
 
         var generatedFiles = new List<string>();
         VideoTtsAudioValidationDto audioValidation = new(false, 0, 0, request.DryRun);
+        var tempAudioPath = string.Empty;
+        var debugPath = BuildTtsDebugOutputPath(request.EventId, request.RegionId, profile);
         if (!request.DryRun)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
-            await WriteTtsAudioAsync(script.FullNarrationText, audioPath, actualDurationSeconds, provider, cancellationToken);
-            audioValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: !provider.IsSynthetic, cancellationToken);
-            var measuredDurationSeconds = await ProbeDurationSecondsAsync(audioPath, cancellationToken);
-            if (!provider.IsSynthetic && measuredDurationSeconds > 0)
-                actualDurationSeconds = Math.Round(measuredDurationSeconds, 3, MidpointRounding.AwayFromZero);
+            var tempRoot = Path.Combine(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot(), ".tts-temp", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempRoot);
+            tempAudioPath = Path.Combine(tempRoot, Path.GetFileName(audioPath));
 
-            if (!audioValidation.AudioValidationPassed && !provider.IsSynthetic)
-                throw new InvalidOperationException("Generated TTS audio validation failed: audio is silent or invalid.");
+            try
+            {
+                await WriteTtsAudioAsync(narrationText, tempAudioPath, actualDurationSeconds, provider, cancellationToken);
+                audioValidation = await ValidateMp3AudioAsync(tempAudioPath, enforceNonSilent: true, cancellationToken);
+                if (audioValidation.AudioDurationSeconds > 0)
+                    actualDurationSeconds = audioValidation.AudioDurationSeconds;
 
-            generatedFiles.Add(NormalizePath(audioPath));
+                var timings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds, provider.ProviderName, provider.VoiceUsed, audioValidation);
+                try
+                {
+                    ValidateVideoTtsTimings(timings);
+                }
+                catch (ArgumentException ex)
+                {
+                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, ex.Message, cancellationToken);
+                    throw new InvalidOperationException(BuildTtsDiagnosticFailureMessage(ex.Message, actualDurationSeconds, narrationWordCount, audioValidation, tempAudioPath), ex);
+                }
+
+                if (!audioValidation.AudioValidationPassed)
+                {
+                    const string message = "Generated TTS audio validation failed: audio is silent or invalid.";
+                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, message, cancellationToken);
+                    throw new InvalidOperationException(BuildTtsDiagnosticFailureMessage(message, actualDurationSeconds, narrationWordCount, audioValidation, tempAudioPath));
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
+                File.Copy(tempAudioPath, audioPath, overwrite: true);
+                await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
+                generatedFiles.Add(NormalizePath(audioPath));
+                generatedFiles.Add(NormalizePath(timingsPath));
+
+                TryDeleteDirectory(tempRoot);
+                return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
+            }
+            catch
+            {
+                if (!string.IsNullOrWhiteSpace(tempAudioPath) && !File.Exists(debugPath))
+                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, "TTS generation failed before final outputs were written.", cancellationToken);
+                throw;
+            }
         }
 
-        var timings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds, provider.ProviderName, provider.VoiceUsed, audioValidation);
-        ValidateVideoTtsTimings(timings);
-
-        if (!request.DryRun)
-        {
-            await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
-            generatedFiles.Add(NormalizePath(timingsPath));
-        }
-
-        return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
+        var dryRunTimings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds, provider.ProviderName, provider.VoiceUsed, audioValidation);
+        ValidateVideoTtsTimings(dryRunTimings);
+        return BuildTtsResponse(request.Phase, audioPath, timingsPath, dryRunTimings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
     }
 
 
@@ -628,6 +662,103 @@ public sealed partial class VideoAssemblyIntelligenceService(
         return script;
     }
 
+
+    private async Task<string> ReadRequiredNarrationTextAsync(VideoAssemblyGenerationRequest request, ScenePresentationProfile profile, VideoNarrationScriptDto script, CancellationToken cancellationToken)
+    {
+        var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var narrationPath = request.ProductionContext?.NarrationRoot is null
+            ? string.Empty
+            : Path.Combine(request.ProductionContext.NarrationRoot, profileFolder, "narration.txt");
+
+        var narrationText = !string.IsNullOrWhiteSpace(narrationPath) && File.Exists(narrationPath)
+            ? await File.ReadAllTextAsync(narrationPath, cancellationToken)
+            : script.FullNarrationText;
+
+        if (string.IsNullOrWhiteSpace(narrationText))
+        {
+            var source = string.IsNullOrWhiteSpace(narrationPath) ? "video narration script" : NormalizePath(narrationPath);
+            throw new ArgumentException($"Required TTS narration text is empty or missing: {source}.");
+        }
+
+        narrationText = narrationText.Trim();
+        if (profile == ScenePresentationProfile.ShortForm && EstimateSpokenDurationSeconds(narrationText) < ShortFormTargetMinimumEstimatedDurationSeconds)
+        {
+            narrationText = ExpandShortNarrationForTargetDuration(narrationText);
+            if (!string.IsNullOrWhiteSpace(narrationPath))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(narrationPath) ?? ".");
+                await File.WriteAllTextAsync(narrationPath, narrationText, cancellationToken);
+            }
+        }
+
+        return narrationText;
+    }
+
+
+    private static string ExpandShortNarrationForTargetDuration(string narrationText)
+    {
+        var expanded = narrationText.Trim();
+        var additions = new[]
+        {
+            "Keep the view simple and use the approved direction, timing, and safety notes before you step outside.",
+            "Give your eyes a moment to adjust, check local clouds, and watch from a clear open spot.",
+            "If conditions cooperate, the whole check is quick, practical, and easy to share."
+        };
+
+        foreach (var addition in additions)
+        {
+            if (EstimateSpokenDurationSeconds(expanded) >= ShortFormTargetMinimumEstimatedDurationSeconds)
+                break;
+            expanded = $"{expanded} {addition}";
+        }
+
+        return expanded;
+    }
+
+    private string BuildTtsDebugOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), "phase-15-debug.json");
+
+    private static async Task WriteTtsDebugAsync(
+        string debugPath,
+        string tempAudioPath,
+        string finalAudioPath,
+        string timingsPath,
+        double actualDurationSeconds,
+        int narrationWordCount,
+        VideoTtsAudioValidationDto audioValidation,
+        string failureReason,
+        CancellationToken cancellationToken)
+    {
+        var payload = new
+        {
+            failureReason,
+            tempAudioPath = NormalizePath(tempAudioPath),
+            finalAudioPath = NormalizePath(finalAudioPath),
+            timingsPath = NormalizePath(timingsPath),
+            actualDurationSeconds = Math.Round(actualDurationSeconds, 3, MidpointRounding.AwayFromZero),
+            narrationWordCount,
+            audioFileSizeBytes = audioValidation.AudioFileSizeBytes,
+            peakDb = audioValidation.AudioPeakDb,
+            rmsDb = audioValidation.AudioRmsDb,
+            isSilent = audioValidation.IsSilentAudio,
+            audioValidationPassed = audioValidation.AudioValidationPassed,
+            generatedUtc = DateTimeOffset.UtcNow
+        };
+
+        Directory.CreateDirectory(Path.GetDirectoryName(debugPath) ?? ".");
+        await File.WriteAllTextAsync(debugPath, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+    }
+
+    private static string BuildTtsDiagnosticFailureMessage(string failureReason, double actualDurationSeconds, int narrationWordCount, VideoTtsAudioValidationDto audioValidation, string tempAudioPath)
+        => $"{failureReason} ActualDurationSeconds={actualDurationSeconds:0.###}; NarrationWordCount={narrationWordCount}; AudioFileSizeBytes={audioValidation.AudioFileSizeBytes}; PeakDb={audioValidation.AudioPeakDb:0.###}; RmsDb={audioValidation.AudioRmsDb:0.###}; IsSilent={audioValidation.IsSilentAudio}; TempAudioPath={NormalizePath(tempAudioPath)}.";
+
+    private static void TryDeleteDirectory(string directoryPath)
+    {
+        try { if (Directory.Exists(directoryPath)) Directory.Delete(directoryPath, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
     private async Task<VideoAssemblyIntelligenceDto> EnsureRequiredScriptInputsAsync(string eventId, string regionId, ScenePresentationProfile presentationProfile, CancellationToken cancellationToken)
     {
         var videoAssemblyIntelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId, presentationProfile);
@@ -833,29 +964,92 @@ public sealed partial class VideoAssemblyIntelligenceService(
         if (string.IsNullOrWhiteSpace(objects)) objects = title;
         var direction = eventInfo?.SkyDirectionHint ?? "the approved sky direction";
         var window = eventInfo?.BestViewingWindowLocal ?? eventInfo?.LocalPeakTime ?? "the approved viewing window";
-        var sceneScripts = new[]
-        {
-            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), $"{title} is the sky event to watch.", title),
-            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), $"The event centers on {objects}, with visuals matched to the approved plan.", objects),
-            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), eventInfo?.ScientificContext ?? $"{title} is worth watching because the geometry is viewer-friendly.", "Why it matters"),
-            new VideoNarrationSceneScriptDto("Where", GetDuration(durations, "Where", 3.0), $"Look toward {direction}.", direction),
-            new VideoNarrationSceneScriptDto("When", GetDuration(durations, "When", 3.0), $"Best viewing is {window}.", window),
-            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Check clouds, choose a safe open spot, and use the approved viewing window.", "Set a reminder")
-        };
+        var sceneScripts = BuildTargetedShortFormSceneScripts(
+            durations,
+            title,
+            objects,
+            direction,
+            window,
+            eventInfo?.ScientificContext);
+        var fullNarrationText = string.Join(" ", sceneScripts.Select(scene => scene.Narration));
+        var totalEstimatedDurationSeconds = Math.Round(sceneScripts.Sum(scene => scene.DurationSeconds), 3, MidpointRounding.AwayFromZero);
 
         return new VideoNarrationScriptDto(
             request.EventId,
             request.RegionId,
             request.Language,
             request.Platform,
-            sceneScripts.Sum(scene => scene.DurationSeconds),
+            totalEstimatedDurationSeconds,
             new VideoNarrationScriptStyleDto("Excited but clear", "Fast short-form", "Neutral energetic narrator"),
             sceneScripts,
-            string.Join(" ", sceneScripts.Select(scene => scene.Narration)),
+            fullNarrationText,
             new VideoNarrationTtsPlanDto(true, "NeutralEnergetic", "video-tts-audio.mp3"),
             new VideoNarrationScriptScoresDto(96, 95, 96),
             [],
             DateTimeOffset.UtcNow);
+    }
+
+
+    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildTargetedShortFormSceneScripts(
+        IReadOnlyDictionary<string, double> durations,
+        string title,
+        string objects,
+        string direction,
+        string window,
+        string? scientificContext)
+    {
+        var sceneScripts = new[]
+        {
+            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), $"Don’t miss this sky event tonight.", title),
+            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), $"The event centers on {objects}, matched to the approved plan.", objects),
+            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), BuildShortFormWhyNarration(scientificContext), "Why it matters"),
+            new VideoNarrationSceneScriptDto("Where", GetDuration(durations, "Where", 3.0), $"Look toward {direction}.", direction),
+            new VideoNarrationSceneScriptDto("When", GetDuration(durations, "When", 3.0), $"Best viewing is {window}.", window),
+            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Check clouds, choose a safe open spot, and set a reminder.", "Set a reminder")
+        };
+
+        var estimatedDuration = EstimateSpokenDurationSeconds(string.Join(" ", sceneScripts.Select(scene => scene.Narration)));
+        if (estimatedDuration >= ShortFormTargetMinimumEstimatedDurationSeconds)
+            return NormalizeShortFormSceneDurations(sceneScripts, Math.Clamp(estimatedDuration, ShortFormTargetMinimumEstimatedDurationSeconds, ShortFormTargetMaximumEstimatedDurationSeconds));
+
+        var expanded = sceneScripts.Select(scene => scene.SceneKey switch
+        {
+            "Hook" => scene with { Narration = $"{scene.Narration} This is a quick, beginner-friendly sky check." },
+            "What" => scene with { Narration = $"{scene.Narration} Watch for the brightest approved objects rather than searching the whole sky." },
+            "Why" => scene with { Narration = $"{scene.Narration} The timing makes the view easier to notice from ordinary locations." },
+            "Where" => scene with { Narration = $"{scene.Narration} Avoid trees, buildings, and bright lights when you can." },
+            "When" => scene with { Narration = $"{scene.Narration} A few minutes early gives you time to find the direction." },
+            "Action" => scene with { Narration = $"{scene.Narration} Step outside, look up, and share the moment if the sky is clear." },
+            _ => scene
+        }).ToArray();
+
+        var expandedDuration = Math.Clamp(EstimateSpokenDurationSeconds(string.Join(" ", expanded.Select(scene => scene.Narration))), ShortFormTargetMinimumEstimatedDurationSeconds, ShortFormTargetMaximumEstimatedDurationSeconds);
+        return NormalizeShortFormSceneDurations(expanded, expandedDuration);
+    }
+
+
+    private static string BuildShortFormWhyNarration(string? scientificContext)
+    {
+        if (string.IsNullOrWhiteSpace(scientificContext))
+            return "It matters because the view is clear, timely, and easy to recognize.";
+
+        var shortened = KeepFirstTwoSentences(scientificContext.Trim());
+        return CountSpokenWords(shortened) <= 18
+            ? shortened
+            : "It matters because the view is clear, timely, and easy to recognize.";
+    }
+
+    private static IReadOnlyList<VideoNarrationSceneScriptDto> NormalizeShortFormSceneDurations(IReadOnlyList<VideoNarrationSceneScriptDto> sceneScripts, double targetDurationSeconds)
+    {
+        var estimatedDurations = sceneScripts.Select(scene => Math.Max(0.5, EstimateSpokenDurationSeconds(scene.Narration))).ToArray();
+        var total = estimatedDurations.Sum();
+        if (total <= 0)
+            return sceneScripts;
+
+        return sceneScripts.Select((scene, index) => scene with
+        {
+            DurationSeconds = Math.Round(targetDurationSeconds * estimatedDurations[index] / total, 3, MidpointRounding.AwayFromZero)
+        }).ToArray();
     }
 
     private static VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
@@ -2041,6 +2235,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException("Video TTS timings validation failed: voiceUsed is required.");
         if (timings.AudioValidation is null)
             throw new ArgumentException("Video TTS timings validation failed: audioValidation is required.");
+        if (!timings.AudioValidation.AudioValidationPassed || timings.AudioValidation.IsSilentAudio)
+            throw new ArgumentException("Video TTS timings validation failed: audioValidation must pass and must not be silent.");
     }
 
     private static void ValidateTimingContinuity(IReadOnlyList<(double StartSeconds, double EndSeconds)> timings, double actualDurationSeconds, string messagePrefix)
