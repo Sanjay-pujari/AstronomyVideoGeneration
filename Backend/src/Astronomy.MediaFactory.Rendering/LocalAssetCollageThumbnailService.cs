@@ -947,7 +947,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     {
         var hi = LocalizationResolver.IsHindi(request.Context.Localization.ResolvedLanguage);
         if (!hi && IsVenusJupiterPair(assets))
-            return "DON'T MISS THIS TONIGHT\nVenus + Jupiter\nAfter Sunset";
+            return $"{assets.First(a => a.Category.Equals("venus", StringComparison.OrdinalIgnoreCase)).ObjectName} Near {assets.First(a => a.Category.Equals("jupiter", StringComparison.OrdinalIgnoreCase)).ObjectName}\nTonight";
 
         var words = hi ? HindiHook(selection.Hero.Key) : EnglishHook(selection, request);
         var limited = LimitHook(words, hi ? 32 : 28, 4);
@@ -973,12 +973,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             "DeepSpaceMode" => "Milky Way Tonight",
             _ => hero.Key switch
             {
-                "venus" => "Venus After Sunset",
+                "venus" => "Venus Tonight",
                 "saturn" => "Saturn Visible Tonight",
                 "moon" => "Moon Tonight",
                 "jupiter" => "Jupiter Tonight",
                 "mars" => "Mars Tonight",
-                "mercury" => "Mercury After Sunset",
+                "mercury" => "Mercury Tonight",
                 _ => "Don’t Miss This"
             }
         };

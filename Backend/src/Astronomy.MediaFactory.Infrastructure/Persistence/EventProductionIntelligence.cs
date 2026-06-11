@@ -292,7 +292,7 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
         var trimmed = needle.Trim();
         if (trimmed.Any(char.IsWhiteSpace) || trimmed.Any(ch => !char.IsLetterOrDigit(ch)))
             return haystack.Contains(trimmed, StringComparison.OrdinalIgnoreCase);
-        return Regex.IsMatch(haystack, $"(?<![\p{{L}}\p{{N}}]){Regex.Escape(trimmed)}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return Regex.IsMatch(haystack, $"(?<![\\p{{L}}\\p{{N}}]){Regex.Escape(trimmed)}(?![\\p{{L}}\\p{{N}}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken)

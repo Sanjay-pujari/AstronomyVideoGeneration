@@ -219,7 +219,7 @@ public sealed class AstronomyInfographicRenderer(
     {
         DrawPortraitText(ctx, "BEST TIME", 330, 712, 420, Color.White, 42, FontStyle.Bold);
         DrawPortraitText(ctx, "7:23 PM IST", 258, 802, 600, Color.ParseHex("#FFF2B8"), 66, FontStyle.Bold);
-        DrawPortraitText(ctx, "After Sunset", 330, 910, 420, Color.ParseHex("#F6C177"), 38, FontStyle.Bold);
+        DrawPortraitText(ctx, "Best viewing time", 330, 910, 420, Color.ParseHex("#F6C177"), 38, FontStyle.Bold);
     }
 
     private static void DrawPortraitClosingHorizon(IImageProcessingContext ctx)
@@ -849,7 +849,7 @@ public sealed class AnnotationLayerRenderer
                 DrawTitleStack(text, "Why this view matters", "Two bright worlds, one evening sky", fonts, new RectangleF(145, 72, 900, 168));
                 break;
             case "action":
-                DrawTitleStack(text, "STEP OUTSIDE TONIGHT", "LOOK WEST TONIGHT", fonts, new RectangleF(345, 844, 1000, 118));
+                DrawTitleStack(text, "STEP OUTSIDE TONIGHT", "CHECK YOUR SKY", fonts, new RectangleF(345, 844, 1000, 118));
                 break;
         }
     }

@@ -11,9 +11,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 internal static class PhotoCinematicThumbnailRenderer
 {
-    private const string HookText = "DON'T MISS\nTHIS TONIGHT";
-    private const string SecondaryText = "Venus + Jupiter";
-    private const string MicroText = "After Sunset";
+    private const string HookText = "SKY EVENT\nTONIGHT";
+    private const string SecondaryText = "Event Focus";
+    private const string MicroText = "Best Viewing Time";
 
     private static readonly IReadOnlyList<PhotoCinematicThumbnailSpec> Specs =
     [

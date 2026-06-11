@@ -53,7 +53,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const double LongFormNarrationWordsPerMinute = 150.0;
     private const double LongFormMinimumEstimatedDurationSeconds = 120.0;
     private const double LongFormMaximumEstimatedDurationSeconds = 180.0;
-    private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
+    private const string SelectedOpeningHook = "TONIGHT'S SKY EVENT";
     private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
     private const string AzureTtsProviderName = "AzureSpeechTts";
     private const string OpenAiTtsProviderName = "OpenAITts";
