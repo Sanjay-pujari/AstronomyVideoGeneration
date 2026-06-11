@@ -56,7 +56,17 @@ public sealed class HeroAssetSceneSelector : IHeroAssetSceneSelector
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(SelectHeroScenesCore(request.EventId, heroStory, heroBlueprint, approvedScenes));
+        var manifest = SelectHeroScenesCore(request.EventId, heroStory, heroBlueprint, approvedScenes);
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var strategy = request.ProductionContext?.MediaEventStrategy;
+        return Task.FromResult(manifest with
+        {
+            PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
+            EventTitle = intelligence?.Title,
+            EventType = intelligence?.EventType ?? request.ProductionContext?.EventType,
+            StrategyId = intelligence?.StrategyId,
+            StrategyEventType = strategy?.EventType
+        });
     }
 
     public HeroSceneManifestDto SelectHeroScenes(

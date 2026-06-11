@@ -7,6 +7,16 @@ public sealed record HeroSceneManifestDto(
     HeroSceneManifestEntryDto SupportScene,
     string SelectionReason)
 {
+    public string? PlanId { get; init; }
+
+    public string? EventTitle { get; init; }
+
+    public string? EventType { get; init; }
+
+    public string? StrategyId { get; init; }
+
+    public string? StrategyEventType { get; init; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     public string PrimarySceneId => PrimaryScene.SceneId;
 
