@@ -551,7 +551,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     }
 
 
-    private static void ValidateSceneAssetStrategy(ProductionEventIntelligence intelligence, string currentRunRoot, List<string> warnings, List<string> errors)
+    private void ValidateSceneAssetStrategy(ProductionEventIntelligence intelligence, string currentRunRoot, List<string> warnings, List<string> errors)
     {
         var sceneRoot = ResolveCurrentRunDirectory(currentRunRoot, "scene-approval-v3");
         if (!Directory.Exists(sceneRoot))
