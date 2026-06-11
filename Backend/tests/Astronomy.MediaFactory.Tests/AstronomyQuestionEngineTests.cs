@@ -235,6 +235,27 @@ public sealed class AstronomyQuestionEngineTests
         Assert.Equal(0, await db.AstronomyQuestionAnswerSets.CountAsync());
     }
 
+
+    [Theory]
+    [InlineData("open the file", true, "file")]
+    [InlineData("profile", false, "")]
+    [InlineData("wildlife", false, "")]
+    [InlineData("filed", false, "")]
+    [InlineData("lifestyle", false, "")]
+    [InlineData("Set a reminder for the night of Dec 12/13, check weather, and pick a dark open location.", false, "")]
+    public void ForbiddenFileTokenValidation_UsesStandaloneTokenBoundaries(string answerText, bool expectedMatch, string expectedForbiddenTerm)
+    {
+        var method = typeof(AstronomyQuestionEngine).GetMethod("TryMatchForbiddenTerm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("TryMatchForbiddenTerm helper was not found.");
+        var parameters = new object[] { answerText, string.Empty, string.Empty };
+
+        var matched = (bool)method.Invoke(null, parameters)!;
+
+        Assert.Equal(expectedMatch, matched);
+        if (expectedMatch)
+            Assert.Equal(expectedForbiddenTerm, Assert.IsType<string>(parameters[1]));
+    }
+
     [Fact]
     public async Task GenerateQuestionAnswersAsync_UsesMeteorShowerViewingWindowAndDarkSkyGuidance()
     {

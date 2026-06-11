@@ -35,7 +35,7 @@ public sealed class QuestionScenePlanner(
     };
 
     private static readonly Regex GuidPattern = new("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}", RegexOptions.Compiled);
-    private static readonly Regex FilePattern = new(@"\b[\w\-.]+\.(json|png|jpg|jpeg|mp3|wav|mp4|mov|webm|txt)\b|(?:[A-Za-z]:)?[\\/][^\s]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex FilePattern = new(@"\b[\w\-.]+\.(json|png|jpg|jpeg|mp3|wav|mp4|mov|webm|txt)\b|(?:[A-Za-z]:[\\/]|[\\/])(?:[^\s\\/]+[\\/])+[^\s]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex LocalClockTimePattern = new(@"\b(?:[01]?\d|2[0-3]):[0-5]\d\s?(?:AM|PM|am|pm)?\b|\b(?:1[0-2]|0?[1-9])\s?(?:AM|PM|am|pm)\b", RegexOptions.Compiled);
     private static readonly string[] WhySignificanceTerms =
     [
@@ -326,7 +326,7 @@ public sealed class QuestionScenePlanner(
     }
 
     private static Regex ExactTermPattern(string term)
-        => new($"(?<![A-Za-z0-9]){Regex.Escape(term)}(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        => new($"(?<![\\p{{L}}\\p{{N}}_]){Regex.Escape(term)}(?![\\p{{L}}\\p{{N}}_])", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static QuestionDrivenScenePlanDto BuildScenePlan(AstronomyQuestionAnswerSet questionSet, string regionId, string language)
     {
