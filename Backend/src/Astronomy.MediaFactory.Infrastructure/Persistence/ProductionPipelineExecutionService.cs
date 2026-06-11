@@ -236,14 +236,24 @@ public sealed class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateThumbnailsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = "Images", DryRun = false, OverwriteExisting = context.OverwriteExisting, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
-        var outputs = new List<string>(response.GeneratedFiles);
+        var outputs = new List<string>();
+        foreach (var phase in new[] { "Intelligence", "Composition", "SceneSelection", "Images" })
+        {
+            var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = phase, DryRun = false, OverwriteExisting = context.OverwriteExisting, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
+            outputs.AddRange(response.GeneratedFiles);
+        }
+
+        var thumbnailSceneManifestPath = Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-scene-manifest.json");
+        if (!File.Exists(thumbnailSceneManifestPath))
+            throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
+
         CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-landscape.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "landscape.png"), outputs);
         CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-square.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "square.png"), outputs);
         CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "portrait.png"), outputs);
         if (!ThumbnailsExist(context.OutputRoot))
             throw new InvalidOperationException("Thumbnail generation failed contract validation: landscape.png, square.png, and portrait.png are required.");
-        return outputs;
+        outputs.Add(thumbnailSceneManifestPath);
+        return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
 
@@ -281,7 +291,8 @@ public sealed class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"Hero generation failed contract validation: image file is empty: {NormalizePath(heroPath)}.");
 
         await ValidateHeroSceneManifestContractAsync(context, sceneManifestPath, cancellationToken);
-        ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, sceneManifestPath]);
+        var compositionModelPath = Path.Combine(heroRoot, "hero-composition-model.json");
+        ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, sceneManifestPath, compositionModelPath]);
 
         outputs.AddRange(requiredFiles);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -448,15 +459,8 @@ public sealed class ProductionPipelineExecutionService(
         var terms = new List<string>();
         terms.AddRange(intelligence.ForbiddenTerms);
         terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
-        if (IsMeteorStrategy(context))
-            terms.AddRange(["Venus", "Jupiter", "conjunction", "look west", "after sunset", "7:23 PM IST"]);
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase);
     }
-
-    private static bool IsMeteorStrategy(ProductionPhaseContext context)
-        => (context.ProductionEventIntelligence.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
-            || (context.Request.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
-            || (context.MediaEventStrategy.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsToken(string haystack, string needle)
     {

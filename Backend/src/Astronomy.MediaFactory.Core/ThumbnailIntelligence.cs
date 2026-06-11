@@ -96,7 +96,22 @@ public sealed record ThumbnailSceneManifestDto(
     ThumbnailSceneManifestEntryDto PrimaryScene,
     ThumbnailSceneManifestEntryDto SecondaryScene,
     ThumbnailSceneManifestEntryDto SupportScene,
-    string SelectionReason);
+    string SelectionReason)
+{
+    public string? PlanId { get; init; }
+
+    public string? EventType { get; init; }
+
+    public string? Title { get; init; }
+
+    public IReadOnlyList<string> SourceHeroAssets { get; init; } = [];
+
+    public IReadOnlyList<string> SourceSceneAssets { get; init; } = [];
+
+    public IReadOnlyList<string> GeneratedThumbnailPaths { get; init; } = [];
+
+    public IReadOnlyDictionary<string, string> ValidationFacts { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+}
 
 public sealed record ThumbnailSceneManifestEntryDto(
     int SceneNumber,
