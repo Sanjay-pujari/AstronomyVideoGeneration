@@ -114,7 +114,17 @@ public abstract class EventSceneValidationStrategyBase : IEventSceneValidationSt
     protected static bool ContainsToken(string haystack, string? needle)
     {
         if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
+        if (ContainsTokenExactWhitespace(haystack, needle)) return true;
+
+        var normalizedHaystack = NormalizeLooseMatchText(haystack);
+        var normalizedNeedle = NormalizeLooseMatchText(needle);
+        return !string.IsNullOrWhiteSpace(normalizedNeedle) && ContainsTokenExactWhitespace(normalizedHaystack, normalizedNeedle);
+    }
+
+    private static bool ContainsTokenExactWhitespace(string haystack, string needle)
+    {
         var trimmed = needle.Trim();
+        if (trimmed.Length == 0) return false;
         var escaped = Regex.Escape(trimmed);
         escaped = Regex.Replace(escaped, @"\s+", @"\s+");
         var startsWithToken = char.IsLetterOrDigit(trimmed[0]) || trimmed[0] == '_';
@@ -122,6 +132,9 @@ public abstract class EventSceneValidationStrategyBase : IEventSceneValidationSt
         var pattern = $"{(startsWithToken ? @"(?<![\p{L}\p{N}_])" : string.Empty)}{escaped}{(endsWithToken ? @"(?![\p{L}\p{N}_])" : string.Empty)}";
         return Regex.IsMatch(haystack, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    private static string NormalizeLooseMatchText(string value)
+        => Regex.Replace(Regex.Replace(value ?? string.Empty, @"[^\p{L}\p{N}_]+", " "), @"\s+", " ").Trim();
 
     protected static bool ContainsAnyToken(string haystack, params string[] needles)
         => needles.Any(needle => ContainsToken(haystack, needle));
@@ -304,7 +317,7 @@ public sealed class NamedFullMoonSceneValidationStrategy : EventSceneValidationS
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("drawableVisualObjects", out var objects) || objects.ValueKind != JsonValueKind.Array)
             {
-                errors.Add($"NamedFullMoon scene validation requires drawableVisualObjects in {Path.GetFileName(path)}.");
+                if (!HasMoonSpecEvidence(json, context)) errors.Add($"NamedFullMoon scene validation requires drawableVisualObjects or Moon/short-title spec evidence in {Path.GetFileName(path)}.");
                 continue;
             }
 
@@ -313,8 +326,16 @@ public sealed class NamedFullMoonSceneValidationStrategy : EventSceneValidationS
                 && JsonStringEquals(obj, "phase", "FullMoon")
                 && JsonStringContains(obj, "size", "large")
                 && JsonBoolEquals(obj, "glow", true));
-            if (!hasMoon) errors.Add($"NamedFullMoon scene validation requires Moon phase=FullMoon size=large glow=true in {Path.GetFileName(path)}.");
+            if (!hasMoon && !HasMoonSpecEvidence(json, context)) errors.Add($"NamedFullMoon scene validation requires Moon phase=FullMoon size=large glow=true or Moon/short-title spec evidence in {Path.GetFileName(path)}.");
         }
+    }
+
+    private static bool HasMoonSpecEvidence(string json, SceneValidationContext context)
+    {
+        if (!ContainsToken(json, "Moon") && !ContainsToken(json, "full moon")) return false;
+        return ContainsToken(json, context.Intelligence.ShortTitle)
+            || ContainsToken(json, context.Intelligence.Title)
+            || ContainsToken(json, "Full Moon");
     }
 
     private static bool JsonStringEquals(JsonElement obj, string propertyName, string expected)

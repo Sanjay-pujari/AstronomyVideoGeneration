@@ -232,5 +232,86 @@ public sealed class EventProductionIntelligenceTests
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
         Assert.Empty(result.Errors);
     }
+    [Theory]
+    [InlineData("Snow Moon", "Snow Moon", true)]
+    [InlineData("Snow-Moon", "Snow Moon", true)]
+    [InlineData("Snow    Moon", "Snow Moon", true)]
+    [InlineData("Snowmoon", "Snow Moon", false)]
+    public void ProductionQualityContainsToken_IgnoresPunctuationAndExtraWhitespace(string text, string token, bool expected)
+    {
+        var method = typeof(ProductionPipelineQualityValidator).GetMethod("ContainsToken", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("ContainsToken helper was not found.");
+
+        var actual = (bool)method.Invoke(null, [text, token])!;
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task ProductionQualityValidator_AcceptsSnowMoonShortTitleMetadataForPhase10()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-snow-moon-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "NamedFullMoon scene plan for the Snow Moon with Moon/Snow Moon visual evidence and viewing window 2026-02-01 18:00–23:00 UTC.");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.enriched.json"), "Snow Moon enriched plan: a full Moon over a winter horizon, no unrelated planet leakage, viewing window 2026-02-01 18:00–23:00 UTC.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "title":"Snow Moon",
+  "shortTitle":"Snow Moon",
+  "astronomyEventShortTitle":"Snow Moon",
+  "backgroundPrompt":"large visible Moon/Snow Moon above a snowy horizon",
+  "overlayText":["Snow Moon", "Full Moon", "2026-02-01 18:00–23:00 UTC"],
+  "accessibilityCues":["Moon/Snow Moon is the dominant object"]
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), """
+{
+  "shortTitle":"Snow Moon",
+  "checks":["Moon/Snow Moon visible", "full Moon glow readable", "no forbidden object leakage"]
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Watch the Snow Moon during the evening viewing window.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nSnow Moon full Moon is visible from 18:00–23:00 UTC.\n");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "NamedFullMoon",
+            "Snow Moon Full Moon",
+            "Snow Moon",
+            DateTimeOffset.Parse("2026-02-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-02-01T18:00:00Z"),
+            "18:00 UTC",
+            "2026-02-01 18:00–23:00 UTC",
+            "eastern sky",
+            "Global",
+            ["Moon"],
+            [],
+            null,
+            "Low",
+            100m,
+            "Snow Moon Full Moon",
+            [],
+            ["Moon", "full moon glow"],
+            ["Use shortTitle metadata"],
+            [],
+            ["Venus", "Jupiter"],
+            RequiredVisualObjects: ["Moon"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new NamedFullMoonSceneValidationStrategy(),
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Empty(result.Errors);
+    }
 
 }
