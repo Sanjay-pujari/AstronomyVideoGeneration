@@ -201,6 +201,119 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.False(legacy.WasCalled);
     }
 
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionRunningWithoutRecoveryMode_IsExcluded()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            RetryFailedOnly: true,
+            AllowFailedPlanRetry: true,
+            StartPhaseNo: 17,
+            EndPhaseNo: 19), CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Geminids Meteor Shower Peak"
+            && warning.Reason.Contains("ProductionRunning", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionRunningWithRecoveryMode_IsSelectedAndForwardsPhaseOptions()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            OverwriteExisting: false,
+            StartPhaseNo: 17,
+            EndPhaseNo: 19,
+            RetryFailedOnly: true,
+            AllowFailedPlanRetry: true,
+            AllowRunningPlanRecovery: true), CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.True(response.UseProductionPipeline);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(GeminidsPlanId, response.PlanId);
+        Assert.Equal(GeminidsPlanId, production.CapturedPlanId);
+        Assert.Equal(17, production.CapturedStartPhaseNo);
+        Assert.Equal(19, production.CapturedEndPhaseNo);
+        Assert.True(production.CapturedRetryFailedOnly);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionRunningRecoveryRequiresRetryFlagsAndPhaseWindow()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            AllowRunningPlanRecovery: true), CancellationToken.None));
+
+        Assert.Contains("retryFailedOnly=true", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+    }
+
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
