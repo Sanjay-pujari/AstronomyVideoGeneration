@@ -488,7 +488,7 @@ public sealed class GenericAstronomyEventStrategy : MediaEventStrategyBase
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "What", "When", "Where", "How", "CTA"], ["Intro", "Event context", "Best time", "Sky direction", "Viewing guide", "Scientific context", "Reminder", "CTA"], ["cinematic night sky", "local horizon", "clean astronomy labels"], [nameof(ProductionEventIntelligence.LocalPeakTime)], "clear, factual, viewer-first", ["Sky Event", "Watch Time", "Look Up"], [], ["Avoid generic-only output; use event title, objects, timing, and direction."]);
 }
 
-public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStrategyResolver sceneValidationStrategyResolver, IMediaEventStrategyResolver mediaEventStrategyResolver) : IProductionPipelineQualityValidator
+public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStrategyResolver sceneValidationStrategyResolver, IMediaEventStrategyResolver? mediaEventStrategyResolver = null) : IProductionPipelineQualityValidator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -509,7 +509,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var errors = new List<string>();
         var currentRunIntelligence = await LoadCurrentRunProductionEventIntelligenceAsync(outputRoot, intelligence, cancellationToken);
         var sourceNotes = await LoadCurrentRunSourceNotesAsync(outputRoot, cancellationToken);
-        var strategy = mediaEventStrategyResolver.Resolve(currentRunIntelligence.EventType, currentRunIntelligence.Title);
+        var strategy = (mediaEventStrategyResolver ?? CreateDefaultMediaEventStrategyResolver()).Resolve(currentRunIntelligence.EventType, currentRunIntelligence.Title);
         var strategyDefinition = strategy.BuildDefinition(currentRunIntelligence);
 
         ValidateTextQuality(currentRunIntelligence, outputRoot, warnings, errors, strategyDefinition, sourceNotes);
@@ -530,6 +530,18 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         await WriteValidationAsync(Path.Combine(outputRoot, "production-quality-validation-final.json"), currentRunIntelligence, warnings, errors, cancellationToken, strategy.EventType, leakageHits);
         return new(errors.Count == 0, warnings, errors);
     }
+
+    private static IMediaEventStrategyResolver CreateDefaultMediaEventStrategyResolver()
+        => new MediaEventStrategyResolver([
+            new MeteorShowerStrategy(),
+            new PlanetPairingStrategy(),
+            new ConjunctionStrategy(),
+            new NamedFullMoonStrategy(),
+            new NewMoonStrategy(),
+            new LunarEclipseStrategy(),
+            new SolarEclipseStrategy(),
+            new GenericAstronomyEventStrategy()
+        ]);
 
     private static void ValidateTextQuality(ProductionEventIntelligence intelligence, string root, List<string> warnings, List<string> errors, MediaEventStrategyDefinition? strategyDefinition = null, IReadOnlyList<string>? sourceNotes = null)
     {
@@ -668,7 +680,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         catch (JsonException) { return null; }
     }
 
-    private static IEnumerable<ForbiddenLeakageHit> FindJsonTermHits(string file, JsonElement element, string field, string term)
+    private static IEnumerable<ForbiddenLeakageHit> FindJsonTermHits(string file, JsonElement element, string field, string term, bool parentIsGeneratedContent = false)
     {
         switch (element.ValueKind)
         {
@@ -677,7 +689,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 {
                     if (IsForbiddenLeakageMetadataField(property.Name)) continue;
                     var childField = field == "$" ? property.Name : $"{field}.{property.Name}";
-                    foreach (var hit in FindJsonTermHits(file, property.Value, childField, term))
+                    var childIsGeneratedContent = parentIsGeneratedContent || IsGeneratedContentField(property.Name);
+                    foreach (var hit in FindJsonTermHits(file, property.Value, childField, term, childIsGeneratedContent))
                         yield return hit;
                 }
                 break;
@@ -685,12 +698,13 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 var index = 0;
                 foreach (var item in element.EnumerateArray())
                 {
-                    foreach (var hit in FindJsonTermHits(file, item, $"{field}[{index}]", term))
+                    foreach (var hit in FindJsonTermHits(file, item, $"{field}[{index}]", term, parentIsGeneratedContent))
                         yield return hit;
                     index++;
                 }
                 break;
             case JsonValueKind.String:
+                if (!parentIsGeneratedContent && !IsGeneratedContentField(LastJsonPathSegment(field))) yield break;
                 var value = element.GetString() ?? string.Empty;
                 foreach (Match match in TokenMatches(value, term))
                     yield return new ForbiddenLeakageHit(term, NormalizePath(file), field, BuildSnippet(value, match.Index, match.Length));
@@ -700,11 +714,41 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
 
+    private static string LastJsonPathSegment(string field)
+    {
+        var lastDot = field.LastIndexOf('.');
+        var segment = lastDot >= 0 ? field[(lastDot + 1)..] : field;
+        var bracket = segment.IndexOf('[');
+        return bracket >= 0 ? segment[..bracket] : segment;
+    }
+
+    private static bool IsGeneratedContentField(string propertyName)
+        => propertyName.Equals("title", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("subtitle", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("narration", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("narrationText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("text", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("overlayText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("prompt", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("purpose", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("description", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("scenePurpose", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("sceneText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("hook", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("cta", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("script", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("content", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("manifestContent", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsForbiddenLeakageMetadataField(string propertyName)
-        => propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
+        => propertyName.Equals("forbiddenTermsChecked", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("allowedTerms", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("forbiddenObjectNames", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("forbiddenUnrelatedObjects", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("validationRules", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("checks", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("ruleDescriptions", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("forbiddenLeakageHits", StringComparison.OrdinalIgnoreCase);
 
     private static MatchCollection TokenMatches(string haystack, string needle)

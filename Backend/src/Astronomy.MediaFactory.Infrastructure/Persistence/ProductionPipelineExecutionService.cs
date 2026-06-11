@@ -771,8 +771,18 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseAssembleVideoAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
+        if (profile == ScenePresentationProfile.ShortForm)
+        {
+            var intelligence = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, "Intelligence"), cancellationToken);
+            outputs.AddRange(intelligence.GeneratedFiles);
+            if (!string.IsNullOrWhiteSpace(intelligence.VideoAssemblyIntelligencePath)) outputs.Add(intelligence.VideoAssemblyIntelligencePath);
+        }
+
         foreach (var phase in new[] { profile == ScenePresentationProfile.ShortForm ? "Assembly" : "LongFormAssembly", profile == ScenePresentationProfile.ShortForm ? "Render" : "LongFormRender" })
         {
+            if (profile == ScenePresentationProfile.ShortForm && string.Equals(phase, "Render", StringComparison.OrdinalIgnoreCase))
+                ValidateVideoAssemblyIntelligenceBeforeRendering(context);
+
             var response = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, phase), cancellationToken);
             outputs.AddRange(response.GeneratedFiles);
         }
@@ -863,21 +873,127 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Pre-render scene approval validation failed: narration/spec files contain forbidden terms for the selected event strategy: " + string.Join("; ", hits));
     }
 
+    private static void ValidateVideoAssemblyIntelligenceBeforeRendering(ProductionPhaseContext context)
+    {
+        var path = Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-assembly-intelligence.json");
+        if (!File.Exists(path))
+            throw new InvalidOperationException($"Pre-render video assembly validation failed: video-assembly-intelligence.json was not found at '{NormalizePath(path)}'.");
+
+        var forbiddenTerms = BuildForbiddenTermsForStrategy(context).ToArray();
+        if (forbiddenTerms.Length == 0) return;
+
+        var text = File.ReadAllText(path);
+        using var doc = JsonDocument.Parse(text);
+        var hits = forbiddenTerms
+            .SelectMany(term => FindGeneratedContentTermHits(doc.RootElement, "$", term))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (hits.Length > 0)
+            throw new InvalidOperationException("Pre-render video assembly validation failed: video-assembly-intelligence.json contains forbidden terms for the selected event strategy: " + string.Join("; ", hits.Select(hit => $"{NormalizePath(path)} => {hit}")));
+    }
+
+    private static IEnumerable<string> FindGeneratedContentTermHits(JsonElement element, string field, string term, bool parentIsGeneratedContent = false)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (IsValidationMetadataField(property.Name)) continue;
+                    var childField = field == "$" ? property.Name : $"{field}.{property.Name}";
+                    var childIsGeneratedContent = parentIsGeneratedContent || IsGeneratedContentField(property.Name);
+                    foreach (var hit in FindGeneratedContentTermHits(property.Value, childField, term, childIsGeneratedContent))
+                        yield return hit;
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    foreach (var hit in FindGeneratedContentTermHits(item, $"{field}[{index}]", term, parentIsGeneratedContent))
+                        yield return hit;
+                    index++;
+                }
+                break;
+            case JsonValueKind.String:
+                if (!parentIsGeneratedContent && !IsGeneratedContentField(LastJsonPathSegment(field))) yield break;
+                var value = element.GetString() ?? string.Empty;
+                foreach (Match match in Regex.Matches(value, BuildTokenPattern(term), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                    yield return $"field={field}, term={term}, snippet={BuildSnippet(value, match.Index, match.Length)}";
+                break;
+        }
+    }
+
+    private static string LastJsonPathSegment(string field)
+    {
+        var lastDot = field.LastIndexOf('.');
+        var segment = lastDot >= 0 ? field[(lastDot + 1)..] : field;
+        var bracket = segment.IndexOf('[');
+        return bracket >= 0 ? segment[..bracket] : segment;
+    }
+
+    private static bool IsValidationMetadataField(string propertyName)
+        => propertyName.Equals("forbiddenTermsChecked", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("allowedTerms", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenObjectNames", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenUnrelatedObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("validationRules", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("checks", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("ruleDescriptions", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsGeneratedContentField(string propertyName)
+        => propertyName.Equals("title", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("subtitle", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("narration", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("narrationText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("text", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("overlayText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("prompt", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("purpose", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("description", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("scenePurpose", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("sceneText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("hook", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("cta", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("script", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("content", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildSnippet(string text, int index, int length)
+    {
+        const int context = 50;
+        var start = Math.Max(0, index - context);
+        var end = Math.Min(text.Length, index + length + context);
+        var snippet = Regex.Replace(text[start..end].Replace("\r", " ").Replace("\n", " "), @"\s+", " ").Trim();
+        return (start > 0 ? "…" : string.Empty) + snippet + (end < text.Length ? "…" : string.Empty);
+    }
+
     private static IEnumerable<string> BuildForbiddenTermsForStrategy(ProductionPhaseContext context)
     {
         var intelligence = context.ProductionEventIntelligence;
         var terms = new List<string>();
         terms.AddRange(intelligence.ForbiddenTerms);
         terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
+        if (context.MediaEventStrategy is not null)
+            terms.AddRange(context.MediaEventStrategy.BuildDefinition(intelligence).ForbiddenUnrelatedObjects);
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool ContainsToken(string haystack, string needle)
     {
         if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
-        var escaped = Regex.Escape(needle.Trim());
+        return Regex.IsMatch(haystack, BuildTokenPattern(needle), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string BuildTokenPattern(string needle)
+    {
+        var trimmed = needle.Trim();
+        var escaped = Regex.Escape(trimmed);
         escaped = Regex.Replace(escaped, @"\s+", @"\s+");
-        return Regex.IsMatch(haystack, $@"(?<![\p{{L}}\p{{N}}]){escaped}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var startsWithToken = char.IsLetterOrDigit(trimmed[0]) || trimmed[0] == '_';
+        var endsWithToken = char.IsLetterOrDigit(trimmed[^1]) || trimmed[^1] == '_';
+        return $"{(startsWithToken ? @"(?<![\p{L}\p{N}_])" : string.Empty)}{escaped}{(endsWithToken ? @"(?![\p{L}\p{N}_])" : string.Empty)}";
     }
 
     private static string RequireFile(string path, string name)
