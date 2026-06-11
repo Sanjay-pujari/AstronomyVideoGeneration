@@ -399,7 +399,7 @@ public sealed class AstronomyQuestionEngine(
         }
 
 
-        if (set.EventType.Contains("MeteorShower", StringComparison.OrdinalIgnoreCase) || set.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+        if (set.EventType.Contains("MeteorShower", StringComparison.OrdinalIgnoreCase) || set.EventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
         {
             var combined = string.Join(" ", set.Answers.Select(a => a.AnswerText));
             if (combined.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
