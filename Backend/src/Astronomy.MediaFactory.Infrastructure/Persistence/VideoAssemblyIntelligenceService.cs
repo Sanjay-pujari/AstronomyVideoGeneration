@@ -955,7 +955,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             .GroupBy(scene => scene.QuestionType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-        return ShortFormSectionOrder.Select(section => new VideoAssemblySceneDurationDto(
+        return RequiredAssemblySceneOrder.Select(section => new VideoAssemblySceneDurationDto(
             section,
             ResolveShortFormBaseDuration(section),
             ResolveShortFormScenePurpose(section, eventInfo, scenesByQuestion))).ToArray();
@@ -1073,7 +1073,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private IReadOnlyList<VideoAssemblyPurposeSource> LoadShortFormPurposeSources(VideoAssemblyGenerationRequest request)
     {
         var sources = new List<VideoAssemblyPurposeSource>();
-        var questionRoot = ResolveQuestionEngineRoot(request.EventId, request.RegionId);
+        var questionRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
         AddNarrationPurposeSources(Path.Combine(questionRoot, "question-driven-narration.json"), sources);
         AddEnrichedPlanPurposeSources(Path.Combine(questionRoot, "question-driven-scene-plan.enriched.json"), sources);
         AddSceneApprovalPurposeSources(Path.Combine(questionRoot, SceneApprovalDirectoryName, "short"), sources);
