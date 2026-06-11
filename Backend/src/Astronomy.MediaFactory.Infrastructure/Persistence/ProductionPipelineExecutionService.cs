@@ -64,7 +64,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
-        var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, deletedFilesDueToOverwrite);
+        var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite);
         if (request.OverwriteExisting)
             ClearPhaseRangeOutputsForOverwrite(context);
 
@@ -1021,7 +1021,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
@@ -1076,7 +1076,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
         foreach (var directory in Directory.EnumerateDirectories(path))
         {
-            if (string.Equals(Path.GetFileName(directory), "plan-input", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(Path.GetFileName(directory), "plan-input", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetFileName(directory), "_archive", StringComparison.OrdinalIgnoreCase)) continue;
             Directory.Delete(directory, recursive: true);
         }
         foreach (var file in Directory.EnumerateFiles(path))

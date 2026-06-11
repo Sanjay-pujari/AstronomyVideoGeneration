@@ -2,6 +2,16 @@ using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core;
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ContentPlanExecutionMode
+{
+    Normal,
+    RetryFailed,
+    RecoverRunning,
+    RebuildOutputs,
+    FullRebuild
+}
+
 public sealed record BatchGenerateFromPlansRequest(
     int Year,
     string RegionId,
@@ -18,7 +28,11 @@ public sealed record BatchGenerateFromPlansRequest(
     bool AllowFailedPlanRetry = false,
     bool AllowRunningPlanRecovery = false,
     Guid? PlanId = null,
-    int? RunningPlanRecoveryStaleAfterMinutes = null);
+    int? RunningPlanRecoveryStaleAfterMinutes = null,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
+    bool AllowCompletedPlanRerun = false,
+    bool ArchivePreviousRun = false,
+    bool RebuildIntelligence = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -59,7 +73,14 @@ public sealed record BatchGenerateFromPlansResponse(
     object? ProductionPipelineRequest = null,
     IReadOnlyList<string>? PlannedSteps = null,
     int? LastCompletedPhaseNo = null,
-    int? LastFailedPhaseNo = null);
+    int? LastFailedPhaseNo = null,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
+    bool CompletedPlanRerun = false,
+    bool PreviousOutputArchived = false,
+    string? ArchivePath = null,
+    IReadOnlyList<string>? DeletedOutputFolders = null,
+    int? StartPhaseNo = null,
+    int? EndPhaseNo = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -178,7 +199,11 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool OverwriteExisting = false,
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
-    bool RetryFailedOnly = false);
+    bool RetryFailedOnly = false,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
+    bool AllowCompletedPlanRerun = false,
+    bool ArchivePreviousRun = false,
+    bool RebuildIntelligence = false);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,
@@ -242,7 +267,11 @@ public sealed record ProductionPipelineRequest(
     ProductionPipelineExecutionContext? ExecutionContext = null,
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
-    bool RetryFailedOnly = false);
+    bool RetryFailedOnly = false,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
+    bool AllowCompletedPlanRerun = false,
+    bool ArchivePreviousRun = false,
+    bool RebuildIntelligence = false);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProductionPhaseStatus
@@ -268,6 +297,7 @@ public sealed record ProductionPhaseContext(
     int StartPhaseNo,
     int EndPhaseNo,
     bool RetryFailedOnly,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
     IReadOnlyList<string>? DeletedFilesDueToOverwrite = null);
 
 public sealed record ProductionPhaseResult(
@@ -317,7 +347,14 @@ public sealed record ProductionPipelineExecutionResult(
     IReadOnlyList<string> Errors,
     IReadOnlyList<ProductionPhaseResult>? PhaseResults = null,
     int? LastCompletedPhaseNo = null,
-    int? LastFailedPhaseNo = null);
+    int? LastFailedPhaseNo = null,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
+    bool CompletedPlanRerun = false,
+    bool PreviousOutputArchived = false,
+    string? ArchivePath = null,
+    IReadOnlyList<string>? DeletedOutputFolders = null,
+    int? StartPhaseNo = null,
+    int? EndPhaseNo = null);
 
 public sealed record ContentPlanProductionExecutionResult(
     bool Success,
@@ -348,7 +385,14 @@ public sealed record ContentPlanProductionExecutionResult(
     IReadOnlyList<string> Errors,
     IReadOnlyList<ProductionPhaseResult>? PhaseResults = null,
     int? LastCompletedPhaseNo = null,
-    int? LastFailedPhaseNo = null);
+    int? LastFailedPhaseNo = null,
+    ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
+    bool CompletedPlanRerun = false,
+    bool PreviousOutputArchived = false,
+    string? ArchivePath = null,
+    IReadOnlyList<string>? DeletedOutputFolders = null,
+    int? StartPhaseNo = null,
+    int? EndPhaseNo = null);
 
 public interface IContentPlanProductionRequestMapper
 {

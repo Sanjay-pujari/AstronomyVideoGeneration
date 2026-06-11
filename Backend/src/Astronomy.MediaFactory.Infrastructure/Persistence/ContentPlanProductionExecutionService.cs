@@ -15,6 +15,19 @@ public sealed class ContentPlanProductionExecutionService(
     ILogger<ContentPlanProductionExecutionService> logger) : IContentPlanProductionExecutionService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly string[] RebuildOutputEntries =
+    [
+        "question-engine",
+        "scene-approval-v3",
+        "hero",
+        "thumbnails",
+        "narration",
+        "tts",
+        "video-assembly",
+        "validation",
+        "phase-manifest.json"
+    ];
+
     private static readonly string[] ProductionSteps =
     [
         "Question Engine",
@@ -44,6 +57,10 @@ public sealed class ContentPlanProductionExecutionService(
             ?? throw new ArgumentException($"ContentGenerationPlan '{request.ContentGenerationPlanId}' is not linked to AstronomyEventIntelligence.", nameof(request));
 
         var productionRequest = mapper.Map(plan, intelligence);
+        var executionMode = request.ExecutionMode;
+        var isCompletedPlanRerun = IsProductionCompleted(plan) && executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild;
+        var startPhaseNo = ResolveStartPhaseNo(request);
+        var endPhaseNo = request.EndPhaseNo ?? 19;
         var executionContext = BuildExecutionContext(plan, intelligence, productionRequest);
         var outputRoot = BuildPlanOutputRoot(productionRequest);
         logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
@@ -53,12 +70,13 @@ public sealed class ContentPlanProductionExecutionService(
 
         if (request.DryRun)
         {
-            return BuildResult(true, true, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, []);
+            return BuildResult(true, true, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, [], executionMode, isCompletedPlanRerun, false, null, [], startPhaseNo, endPhaseNo);
         }
 
         ContentPipelineExecution? execution = null;
         try
         {
+            var outputPreparation = PrepareOutputRoot(outputRoot, request, startPhaseNo);
             Directory.CreateDirectory(outputRoot);
             await WritePlanInputAsync(outputRoot, plan, intelligence, productionRequest, cancellationToken);
 
@@ -84,9 +102,10 @@ public sealed class ContentPlanProductionExecutionService(
                 DryRun: false,
                 OverwriteExisting: request.OverwriteExisting,
                 ExecutionContext: executionContext,
-                StartPhaseNo: request.StartPhaseNo,
-                EndPhaseNo: request.EndPhaseNo,
-                RetryFailedOnly: request.RetryFailedOnly), cancellationToken);
+                StartPhaseNo: startPhaseNo,
+                EndPhaseNo: endPhaseNo,
+                RetryFailedOnly: request.RetryFailedOnly,
+                ExecutionMode: executionMode), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
             errors.AddRange(pipelineResult.Errors);
@@ -115,7 +134,7 @@ public sealed class ContentPlanProductionExecutionService(
             plan.FailureReason = productionFailed ? execution.ErrorMessage : null;
             await db.SaveChangesAsync(cancellationToken);
 
-            return BuildResult(productionCompleted, false, plan, productionRequest, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors, pipelineResult.PhaseResults ?? []);
+            return BuildResult(productionCompleted, false, plan, productionRequest, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors, pipelineResult.PhaseResults ?? [], executionMode, isCompletedPlanRerun, outputPreparation.PreviousOutputArchived, outputPreparation.ArchivePath, outputPreparation.DeletedOutputFolders, startPhaseNo, endPhaseNo);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -144,7 +163,7 @@ public sealed class ContentPlanProductionExecutionService(
             plan.CompletedUtc = null;
             plan.FailureReason = ex.Message;
             await db.SaveChangesAsync(CancellationToken.None);
-            return BuildResult(false, false, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, []);
+            return BuildResult(false, false, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, [], executionMode, isCompletedPlanRerun, false, null, [], startPhaseNo, endPhaseNo);
         }
     }
 
@@ -306,7 +325,7 @@ public sealed class ContentPlanProductionExecutionService(
         return json;
     }
 
-    private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults)
+    private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults, ContentPlanExecutionMode executionMode, bool completedPlanRerun, bool previousOutputArchived, string? archivePath, IReadOnlyList<string> deletedOutputFolders, int startPhaseNo, int endPhaseNo)
     {
         var lastCompletedPhaseNo = phaseResults
             .Where(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
@@ -319,8 +338,134 @@ public sealed class ContentPlanProductionExecutionService(
             .Select(p => (int?)p.PhaseNo)
             .FirstOrDefault();
 
-        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo);
+        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo);
     }
+
+
+    private static bool IsProductionCompleted(ContentGenerationPlan plan)
+        => string.Equals(plan.Status, "ProductionCompleted", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(plan.PlanStatus, "ProductionCompleted", StringComparison.OrdinalIgnoreCase);
+
+    private static int ResolveStartPhaseNo(ContentPlanProductionExecutionRequest request)
+    {
+        if (request.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs && request.RebuildIntelligence) return 1;
+        return request.StartPhaseNo ?? (request.ExecutionMode == ContentPlanExecutionMode.FullRebuild ? 1 : request.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs ? 3 : 1);
+    }
+
+    private static OutputPreparationResult PrepareOutputRoot(string outputRoot, ContentPlanProductionExecutionRequest request, int startPhaseNo)
+    {
+        if (request.ExecutionMode is not (ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild))
+            return new(false, null, []);
+
+        if (Directory.Exists(outputRoot) && !request.OverwriteExisting)
+            throw new InvalidOperationException("Completed plan rerun output cleanup requires overwriteExisting=true.");
+
+        if (!Directory.Exists(outputRoot))
+            return new(false, null, []);
+
+        if (request.ArchivePreviousRun)
+        {
+            var archivePath = ArchivePreviousRun(outputRoot, request.ExecutionMode, request.RebuildIntelligence);
+            return new(true, archivePath, []);
+        }
+
+        var deleted = request.ExecutionMode == ContentPlanExecutionMode.FullRebuild && startPhaseNo <= 1
+            ? DeleteFullPlanOutput(outputRoot)
+            : DeleteRebuildOutputs(outputRoot, request.RebuildIntelligence);
+        return new(false, null, deleted);
+    }
+
+    private static string ArchivePreviousRun(string outputRoot, ContentPlanExecutionMode executionMode, bool rebuildIntelligence)
+    {
+        var archivePath = Path.Combine(outputRoot, "_archive", DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfffZ"));
+        Directory.CreateDirectory(archivePath);
+        if (executionMode == ContentPlanExecutionMode.FullRebuild)
+        {
+            foreach (var directory in Directory.EnumerateDirectories(outputRoot).ToArray())
+            {
+                if (string.Equals(Path.GetFileName(directory), "_archive", StringComparison.OrdinalIgnoreCase)) continue;
+                Directory.Move(directory, Path.Combine(archivePath, Path.GetFileName(directory)));
+            }
+
+            foreach (var file in Directory.EnumerateFiles(outputRoot).ToArray())
+                File.Move(file, Path.Combine(archivePath, Path.GetFileName(file)));
+            return archivePath;
+        }
+
+        foreach (var entry in RebuildOutputEntries)
+        {
+            var path = Path.Combine(outputRoot, entry);
+            var destination = Path.Combine(archivePath, entry);
+            if (Directory.Exists(path))
+                Directory.Move(path, destination);
+            else if (File.Exists(path))
+                File.Move(path, destination);
+        }
+
+        if (rebuildIntelligence)
+        {
+            var productionIntelligence = Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json");
+            if (File.Exists(productionIntelligence))
+            {
+                var destination = Path.Combine(archivePath, "plan-input", "production-event-intelligence.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Move(productionIntelligence, destination);
+            }
+        }
+
+        return archivePath;
+    }
+
+    private static IReadOnlyList<string> DeleteFullPlanOutput(string outputRoot)
+    {
+        var deleted = new List<string>();
+        if (!Directory.Exists(outputRoot)) return deleted;
+        foreach (var directory in Directory.EnumerateDirectories(outputRoot).ToArray())
+        {
+            deleted.Add(directory);
+            Directory.Delete(directory, recursive: true);
+        }
+
+        foreach (var file in Directory.EnumerateFiles(outputRoot).ToArray())
+        {
+            deleted.Add(file);
+            File.Delete(file);
+        }
+        return deleted;
+    }
+
+    private static IReadOnlyList<string> DeleteRebuildOutputs(string outputRoot, bool rebuildIntelligence)
+    {
+        var deleted = new List<string>();
+        foreach (var entry in RebuildOutputEntries)
+        {
+            var path = Path.Combine(outputRoot, entry);
+            if (Directory.Exists(path))
+            {
+                deleted.Add(path);
+                Directory.Delete(path, recursive: true);
+            }
+            else if (File.Exists(path))
+            {
+                deleted.Add(path);
+                File.Delete(path);
+            }
+        }
+
+        if (rebuildIntelligence)
+        {
+            var productionIntelligence = Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json");
+            if (File.Exists(productionIntelligence))
+            {
+                deleted.Add(productionIntelligence);
+                File.Delete(productionIntelligence);
+            }
+        }
+
+        return deleted;
+    }
+
+    private sealed record OutputPreparationResult(bool PreviousOutputArchived, string? ArchivePath, IReadOnlyList<string> DeletedOutputFolders);
 
     private string BuildPlanOutputRoot(ContentPlanProductionPipelineRequest request)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "plans", Sanitize(request.RegionId), (request.ScheduledUtc?.Year ?? request.PeakUtc?.Year ?? DateTimeOffset.UtcNow.Year).ToString(), request.PlanId.ToString("D"));
