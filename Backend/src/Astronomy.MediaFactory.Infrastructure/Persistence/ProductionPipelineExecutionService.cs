@@ -632,7 +632,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.Concat((value ?? string.Empty).ToLowerInvariant().Where(char.IsLetterOrDigit));
 
     private static string FirstNonEmpty(params string?[] values)
-        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))!.Trim();
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 
     private static int CountSpokenWords(string narration)
         => string.IsNullOrWhiteSpace(narration) ? 0 : SpokenWordRegex().Matches(narration).Count;
