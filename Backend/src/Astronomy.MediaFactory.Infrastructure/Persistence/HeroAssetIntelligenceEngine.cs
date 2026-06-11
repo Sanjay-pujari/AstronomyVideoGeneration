@@ -390,6 +390,8 @@ public sealed class HeroAssetStoryGenerator(
             warnings.Add($"Required strategy celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
 
         var layoutValidation = compositionModel is null ? null : BuildHeroLayoutValidation(compositionModel, planetAssets.Select(asset => asset.Label).ToArray());
+        var strategyValidationIssues = ValidateHeroStrategyRenderingContract(request, heroStory, selectedSceneManifest, compositionModel, planetAssets);
+        warnings.AddRange(strategyValidationIssues);
         if (layoutValidation?.DuplicateBlocksDetected == true)
             warnings.Add("Hero layout validation failed: duplicate composition block rendering was detected.");
         if (layoutValidation?.TextOverlapDetected == true)
@@ -407,7 +409,8 @@ public sealed class HeroAssetStoryGenerator(
             && !layoutValidation.DuplicateBlocksDetected
             && !layoutValidation.TextOverlapDetected
             && layoutValidation.ObjectsVisible
-            && heroSceneSelectorExecuted;
+            && heroSceneSelectorExecuted
+            && strategyValidationIssues.Count == 0;
         if (!isValid)
         {
             if (layoutValidation is null || !layoutValidation.IsValid)
@@ -473,7 +476,7 @@ public sealed class HeroAssetStoryGenerator(
                 .Where(File.Exists)
                 .Select(NormalizePath)
                 .ToArray();
-            var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, missingSceneAssets.Count == 0);
+            var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, missingSceneAssets.Count == 0, request.ProductionContext?.ProductionEventIntelligence);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), cancellationToken);
         }
 
@@ -794,12 +797,99 @@ public sealed class HeroAssetStoryGenerator(
             showReferenceOverlays: false,
             referenceStars: [],
             labels: BuildHeroVariantLabels(compositionModel, variant, width, height),
-            backgroundImagePath: null,
+            backgroundImagePath: ResolveHeroBackgroundImagePath(sceneManifest),
             compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
     }
 
+
+    private static string? ResolveHeroBackgroundImagePath(HeroSceneManifestDto sceneManifest)
+    {
+        var candidates = new[]
+        {
+            sceneManifest.PrimaryScene.ImagePath,
+            sceneManifest.SecondaryScene.ImagePath,
+            sceneManifest.SupportScene.ImagePath
+        };
+
+        return candidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+    }
+
+    private static IReadOnlyList<string> ValidateHeroStrategyRenderingContract(
+        HeroAssetStoryGenerationRequest request,
+        HeroAssetStoryDto heroStory,
+        HeroSceneManifestDto? sceneManifest,
+        HeroCompositionModelDto? compositionModel,
+        IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var issues = new List<string>();
+        if (intelligence is null)
+        {
+            issues.Add("Hero rendering validation failed: ProductionEventIntelligence is required for strategy-driven hero rendering.");
+            return issues;
+        }
+
+        if (sceneManifest is null)
+            issues.Add("Hero rendering validation failed: current scene assets are required for hero rendering.");
+        else if (new[] { sceneManifest.PrimaryScene.ImagePath, sceneManifest.SecondaryScene.ImagePath, sceneManifest.SupportScene.ImagePath }.All(path => string.IsNullOrWhiteSpace(path) || !File.Exists(path)))
+            issues.Add("Hero rendering validation failed: hero scene manifest does not reference any existing approved scene assets.");
+
+        var serializedContract = JsonSerializer.Serialize(new { heroStory, sceneManifest, compositionModel, intelligence.EventType, intelligence.Title }, JsonOptions);
+        foreach (var term in BuildHeroForbiddenTerms(intelligence))
+        {
+            if (ContainsToken(serializedContract, term))
+                issues.Add($"Hero rendering validation failed: forbidden strategy term leaked into hero manifest/text/model: {term}.");
+        }
+
+        if (IsMeteorEventType(intelligence.EventType) || IsMeteorStory(heroStory.HeroStorySource))
+        {
+            if (planetAssets.Count > 0)
+                issues.Add("Hero rendering validation failed: meteor-shower heroes must not render planet-pairing foreground assets.");
+
+            var modelText = JsonSerializer.Serialize(compositionModel, JsonOptions);
+            var storyText = JsonSerializer.Serialize(heroStory, JsonOptions);
+            if (!ContainsToken(modelText + " " + storyText + " " + string.Join(' ', intelligence.VisualMotifs), "meteor"))
+                issues.Add("Hero rendering validation failed: meteor-shower hero must carry meteor-specific visual intent.");
+
+            if (IsDaytimeLocalPeak(intelligence.LocalPeakTime) && ContainsToken(modelText + " " + storyText, intelligence.LocalPeakTime!))
+                issues.Add($"Hero rendering validation failed: meteor-shower hero used daytime localPeakTime '{intelligence.LocalPeakTime}' instead of the viewing window.");
+
+            if (!ContainsAnyNightViewingCue(modelText + " " + storyText + " " + FirstNonEmpty(intelligence.PreferredViewingWindow, intelligence.BestViewingWindowLocal)))
+                issues.Add("Hero rendering validation failed: meteor-shower hero must use a dark-sky viewing window rather than a daytime peak time.");
+        }
+
+        return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IEnumerable<string> BuildHeroForbiddenTerms(ProductionEventIntelligence intelligence)
+    {
+        var terms = new List<string>();
+        terms.AddRange(intelligence.ForbiddenTerms);
+        terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
+        return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static bool ContainsAnyNightViewingCue(string value)
+    {
+        var cues = new[] { "night", "midnight", "pre-dawn", "predawn", "before dawn", "dark", "early morning", "radiant" };
+        return cues.Any(cue => value.Contains(cue, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsDaytimeLocalPeak(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?<!\d)(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out var hour)) return false;
+        var suffix = match.Groups[3].Value;
+        if (suffix.Equals("PM", StringComparison.OrdinalIgnoreCase) && hour < 12) hour += 12;
+        if (suffix.Equals("AM", StringComparison.OrdinalIgnoreCase) && hour == 12) hour = 0;
+        return hour >= 6 && hour < 18;
+    }
 
     private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveHeroCelestialTextures(string celestialAssetsRoot, ProductionEventIntelligence? intelligence, HeroAssetStoryDto heroStory)
     {
@@ -956,7 +1046,8 @@ public sealed class HeroAssetStoryGenerator(
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         IReadOnlyList<string> generatedHeroImages,
         int platformVariantCount,
-        bool approvedSceneBaselineAvailable)
+        bool approvedSceneBaselineAvailable,
+        ProductionEventIntelligence? intelligence)
     {
         var usesRealCelestialAssets = planetAssets.Count >= 2
             && planetAssets.All(asset => !string.IsNullOrWhiteSpace(asset.TexturePath) && File.Exists(asset.TexturePath));
@@ -972,6 +1063,8 @@ public sealed class HeroAssetStoryGenerator(
             UsesPlaceholderDots: false,
             UsesManualCirclePlanets: false,
             MatchesApprovedSceneVisualBaseline: approvedSceneBaselineAvailable,
+            FailoverVisualUsed: false,
+            StrategyEventType: intelligence?.EventType ?? string.Empty,
             PlatformVariantCount: platformVariantCount,
             GeneratedFiles: generatedImageNames);
     }
@@ -1046,6 +1139,8 @@ public sealed class HeroAssetStoryGenerator(
         bool UsesPlaceholderDots,
         bool UsesManualCirclePlanets,
         bool MatchesApprovedSceneVisualBaseline,
+        bool FailoverVisualUsed,
+        string StrategyEventType,
         int PlatformVariantCount,
         IReadOnlyList<string> GeneratedFiles);
 

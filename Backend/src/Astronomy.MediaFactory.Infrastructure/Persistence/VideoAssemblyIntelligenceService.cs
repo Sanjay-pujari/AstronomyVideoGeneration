@@ -654,13 +654,32 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var thumbnailRoot = BuildThumbnailAssetsRoot(eventId, regionId);
 
         await EnsureHeroStoryInputAsync(heroRoot, cancellationToken);
-        using var heroSceneManifest = await EnsureJsonInputAsync(Path.Combine(heroRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
+        var heroSceneManifestPath = Path.Combine(heroRoot, HeroSceneManifestFileName);
+        var thumbnailSceneManifestPath = Path.Combine(thumbnailRoot, ThumbnailSceneManifestFileName);
+        EnsureManifestPairExistsBeforeRead(heroSceneManifestPath, HeroSceneManifestFileName, thumbnailSceneManifestPath, ThumbnailSceneManifestFileName);
+
+        using var heroSceneManifest = await EnsureJsonInputAsync(heroSceneManifestPath, HeroSceneManifestFileName, cancellationToken);
         using var heroCompositionModel = await EnsureJsonInputAsync(Path.Combine(heroRoot, HeroCompositionModelFileName), HeroCompositionModelFileName, cancellationToken);
-        using var thumbnailSceneManifest = await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailSceneManifestFileName), ThumbnailSceneManifestFileName, cancellationToken);
+        using var thumbnailSceneManifest = await EnsureJsonInputAsync(thumbnailSceneManifestPath, ThumbnailSceneManifestFileName, cancellationToken);
         using var thumbnailIntelligence = await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailIntelligenceFileName), ThumbnailIntelligenceFileName, cancellationToken);
         using var thumbnailCompositionModel = await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailCompositionModelFileName), ThumbnailCompositionModelFileName, cancellationToken);
 
         EnsureApprovedSceneImages(eventId, regionId, ResolveScenePresentationProfile(platform), heroSceneManifest, thumbnailSceneManifest);
+    }
+
+    private static void EnsureManifestPairExistsBeforeRead(string heroSceneManifestPath, string heroFileName, string thumbnailSceneManifestPath, string thumbnailFileName)
+    {
+        var missing = new[]
+        {
+            (Path: heroSceneManifestPath, FileName: heroFileName),
+            (Path: thumbnailSceneManifestPath, FileName: thumbnailFileName)
+        }
+        .Where(item => !File.Exists(item.Path))
+        .Select(item => $"{item.FileName} at '{NormalizePath(item.Path)}'")
+        .ToArray();
+
+        if (missing.Length > 0)
+            throw new ArgumentException("Required video assembly manifest input(s) missing before narration generation: " + string.Join(", ", missing) + ".");
     }
 
     private static async Task<JsonDocument> EnsureJsonInputAsync(string path, string fileName, CancellationToken cancellationToken)

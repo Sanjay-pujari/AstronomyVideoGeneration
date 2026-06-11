@@ -116,8 +116,38 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawHeroAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
     {
-        DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
+        if (IsMeteorHero(request))
+            DrawMeteorRadiantAndStreaks(ctx, request.Width, request.Height);
+
+        DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: false);
         DrawHeroLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.Labels);
+    }
+
+
+    private static bool IsMeteorHero(AstronomyVisualCompositionRequest request)
+    {
+        var text = string.Join(' ', request.Title, request.Subtitle, request.MetadataLine, request.Mood, string.Join(' ', request.Labels.Select(label => label.Text)));
+        return text.Contains("meteor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void DrawMeteorRadiantAndStreaks(IImageProcessingContext ctx, int width, int height)
+    {
+        var radiant = new PointF(width * 0.62f, height * 0.24f);
+        ctx.Fill(Color.FromRgba(95, 145, 255, 34), new EllipsePolygon(radiant.X, radiant.Y, width * 0.16f, width * 0.16f));
+        ctx.Fill(Color.FromRgba(180, 215, 255, 42), new EllipsePolygon(radiant.X, radiant.Y, width * 0.055f, width * 0.055f));
+
+        var rng = new Random(9001 + width + height);
+        for (var i = 0; i < 22; i++)
+        {
+            var angle = (-158 + i * 11.5f + rng.Next(-5, 6)) * MathF.PI / 180f;
+            var length = width * (0.10f + (i % 6) * 0.018f);
+            var start = new PointF(
+                radiant.X + MathF.Cos(angle) * length * 0.18f + rng.Next((int)(-width * 0.08f), (int)(width * 0.08f)),
+                radiant.Y + MathF.Sin(angle) * length * 0.18f + rng.Next((int)(-height * 0.04f), (int)(height * 0.08f)));
+            var end = new PointF(start.X + MathF.Cos(angle) * length, start.Y + MathF.Sin(angle) * length);
+            ctx.DrawLine(Pens.Solid(Color.FromRgba(135, 205, 255, 170), Math.Max(2f, width / 520f)), start, end);
+            ctx.DrawLine(Pens.Solid(Color.FromRgba(255, 255, 255, 205), Math.Max(1f, width / 900f)), start, end);
+        }
     }
 
     private static void DrawPosterAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)

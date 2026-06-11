@@ -183,6 +183,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateMeteorShowerThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
         var outputFiles = PhotoCinematicThumbnailRenderer.PlannedOutputFiles(thumbnailRoot).ToArray();
+        var manifestPath = BuildThumbnailSceneManifestOutputPath(request.EventId, request.RegionId);
+        var manifest = await LoadThumbnailSceneManifestAsync(manifestPath, cancellationToken);
+        ValidateThumbnailSceneManifest(manifest, requireSavedManifest: true, outputPath: manifestPath);
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
@@ -212,8 +215,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             Directory.CreateDirectory(thumbnailRoot);
             foreach (var file in outputFiles)
-                await WriteMeteorThumbnailAsync(file, cancellationToken);
+                await WriteMeteorThumbnailAsync(file, request, cancellationToken);
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+            await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken);
         }
 
         return BuildImageGenerationResponse(
@@ -230,7 +234,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             thumbnailLayoutValidationPath: validationPath);
     }
 
-    private static async Task WriteMeteorThumbnailAsync(string outputPath, CancellationToken cancellationToken)
+    private static async Task WriteMeteorThumbnailAsync(string outputPath, ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var fileName = Path.GetFileName(outputPath);
         var (width, height) = fileName.Contains("portrait", StringComparison.OrdinalIgnoreCase) ? (1080, 1920) : fileName.Contains("square", StringComparison.OrdinalIgnoreCase) ? (1080, 1080) : (1280, 720);
@@ -243,7 +247,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 var color = Color.FromRgb((byte)(5 + 10 * t), (byte)(12 + 12 * t), (byte)(34 + 42 * t));
                 ctx.Fill(color, new RectangleF(0, y, width, 1));
             }
-            var rng = new Random(20261214 + width + height);
+            var rng = new Random(HashCode.Combine(request.EventId, request.RegionId, width, height));
             for (var i = 0; i < 180; i++)
             {
                 var x = rng.Next(width);
@@ -263,9 +267,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ctx.Fill(Color.FromRgba(0, 0, 0, 120), new RectangleF(0, height * 0.76f, width, height * 0.24f));
             var font = ResolveThumbnailFont(width / 16f, FontStyle.Bold);
             var small = ResolveThumbnailFont(width / 30f, FontStyle.Bold);
-            ctx.DrawText("Meteor Shower Peak", font, Color.White, new PointF(width * 0.06f, height * 0.08f));
-            ctx.DrawText("Best Night: Dec 14", small, Color.ParseHex("#F8D36B"), new PointF(width * 0.06f, height * 0.23f));
-            ctx.DrawText("Low Moon Interference", small, Color.ParseHex("#BFE6FF"), new PointF(width * 0.06f, height * 0.31f));
+            var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+            var title = CleanThumbnailText(intelligence?.ShortTitle ?? intelligence?.Title ?? "Meteor Shower Peak", "Meteor Shower Peak", 28);
+            var window = CleanThumbnailText(ResolveMeteorViewingWindow(intelligence), "Dark pre-dawn sky", 30);
+            var moon = CleanThumbnailText(intelligence?.MoonInterference ?? "Low moon interference", "Low moon interference", 30);
+            ctx.DrawText(title, font, Color.White, new PointF(width * 0.06f, height * 0.08f));
+            ctx.DrawText(window, small, Color.ParseHex("#F8D36B"), new PointF(width * 0.06f, height * 0.23f));
+            ctx.DrawText(moon, small, Color.ParseHex("#BFE6FF"), new PointF(width * 0.06f, height * 0.31f));
         });
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
@@ -284,6 +292,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Console.WriteLine($"[ThumbnailImages] Requested renderer = {rendererName}");
 
         var outputFiles = PhotoCinematicThumbnailRenderer.PlannedOutputFiles(thumbnailRoot).ToArray();
+        var manifestPath = BuildThumbnailSceneManifestOutputPath(request.EventId, request.RegionId);
+        var manifest = await LoadThumbnailSceneManifestAsync(manifestPath, cancellationToken);
+        ValidateThumbnailSceneManifest(manifest, requireSavedManifest: true, outputPath: manifestPath);
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
 
         var validation = new ThumbnailLayoutValidationDto(
@@ -332,6 +343,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 throw new InvalidOperationException($"PhotoCinematicThumbnailRenderer did not write expected thumbnail file(s): {string.Join(", ", missingWrites)}.");
 
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+            await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken);
         }
         else
         {
@@ -576,12 +588,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private void EnsureApprovedSceneOutputs(string eventId, string regionId, JsonDocument sceneManifest)
     {
-        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName);
+        var sceneApprovalRoot = BuildSceneApprovalRoot(eventId, regionId);
         var sceneIds = ResolveManifestSceneIds(sceneManifest).DefaultIfEmpty("scene-001").ToArray();
         var missingSceneOutputs = sceneIds
-            .Select(sceneId => Path.Combine(sceneApprovalRoot, $"{sceneId}-final.png"))
-            .Where(path => !File.Exists(path))
-            .Select(NormalizePath)
+            .Where(sceneId => ResolveApprovedSceneImagePath(sceneApprovalRoot, sceneId) is null)
+            .Select(sceneId => NormalizePath(Path.Combine(sceneApprovalRoot, $"{sceneId}-final.png")))
             .ToArray();
 
         if (missingSceneOutputs.Length > 0)
@@ -773,20 +784,51 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private ThumbnailSceneManifestDto BuildThumbnailSceneManifest(ThumbnailAssetGenerationRequest request, JsonDocument heroSceneManifest)
     {
-        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(request.EventId, request.RegionId), SceneApprovalDirectoryName);
-        var primaryImagePath = Path.Combine(sceneApprovalRoot, "scene-001-final.png");
-        var secondaryImagePath = Path.Combine(sceneApprovalRoot, "scene-005-final.png");
-        var supportImagePath = Path.Combine(sceneApprovalRoot, "scene-006-final.png");
+        var sceneApprovalRoot = BuildSceneApprovalRoot(request.EventId, request.RegionId);
+        var primaryImagePath = ResolveApprovedSceneImagePath(sceneApprovalRoot, "scene-001") ?? Path.Combine(sceneApprovalRoot, "scene-001-final.png");
+        var secondaryImagePath = ResolveApprovedSceneImagePath(sceneApprovalRoot, "scene-005") ?? Path.Combine(sceneApprovalRoot, "scene-005-final.png");
+        var supportImagePath = ResolveApprovedSceneImagePath(sceneApprovalRoot, "scene-006") ?? Path.Combine(sceneApprovalRoot, "scene-006-final.png");
 
         if (!HeroManifestContainsSuitablePrimaryScene(heroSceneManifest))
             throw new ArgumentException("Thumbnail scene selection validation failed: primary scene scene-001 / What is not visually suitable for thumbnail use.");
+
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var heroAssetPaths = new[]
+        {
+            Path.Combine(BuildHeroAssetsRoot(request.EventId, request.RegionId), HeroAssetStoryFileName),
+            Path.Combine(BuildHeroAssetsRoot(request.EventId, request.RegionId), HeroSceneManifestFileName),
+            Path.Combine(BuildHeroAssetsRoot(request.EventId, request.RegionId), HeroCompositionModelFileName),
+            Path.Combine(BuildHeroAssetsRoot(request.EventId, request.RegionId), "hero.png")
+        }.Where(File.Exists).Select(NormalizePath).ToArray();
+        var sourceSceneAssets = new[] { primaryImagePath, secondaryImagePath, supportImagePath }.Select(NormalizePath).ToArray();
 
         return new ThumbnailSceneManifestDto(
             request.EventId,
             new ThumbnailSceneManifestEntryDto(1, "What", NormalizePath(primaryImagePath), "PrimaryVisual"),
             new ThumbnailSceneManifestEntryDto(5, "Why", NormalizePath(secondaryImagePath), "EmotionalSignificance"),
             new ThumbnailSceneManifestEntryDto(6, "Action", NormalizePath(supportImagePath), "UrgencyCue"),
-            "Use What scene for visual focus, Why scene for emotional pull, and Action scene for urgency.");
+            "Use What scene for visual focus, Why scene for emotional pull, and Action scene for urgency.")
+        {
+            PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
+            EventType = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
+            Title = intelligence?.Title ?? request.EventId,
+            SourceHeroAssets = heroAssetPaths,
+            SourceSceneAssets = sourceSceneAssets,
+            GeneratedThumbnailPaths = [],
+            ValidationFacts = BuildThumbnailManifestValidationFacts(request, intelligence)
+        };
+    }
+
+    private static string? ResolveApprovedSceneImagePath(string sceneApprovalRoot, string sceneId)
+    {
+        if (!Directory.Exists(sceneApprovalRoot)) return null;
+        var patterns = new[] { $"{sceneId}-final.png", $"{sceneId}.png" };
+        return patterns
+            .SelectMany(pattern => Directory.EnumerateFiles(sceneApprovalRoot, pattern, SearchOption.AllDirectories))
+            .OrderBy(path => path.Contains($"{Path.DirectorySeparatorChar}long{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(path => path.EndsWith("-final.png", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     private static bool HeroManifestContainsSuitablePrimaryScene(JsonDocument heroSceneManifest)
@@ -1130,6 +1172,68 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("Thumbnail layout validation failed: thumbnailFinalReadinessScore must be at least 95.");
     }
 
+    private static IReadOnlyDictionary<string, string> BuildThumbnailManifestValidationFacts(ThumbnailAssetGenerationRequest request, ProductionEventIntelligence? intelligence)
+    {
+        var facts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["eventId"] = request.EventId,
+            ["eventType"] = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
+            ["title"] = intelligence?.Title ?? request.EventId,
+            ["viewingWindow"] = ResolveMeteorViewingWindow(intelligence),
+            ["visualStrategy"] = string.Join(", ", intelligence?.VisualMotifs ?? [])
+        };
+        return facts;
+    }
+
+    private static async Task UpdateThumbnailSceneManifestGeneratedPathsAsync(string manifestPath, IReadOnlyList<string> generatedPaths, ThumbnailLayoutValidationDto validation, CancellationToken cancellationToken)
+    {
+        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(manifestPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Thumbnail scene manifest input could not be parsed.");
+        var facts = new Dictionary<string, string>(manifest.ValidationFacts, StringComparer.OrdinalIgnoreCase)
+        {
+            ["thumbnailVisualSourceMode"] = validation.ThumbnailVisualSourceMode,
+            ["sourceSceneUsed"] = validation.SourceSceneUsed,
+            ["readinessScore"] = validation.ThumbnailFinalReadinessScore.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["forbiddenPlanetLeakage"] = (validation.VenusRenderedAsStarPoint || validation.JupiterRenderedAsPlanet).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        };
+
+        var updated = manifest with
+        {
+            GeneratedThumbnailPaths = generatedPaths.Select(NormalizePath).ToArray(),
+            ValidationFacts = facts
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(updated, JsonOptions), cancellationToken);
+    }
+
+    private static string ResolveMeteorViewingWindow(ProductionEventIntelligence? intelligence)
+    {
+        if (intelligence is null) return string.Empty;
+        var preferred = FirstNonEmpty(intelligence.PreferredViewingWindow, intelligence.BestViewingWindowLocal);
+        if (!string.IsNullOrWhiteSpace(preferred)) return preferred;
+        return IsDaytimeLocalPeak(intelligence.LocalPeakTime) ? "Dark pre-dawn sky" : intelligence.LocalPeakTime ?? string.Empty;
+    }
+
+    private static string CleanThumbnailText(string? value, string fallback, int maxLength)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+        cleaned = cleaned.Replace("localPeakTime", "viewing window", StringComparison.OrdinalIgnoreCase);
+        return cleaned.Length <= maxLength ? cleaned : cleaned[..maxLength].TrimEnd();
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static bool IsDaytimeLocalPeak(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?<!\d)(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out var hour)) return false;
+        var suffix = match.Groups[3].Value;
+        if (suffix.Equals("PM", StringComparison.OrdinalIgnoreCase) && hour < 12) hour += 12;
+        if (suffix.Equals("AM", StringComparison.OrdinalIgnoreCase) && hour == 12) hour = 0;
+        return hour >= 6 && hour < 18;
+    }
+
     private static void ValidateThumbnailSceneManifest(ThumbnailSceneManifestDto manifest, bool requireSavedManifest, string outputPath)
     {
         if (manifest.PrimaryScene is null || string.IsNullOrWhiteSpace(manifest.PrimaryScene.ImagePath))
@@ -1150,6 +1254,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException($"Thumbnail scene selection validation failed: selected image file(s) missing: {string.Join(", ", missingImages)}.");
         if (requireSavedManifest && !File.Exists(outputPath))
             throw new ArgumentException($"Thumbnail scene selection validation failed: manifest was not saved at '{NormalizePath(outputPath)}'.");
+        if (requireSavedManifest && string.IsNullOrWhiteSpace(manifest.EventType))
+            throw new ArgumentException("Thumbnail scene selection validation failed: eventType is required in thumbnail-scene-manifest.json.");
+        if (requireSavedManifest && string.IsNullOrWhiteSpace(manifest.Title))
+            throw new ArgumentException("Thumbnail scene selection validation failed: title is required in thumbnail-scene-manifest.json.");
+        if (requireSavedManifest && manifest.SourceHeroAssets.Count == 0)
+            throw new ArgumentException("Thumbnail scene selection validation failed: source hero assets are required in thumbnail-scene-manifest.json.");
     }
 
     private static string ResolveRecommendedSourceScene(JsonDocument compositionModel)
@@ -1177,6 +1287,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("Only thumbnail asset phases 'Intelligence', 'Composition', 'SceneSelection', and 'ImageGeneration' are supported in this endpoint version.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.EventId) || string.IsNullOrWhiteSpace(request.RegionId) || string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("Thumbnail intelligence generation requires event id, region id, and language.", nameof(request));
+    }
+
+    private string BuildSceneApprovalRoot(string eventId, string regionId)
+    {
+        if (!string.IsNullOrWhiteSpace(_activeProductionContext?.PlanRoot))
+            return Path.Combine(_activeProductionContext!.PlanRoot!, SceneApprovalDirectoryName);
+
+        var questionRoot = BuildQuestionEngineRoot(eventId, regionId);
+        var eventRoot = Directory.GetParent(questionRoot)?.FullName;
+        return string.IsNullOrWhiteSpace(eventRoot) ? Path.Combine(questionRoot, SceneApprovalDirectoryName) : Path.Combine(eventRoot, SceneApprovalDirectoryName);
     }
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
