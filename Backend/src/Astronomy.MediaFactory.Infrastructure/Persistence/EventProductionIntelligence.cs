@@ -698,6 +698,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         }
     }
 
+    private static string NormalizePath(string path) => path.Replace('\\', '/');
+
     private static bool IsForbiddenLeakageMetadataField(string propertyName)
         => propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("forbiddenObjectNames", StringComparison.OrdinalIgnoreCase)
