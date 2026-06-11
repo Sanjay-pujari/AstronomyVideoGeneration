@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -43,6 +44,7 @@ public sealed class ProductionPipelineExecutionService(
         var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 19);
         var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 19, startPhaseNo, 19);
         var phaseResults = new List<ProductionPhaseResult>();
+        var deletedFilesDueToOverwrite = new List<string>();
 
         if (request.OverwriteExisting && startPhaseNo <= 1)
             ClearProductionOutputRoot(outputRoot);
@@ -50,12 +52,14 @@ public sealed class ProductionPipelineExecutionService(
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
-        var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly);
+        var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, deletedFilesDueToOverwrite);
         if (request.OverwriteExisting)
             ClearPhaseRangeOutputsForOverwrite(context);
 
         Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "short"));
         Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "long"));
+        warnings.Add($"sceneApprovalStagingRoot={NormalizePath(executionContext.SceneRoot!)}");
+        warnings.Add($"sceneApprovalNormalizedRoot={NormalizePath(GetSceneApprovalNormalizedRoot(outputRoot))}");
 
         if (request.DryRun)
         {
@@ -184,13 +188,18 @@ public sealed class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
-        return response.GeneratedFiles;
+        var outputs = new List<string>(response.GeneratedFiles);
+        Directory.CreateDirectory(context.ExecutionContext.SceneRoot!);
+        CopyFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration.json"), outputs);
+        CopyFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration-review.json"), outputs);
+        return outputs;
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "short"));
         Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "long"));
+        ValidateSceneApprovalTextBeforeRendering(context);
         var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
         var shortRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "short");
         if (!DirectoryHasPng(shortRoot)) throw new InvalidOperationException($"Short scene image validation failed: no .png files were found in '{shortRoot}'.");
@@ -208,7 +217,8 @@ public sealed class ProductionPipelineExecutionService(
     {
         var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken);
         if (!validation.IsValid) throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", validation.Errors));
-        return [Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long")];
+        var materialized = await MaterializeSceneApprovalAsync(context.ExecutionContext.SceneRoot!, GetSceneApprovalNormalizedRoot(context.OutputRoot), cancellationToken);
+        return materialized.Concat([Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long")]).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -288,6 +298,84 @@ public sealed class ProductionPipelineExecutionService(
             ProductionContext = context.ExecutionContext
         };
 
+
+    private static async Task<IReadOnlyList<string>> MaterializeSceneApprovalAsync(string stagingRoot, string normalizedRoot, CancellationToken cancellationToken)
+    {
+        var copied = new List<string>();
+        if (!Directory.Exists(stagingRoot)) return copied;
+
+        foreach (var source in Directory.EnumerateFiles(stagingRoot, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(stagingRoot, source);
+            var parts = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fileName = Path.GetFileName(source);
+            if (parts.Length > 1
+                && (string.Equals(parts[0], "short", StringComparison.OrdinalIgnoreCase) || string.Equals(parts[0], "long", StringComparison.OrdinalIgnoreCase))
+                && fileName.EndsWith("-final.png", StringComparison.OrdinalIgnoreCase))
+            {
+                fileName = fileName.Replace("-final", string.Empty, StringComparison.OrdinalIgnoreCase);
+                relativePath = Path.Combine(parts[..^1].Append(fileName).ToArray());
+            }
+
+            CopyFile(source, Path.Combine(normalizedRoot, relativePath), copied);
+        }
+
+        await WriteScenesManifestsAsync(Path.GetDirectoryName(normalizedRoot)!, cancellationToken);
+        return copied;
+    }
+
+    private static void ValidateSceneApprovalTextBeforeRendering(ProductionPhaseContext context)
+    {
+        var forbiddenTerms = BuildForbiddenTermsForStrategy(context).ToArray();
+        if (forbiddenTerms.Length == 0) return;
+
+        var paths = new List<string>();
+        var narrationPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json");
+        if (File.Exists(narrationPath)) paths.Add(narrationPath);
+        if (Directory.Exists(context.ExecutionContext.SceneRoot!))
+        {
+            paths.AddRange(Directory.EnumerateFiles(context.ExecutionContext.SceneRoot!, "*-infographic-spec.json", SearchOption.AllDirectories));
+            paths.AddRange(Directory.EnumerateFiles(context.ExecutionContext.SceneRoot!, "*narration*.json", SearchOption.AllDirectories));
+            paths.AddRange(Directory.EnumerateFiles(context.ExecutionContext.SceneRoot!, "*narration*.txt", SearchOption.AllDirectories));
+        }
+
+        var hits = new List<string>();
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var text = File.ReadAllText(path);
+            var pathHits = forbiddenTerms.Where(term => ContainsToken(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (pathHits.Length > 0) hits.Add($"{NormalizePath(path)} => {string.Join(", ", pathHits)}");
+        }
+
+        if (hits.Count > 0)
+            throw new InvalidOperationException("Pre-render scene approval validation failed: narration/spec files contain forbidden terms for the selected event strategy: " + string.Join("; ", hits));
+    }
+
+    private static IEnumerable<string> BuildForbiddenTermsForStrategy(ProductionPhaseContext context)
+    {
+        var intelligence = context.ProductionEventIntelligence;
+        var terms = new List<string>();
+        terms.AddRange(intelligence.ForbiddenTerms);
+        terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
+        if (IsGeminidsOrMeteorStrategy(context))
+            terms.AddRange(["Venus", "Jupiter", "conjunction", "look west", "after sunset", "7:23 PM IST"]);
+        return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsGeminidsOrMeteorStrategy(ProductionPhaseContext context)
+        => (context.ProductionEventIntelligence.Title ?? string.Empty).Contains("Geminid", StringComparison.OrdinalIgnoreCase)
+            || (context.ProductionEventIntelligence.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || (context.Request.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || (context.MediaEventStrategy.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsToken(string haystack, string needle)
+    {
+        if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
+        var escaped = Regex.Escape(needle.Trim());
+        escaped = Regex.Replace(escaped, @"\s+", @"\s+");
+        return Regex.IsMatch(haystack, $@"(?<![\p{{L}}\p{{N}}]){escaped}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
     private static string RequireFile(string path, string name)
         => File.Exists(path) ? path : throw new InvalidOperationException($"Required {name} file was not found at '{path}'.");
 
@@ -306,14 +394,14 @@ public sealed class ProductionPipelineExecutionService(
         var validationPath = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry);
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo, phaseName, status = status.ToString(), startedUtc = started, finishedUtc = finished, durationMs = result.DurationMs, inputFiles, outputFiles, warnings, errors, reason, canRetry }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo, phaseName, status = status.ToString(), startedUtc = started, finishedUtc = finished, durationMs = result.DurationMs, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = outputFiles, inputFiles, outputFiles, warnings, errors, reason, canRetry }, JsonOptions), cancellationToken);
         return result;
     }
 
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, phases = phaseResults }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
@@ -328,7 +416,7 @@ public sealed class ProductionPipelineExecutionService(
     {
         var year = request.ScheduledUtc?.Year ?? request.PeakUtc?.Year ?? request.StartUtc?.Year ?? DateTimeOffset.UtcNow.Year;
         var questionRoot = Path.Combine(planRoot, "question-engine");
-        var sceneRoot = Path.Combine(planRoot, "scene-approval-v3");
+        var sceneRoot = Path.Combine(questionRoot, "scene-approval-v3");
         var heroRoot = Path.Combine(planRoot, "hero");
         var thumbnailRoot = Path.Combine(planRoot, "thumbnails");
         var narrationRoot = Path.Combine(planRoot, "narration");
@@ -375,36 +463,41 @@ public sealed class ProductionPipelineExecutionService(
             File.Delete(file);
     }
 
-    private static void DeleteProductionSubtree(string path)
+    private static void DeleteProductionSubtree(string path, List<string>? deletedFiles = null)
     {
-        if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
-            Directory.Delete(path, recursive: true);
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        if (deletedFiles is not null)
+            deletedFiles.AddRange(Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Select(NormalizePath));
+        Directory.Delete(path, recursive: true);
     }
 
     private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
     {
+        var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
         if (context.StartPhaseNo <= 7 && context.EndPhaseNo >= 7)
         {
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"));
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"));
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), deletedFiles);
         }
 
-        if (context.StartPhaseNo <= 8 && context.EndPhaseNo >= 8)
+        if (context.StartPhaseNo <= 10 && context.EndPhaseNo >= 7)
         {
-            DeleteProductionSubtree(context.ExecutionContext.SceneRoot!);
-            DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"));
+            DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles);
+            DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles);
+            DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles);
         }
 
         var firstValidationToDelete = Math.Max(context.StartPhaseNo, 7);
         var lastValidationToDelete = Math.Min(context.EndPhaseNo, 10);
         for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"));
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
     }
 
-    private static void DeleteFileIfExists(string path)
+    private static void DeleteFileIfExists(string path, List<string>? deletedFiles = null)
     {
-        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-            File.Delete(path);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        deletedFiles?.Add(NormalizePath(path));
+        File.Delete(path);
     }
 
     private async Task<IReadOnlyList<string>> MaterializePlanFolderAsync(ContentPlanProductionPipelineRequest request, string eventId, string outputRoot, IReadOnlyList<string> generatedFiles, CancellationToken cancellationToken)
@@ -492,6 +585,9 @@ public sealed class ProductionPipelineExecutionService(
 
     private static ProductionPipelineExecutionResult BuildResult(bool success, bool dryRun, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult>? phaseResults = null)
         => new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
+
+    private static string GetSceneApprovalNormalizedRoot(string outputRoot) => Path.Combine(outputRoot, "scene-approval-v3");
+    private static string NormalizePath(string path) => path.Replace('\\', '/');
 
     private string ResolveWorkingDirectoryRoot() => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string Sanitize(string value) => string.Join("-", (value ?? "unknown").Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
