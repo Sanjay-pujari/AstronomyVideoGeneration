@@ -284,7 +284,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
-    public async Task GenerateFromPlansAsync_ProductionRunningRecoveryRequiresRetryFlagsAndPhaseWindow()
+    public async Task GenerateFromPlansAsync_ProductionRunningRecoveryRequiresAllowRunningPlanRecoveryFlag()
     {
         await using var db = CreateDb();
         SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
@@ -308,9 +308,87 @@ public sealed class ContentPlanBatchGenerationServiceTests
             DryRun: false,
             PlanTitles: ["Geminids Meteor Shower Peak"],
             UseProductionPipeline: true,
-            AllowRunningPlanRecovery: true), CancellationToken.None));
+            ExecutionMode: ContentPlanExecutionMode.RecoverRunning), CancellationToken.None));
 
-        Assert.Contains("retryFailedOnly=true", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("allowRunningPlanRecovery=true", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+    }
+
+
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionCompletedWithRebuildOutputs_IsSelectedAndForwardsRerunOptions()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            OverwriteExisting: true,
+            ExecutionMode: ContentPlanExecutionMode.RebuildOutputs,
+            AllowCompletedPlanRerun: true,
+            ArchivePreviousRun: true), CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(ContentPlanExecutionMode.RebuildOutputs, production.CapturedExecutionMode);
+        Assert.True(production.CapturedAllowCompletedPlanRerun);
+        Assert.True(production.CapturedArchivePreviousRun);
+        Assert.Equal(3, production.CapturedStartPhaseNo);
+        Assert.Equal(19, production.CapturedEndPhaseNo);
+        Assert.Equal(ContentPlanExecutionMode.RebuildOutputs, response.ExecutionMode);
+        Assert.True(response.CompletedPlanRerun);
+        Assert.True(response.PreviousOutputArchived);
+        Assert.Equal("/archive/geminids", response.ArchivePath);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionCompletedWithoutExplicitFlag_IsRejected()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            OverwriteExisting: true,
+            ExecutionMode: ContentPlanExecutionMode.RebuildOutputs), CancellationToken.None));
+
+        Assert.Contains("allowCompletedPlanRerun=true", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(Guid.Empty, production.CapturedPlanId);
     }
 
@@ -385,6 +463,9 @@ public sealed class ContentPlanBatchGenerationServiceTests
         public int? CapturedStartPhaseNo { get; private set; }
         public int? CapturedEndPhaseNo { get; private set; }
         public bool CapturedRetryFailedOnly { get; private set; }
+        public ContentPlanExecutionMode CapturedExecutionMode { get; private set; }
+        public bool CapturedAllowCompletedPlanRerun { get; private set; }
+        public bool CapturedArchivePreviousRun { get; private set; }
 
         public Task<ContentPlanProductionExecutionResult> ExecuteContentPlanAsync(Guid contentGenerationPlanId, bool dryRun, bool overwriteExisting, CancellationToken cancellationToken)
         {
@@ -454,7 +535,14 @@ public sealed class ContentPlanBatchGenerationServiceTests
                 ExpectedSteps,
                 [],
                 [],
-                []));
+                [],
+                ExecutionMode: CapturedExecutionMode,
+                CompletedPlanRerun: CapturedAllowCompletedPlanRerun,
+                PreviousOutputArchived: CapturedArchivePreviousRun,
+                ArchivePath: CapturedArchivePreviousRun ? "/archive/geminids" : null,
+                DeletedOutputFolders: [],
+                StartPhaseNo: CapturedStartPhaseNo,
+                EndPhaseNo: CapturedEndPhaseNo));
         }
 
         public Task<ContentPlanProductionExecutionResult> ExecuteContentPlanWithProductionPipelineAsync(ContentPlanProductionExecutionRequest request, CancellationToken cancellationToken)
@@ -462,6 +550,9 @@ public sealed class ContentPlanBatchGenerationServiceTests
             CapturedStartPhaseNo = request.StartPhaseNo;
             CapturedEndPhaseNo = request.EndPhaseNo;
             CapturedRetryFailedOnly = request.RetryFailedOnly;
+            CapturedExecutionMode = request.ExecutionMode;
+            CapturedAllowCompletedPlanRerun = request.AllowCompletedPlanRerun;
+            CapturedArchivePreviousRun = request.ArchivePreviousRun;
             return ExecuteContentPlanAsync(request.ContentGenerationPlanId, request.DryRun, request.OverwriteExisting, cancellationToken);
         }
     }
