@@ -47,7 +47,12 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("Intelligence", result.PhaseExecuted);
         Assert.Equal(outputPath.Replace('\\', '/'), result.VideoAssemblyIntelligencePath);
         Assert.Equal("DON'T MISS THIS TONIGHT", result.SelectedOpeningHook);
-        Assert.Equal(20.0, result.RecommendedTotalDurationSeconds);
+        Assert.Equal(30.0, result.RecommendedTotalDurationSeconds);
+        Assert.NotNull(result.DurationValidation);
+        Assert.Equal("ShortVideo", result.DurationValidation!.ProfileName);
+        Assert.Equal(30, result.DurationValidation.TargetDurationRange.MinSeconds);
+        Assert.Equal(45, result.DurationValidation.AcceptableDurationRange.MaxSeconds);
+        Assert.True(result.DurationValidation.Passed);
         Assert.True(result.TtsRequired);
         Assert.True(result.FinalVideoPlanned);
         Assert.Empty(result.GeneratedFiles);
@@ -66,7 +71,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("Curiosity → Clarity → Action", saved.EmotionalArc);
         Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.RecommendedSceneOrder);
         Assert.Equal(6, saved.RecommendedSceneDurations.Count);
-        Assert.Equal(20.0, saved.RecommendedTotalDurationSeconds);
+        Assert.Equal(30.0, saved.RecommendedTotalDurationSeconds);
         Assert.True(saved.AudioPlan.TtsRequired);
         Assert.True(saved.OutputsPlanned.Contains("final-video-short.mp4"));
         Assert.True(saved.Scores.VideoAssemblyReadinessScore >= 90);
@@ -458,7 +463,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("Script", result.PhaseExecuted);
         Assert.True(result.VideoNarrationScriptGenerated);
         Assert.Equal(outputPath.Replace('\\', '/'), result.VideoNarrationScriptPath);
-        Assert.InRange(result.TotalEstimatedDurationSeconds, 18.0, 22.0);
+        Assert.InRange(result.TotalEstimatedDurationSeconds, 30.0, 40.0);
         Assert.True(result.TtsReady);
         Assert.Empty(result.GeneratedFiles);
         Assert.True(File.Exists(outputPath));
@@ -471,7 +476,12 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(RegionId, saved.RegionId);
         Assert.Equal("en", saved.Language);
         Assert.Equal("YouTubeShort", saved.Platform);
-        Assert.InRange(saved.TotalEstimatedDurationSeconds, 18.0, 22.0);
+        Assert.InRange(saved.TotalEstimatedDurationSeconds, 30.0, 40.0);
+        Assert.NotNull(saved.DurationValidation);
+        Assert.Equal("ShortVideo", saved.DurationValidation!.ProfileName);
+        Assert.Equal(30, saved.DurationValidation.TargetDurationRange.MinSeconds);
+        Assert.Equal(45, saved.DurationValidation.AcceptableDurationRange.MaxSeconds);
+        Assert.True(saved.DurationValidation.Passed);
         Assert.Equal("Excited but clear", saved.ScriptStyle.Tone);
         Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.SceneScripts.Select(scene => scene.SceneKey));
         Assert.Contains("sky highlight", saved.SceneScripts[0].Narration, StringComparison.OrdinalIgnoreCase);
@@ -563,10 +573,14 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
         using var debug = JsonDocument.Parse(await File.ReadAllTextAsync(debugPath));
         var root = debug.RootElement;
-        Assert.InRange(root.GetProperty("actualDurationSeconds").GetDouble(), 15.0, 25.0);
+        Assert.InRange(root.GetProperty("actualDurationSeconds").GetDouble(), 25.0, 45.0);
         Assert.True(root.GetProperty("narrationWordCount").GetInt32() > 0);
         Assert.True(root.GetProperty("audioFileSizeBytes").GetInt64() > 0);
         Assert.True(root.GetProperty("isSilent").GetBoolean());
+        var durationValidation = root.GetProperty("durationValidation");
+        Assert.Equal("ShortVideo", durationValidation.GetProperty("profileName").GetString());
+        Assert.Equal(25, durationValidation.GetProperty("acceptableDurationRange").GetProperty("minSeconds").GetDouble());
+        Assert.True(durationValidation.GetProperty("passed").GetBoolean());
     }
 
 

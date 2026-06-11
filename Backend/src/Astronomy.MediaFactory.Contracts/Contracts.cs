@@ -321,6 +321,32 @@ public sealed class VideoAssemblyOptions
 {
     public const string SectionName = "VideoAssembly";
     public VideoAssemblyBackgroundMusicOptions BackgroundMusic { get; set; } = new();
+    public VideoDurationProfileOptions ShortVideo { get; set; } = VideoDurationProfileOptions.ShortVideoDefaults();
+    public VideoDurationProfileOptions LongVideo { get; set; } = VideoDurationProfileOptions.LongVideoDefaults();
+}
+
+public sealed class VideoDurationProfileOptions
+{
+    public double TargetDurationSecondsMin { get; set; }
+    public double TargetDurationSecondsMax { get; set; }
+    public double AcceptableDurationSecondsMin { get; set; }
+    public double AcceptableDurationSecondsMax { get; set; }
+
+    public static VideoDurationProfileOptions ShortVideoDefaults() => new()
+    {
+        TargetDurationSecondsMin = 30,
+        TargetDurationSecondsMax = 40,
+        AcceptableDurationSecondsMin = 25,
+        AcceptableDurationSecondsMax = 45
+    };
+
+    public static VideoDurationProfileOptions LongVideoDefaults() => new()
+    {
+        TargetDurationSecondsMin = 120,
+        TargetDurationSecondsMax = 180,
+        AcceptableDurationSecondsMin = 90,
+        AcceptableDurationSecondsMax = 240
+    };
 }
 
 public sealed class VideoAssemblyBackgroundMusicOptions

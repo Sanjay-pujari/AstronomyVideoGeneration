@@ -51,10 +51,6 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const double LongFormCrossFadeDurationSeconds = 0.6;
     private const double HookOptimizationDurationSeconds = 3.218;
     private const double LongFormNarrationWordsPerMinute = 150.0;
-    private const double ShortFormTargetMinimumEstimatedDurationSeconds = 18.0;
-    private const double ShortFormTargetMaximumEstimatedDurationSeconds = 22.0;
-    private const double LongFormMinimumEstimatedDurationSeconds = 120.0;
-    private const double LongFormMaximumEstimatedDurationSeconds = 180.0;
     private const string SelectedOpeningHook = "TONIGHT'S SKY EVENT";
     private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
     private const string AzureTtsProviderName = "AzureSpeechTts";
@@ -111,6 +107,59 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private static string ResolveSceneApprovalProfileDirectoryName(ScenePresentationProfile presentationProfile)
         => presentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
+
+    private VideoDurationProfileOptions ResolveDurationProfile(ScenePresentationProfile profile)
+        => NormalizeDurationProfile(profile == ScenePresentationProfile.ShortForm
+            ? videoAssemblyOptions?.Value.ShortVideo
+            : videoAssemblyOptions?.Value.LongVideo, profile);
+
+    private static VideoDurationProfileOptions NormalizeDurationProfile(VideoDurationProfileOptions? configured, ScenePresentationProfile profile)
+    {
+        var fallback = profile == ScenePresentationProfile.ShortForm
+            ? VideoDurationProfileOptions.ShortVideoDefaults()
+            : VideoDurationProfileOptions.LongVideoDefaults();
+        var value = configured ?? fallback;
+        return new VideoDurationProfileOptions
+        {
+            TargetDurationSecondsMin = value.TargetDurationSecondsMin > 0 ? value.TargetDurationSecondsMin : fallback.TargetDurationSecondsMin,
+            TargetDurationSecondsMax = value.TargetDurationSecondsMax > 0 ? value.TargetDurationSecondsMax : fallback.TargetDurationSecondsMax,
+            AcceptableDurationSecondsMin = value.AcceptableDurationSecondsMin > 0 ? value.AcceptableDurationSecondsMin : fallback.AcceptableDurationSecondsMin,
+            AcceptableDurationSecondsMax = value.AcceptableDurationSecondsMax > 0 ? value.AcceptableDurationSecondsMax : fallback.AcceptableDurationSecondsMax
+        };
+    }
+
+    private static string ResolveDurationProfileName(ScenePresentationProfile profile)
+        => profile == ScenePresentationProfile.ShortForm ? "ShortVideo" : "LongVideo";
+
+    private static string ResolvePlannedFormat(ScenePresentationProfile profile)
+        => profile == ScenePresentationProfile.ShortForm ? "ShortVideo" : "LongVideo";
+
+    private VideoDurationContractValidationDto BuildDurationValidation(ScenePresentationProfile profile, double actualDurationSeconds, bool useTargetRange, string valueLabel)
+    {
+        var contract = ResolveDurationProfile(profile);
+        var min = useTargetRange ? contract.TargetDurationSecondsMin : contract.AcceptableDurationSecondsMin;
+        var max = useTargetRange ? contract.TargetDurationSecondsMax : contract.AcceptableDurationSecondsMax;
+        var passed = actualDurationSeconds >= min && actualDurationSeconds <= max;
+        var rangeName = useTargetRange ? "target" : "acceptable";
+        var rounded = Math.Round(actualDurationSeconds, 3, MidpointRounding.AwayFromZero);
+        var reason = passed
+            ? $"{valueLabel} is within the {rangeName} duration range."
+            : $"{valueLabel} must be {min:0.###}-{max:0.###} seconds for {ResolveDurationProfileName(profile)}.";
+        return new VideoDurationContractValidationDto(
+            ResolvePlannedFormat(profile),
+            ResolveDurationProfileName(profile),
+            new VideoDurationRangeDto(contract.TargetDurationSecondsMin, contract.TargetDurationSecondsMax),
+            new VideoDurationRangeDto(contract.AcceptableDurationSecondsMin, contract.AcceptableDurationSecondsMax),
+            rounded,
+            passed,
+            reason);
+    }
+
+    private void EnsureDurationValidationPassed(VideoDurationContractValidationDto report, string messagePrefix)
+    {
+        if (!report.Passed)
+            throw new ArgumentException($"{messagePrefix}: {report.Reason} ActualDurationSeconds={report.ActualDurationSeconds:0.###}; plannedFormat={report.PlannedFormat}; profileName={report.ProfileName}; targetDurationRange={report.TargetDurationRange.MinSeconds:0.###}-{report.TargetDurationRange.MaxSeconds:0.###}; acceptableDurationRange={report.AcceptableDurationRange.MinSeconds:0.###}-{report.AcceptableDurationRange.MaxSeconds:0.###}.");
+    }
 
     private static ScenePresentationProfile ResolveRequestProfile(VideoAssemblyGenerationRequest request)
         => request.ScenePresentationProfile ?? ResolveScenePresentationProfile(request.Platform);
@@ -342,7 +391,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var narrationText = await ReadRequiredNarrationTextAsync(request, profile, script, cancellationToken);
         script = script with { FullNarrationText = narrationText };
         var provider = ResolveTtsProvider(request, script);
-        var actualDurationSeconds = NormalizeTtsDuration(script.TotalEstimatedDurationSeconds);
+        var actualDurationSeconds = NormalizeTtsDuration(profile, script.TotalEstimatedDurationSeconds);
         var narrationWordCount = CountSpokenWords(narrationText);
 
         var generatedFiles = new List<string>();
@@ -369,14 +418,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
                 }
                 catch (ArgumentException ex)
                 {
-                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, ex.Message, cancellationToken);
+                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, timings.DurationValidation, ex.Message, cancellationToken);
                     throw new InvalidOperationException(BuildTtsDiagnosticFailureMessage(ex.Message, actualDurationSeconds, narrationWordCount, audioValidation, tempAudioPath), ex);
                 }
 
                 if (!audioValidation.AudioValidationPassed)
                 {
                     const string message = "Generated TTS audio validation failed: audio is silent or invalid.";
-                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, message, cancellationToken);
+                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, BuildDurationValidation(profile, actualDurationSeconds, useTargetRange: false, "actualDurationSeconds"), message, cancellationToken);
                     throw new InvalidOperationException(BuildTtsDiagnosticFailureMessage(message, actualDurationSeconds, narrationWordCount, audioValidation, tempAudioPath));
                 }
 
@@ -392,7 +441,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             catch
             {
                 if (!string.IsNullOrWhiteSpace(tempAudioPath) && !File.Exists(debugPath))
-                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, "TTS generation failed before final outputs were written.", cancellationToken);
+                    await WriteTtsDebugAsync(debugPath, tempAudioPath, audioPath, timingsPath, actualDurationSeconds, narrationWordCount, audioValidation, BuildDurationValidation(profile, actualDurationSeconds, useTargetRange: false, "actualDurationSeconds"), "TTS generation failed before final outputs were written.", cancellationToken);
                 throw;
             }
         }
@@ -431,8 +480,15 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new InvalidOperationException("Generated long-form TTS audio validation failed: audio is silent or invalid.");
 
         var actualDurationSeconds = Math.Round(await ProbeDurationSecondsAsync(audioPath, cancellationToken), 3, MidpointRounding.AwayFromZero);
-        if (actualDurationSeconds < LongFormMinimumEstimatedDurationSeconds || actualDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
-            throw new InvalidOperationException($"Generated long-form TTS audio duration must be 120-180 seconds. ActualDurationSeconds={actualDurationSeconds:0.###}.");
+        var durationValidation = BuildDurationValidation(ScenePresentationProfile.LongForm, actualDurationSeconds, useTargetRange: false, "actualDurationSeconds");
+        try
+        {
+            EnsureDurationValidationPassed(durationValidation, "Generated long-form TTS audio duration validation failed");
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
 
         var sectionTimings = await BuildActualLongFormSectionTimingsAsync(script, actualDurationSeconds, cancellationToken);
         var timings = new LongFormVideoTtsTimingsDto(
@@ -447,7 +503,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             AzureTtsProviderName,
             voiceUsed,
             audioValidation,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            durationValidation);
         ValidateLongFormVideoTtsTimings(timings);
 
         await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
@@ -695,6 +752,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         double actualDurationSeconds,
         int narrationWordCount,
         VideoTtsAudioValidationDto audioValidation,
+        VideoDurationContractValidationDto? durationValidation,
         string failureReason,
         CancellationToken cancellationToken)
     {
@@ -711,6 +769,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             rmsDb = audioValidation.AudioRmsDb,
             isSilent = audioValidation.IsSilentAudio,
             audioValidationPassed = audioValidation.AudioValidationPassed,
+            durationValidation,
             generatedUtc = DateTimeOffset.UtcNow
         };
 
@@ -851,12 +910,13 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
     }
 
-    private static VideoAssemblyIntelligenceDto BuildVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
+    private VideoAssemblyIntelligenceDto BuildVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
     {
         if (IsLongFormRequest(request))
             return BuildLongFormVideoAssemblyIntelligence(request);
 
-        var sceneDurations = new[]
+        var targetDurationSeconds = ResolveShortFormTargetDuration(request);
+        var baseSceneDurations = new[]
         {
             new VideoAssemblySceneDurationDto("Hook", 3.0, "Stop scroll"),
             new VideoAssemblySceneDurationDto("What", 4.0, "Show Venus and Jupiter"),
@@ -865,6 +925,12 @@ public sealed partial class VideoAssemblyIntelligenceService(
             new VideoAssemblySceneDurationDto("When", 3.0, "Tell best viewing time"),
             new VideoAssemblySceneDurationDto("Action", 3.0, "Call to action")
         };
+        var baseTotal = baseSceneDurations.Sum(scene => scene.DurationSeconds);
+        var sceneDurations = baseSceneDurations.Select(scene => scene with
+        {
+            DurationSeconds = Math.Round(targetDurationSeconds * scene.DurationSeconds / baseTotal, 3, MidpointRounding.AwayFromZero)
+        }).ToArray();
+        sceneDurations[^1] = sceneDurations[^1] with { DurationSeconds = Math.Round(targetDurationSeconds - sceneDurations[..^1].Sum(scene => scene.DurationSeconds), 3, MidpointRounding.AwayFromZero) };
 
         return new VideoAssemblyIntelligenceDto(
             request.EventId,
@@ -884,13 +950,13 @@ public sealed partial class VideoAssemblyIntelligenceService(
             new VideoAssemblyScoresDto(96, 95, 96, 95),
             [],
             DateTimeOffset.UtcNow,
-            20,
+            targetDurationSeconds,
             ScenePresentationProfile.ShortForm,
             "question-engine/scene-approval-v3/short/",
             null);
     }
 
-    private static VideoAssemblyIntelligenceDto BuildLongFormVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
+    private VideoAssemblyIntelligenceDto BuildLongFormVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
     {
         var targetDurationSeconds = ResolveLongFormTargetDuration(request);
         var perSection = Math.Round(targetDurationSeconds / LongFormSectionOrder.Length, 3, MidpointRounding.AwayFromZero);
@@ -921,7 +987,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             LongFormSectionOrder);
     }
 
-    private static VideoNarrationScriptDto BuildVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
+    private VideoNarrationScriptDto BuildVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
     {
         if (IsLongFormRequest(request))
             return BuildLongFormVideoNarrationScript(request, intelligence);
@@ -959,7 +1025,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     }
 
 
-    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildTargetedShortFormSceneScripts(
+    private IReadOnlyList<VideoNarrationSceneScriptDto> BuildTargetedShortFormSceneScripts(
         IReadOnlyDictionary<string, double> durations,
         string title,
         string objects,
@@ -977,7 +1043,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Choose a safe open spot, check clouds, and set a reminder.", "Set a reminder")
         };
 
-        var estimatedDuration = Math.Clamp(EstimateSpokenDurationSeconds(string.Join(" ", sceneScripts.Select(scene => scene.Narration))), ShortFormTargetMinimumEstimatedDurationSeconds, ShortFormTargetMaximumEstimatedDurationSeconds);
+        var durationProfile = ResolveDurationProfile(ScenePresentationProfile.ShortForm);
+        var estimatedDuration = Math.Clamp(EstimateSpokenDurationSeconds(string.Join(" ", sceneScripts.Select(scene => scene.Narration))), durationProfile.TargetDurationSecondsMin, durationProfile.TargetDurationSecondsMax);
         return NormalizeShortFormSceneDurations(sceneScripts, estimatedDuration);
     }
 
@@ -1006,7 +1073,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }).ToArray();
     }
 
-    private static VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
+    private VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
     {
         var sceneScripts = BuildBalancedLongFormSceneScripts(request.ProductionContext?.ProductionEventIntelligence);
         var fullNarrationText = string.Join(" ", sceneScripts.Select(scene => scene.Narration));
@@ -1027,7 +1094,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             DateTimeOffset.UtcNow);
     }
 
-    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts(ProductionEventIntelligence? eventInfo)
+    private IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts(ProductionEventIntelligence? eventInfo)
     {
         var sections = eventInfo?.ValidationRules is not null ? LongFormSectionOrder : LongFormSectionOrder;
         var scripts = sections.Select(section =>
@@ -1037,14 +1104,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }).ToArray();
 
         var totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
-        if (totalDuration < LongFormMinimumEstimatedDurationSeconds)
+        if (totalDuration < ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMin)
             scripts = ExpandLongFormSceneNarration(scripts);
-        else if (totalDuration > LongFormMaximumEstimatedDurationSeconds)
+        else if (totalDuration > ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMax)
             scripts = ShortenLongFormSceneNarration(scripts);
 
         totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
-        if (totalDuration < LongFormMinimumEstimatedDurationSeconds || totalDuration > LongFormMaximumEstimatedDurationSeconds)
-            throw new ArgumentException("Video narration script validation failed: LongForm narration word-count estimate must be 120-180 seconds.");
+        if (totalDuration < ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMin || totalDuration > ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMax)
+            throw new ArgumentException($"Video narration script validation failed: LongForm narration word-count estimate must be {ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMin:0.###}-{ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMax:0.###} seconds.");
 
         return scripts.Select(scene => scene with { DurationSeconds = EstimateSpokenDurationSeconds(scene.Narration) }).ToArray();
     }
@@ -1149,7 +1216,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         => durations.TryGetValue(sceneKey, out var duration) ? duration : fallback;
 
 
-    private static VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds, string ttsProvider, string voiceUsed, VideoTtsAudioValidationDto audioValidation)
+    private VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds, string ttsProvider, string voiceUsed, VideoTtsAudioValidationDto audioValidation)
     {
         var estimatedDurationSeconds = script.TotalEstimatedDurationSeconds;
         var sceneTimings = new List<VideoTtsSceneTimingDto>();
@@ -1180,14 +1247,31 @@ public sealed partial class VideoAssemblyIntelligenceService(
             ttsProvider,
             voiceUsed,
             DateTimeOffset.UtcNow,
-            audioValidation);
+            audioValidation,
+            BuildDurationValidation(ResolveRequestProfile(request), actualDurationSeconds, useTargetRange: false, "actualDurationSeconds"));
     }
 
-    private static double NormalizeTtsDuration(double estimatedDurationSeconds)
-        => Math.Round(Math.Clamp(estimatedDurationSeconds, estimatedDurationSeconds > 60 ? 120.0 : 15.0, estimatedDurationSeconds > 60 ? 180.0 : 25.0), 3, MidpointRounding.AwayFromZero);
+    private double NormalizeTtsDuration(ScenePresentationProfile profile, double estimatedDurationSeconds)
+    {
+        var contract = ResolveDurationProfile(profile);
+        return Math.Round(Math.Clamp(estimatedDurationSeconds, contract.AcceptableDurationSecondsMin, contract.AcceptableDurationSecondsMax), 3, MidpointRounding.AwayFromZero);
+    }
 
-    private static double ResolveLongFormTargetDuration(VideoAssemblyGenerationRequest request)
-        => Math.Clamp((request.LongForm?.TargetDurationSeconds ?? 0) > 0 ? request.LongForm!.TargetDurationSeconds : 180, 120, 180);
+    private double ResolveShortFormTargetDuration(VideoAssemblyGenerationRequest request)
+    {
+        var contract = ResolveDurationProfile(ScenePresentationProfile.ShortForm);
+        var requested = request.ShortForm?.TargetDurationSeconds ?? 0;
+        var fallback = contract.TargetDurationSecondsMin;
+        return Math.Clamp(requested > 0 ? requested : fallback, contract.TargetDurationSecondsMin, contract.TargetDurationSecondsMax);
+    }
+
+    private double ResolveLongFormTargetDuration(VideoAssemblyGenerationRequest request)
+    {
+        var contract = ResolveDurationProfile(ScenePresentationProfile.LongForm);
+        var requested = request.LongForm?.TargetDurationSeconds ?? 0;
+        var fallback = contract.TargetDurationSecondsMax;
+        return Math.Clamp(requested > 0 ? requested : fallback, contract.TargetDurationSecondsMin, contract.TargetDurationSecondsMax);
+    }
 
     private async Task WriteTtsAudioAsync(string narrationText, string audioPath, double durationSeconds, TtsProviderSelection provider, CancellationToken cancellationToken)
     {
@@ -1551,7 +1635,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             BuildSceneMappingValidation(segments, inputs.ScenePresentationProfile),
             BuildRenderMusicPlan(request),
             [],
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            BuildDurationValidation(inputs.ScenePresentationProfile, inputs.Timings.ActualDurationSeconds, useTargetRange: false, "actualDurationSeconds"));
     }
 
     private static VideoAssemblySceneMappingValidationDto BuildSceneMappingValidation(IReadOnlyList<VideoAssemblyPlanSegmentDto> segments, ScenePresentationProfile profile)
@@ -1644,7 +1729,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             _ => "SubtleKenBurns"
         };
 
-    private static void ValidateVideoAssemblyPlan(VideoAssemblyPlanDto plan)
+    private void ValidateVideoAssemblyPlan(VideoAssemblyPlanDto plan)
     {
         ValidateSceneTimingOrder(plan.Segments.Select(segment => segment.SceneKey), plan.ScenePresentationProfile, VideoAssemblyPlanFileName);
         if (plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm && plan.Segments.Count != 6)
@@ -1659,6 +1744,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException("Video assembly validation failed: validation.segmentCount must match segment count.");
         if (!plan.Validation.DurationMatchesAudio)
             throw new ArgumentException("Video assembly validation failed: duration does not match TTS duration.");
+        EnsureDurationValidationPassed(plan.DurationValidation ?? BuildDurationValidation(plan.ScenePresentationProfile, plan.TotalDurationSeconds, useTargetRange: false, "actualDurationSeconds"), "Video assembly validation failed");
         if (!plan.Validation.ReadyForRender)
             throw new ArgumentException("Video assembly validation failed: readyForRender must be true.");
         if (plan.SceneMappingValidation is null)
@@ -2092,21 +2178,19 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private static string ResolveVideoAssemblyPlanFileName(ScenePresentationProfile profile)
         => profile == ScenePresentationProfile.ShortForm ? VideoAssemblyPlanFileName : LongVideoAssemblyPlanFileName;
 
-    private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
+    private void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
     {
         if (string.IsNullOrWhiteSpace(script.FullNarrationText))
             throw new ArgumentException("Video narration script validation failed: fullNarrationText must not be empty.");
         var profile = ResolveScenePresentationProfile(script.Platform);
         ValidateSceneTimingOrder(script.SceneScripts.Select(scene => scene.SceneKey), profile, "video-narration-script.json");
-        if (profile == ScenePresentationProfile.ShortForm && (script.TotalEstimatedDurationSeconds < 15 || script.TotalEstimatedDurationSeconds > 25))
-            throw new ArgumentException("Video narration script validation failed: totalEstimatedDurationSeconds must be 15-25 seconds.");
+        var durationValidation = script.DurationValidation ?? BuildDurationValidation(profile, script.TotalEstimatedDurationSeconds, useTargetRange: true, "totalEstimatedDurationSeconds");
+        EnsureDurationValidationPassed(durationValidation, "Video narration script validation failed");
         if (profile == ScenePresentationProfile.LongForm)
         {
             var calculatedDurationSeconds = EstimateSpokenDurationSeconds(script.FullNarrationText);
             if (Math.Abs(script.TotalEstimatedDurationSeconds - calculatedDurationSeconds) > 1.0)
                 throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be calculated from narration word count or TTS estimate.");
-            if (script.TotalEstimatedDurationSeconds < LongFormMinimumEstimatedDurationSeconds || script.TotalEstimatedDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
-                throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be 120-180 seconds.");
         }
         if (!script.TtsPlan.TtsRequired)
             throw new ArgumentException("Video narration script validation failed: ttsRequired must be true.");
@@ -2132,31 +2216,28 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException($"Video narration script validation failed: LongForm scene order in {fileName} must match the longFormSections plan.");
     }
 
-    private static void ValidateVideoAssemblyIntelligence(VideoAssemblyIntelligenceDto intelligence)
+    private void ValidateVideoAssemblyIntelligence(VideoAssemblyIntelligenceDto intelligence)
     {
         if (string.IsNullOrWhiteSpace(intelligence.SelectedOpeningHook))
             throw new ArgumentException("Video assembly intelligence validation failed: selectedOpeningHook is required.");
         if (intelligence.RecommendedSceneOrder.Count == 0)
             throw new ArgumentException("Video assembly intelligence validation failed: recommendedSceneOrder must not be empty.");
-        if (string.Equals(intelligence.Platform, "YouTubeShort", StringComparison.OrdinalIgnoreCase)
-            && (intelligence.RecommendedTotalDurationSeconds < 15 || intelligence.RecommendedTotalDurationSeconds > 30))
-            throw new ArgumentException("Video assembly intelligence validation failed: YouTubeShort total duration must be 15-30 seconds.");
+        var profile = ResolveScenePresentationProfile(intelligence.Platform);
+        EnsureDurationValidationPassed(BuildDurationValidation(profile, intelligence.RecommendedTotalDurationSeconds, useTargetRange: true, "recommendedTotalDurationSeconds"), "Video assembly intelligence validation failed");
         if (!intelligence.AudioPlan.TtsRequired)
             throw new ArgumentException("Video assembly intelligence validation failed: ttsRequired must be true.");
         if (intelligence.Scores.VideoAssemblyReadinessScore < 90)
             throw new ArgumentException("Video assembly intelligence validation failed: videoAssemblyReadinessScore must be at least 90.");
     }
 
-    private static void ValidateLongFormVideoTtsTimings(LongFormVideoTtsTimingsDto timings)
+    private void ValidateLongFormVideoTtsTimings(LongFormVideoTtsTimingsDto timings)
     {
         if (string.IsNullOrWhiteSpace(timings.AudioFilePath))
             throw new ArgumentException("Long-form video TTS timings validation failed: audioFilePath is required.");
         if (!string.Equals(timings.Platform, "YouTubeLong", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Long-form video TTS timings validation failed: platform must be YouTubeLong.");
-        if (timings.EstimatedDurationSeconds < LongFormMinimumEstimatedDurationSeconds || timings.EstimatedDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
-            throw new ArgumentException("Long-form video TTS timings validation failed: estimatedDurationSeconds must be 120-180 seconds.");
-        if (timings.ActualDurationSeconds < LongFormMinimumEstimatedDurationSeconds || timings.ActualDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
-            throw new ArgumentException("Long-form video TTS timings validation failed: actualDurationSeconds must be 120-180 seconds.");
+        EnsureDurationValidationPassed(BuildDurationValidation(ScenePresentationProfile.LongForm, timings.EstimatedDurationSeconds, useTargetRange: true, "estimatedDurationSeconds"), "Long-form video TTS timings validation failed");
+        EnsureDurationValidationPassed(timings.DurationValidation ?? BuildDurationValidation(ScenePresentationProfile.LongForm, timings.ActualDurationSeconds, useTargetRange: false, "actualDurationSeconds"), "Long-form video TTS timings validation failed");
         if (!string.Equals(timings.TtsProvider, AzureTtsProviderName, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Long-form video TTS timings validation failed: ttsProvider must be AzureSpeechTts.");
         if (string.IsNullOrWhiteSpace(timings.VoiceUsed))
@@ -2169,19 +2250,13 @@ public sealed partial class VideoAssemblyIntelligenceService(
         ValidateTimingContinuity(timings.SectionTimings.Select(section => (section.StartSeconds, section.EndSeconds)).ToArray(), timings.ActualDurationSeconds, "Long-form video TTS timings validation failed");
     }
 
-    private static void ValidateVideoTtsTimings(VideoTtsTimingsDto timings)
+    private void ValidateVideoTtsTimings(VideoTtsTimingsDto timings)
     {
         if (string.IsNullOrWhiteSpace(timings.AudioFilePath))
             throw new ArgumentException("Video TTS timings validation failed: audioFilePath is required.");
         var profile = ResolveScenePresentationProfile(timings.Platform);
-        if (profile == ScenePresentationProfile.ShortForm && (timings.EstimatedDurationSeconds < 15 || timings.EstimatedDurationSeconds > 25))
-            throw new ArgumentException("Video TTS timings validation failed: estimatedDurationSeconds must be 15-25 seconds.");
-        if (profile == ScenePresentationProfile.ShortForm && (timings.ActualDurationSeconds < 15 || timings.ActualDurationSeconds > 25))
-            throw new ArgumentException("Video TTS timings validation failed: actualDurationSeconds must be 15-25 seconds.");
-        if (profile == ScenePresentationProfile.LongForm && (timings.EstimatedDurationSeconds < 120 || timings.EstimatedDurationSeconds > 180))
-            throw new ArgumentException("Video TTS timings validation failed: LongForm estimatedDurationSeconds must be 120-180 seconds.");
-        if (profile == ScenePresentationProfile.LongForm && (timings.ActualDurationSeconds < 120 || timings.ActualDurationSeconds > 180))
-            throw new ArgumentException("Video TTS timings validation failed: LongForm actualDurationSeconds must be 120-180 seconds.");
+        EnsureDurationValidationPassed(BuildDurationValidation(profile, timings.EstimatedDurationSeconds, useTargetRange: true, "estimatedDurationSeconds"), "Video TTS timings validation failed");
+        EnsureDurationValidationPassed(timings.DurationValidation ?? BuildDurationValidation(profile, timings.ActualDurationSeconds, useTargetRange: false, "actualDurationSeconds"), "Video TTS timings validation failed");
         ValidateSceneTimingOrder(timings.SceneTimings.Select(scene => scene.SceneKey), profile, "video-tts-timings.json");
         if (string.IsNullOrWhiteSpace(timings.TtsProvider))
             throw new ArgumentException("Video TTS timings validation failed: ttsProvider is required.");
@@ -2224,7 +2299,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException("phase is required.", nameof(request));
     }
 
-    private static VideoAssemblyGenerationResponse BuildResponse(string phaseRequested, VideoAssemblyIntelligenceDto intelligence, string outputPath)
+    private VideoAssemblyGenerationResponse BuildResponse(string phaseRequested, VideoAssemblyIntelligenceDto intelligence, string outputPath)
         => new(
             phaseRequested,
             phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormIntelligence" : "Intelligence",
@@ -2234,9 +2309,10 @@ public sealed partial class VideoAssemblyIntelligenceService(
             intelligence.RecommendedTotalDurationSeconds,
             intelligence.AudioPlan.TtsRequired,
             intelligence.OutputsPlanned.Any(output => string.Equals(output, "final-video-short.mp4", StringComparison.OrdinalIgnoreCase) || string.Equals(output, "final-video-long.mp4", StringComparison.OrdinalIgnoreCase)),
-            []);
+            [],
+            DurationValidation: BuildDurationValidation(ResolveScenePresentationProfile(intelligence.Platform), intelligence.RecommendedTotalDurationSeconds, useTargetRange: true, "recommendedTotalDurationSeconds"));
 
-    private static VideoAssemblyGenerationResponse BuildScriptResponse(string phaseRequested, VideoNarrationScriptDto script, string outputPath)
+    private VideoAssemblyGenerationResponse BuildScriptResponse(string phaseRequested, VideoNarrationScriptDto script, string outputPath)
         => new(
             phaseRequested,
             phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormScript" : "Script",
@@ -2250,9 +2326,10 @@ public sealed partial class VideoAssemblyIntelligenceService(
             true,
             NormalizePath(outputPath),
             script.TotalEstimatedDurationSeconds,
-            script.Scores.TtsReadinessScore >= 90);
+            script.Scores.TtsReadinessScore >= 90,
+            DurationValidation: script.DurationValidation ?? BuildDurationValidation(ResolveScenePresentationProfile(script.Platform), script.TotalEstimatedDurationSeconds, useTargetRange: true, "totalEstimatedDurationSeconds"));
 
-    private static VideoAssemblyGenerationResponse BuildTtsResponse(
+    private VideoAssemblyGenerationResponse BuildTtsResponse(
         string phaseRequested,
         string audioPath,
         string timingsPath,
@@ -2285,10 +2362,11 @@ public sealed partial class VideoAssemblyIntelligenceService(
             audioValidation?.IsSilentAudio ?? false,
             audioValidation?.AudioValidationPassed ?? false,
             audioValidation?.AudioPeakDb ?? 0,
-            audioValidation?.AudioRmsDb ?? 0);
+            audioValidation?.AudioRmsDb ?? 0,
+            DurationValidation: BuildDurationValidation(phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? ScenePresentationProfile.LongForm : ScenePresentationProfile.ShortForm, actualDurationSeconds, useTargetRange: false, "actualDurationSeconds"));
 
 
-    private static VideoAssemblyGenerationResponse BuildLongFormTtsResponse(
+    private VideoAssemblyGenerationResponse BuildLongFormTtsResponse(
         string phaseRequested,
         string audioPath,
         string timingsPath,
@@ -2318,10 +2396,11 @@ public sealed partial class VideoAssemblyIntelligenceService(
             AudioValidationPassed: audioValidation.AudioValidationPassed,
             AudioPeakDb: audioValidation.AudioPeakDb,
             AudioRmsDb: audioValidation.AudioRmsDb,
-            ScenePresentationProfileUsed: ScenePresentationProfile.LongForm);
+            ScenePresentationProfileUsed: ScenePresentationProfile.LongForm,
+            DurationValidation: BuildDurationValidation(ScenePresentationProfile.LongForm, actualDurationSeconds, useTargetRange: false, "actualDurationSeconds"));
 
 
-    private static VideoAssemblyGenerationResponse BuildAssemblyResponse(string phaseRequested, VideoAssemblyPlanDto plan, string outputPath, IReadOnlyList<string> generatedFiles)
+    private VideoAssemblyGenerationResponse BuildAssemblyResponse(string phaseRequested, VideoAssemblyPlanDto plan, string outputPath, IReadOnlyList<string> generatedFiles)
         => new(
             phaseRequested,
             phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormAssembly" : "Assembly",
@@ -2372,7 +2451,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             plan.RenderMusicPlan.MusicLevelPercent,
             plan.RenderMusicPlan.BackgroundMusic,
             string.Empty,
-            plan.RenderMusicPlan.DuckMusicUnderNarration);
+            plan.RenderMusicPlan.DuckMusicUnderNarration,
+            DurationValidation: plan.DurationValidation ?? BuildDurationValidation(plan.ScenePresentationProfile, plan.TotalDurationSeconds, useTargetRange: false, "actualDurationSeconds"));
 
 
 
@@ -2414,7 +2494,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             plan.SceneMappingValidation,
             plan.RenderMusicPlan,
             plan.Warnings,
-            plan.GeneratedUtc
+            plan.GeneratedUtc,
+            plan.DurationValidation
         };
         return JsonSerializer.Serialize(document, JsonOptions);
     }
@@ -2522,11 +2603,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
             renderValidation?.FinalVideoDurationSeconds ?? (request.DryRun ? plan.TotalDurationSeconds : 0),
             renderValidation?.OutputResolution ?? resolution,
             renderValidation?.Fps ?? plan.RenderSettings.Fps,
+            BuildDurationValidation(plan.ScenePresentationProfile, renderValidation?.FinalVideoDurationSeconds ?? (request.DryRun ? plan.TotalDurationSeconds : 0), useTargetRange: false, "actualDurationSeconds"),
             warnings);
     }
 
     private static void EnsureShortFormRenderValidationPassed(VideoRenderValidationDto validation)
     {
+        if (validation.DurationValidation is { Passed: false })
+            throw new InvalidOperationException($"Video render validation failed: {validation.DurationValidation.Reason}");
         if (validation.ScenePresentationProfileUsed != ScenePresentationProfile.ShortForm)
             return;
         if (!validation.RenderUsedShortScenes)
@@ -2541,7 +2625,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new InvalidOperationException("Video render validation failed: ShortForm render validation did not pass.");
     }
 
-    private static VideoAssemblyGenerationResponse BuildRenderResponse(
+    private VideoAssemblyGenerationResponse BuildRenderResponse(
         VideoAssemblyGenerationRequest request,
         string finalVideoPath,
         double finalVideoDurationSeconds,
@@ -2606,7 +2690,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             renderPolish.EffectiveMusicLevelPercent,
             renderPolish.MusicVolumeMultiplier,
             renderPolish.FfmpegAudioFilter,
-            renderPolish.MusicMixApplied);
+            renderPolish.MusicMixApplied,
+            DurationValidation: renderPolish.DurationValidation ?? BuildDurationValidation(renderPolish.ScenePresentationProfileUsed, finalVideoDurationSeconds, useTargetRange: false, "actualDurationSeconds"));
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => !string.IsNullOrWhiteSpace(_activeProductionContext?.QuestionRoot) ? _activeProductionContext!.QuestionRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
