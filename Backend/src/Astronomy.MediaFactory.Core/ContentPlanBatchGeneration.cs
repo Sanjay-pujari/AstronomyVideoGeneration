@@ -15,7 +15,10 @@ public sealed record BatchGenerateFromPlansRequest(
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
     bool RetryFailedOnly = false,
-    bool AllowFailedPlanRetry = false);
+    bool AllowFailedPlanRetry = false,
+    bool AllowRunningPlanRecovery = false,
+    Guid? PlanId = null,
+    int? RunningPlanRecoveryStaleAfterMinutes = null);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -54,7 +57,9 @@ public sealed record BatchGenerateFromPlansResponse(
     string? FinalShortVideoPath = null,
     string? FinalLongVideoPath = null,
     object? ProductionPipelineRequest = null,
-    IReadOnlyList<string>? PlannedSteps = null);
+    IReadOnlyList<string>? PlannedSteps = null,
+    int? LastCompletedPhaseNo = null,
+    int? LastFailedPhaseNo = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -310,7 +315,9 @@ public sealed record ProductionPipelineExecutionResult(
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    IReadOnlyList<ProductionPhaseResult>? PhaseResults = null);
+    IReadOnlyList<ProductionPhaseResult>? PhaseResults = null,
+    int? LastCompletedPhaseNo = null,
+    int? LastFailedPhaseNo = null);
 
 public sealed record ContentPlanProductionExecutionResult(
     bool Success,
@@ -339,7 +346,9 @@ public sealed record ContentPlanProductionExecutionResult(
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    IReadOnlyList<ProductionPhaseResult>? PhaseResults = null);
+    IReadOnlyList<ProductionPhaseResult>? PhaseResults = null,
+    int? LastCompletedPhaseNo = null,
+    int? LastFailedPhaseNo = null);
 
 public interface IContentPlanProductionRequestMapper
 {

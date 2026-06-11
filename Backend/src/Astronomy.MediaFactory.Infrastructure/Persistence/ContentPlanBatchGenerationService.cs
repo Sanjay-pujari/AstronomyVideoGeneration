@@ -16,8 +16,10 @@ public sealed class ContentPlanBatchGenerationService(
 {
     private const int DefaultMaxPlans = 1;
     private const int MaxPlanLimit = 10;
+    private const int DefaultRunningPlanRecoveryStaleAfterMinutes = 120;
     private static readonly string[] RunnableStatuses = ["Draft", "Planned", "Approved"];
     private static readonly string[] RetryRunnableStatuses = ["Draft", "Planned", "Approved", "ProductionFailed"];
+    private static readonly string[] RunningRecoveryStatuses = ["Draft", "Planned", "Approved", "ProductionFailed", "ProductionRunning"];
     private static readonly string[] DryRunSteps =
     [
         "Would create content_pipeline_execution",
@@ -36,7 +38,7 @@ public sealed class ContentPlanBatchGenerationService(
     {
         ValidateRequest(request);
 
-        var requestedTitles = request.PlanTitles!
+        var requestedTitles = (request.PlanTitles ?? [])
             .Select(t => t.Trim())
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -44,8 +46,9 @@ public sealed class ContentPlanBatchGenerationService(
         var maxPlans = Math.Clamp(request.MaxPlans <= 0 ? DefaultMaxPlans : request.MaxPlans, 1, MaxPlanLimit);
         var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, request.Language, cancellationToken);
 
+        var recoveryMode = IsRunningPlanRecoveryMode(request);
         var allowFailedPlanRetry = IsFailedPlanRetryMode(request);
-        var selection = SelectPlans(candidates, requestedTitles, request.OnlyHighPriority, maxPlans, allowFailedPlanRetry);
+        var selection = SelectPlans(candidates, requestedTitles, request.PlanId, request.OnlyHighPriority, maxPlans, allowFailedPlanRetry, recoveryMode, ResolveRunningPlanRecoveryStaleAfter(request));
         var selectedPlanEntities = selection.SelectedPlans;
         var warnings = selection.Warnings;
         var selectedPlans = selectedPlanEntities
@@ -113,7 +116,9 @@ public sealed class ContentPlanBatchGenerationService(
                 FinalShortVideoPath: execution.FinalShortVideoPath,
                 FinalLongVideoPath: execution.FinalLongVideoPath,
                 ProductionPipelineRequest: execution.ProductionPipelineRequest,
-                PlannedSteps: execution.PlannedProductionSteps);
+                PlannedSteps: execution.PlannedProductionSteps,
+                LastCompletedPhaseNo: execution.LastCompletedPhaseNo,
+                LastFailedPhaseNo: execution.LastFailedPhaseNo);
         }
 
         logger.LogInformation("Using placeholder planning pipeline");
@@ -235,16 +240,21 @@ public sealed class ContentPlanBatchGenerationService(
             .ToArrayAsync(cancellationToken);
     }
 
-    private static SelectionResult SelectPlans(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, bool onlyHighPriority, int maxPlans, bool allowFailedPlanRetry)
+    private static SelectionResult SelectPlans(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, Guid? requestedPlanId, bool onlyHighPriority, int maxPlans, bool allowFailedPlanRetry, bool recoveryMode, TimeSpan runningPlanRecoveryStaleAfter)
     {
-        var allowedStatuses = allowFailedPlanRetry ? RetryRunnableStatuses : RunnableStatuses;
+        var allowedStatuses = recoveryMode ? RunningRecoveryStatuses : allowFailedPlanRetry ? RetryRunnableStatuses : RunnableStatuses;
         var selected = new List<ContentGenerationPlan>();
         var warnings = new List<BatchGenerateFromPlansWarning>();
         var selectedIds = new HashSet<Guid>();
 
+        if (requestedPlanId is { } planId)
+        {
+            SelectRequestedPlan(candidates, planId, onlyHighPriority, maxPlans, recoveryMode, runningPlanRecoveryStaleAfter, allowedStatuses, selected, warnings, selectedIds);
+        }
+
         foreach (var requestedTitle in requestedTitles)
         {
-            var matches = FindMatches(candidates, requestedTitle)
+            var matches = (recoveryMode ? FindExactMatches(candidates, requestedTitle) : FindMatches(candidates, requestedTitle))
                 .Where(p => !selectedIds.Contains(p.Id))
                 .ToArray();
 
@@ -256,6 +266,7 @@ public sealed class ContentPlanBatchGenerationService(
 
             var runnableMatches = matches
                 .Where(p => IsStatusRunnable(p, allowedStatuses))
+                .Where(p => !IsProductionRunning(p) || CanRecoverRunningPlan(p, recoveryMode, runningPlanRecoveryStaleAfter))
                 .Where(IsAstronomyEventRunnable)
                 .Where(p => !onlyHighPriority || IsHighPriority(p))
                 .OrderBy(p => IsExactMatch(p, requestedTitle) ? 0 : 1)
@@ -265,7 +276,7 @@ public sealed class ContentPlanBatchGenerationService(
 
             if (runnableMatches.Length == 0)
             {
-                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(matches[0], onlyHighPriority, allowedStatuses)));
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(matches[0], onlyHighPriority, allowedStatuses, recoveryMode, runningPlanRecoveryStaleAfter)));
                 continue;
             }
 
@@ -282,11 +293,40 @@ public sealed class ContentPlanBatchGenerationService(
         return new SelectionResult(selected, warnings);
     }
 
+    private static void SelectRequestedPlan(IReadOnlyList<ContentGenerationPlan> candidates, Guid requestedPlanId, bool onlyHighPriority, int maxPlans, bool recoveryMode, TimeSpan runningPlanRecoveryStaleAfter, IReadOnlyCollection<string> allowedStatuses, List<ContentGenerationPlan> selected, List<BatchGenerateFromPlansWarning> warnings, HashSet<Guid> selectedIds)
+    {
+        var plan = candidates.FirstOrDefault(p => p.Id == requestedPlanId);
+        if (plan is null)
+        {
+            warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), false, false, "No planId match found"));
+            return;
+        }
+
+        if (selected.Count >= maxPlans)
+        {
+            warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, $"Excluded because selection was capped to maxPlans={maxPlans}"));
+            return;
+        }
+
+        if (selectedIds.Contains(plan.Id)) return;
+        if (!IsStatusRunnable(plan, allowedStatuses) || (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter)) || !IsAstronomyEventRunnable(plan) || (onlyHighPriority && !IsHighPriority(plan)))
+        {
+            warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(plan, onlyHighPriority, allowedStatuses, recoveryMode, runningPlanRecoveryStaleAfter)));
+            return;
+        }
+
+        selected.Add(plan);
+        selectedIds.Add(plan.Id);
+    }
+
     private static IReadOnlyList<ContentGenerationPlan> FindMatches(IEnumerable<ContentGenerationPlan> candidates, string requestedTitle)
     {
-        var exact = candidates.Where(p => IsExactMatch(p, requestedTitle)).ToArray();
-        return exact.Length > 0 ? exact : candidates.Where(p => IsContainsMatch(p, requestedTitle)).ToArray();
+        var exact = FindExactMatches(candidates, requestedTitle);
+        return exact.Count > 0 ? exact : candidates.Where(p => IsContainsMatch(p, requestedTitle)).ToArray();
     }
+
+    private static IReadOnlyList<ContentGenerationPlan> FindExactMatches(IEnumerable<ContentGenerationPlan> candidates, string requestedTitle)
+        => candidates.Where(p => IsExactMatch(p, requestedTitle)).ToArray();
 
     private static bool IsExactMatch(ContentGenerationPlan plan, string requestedTitle)
     {
@@ -330,12 +370,51 @@ public sealed class ContentPlanBatchGenerationService(
         => request.UseProductionPipeline
             && (request.RetryFailedOnly || request.StartPhaseNo.HasValue || request.AllowFailedPlanRetry);
 
+    private static bool IsRunningPlanRecoveryMode(BatchGenerateFromPlansRequest request)
+        => request.UseProductionPipeline
+            && request.AllowRunningPlanRecovery
+            && request.RetryFailedOnly
+            && request.AllowFailedPlanRetry
+            && request.StartPhaseNo.HasValue
+            && request.EndPhaseNo.HasValue
+            && (request.PlanId.HasValue || request.PlanTitles is { Count: > 0 });
+
+    private static TimeSpan ResolveRunningPlanRecoveryStaleAfter(BatchGenerateFromPlansRequest request)
+    {
+        var minutes = request.RunningPlanRecoveryStaleAfterMinutes;
+        if (!minutes.HasValue && int.TryParse(Environment.GetEnvironmentVariable("ASTROPULSE_RUNNING_PLAN_RECOVERY_STALE_AFTER_MINUTES"), out var configuredMinutes))
+            minutes = configuredMinutes;
+        return TimeSpan.FromMinutes(Math.Max(1, minutes ?? DefaultRunningPlanRecoveryStaleAfterMinutes));
+    }
+
     private static bool IsStatusRunnable(ContentGenerationPlan plan)
         => IsStatusRunnable(plan, RunnableStatuses);
 
     private static bool IsStatusRunnable(ContentGenerationPlan plan, IReadOnlyCollection<string> allowedStatuses)
         => allowedStatuses.Contains(plan.Status, StringComparer.OrdinalIgnoreCase)
             || allowedStatuses.Contains(plan.PlanStatus, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsProductionRunning(ContentGenerationPlan plan)
+        => string.Equals(plan.Status, "ProductionRunning", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(plan.PlanStatus, "ProductionRunning", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CanRecoverRunningPlan(ContentGenerationPlan plan, bool recoveryMode, TimeSpan staleAfter)
+    {
+        if (!recoveryMode) return false;
+
+        var lastActivityUtc = ResolveRunningPlanLastActivityUtc(plan);
+        var isStale = DateTimeOffset.UtcNow - lastActivityUtc >= staleAfter;
+        var requireStaleRecovery = string.Equals(Environment.GetEnvironmentVariable("ASTROPULSE_REQUIRE_STALE_RUNNING_PLAN_RECOVERY"), "true", StringComparison.OrdinalIgnoreCase);
+        return isStale || !requireStaleRecovery;
+    }
+
+    private static DateTimeOffset ResolveRunningPlanLastActivityUtc(ContentGenerationPlan plan)
+        => ReadOptionalDateTimeOffsetProperty(plan, "LastRunHeartbeat")
+            ?? plan.UpdatedUtc
+            ?? plan.CreatedUtc;
+
+    private static DateTimeOffset? ReadOptionalDateTimeOffsetProperty(object? value, string propertyName)
+        => value?.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(value) as DateTimeOffset?;
 
     private static bool IsAstronomyEventRunnable(ContentGenerationPlan plan)
     {
@@ -349,8 +428,10 @@ public sealed class ContentPlanBatchGenerationService(
 
     private static bool IsHighPriority(ContentGenerationPlan plan) => plan.Priority <= 10 || plan.PriorityScore >= 7.5m;
 
-    private static string BuildExclusionReason(ContentGenerationPlan plan, bool onlyHighPriority, IReadOnlyCollection<string> allowedStatuses)
+    private static string BuildExclusionReason(ContentGenerationPlan plan, bool onlyHighPriority, IReadOnlyCollection<string> allowedStatuses, bool recoveryMode = false, TimeSpan? runningPlanRecoveryStaleAfter = null)
     {
+        if (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter ?? TimeSpan.Zero))
+            return "Excluded because ProductionRunning plans require explicit recovery mode with allowRunningPlanRecovery=true, retryFailedOnly=true, allowFailedPlanRetry=true, startPhaseNo, endPhaseNo, and an exact planTitle or planId";
         if (!IsStatusRunnable(plan, allowedStatuses))
             return $"Excluded because status was {plan.Status} and planStatus was {plan.PlanStatus}; allowed status or planStatus values are {string.Join(", ", allowedStatuses)}";
         if (plan.AstronomyEventIntelligence is null)
@@ -462,8 +543,18 @@ public sealed class ContentPlanBatchGenerationService(
         if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
         if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Language is required.");
         if (request.MaxPlans is < 1 or > MaxPlanLimit) throw new ArgumentException($"MaxPlans must be between 1 and {MaxPlanLimit}.");
-        if (request.PlanTitles is not { Count: > 0 } || request.PlanTitles.All(string.IsNullOrWhiteSpace))
-            throw new ArgumentException("At least one explicit plan title is required for safe batch generation.");
+        var hasPlanTitle = request.PlanTitles is { Count: > 0 } && request.PlanTitles.Any(title => !string.IsNullOrWhiteSpace(title));
+        if (!hasPlanTitle && !request.PlanId.HasValue)
+            throw new ArgumentException("At least one explicit plan title or planId is required for safe batch generation.");
+        if (request.AllowRunningPlanRecovery)
+        {
+            if (!request.UseProductionPipeline) throw new ArgumentException("allowRunningPlanRecovery requires useProductionPipeline=true.");
+            if (!request.RetryFailedOnly) throw new ArgumentException("allowRunningPlanRecovery requires retryFailedOnly=true.");
+            if (!request.AllowFailedPlanRetry) throw new ArgumentException("allowRunningPlanRecovery requires allowFailedPlanRetry=true.");
+            if (!request.StartPhaseNo.HasValue) throw new ArgumentException("allowRunningPlanRecovery requires startPhaseNo.");
+            if (!request.EndPhaseNo.HasValue) throw new ArgumentException("allowRunningPlanRecovery requires endPhaseNo.");
+            if (request.MaxPlans != 1) throw new ArgumentException("allowRunningPlanRecovery is locked to maxPlans=1.");
+        }
     }
 
     private sealed record SelectionResult(IReadOnlyList<ContentGenerationPlan> SelectedPlans, IReadOnlyList<BatchGenerateFromPlansWarning> Warnings);

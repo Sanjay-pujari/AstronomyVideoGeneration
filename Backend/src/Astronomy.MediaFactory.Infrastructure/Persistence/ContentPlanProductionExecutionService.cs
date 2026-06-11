@@ -95,9 +95,13 @@ public sealed class ContentPlanProductionExecutionService(
             var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
             var shortOk = File.Exists(shortVideo);
             var longOk = File.Exists(longVideo);
-            execution.Status = errors.Count == 0 ? "Completed" : "Failed";
-            execution.FinishedUtc = DateTimeOffset.UtcNow;
-            execution.ErrorMessage = errors.Count == 0 ? null : string.Join("; ", errors);
+            var phase19Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 19);
+            var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
+            var productionFailed = errors.Count > 0 || !pipelineResult.Success || phaseFailed;
+            var productionCompleted = !productionFailed && phase19Succeeded;
+            execution.Status = productionCompleted ? "Completed" : productionFailed ? "Failed" : "Running";
+            execution.FinishedUtc = productionCompleted || productionFailed ? DateTimeOffset.UtcNow : null;
+            execution.ErrorMessage = productionFailed ? string.Join("; ", errors.DefaultIfEmpty("Production pipeline failed.")) : null;
             execution.OutputFolder = outputRoot;
             execution.ShortVideoPath = shortOk ? shortVideo : null;
             execution.LongVideoPath = longOk ? longVideo : null;
@@ -105,15 +109,27 @@ public sealed class ContentPlanProductionExecutionService(
             execution.ThumbnailShortPath = Path.Combine(outputRoot, "thumbnails", "portrait.png");
             plan.FinalVideoPath = longOk ? longVideo : shortVideo;
             plan.ThumbnailPath = Path.Combine(outputRoot, "thumbnails", "landscape.png");
-            plan.PlanStatus = errors.Count == 0 ? "ProductionCompleted" : "ProductionFailed";
+            plan.PlanStatus = productionCompleted ? "ProductionCompleted" : productionFailed ? "ProductionFailed" : "ProductionRunning";
             plan.Status = plan.PlanStatus;
-            plan.CompletedUtc = errors.Count == 0 ? DateTimeOffset.UtcNow : null;
-            plan.FailureReason = errors.Count == 0 ? null : execution.ErrorMessage;
+            plan.CompletedUtc = productionCompleted ? DateTimeOffset.UtcNow : null;
+            plan.FailureReason = productionFailed ? execution.ErrorMessage : null;
             await db.SaveChangesAsync(cancellationToken);
 
-            return BuildResult(errors.Count == 0, false, plan, productionRequest, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors, pipelineResult.PhaseResults ?? []);
+            return BuildResult(productionCompleted, false, plan, productionRequest, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors, pipelineResult.PhaseResults ?? []);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("DB-plan production pipeline execution was cancelled by request for plan {PlanId}", request.ContentGenerationPlanId);
+            if (execution is not null)
+            {
+                execution.Status = "Cancelled";
+                execution.FinishedUtc = DateTimeOffset.UtcNow;
+                execution.ErrorMessage = "Production pipeline execution was cancelled by request.";
+                await db.SaveChangesAsync(CancellationToken.None);
+            }
+            throw;
+        }
+        catch (Exception ex)
         {
             logger.LogWarning(ex, "DB-plan production pipeline execution failed for plan {PlanId}", request.ContentGenerationPlanId);
             errors.Add(ex.Message);
@@ -122,11 +138,12 @@ public sealed class ContentPlanProductionExecutionService(
                 execution.Status = "Failed";
                 execution.FinishedUtc = DateTimeOffset.UtcNow;
                 execution.ErrorMessage = ex.Message;
-                plan.PlanStatus = "ProductionFailed";
-                plan.Status = "ProductionFailed";
-                plan.FailureReason = ex.Message;
-                await db.SaveChangesAsync(cancellationToken);
             }
+            plan.PlanStatus = "ProductionFailed";
+            plan.Status = "ProductionFailed";
+            plan.CompletedUtc = null;
+            plan.FailureReason = ex.Message;
+            await db.SaveChangesAsync(CancellationToken.None);
             return BuildResult(false, false, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, []);
         }
     }
@@ -151,6 +168,9 @@ public sealed class ContentPlanProductionExecutionService(
             RequestedOutputs: productionRequest.RequestedOutputs,
             Category: productionRequest.Category,
             PlannedFormat: productionRequest.PlannedFormat);
+
+    private static bool PhaseSucceeded(IReadOnlyList<ProductionPhaseResult>? phaseResults, int phaseNo)
+        => phaseResults?.Any(p => p.PhaseNo == phaseNo && p.Status == ProductionPhaseStatus.Succeeded) == true;
 
     private async Task WritePlanInputAsync(string outputRoot, ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, CancellationToken cancellationToken)
     {
@@ -287,7 +307,20 @@ public sealed class ContentPlanProductionExecutionService(
     }
 
     private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults)
-        => new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
+    {
+        var lastCompletedPhaseNo = phaseResults
+            .Where(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
+            .OrderByDescending(p => p.PhaseNo)
+            .Select(p => (int?)p.PhaseNo)
+            .FirstOrDefault();
+        var lastFailedPhaseNo = phaseResults
+            .Where(p => p.Status == ProductionPhaseStatus.Failed)
+            .OrderByDescending(p => p.PhaseNo)
+            .Select(p => (int?)p.PhaseNo)
+            .FirstOrDefault();
+
+        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo);
+    }
 
     private string BuildPlanOutputRoot(ContentPlanProductionPipelineRequest request)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "plans", Sanitize(request.RegionId), (request.ScheduledUtc?.Year ?? request.PeakUtc?.Year ?? DateTimeOffset.UtcNow.Year).ToString(), request.PlanId.ToString("D"));
