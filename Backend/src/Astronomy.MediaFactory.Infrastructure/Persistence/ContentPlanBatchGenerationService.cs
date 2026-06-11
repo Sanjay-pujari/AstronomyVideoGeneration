@@ -16,7 +16,6 @@ public sealed class ContentPlanBatchGenerationService(
 {
     private const int DefaultMaxPlans = 1;
     private const int MaxPlanLimit = 10;
-    private static readonly Guid GeminidsPlanId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
     private static readonly string[] RunnableStatuses = ["Draft", "Planned", "Approved"];
     private static readonly string[] DryRunSteps =
     [
@@ -47,15 +46,6 @@ public sealed class ContentPlanBatchGenerationService(
         var selection = SelectPlans(candidates, requestedTitles, request.OnlyHighPriority, maxPlans);
         var selectedPlanEntities = selection.SelectedPlans;
         var warnings = selection.Warnings;
-        if (request.UseProductionPipeline && selectedPlanEntities.Count == 0)
-        {
-            var geminidsPlan = candidates.FirstOrDefault(p => p.Id == GeminidsPlanId);
-            if (geminidsPlan is not null && requestedTitles.Any(t => IsExactMatch(geminidsPlan, t) || IsContainsMatch(geminidsPlan, t)))
-            {
-                selectedPlanEntities = [geminidsPlan];
-                warnings = warnings.Where(w => !string.Equals(w.RequestedTitle, geminidsPlan.Title, StringComparison.OrdinalIgnoreCase)).ToArray();
-            }
-        }
         var selectedPlans = selectedPlanEntities
             .Select(ToSelectedPlan)
             .ToArray();
@@ -83,11 +73,13 @@ public sealed class ContentPlanBatchGenerationService(
 
             logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", selectedPlans[0].ContentGenerationPlanId);
 
-            var execution = await productionExecution.ExecuteContentPlanAsync(
+            var execution = await productionExecution.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
                 selectedPlans[0].ContentGenerationPlanId,
                 request.DryRun,
                 request.OverwriteExisting,
-                cancellationToken);
+                request.StartPhaseNo,
+                request.EndPhaseNo,
+                request.RetryFailedOnly), cancellationToken);
 
             return new BatchGenerateFromPlansResponse(
                 Success: execution.Success,
@@ -96,7 +88,7 @@ public sealed class ContentPlanBatchGenerationService(
                 SelectedPlanCount: selectedPlans.Length,
                 MaxPlans: maxPlans,
                 SelectedPlans: selectedPlans,
-                Steps: execution.PlannedProductionSteps.Cast<object>().ToArray(),
+                Steps: (execution.PhaseResults is { Count: > 0 } ? execution.PhaseResults.Cast<object>().ToArray() : execution.PlannedProductionSteps.Cast<object>().ToArray()),
                 Warnings: warnings.Concat(execution.Warnings.Select(w => new BatchGenerateFromPlansWarning(selectedPlans[0].Title, true, true, w))).ToArray(),
                 Errors: execution.Errors,
                 Results: [execution],

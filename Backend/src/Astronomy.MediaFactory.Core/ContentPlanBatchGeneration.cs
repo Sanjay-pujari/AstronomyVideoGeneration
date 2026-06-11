@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record BatchGenerateFromPlansRequest(
@@ -9,7 +11,10 @@ public sealed record BatchGenerateFromPlansRequest(
     bool DryRun = true,
     IReadOnlyList<string>? PlanTitles = null,
     bool UseProductionPipeline = false,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    int? StartPhaseNo = null,
+    int? EndPhaseNo = null,
+    bool RetryFailedOnly = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -164,7 +169,10 @@ public sealed record ContentPlanProductionPipelineRequest(
 public sealed record ContentPlanProductionExecutionRequest(
     Guid ContentGenerationPlanId,
     bool DryRun,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    int? StartPhaseNo = null,
+    int? EndPhaseNo = null,
+    bool RetryFailedOnly = false);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,
@@ -225,7 +233,61 @@ public sealed record ProductionPipelineRequest(
     string OutputRoot,
     bool DryRun,
     bool OverwriteExisting = false,
-    ProductionPipelineExecutionContext? ExecutionContext = null);
+    ProductionPipelineExecutionContext? ExecutionContext = null,
+    int? StartPhaseNo = null,
+    int? EndPhaseNo = null,
+    bool RetryFailedOnly = false);
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ProductionPhaseStatus
+{
+    Pending,
+    Running,
+    Succeeded,
+    Skipped,
+    Failed
+}
+
+public sealed record ProductionPhaseContext(
+    ProductionPipelineRequest PipelineRequest,
+    ContentPlanProductionPipelineRequest Request,
+    Guid AstronomyEventIntelligenceId,
+    string EventId,
+    string OutputRoot,
+    ProductionPipelineExecutionContext ExecutionContext,
+    ProductionEventIntelligence ProductionEventIntelligence,
+    IMediaEventStrategy MediaEventStrategy,
+    bool DryRun,
+    bool OverwriteExisting,
+    int StartPhaseNo,
+    int EndPhaseNo,
+    bool RetryFailedOnly);
+
+public sealed record ProductionPhaseResult(
+    int PhaseNo,
+    string PhaseName,
+    ProductionPhaseStatus Status,
+    DateTimeOffset StartedUtc,
+    DateTimeOffset FinishedUtc,
+    long DurationMs,
+    IReadOnlyList<string> InputFiles,
+    IReadOnlyList<string> OutputFiles,
+    string? ValidationReportPath,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    bool CanRetry);
+
+public interface IProductionPhase
+{
+    int PhaseNo { get; }
+    string PhaseName { get; }
+    Task<ProductionPhaseResult> ExecuteAsync(ProductionPhaseContext context, CancellationToken cancellationToken);
+}
+
+public interface IProductionPhaseRunner
+{
+    Task<ProductionPipelineExecutionResult> RunAsync(ProductionPipelineRequest request, CancellationToken cancellationToken);
+}
 
 public sealed record ProductionPipelineExecutionResult(
     bool Success,
@@ -245,7 +307,8 @@ public sealed record ProductionPipelineExecutionResult(
     string FinalLongVideoPath,
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<ProductionPhaseResult>? PhaseResults = null);
 
 public sealed record ContentPlanProductionExecutionResult(
     bool Success,
@@ -273,7 +336,8 @@ public sealed record ContentPlanProductionExecutionResult(
     IReadOnlyList<string> PlannedProductionSteps,
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<ProductionPhaseResult>? PhaseResults = null);
 
 public interface IContentPlanProductionRequestMapper
 {

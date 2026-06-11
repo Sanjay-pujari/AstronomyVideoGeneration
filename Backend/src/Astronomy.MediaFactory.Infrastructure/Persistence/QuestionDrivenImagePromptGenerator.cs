@@ -11,12 +11,12 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
         var isMeteorShower = ContainsMeteorContext(request.VisualIntent) || ContainsMeteorContext(request.ImagePromptIntent);
         var sceneMood = isMeteorShower ? request.QuestionType.ToLowerInvariant() switch
         {
-            "what" => "Geminids meteor shower peak-night alert, cinematic dark night sky over Udaipur India, multiple meteor streaks, subtle Gemini radiant constellation hint, premium astronomy magazine cover mood",
+            "what" => "meteor shower peak-night alert, cinematic dark night sky over Udaipur India, multiple meteor streaks, subtle Gemini radiant constellation hint, premium astronomy magazine cover mood",
             "where" => "dark open sky viewing guide over Udaipur, east-to-overhead sky orientation, meteor streaks, subtle Gemini radiant marker, low light pollution context",
             "when" => "midnight to pre-dawn meteor shower timing visual, dark blue-black sky, 00:00 to 05:00 IST night window mood, meteor activity increasing toward dawn",
             "how" => "observer-friendly meteor shower scene, person reclining under dark open sky, no telescope, city lights avoided, eyes adapting, meteor streaks overhead",
-            "why" => "premium editorial Geminids sky with abundant meteor streaks, strong annual meteor shower mood, low moon interference, subtle radiant from Gemini",
-            "action" => "inspirational save-date meteor shower poster mood, Udaipur night landscape silhouette, Geminids streaks overhead, Dec 13/14 reminder energy",
+            "why" => "premium editorial meteor shower sky with abundant meteor streaks, strong annual meteor shower mood, low moon interference, subtle radiant from Gemini",
+            "action" => "inspirational save-date meteor shower poster mood, Udaipur night landscape silhouette, meteor streaks overhead, Dec 13/14 reminder energy",
             _ => "clean dark night meteor shower sky over India with meteor streaks and subtle constellation context"
         } : request.QuestionType.ToLowerInvariant() switch
         {
@@ -47,5 +47,5 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
     }
 
     private static bool ContainsMeteorContext(string? value)
-        => !string.IsNullOrWhiteSpace(value) && (value.Contains("meteor", StringComparison.OrdinalIgnoreCase) || value.Contains("Geminids", StringComparison.OrdinalIgnoreCase) || value.Contains("radiant", StringComparison.OrdinalIgnoreCase));
+        => !string.IsNullOrWhiteSpace(value) && (value.Contains("meteor", StringComparison.OrdinalIgnoreCase) || value.Contains("radiant", StringComparison.OrdinalIgnoreCase));
 }

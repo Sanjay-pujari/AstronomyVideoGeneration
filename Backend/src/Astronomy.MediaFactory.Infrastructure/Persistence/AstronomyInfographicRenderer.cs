@@ -26,22 +26,27 @@ public sealed class AstronomyInfographicRenderer(
     public async Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken, AstronomyInfographicRenderVariant? variant = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
-        if (!File.Exists(venusAssetPath)) throw new ArgumentException($"Required local Venus asset was not found at '{venusAssetPath}'.", nameof(venusAssetPath));
-        if (!File.Exists(jupiterAssetPath)) throw new ArgumentException($"Required local Jupiter asset was not found at '{jupiterAssetPath}'.", nameof(jupiterAssetPath));
+        var planetAssetsAvailable = !string.IsNullOrWhiteSpace(venusAssetPath) && !string.IsNullOrWhiteSpace(jupiterAssetPath) && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath);
 
         var targetVariant = variant ?? AstronomyInfographicRenderVariant.LongForm;
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
 
         if (targetVariant.VariantName.Equals(AstronomyInfographicRenderVariant.ShortForm.VariantName, StringComparison.OrdinalIgnoreCase))
         {
-            using var shortFormImage = await RenderNativeShortFormAsync(spec, venusAssetPath, jupiterAssetPath, cancellationToken);
+            using var shortFormImage = await RenderNativeShortFormAsync(spec, planetAssetsAvailable ? venusAssetPath : string.Empty, planetAssetsAvailable ? jupiterAssetPath : string.Empty, cancellationToken);
             await shortFormImage.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
             return;
         }
 
-        using var longFormImage = await RenderApprovedLongFormAsync(spec, venusAssetPath, jupiterAssetPath, cancellationToken);
+        using var longFormImage = await RenderApprovedLongFormAsync(spec, planetAssetsAvailable ? venusAssetPath : string.Empty, planetAssetsAvailable ? jupiterAssetPath : string.Empty, cancellationToken);
         await longFormImage.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
     }
+
+
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> BuildPlanetAssets(string venusAssetPath, string jupiterAssetPath)
+        => File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)
+            ? [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)]
+            : [];
 
     private async Task<Image<Rgba32>> RenderApprovedLongFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
     {
@@ -51,7 +56,7 @@ public sealed class AstronomyInfographicRenderer(
             spec.ViewerQuestion,
             spec.ViewerTakeaway,
             spec.QuestionType,
-            [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)],
+            BuildPlanetAssets(venusAssetPath, jupiterAssetPath),
             mood: "WarmTwilightQuestionScene",
             westMarkerLabel: string.Empty,
             starDensity: 720,
@@ -61,7 +66,7 @@ public sealed class AstronomyInfographicRenderer(
         image.Mutate(ctx =>
         {
             skyGuidanceLayer.Render(ctx, spec, fonts);
-            celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
+            if (File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)) celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
             educationalLayer.Render(ctx, spec, fonts);
             annotationLayer.Render(ctx, spec, fonts);
             backgroundLayer.RenderVignette(ctx);
@@ -79,7 +84,7 @@ public sealed class AstronomyInfographicRenderer(
             GetShortFormCopy(spec).Title,
             GetShortFormCopy(spec).Subtitle,
             spec.QuestionType,
-            [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)],
+            BuildPlanetAssets(venusAssetPath, jupiterAssetPath),
             mood: "WarmTwilightQuestionScene",
             westMarkerLabel: string.Empty,
             starDensity: 520,
@@ -121,10 +126,13 @@ public sealed class AstronomyInfographicRenderer(
         var layout = GetNativeShortFormLayout(spec.QuestionType);
         if (!spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase))
         {
-            DrawPortraitPlanetGlow(ctx, layout.Venus.Center, layout.Venus.Diameter, "#FFF2B8", .080f);
-            DrawPortraitPlanetGlow(ctx, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D", .060f);
-            DrawPortraitAsset(ctx, venusAssetPath, layout.Venus.Center, layout.Venus.Diameter, "#FFF2B8");
-            DrawPortraitAsset(ctx, jupiterAssetPath, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D");
+            if (File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath))
+            {
+                DrawPortraitPlanetGlow(ctx, layout.Venus.Center, layout.Venus.Diameter, "#FFF2B8", .080f);
+                DrawPortraitPlanetGlow(ctx, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D", .060f);
+                DrawPortraitAsset(ctx, venusAssetPath, layout.Venus.Center, layout.Venus.Diameter, "#FFF2B8");
+                DrawPortraitAsset(ctx, jupiterAssetPath, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D");
+            }
         }
 
         switch (spec.QuestionType.ToLowerInvariant())
