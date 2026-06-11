@@ -33,7 +33,10 @@ public sealed record ProductionEventIntelligence(
     IReadOnlyList<string>? HeroCopyCandidates = null,
     IReadOnlyList<string>? ShortSceneArc = null,
     IReadOnlyList<string>? LongSceneArc = null,
-    IReadOnlyList<string>? ValidationRules = null);
+    IReadOnlyList<string>? ValidationRules = null,
+    decimal? AngularSeparationDegrees = null,
+    decimal? AltitudeDegrees = null,
+    string? ReferenceObject = null);
 
 public sealed record MediaEventStrategyDefinition(
     string EventType,
@@ -55,11 +58,23 @@ public sealed record MediaEventStrategyDefinition(
     IReadOnlyList<string>? ViewingSafetyRules = null,
     IReadOnlyList<string>? HeroCopyCandidates = null);
 
+public sealed record QuestionAnswerSetBuildContext(
+    Guid AstronomyEventIntelligenceId,
+    string EventCode,
+    string RegionId,
+    string Language,
+    string Version,
+    string LocationName,
+    DateTimeOffset LocalPeakTime,
+    string TimeZoneAbbreviation,
+    DateTimeOffset GeneratedUtc);
+
 public interface IMediaEventStrategy
 {
     string EventType { get; }
     bool CanHandle(string eventType, string title);
     MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence);
+    QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context);
 }
 
 public interface IMediaEventStrategyResolver

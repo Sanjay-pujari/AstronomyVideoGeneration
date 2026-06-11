@@ -11,6 +11,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed class AstronomyQuestionEngine(
     MediaFactoryDbContext db,
     IOptions<RenderingOptions> renderingOptions,
+    IMediaEventStrategyResolver strategyResolver,
     ILogger<AstronomyQuestionEngine> logger) : IQuestionEngine
 {
     private const string Version = "v1";
@@ -47,10 +48,19 @@ public sealed class AstronomyQuestionEngine(
         "bright",
         "event stands out",
         "alignment",
+        "conjunction",
         "meteor",
         "meteor shower",
         "annual meteor shower",
-        "moon interference"
+        "moon interference",
+        "dark sky",
+        "full moon",
+        "lunar",
+        "eclipse",
+        "rare",
+        "culture",
+        "scientific",
+        "Milky Way"
     ];
     private static readonly (string Term, Regex Pattern)[] InternalTermPatterns =
     [
@@ -104,7 +114,7 @@ public sealed class AstronomyQuestionEngine(
                 continue;
             }
 
-            var setDto = BuildQuestionSet(evt, request.RegionId, request.Language, warnings);
+            var setDto = BuildQuestionSet(evt, request.RegionId, request.Language, warnings, strategyResolver);
             var validationIssues = ValidateQuestionSet(setDto);
             questionSets.Add(setDto);
 
@@ -144,7 +154,7 @@ public sealed class AstronomyQuestionEngine(
 
         var warnings = new List<string>();
         var evt = await ResolveSingleEventAsync(request, cancellationToken);
-        var setDto = BuildQuestionSet(evt, request.RegionId, request.Language, warnings);
+        var setDto = BuildQuestionSet(evt, request.RegionId, request.Language, warnings, strategyResolver);
         var checks = ValidateQuestionSetForApproval(setDto);
         var approvedCount = checks.Count(c => c.Approved);
         var isApproved = checks.Count == RequiredQuestionTypes.Length && checks.All(c => c.Approved);
@@ -243,10 +253,29 @@ public sealed class AstronomyQuestionEngine(
             .ToDictionary(g => g.Key, g => g.First());
     }
 
-    private static QuestionAnswerSetDto BuildQuestionSet(AstronomyEventIntelligence evt, string regionId, string language, List<string> warnings)
+    private static QuestionAnswerSetDto BuildQuestionSet(AstronomyEventIntelligence evt, string regionId, string language, List<string> warnings, IMediaEventStrategyResolver strategyResolver)
     {
         var timezone = ResolveTimezone(evt, regionId, warnings);
         var localPeak = ToLocal(evt.PeakUtc ?? evt.StartUtc, timezone);
+        var timeZoneAbbreviation = FormatTimeZoneAbbreviation(timezone, localPeak);
+        var location = !string.IsNullOrWhiteSpace(evt.LocationName) ? evt.LocationName! : HumanizeLocation(regionId);
+        var intelligence = BuildProductionEventIntelligence(evt, regionId, timezone, localPeak, timeZoneAbbreviation);
+        var strategy = strategyResolver.Resolve(intelligence.EventType, intelligence.Title);
+        var context = new QuestionAnswerSetBuildContext(
+            evt.Id,
+            evt.EventCode,
+            regionId,
+            language,
+            Version,
+            location,
+            localPeak,
+            timeZoneAbbreviation,
+            DateTimeOffset.UtcNow);
+        return strategy.BuildQuestionAnswerSet(intelligence, context);
+    }
+
+    private static ProductionEventIntelligence BuildProductionEventIntelligence(AstronomyEventIntelligence evt, string regionId, string timezone, DateTimeOffset localPeak, string timeZoneAbbreviation)
+    {
         var objectNames = evt.Objects
             .Where(o => !string.IsNullOrWhiteSpace(o.ObjectName))
             .OrderBy(o => o.Magnitude ?? decimal.MaxValue)
@@ -254,111 +283,44 @@ public sealed class AstronomyQuestionEngine(
             .Select(o => o.ObjectName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var primaryObjects = objectNames.Length == 0 ? "the main sky target" : JoinNatural(objectNames.Take(3).ToArray());
-        var direction = FirstMetadataValue(evt, "direction", "viewingDirection", "azimuthDirection") ?? DirectionFromAzimuth(FirstDecimal(evt, "azimuth", "azimuthDegrees", "bestViewingAzimuthDegrees"));
-        var altitude = FirstDecimal(evt, "altitude", "altitudeDegrees", "maxAltitudeDegrees");
-        var constellation = FirstMetadataValue(evt, "constellation", "referenceConstellation", "referenceObject") ?? "a familiar bright reference point";
-        var separation = FirstDecimal(evt, "angularSeparation", "angularSeparationDegrees", "separationDegrees");
-        var location = !string.IsNullOrWhiteSpace(evt.LocationName) ? evt.LocationName! : HumanizeLocation(regionId);
-        var eventType = Humanize(evt.EventType);
-        var skyDirection = FormatSkyDirection(direction);
-        var timeOfNight = DescribeViewingTime(localPeak);
-        var timeZoneAbbreviation = FormatTimeZoneAbbreviation(timezone, localPeak);
-
-        if (IsMeteorShower(evt))
-            return BuildMeteorShowerQuestionSet(evt, regionId, language, timezone, localPeak, timeZoneAbbreviation, location);
-
-        return new QuestionAnswerSetDto(
-            null,
-            evt.Id,
-            evt.EventCode,
-            SafeTitle(evt),
-            evt.EventType,
-            regionId,
-            language,
-            Version,
-            AstronomyQuestionSetStatus.Generated,
-            DateTimeOffset.UtcNow,
-            [
-                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", FormatWhatAnswer(eventType, primaryObjects, location), 1),
-                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward the {skyDirection}, {FormatAltitude(altitude)} above the horizon.", 2),
-                Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is around {localPeak:h:mm tt} {timeZoneAbbreviation}, {timeOfNight}.", 3),
-                Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", FormatHowAnswer(objectNames, primaryObjects, constellation), 4),
-                Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", FormatWhyAnswer(evt, objectNames, primaryObjects, separation, eventType), 5),
-                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", FormatActionAnswer(localPeak), 6)
-            ]);
-    }
-
-    private static QuestionAnswerSetDto BuildMeteorShowerQuestionSet(AstronomyEventIntelligence evt, string regionId, string language, string timezone, DateTimeOffset localPeak, string timeZoneAbbreviation, string location)
-    {
-        var title = SafeTitle(evt);
-        var showerName = ShortMeteorTitle(title);
-        var bestWindow = FirstMetadataValue(evt, "bestViewingWindowLocal", "bestViewingWindow", "viewingWindowLocal")
-            ?? FormatMeteorViewingWindow(localPeak, timeZoneAbbreviation);
-        var direction = FirstMetadataValue(evt, "skyDirectionHint", "directionHint", "direction", "viewingDirection") ?? "East to overhead after 10 PM";
-        var moonInterference = FirstMetadataValue(evt, "moonInterference") ?? "low";
-        var moonIllumination = FirstDecimal(evt, "moonIlluminationPercent");
-        var radiantNote = FirstMetadataValue(evt, "radiantVisibilityNote") ?? "The radiant climbs higher late evening, but meteors can streak across any part of the sky.";
-        var reminderNight = FormatMeteorReminderNight(bestWindow, localPeak);
-        var moonPhrase = moonIllumination.HasValue
-            ? $"{moonInterference.ToLowerInvariant()} moon interference at about {Math.Round(moonIllumination.Value):0}% illumination"
-            : $"{moonInterference.ToLowerInvariant()} moon interference";
-
-        return new QuestionAnswerSetDto(
-            null,
-            evt.Id,
-            evt.EventCode,
-            title,
-            evt.EventType,
-            regionId,
-            language,
-            Version,
-            AstronomyQuestionSetStatus.Generated,
-            DateTimeOffset.UtcNow,
-            [
-                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{showerName} peaks as Earth crosses a stream of debris, producing bright meteors from the shower radiant.", 1),
-                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction}; {radiantNote}", 2),
-                Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"Best viewing is {bestWindow}, when the radiant is higher and the sky is dark.", 3),
-                Answer(AstronomyQuestionTypes.How, "How do I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adapt.", 4),
-                Answer(AstronomyQuestionTypes.Why, "Why is this event special?", "Why it matters", $"{showerName} is one of the strongest annual meteor showers, with {moonPhrase} improving viewing quality.", 5),
-                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", $"Set a reminder for {reminderNight}, check weather, and pick a dark open location.", 6)
-            ]);
-    }
-
-    private static bool IsMeteorShower(AstronomyEventIntelligence evt)
-        => evt.EventType.Contains("MeteorShower", StringComparison.OrdinalIgnoreCase)
-            || evt.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)
-            || SafeTitle(evt).Contains("meteor", StringComparison.OrdinalIgnoreCase);
-
-    private static string ShortMeteorTitle(string title)
-    {
-        var clean = string.IsNullOrWhiteSpace(title) ? "This meteor shower" : title.Trim();
-        clean = clean.Replace("Meteor Shower Peak", "meteor shower", StringComparison.OrdinalIgnoreCase);
-        return clean.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? clean : clean + " meteor shower";
-    }
-
-    private static string FormatMeteorViewingWindow(DateTimeOffset localPeak, string timeZoneAbbreviation)
-    {
-        var date = localPeak.Date;
-        if (localPeak.Hour is >= 6 and < 18)
-            date = date.AddDays(localPeak.Hour < 12 ? -1 : 0);
-        var start = new DateTimeOffset(date.Year, date.Month, date.Day, 0, 0, 0, localPeak.Offset);
-        var end = start.AddHours(5);
-        return $"{start:yyyy-MM-dd HH:mm}–{end:HH:mm} {timeZoneAbbreviation}";
-    }
-
-    private static string FormatMeteorReminderNight(string bestWindow, DateTimeOffset localPeak)
-    {
-        var date = localPeak.Date;
-        var match = Regex.Match(bestWindow ?? string.Empty, @"(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})");
-        if (match.Success
-            && int.TryParse(match.Groups["year"].Value, out var year)
-            && int.TryParse(match.Groups["month"].Value, out var month)
-            && int.TryParse(match.Groups["day"].Value, out var day))
-            date = new DateTime(year, month, day);
-
-        var previous = date.AddDays(-1);
-        return $"the night of {previous:MMM d}/{date:dd}";
+        var primaryObjects = evt.Objects
+            .Where(o => !string.IsNullOrWhiteSpace(o.ObjectName) && ((o.ObjectRole?.Contains("Primary", StringComparison.OrdinalIgnoreCase) == true) || o.ObjectType.Contains("Meteor", StringComparison.OrdinalIgnoreCase)))
+            .Select(o => o.ObjectName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .DefaultIfEmpty(objectNames.FirstOrDefault() ?? string.Empty)
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .ToArray();
+        if (primaryObjects.Length == 0) primaryObjects = objectNames.Take(1).ToArray();
+        var secondaryObjects = objectNames.Except(primaryObjects, StringComparer.OrdinalIgnoreCase).ToArray();
+        var bestWindow = FirstMetadataValue(evt, "bestViewingWindowLocal", "bestViewingWindow", "viewingWindowLocal");
+        var localPeakText = FirstMetadataValue(evt, "localPeakTime", "moonriseLocal", "eclipseTimeLocal") ?? $"{localPeak:h:mm tt} {timeZoneAbbreviation}";
+        var direction = FirstMetadataValue(evt, "skyDirectionHint", "directionHint", "direction", "viewingDirection", "azimuthDirection")
+            ?? DirectionFromAzimuth(FirstDecimal(evt, "azimuth", "azimuthDegrees", "bestViewingAzimuthDegrees"));
+        return new ProductionEventIntelligence(
+            Domain: "Astronomy",
+            EventType: evt.EventType,
+            Title: SafeTitle(evt),
+            ShortTitle: SafeTitle(evt),
+            EventDate: evt.PeakUtc ?? evt.StartUtc,
+            PeakUtc: evt.PeakUtc,
+            LocalPeakTime: localPeakText,
+            BestViewingWindowLocal: bestWindow,
+            SkyDirectionHint: direction,
+            VisibilityRegion: FirstMetadataValue(evt, "visibilityRegion", "localVisibility") ?? evt.LocationName ?? regionId,
+            PrimaryObjects: primaryObjects,
+            SecondaryObjects: secondaryObjects,
+            ViewingQuality: evt.VisibilityScore > 0 ? $"Visibility score {evt.VisibilityScore:0.##}/10" : null,
+            MoonInterference: FirstMetadataValue(evt, "moonInterference"),
+            MoonIlluminationPercent: FirstDecimal(evt, "moonIlluminationPercent"),
+            ScientificContext: SafeTitle(evt),
+            ViewerInstructions: [],
+            VisualMotifs: [],
+            SceneStrategy: [],
+            QualityWarnings: [],
+            ForbiddenTerms: [],
+            AngularSeparationDegrees: FirstDecimal(evt, "angularSeparation", "angularSeparationDegrees", "separationDegrees"),
+            AltitudeDegrees: FirstDecimal(evt, "altitude", "altitudeDegrees", "maxAltitudeDegrees"),
+            ReferenceObject: FirstMetadataValue(evt, "radiantVisibilityNote", "constellation", "referenceConstellation", "referenceObject"));
     }
 
     private static QuestionAnswerDto Answer(string type, string question, string title, string answer, int order) => new(null, type, question, title, Clean(answer), order);
@@ -399,20 +361,56 @@ public sealed class AstronomyQuestionEngine(
         }
 
 
-        if (set.EventType.Contains("MeteorShower", StringComparison.OrdinalIgnoreCase) || set.EventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+        ValidateEventSpecificRules(set, issues);
+
+        return issues;
+    }
+
+    private static void ValidateEventSpecificRules(QuestionAnswerSetDto set, List<string> issues)
+    {
+        var combined = string.Join(" ", set.Answers.Select(a => a.AnswerText));
+        var isMeteor = IsEventType(set, "MeteorShower") || TokenContains(combined, "meteor");
+        var actualAllowsVenus = TokenContains(combined, "Venus") && set.EventTitle.Contains("Venus", StringComparison.OrdinalIgnoreCase);
+        var actualAllowsJupiter = TokenContains(combined, "Jupiter") && set.EventTitle.Contains("Jupiter", StringComparison.OrdinalIgnoreCase);
+
+        if (isMeteor)
         {
-            var combined = string.Join(" ", set.Answers.Select(a => a.AnswerText));
-            if (combined.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
-                issues.Add("MeteorShower question answers must not mention conjunction unless the source event is a conjunction.");
-            if (combined.Contains("Venus", StringComparison.OrdinalIgnoreCase) || combined.Contains("Jupiter", StringComparison.OrdinalIgnoreCase))
-                issues.Add("MeteorShower question answers must not mention Venus or Jupiter unless those are source objects.");
-            var when = set.Answers.FirstOrDefault(a => string.Equals(a.QuestionType, AstronomyQuestionTypes.When, StringComparison.OrdinalIgnoreCase))?.AnswerText ?? string.Empty;
+            if (TokenContains(combined, "conjunction")) issues.Add("MeteorShower question answers must not mention conjunction unless the source event is a conjunction.");
+            if (TokenContains(combined, "Venus") && !actualAllowsVenus) issues.Add("MeteorShower question answers must not mention Venus unless it is a source object.");
+            if (TokenContains(combined, "Jupiter") && !actualAllowsJupiter) issues.Add("MeteorShower question answers must not mention Jupiter unless it is a source object.");
+            if (!TokenContains(combined, "meteor") || !ContainsAny(combined, "dark sky", "darkest") || !ContainsAny(combined, "no telescope")) issues.Add("MeteorShower answers must include meteor, dark-sky, and no-telescope guidance.");
+            var when = AnswerText(set, AstronomyQuestionTypes.When);
             if (Regex.IsMatch(when, @"\b(?:1[01]|[6-9]):[0-5]\d\s?(?:AM|am)\b|\b(?:12|1|2|3|4|5):[0-5]\d\s?(?:PM|pm)\b"))
                 issues.Add("MeteorShower best viewing time must use a dark night window, not a daytime local peak time.");
         }
 
-        return issues;
+        if (!isMeteor && (TokenContains(combined, "meteor") || TokenContains(combined, "radiant")))
+            issues.Add("Non-meteor events must not mention meteor or radiant wording.");
+
+        if (IsEventType(set, "NamedFullMoon") && (!TokenContains(combined, "Moon") || !ContainsAny(combined, "full moon")))
+            issues.Add("NamedFullMoon answers must include Moon and full moon context.");
+
+        if (IsEventType(set, "NewMoon"))
+        {
+            if (!ContainsAny(combined, "dark sky", "darker night", "moonlight is absent")) issues.Add("NewMoon answers must include dark-sky context.");
+            if (ContainsAny(combined, "visible moon", "bright moon", "fully illuminated")) issues.Add("NewMoon answers must not describe visible full-moon imagery.");
+        }
+
+        if (IsEventType(set, "LunarEclipse") && (!TokenContains(combined, "eclipse") || !TokenContains(combined, "Moon") || !TokenContains(combined, "phase")))
+            issues.Add("LunarEclipse answers must include eclipse, Moon, and phase timing.");
+
+        if (IsEventType(set, "SolarEclipse"))
+        {
+            if (!ContainsAny(combined, "certified eclipse glasses", "certified eye protection", "solar filters")) issues.Add("SolarEclipse answers must include eye safety.");
+            if (ContainsAny(combined, "look directly at the Sun")) issues.Add("SolarEclipse answers must not instruct viewers to look directly at the Sun.");
+        }
     }
+
+    private static bool IsEventType(QuestionAnswerSetDto set, string eventType)
+        => set.EventType.Contains(eventType, StringComparison.OrdinalIgnoreCase);
+
+    private static string AnswerText(QuestionAnswerSetDto set, string questionType)
+        => set.Answers.FirstOrDefault(a => string.Equals(a.QuestionType, questionType, StringComparison.OrdinalIgnoreCase))?.AnswerText ?? string.Empty;
 
     private static IReadOnlyList<QuestionAnswerValidationCheckDto> ValidateQuestionSetForApproval(QuestionAnswerSetDto set)
     {
@@ -443,6 +441,23 @@ public sealed class AstronomyQuestionEngine(
             checks.Add(new QuestionAnswerValidationCheckDto(type, issues.Count == 0, issues, recommendations));
         }
 
+        var eventIssues = new List<string>();
+        ValidateEventSpecificRules(set, eventIssues);
+        if (eventIssues.Count > 0)
+        {
+            var actionIndex = checks.FindIndex(c => string.Equals(c.QuestionType, AstronomyQuestionTypes.Action, StringComparison.OrdinalIgnoreCase));
+            if (actionIndex >= 0)
+            {
+                var current = checks[actionIndex];
+                checks[actionIndex] = current with
+                {
+                    Approved = false,
+                    Issues = current.Issues.Concat(eventIssues).ToArray(),
+                    Recommendations = current.Recommendations.Concat(["Apply the event-specific strategy requirements before approval."]).ToArray()
+                };
+            }
+        }
+
         return checks;
     }
 
@@ -467,7 +482,7 @@ public sealed class AstronomyQuestionEngine(
                 }
                 break;
             case AstronomyQuestionTypes.Action:
-                if (!ContainsAny(text, "step outside", "watch", "enjoy", "look", "view", "try", "mark", "clear skies"))
+                if (!ContainsAny(text, "step outside", "watch", "enjoy", "look", "view", "try", "mark", "clear skies", "reminder", "save", "check", "prepare"))
                 {
                     issues.Add("ACTION must work as the closing mark.");
                     recommendations.Add("End with a simple viewer action, such as stepping outside if skies are clear.");
@@ -524,10 +539,17 @@ public sealed class AstronomyQuestionEngine(
     }
 
     private static bool ContainsAny(string text, params string[] terms)
-        => terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+        => terms.Any(term => TokenContains(text, term));
 
     private static bool StartsWithAny(string text, params string[] terms)
         => terms.Any(term => text.StartsWith(term, StringComparison.OrdinalIgnoreCase));
+
+    private static bool TokenContains(string text, string term)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(term)) return false;
+        var escaped = Regex.Escape(term.Trim()).Replace("\\ ", @"\s+");
+        return Regex.IsMatch(text, $@"(?<![\p{{L}}\p{{N}}_]){escaped}(?![\p{{L}}\p{{N}}_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
 
     private static bool TryMatchForbiddenTerm(string answerText, out string forbiddenTerm, out string matchedText)
     {
@@ -723,7 +745,7 @@ public sealed class AstronomyQuestionEngine(
         => timeZoneId switch
         {
             "Asia/Kolkata" => "IST",
-            "Etc/UTC" or "UTC" => "UTC",
+            "Etc/UTC" or "UTC" => "GMT",
             _ => TimeZoneInfo.FindSystemTimeZoneById(timeZoneId).IsDaylightSavingTime(localTime)
                 ? TimeZoneInfo.FindSystemTimeZoneById(timeZoneId).DaylightName
                 : TimeZoneInfo.FindSystemTimeZoneById(timeZoneId).StandardName
