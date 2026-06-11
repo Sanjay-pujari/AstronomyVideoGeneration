@@ -301,7 +301,7 @@ public sealed class QuestionDrivenVisualComposer(
     {
         var isMeteorShower = IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent) || IsMeteorText(narrationScene.SourceAnswer) || IsMeteorText(narrationScene.NarrationText);
         var meteorContextText = $"{narrationScene.SourceAnswer} {narrationScene.ViewerTakeaway} {narrationScene.NarrationText} {narrationScene.CaptionText}";
-        var meteorWindow = ExtractMeteorViewingWindow(meteorContextText);
+        var meteorWindow = ResolveMeteorViewingWindow(request, meteorContextText);
         var meteorDate = ExtractMeteorDate(meteorWindow);
         var meteorReminder = string.IsNullOrWhiteSpace(meteorDate) ? "Set viewing reminder" : $"Set reminder for {meteorDate}";
         var overlays = isMeteorShower ? scene.QuestionType.ToLowerInvariant() switch
@@ -366,7 +366,29 @@ public sealed class QuestionDrivenVisualComposer(
             ? new[] { "Meteor-shower visual cues: meteor streaks, radiant guide, whole-sky dark location, low moon interference, no telescope needed.", "Text coverage target <= 25%; visual astronomy information target >= 75%; no large title cards, debug text, decorative circles, helper boxes, or card layouts." }
             : new[] { scene.AccessibilityIntent, "Text coverage target <= 25%; visual astronomy information target >= 75%; no large title cards, debug text, decorative circles, helper boxes, or card layouts." };
 
-        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets);
+        var bestViewingWindowLocal = isMeteorShower && scene.SceneNumber == 3 ? meteorWindow : null;
+        var strategyValidationFacts = isMeteorShower && scene.SceneNumber == 3
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["bestViewingWindowLocal"] = meteorWindow,
+                ["eventType"] = "MeteorShower",
+                ["requiredTimingCue"] = ExtractMeteorRequiredTimingCue(meteorWindow)
+            }
+            : null;
+
+        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts);
+    }
+
+    private static string ResolveMeteorViewingWindow(QuestionDrivenVisualGenerationRequest request, string text)
+    {
+        var fromIntelligence = request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal;
+        return !string.IsNullOrWhiteSpace(fromIntelligence) ? fromIntelligence : ExtractMeteorViewingWindow(text);
+    }
+
+    private static string ExtractMeteorRequiredTimingCue(string text)
+    {
+        var match = Regex.Match(text ?? string.Empty, @"\b\d{2}:\d{2}[–-]\d{2}:\d{2}\s+[A-Z]{2,5}\b");
+        return match.Success ? match.Value : "Midnight to pre-dawn";
     }
 
     private static string ExtractMeteorViewingWindow(string text)

@@ -107,4 +107,79 @@ public sealed class EventProductionIntelligenceTests
         Assert.Contains(strategies, s => s is LunarEclipseStrategy);
         Assert.Contains(strategies, s => s is SolarEclipseStrategy);
     }
+
+    [Theory]
+    [InlineData("Timing card: 2026-12-14 00:00–05:00 IST.", true)]
+    [InlineData("Timing card: 00:00–05:00 IST — best viewing window.", true)]
+    [InlineData("Best viewing window: Midnight to pre-dawn under dark skies.", true)]
+    [InlineData("Peak calculation: 11:30 +05:30.", false)]
+    public void MeteorBestViewingWindowValidation_AcceptsNormalizedViewingWindowButRejectsDaytimePeak(string text, bool expected)
+    {
+        var method = typeof(ProductionPipelineQualityValidator).GetMethod("HasBestViewingWindowEvidence", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("HasBestViewingWindowEvidence helper was not found.");
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "MeteorShower",
+            "Perseids Meteor Shower Peak",
+            "Perseids",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"),
+            DateTimeOffset.Parse("2026-12-14T06:00:00Z"),
+            "11:30 +05:30",
+            "2026-12-14 00:00–05:00 IST",
+            "east to overhead",
+            "India",
+            ["Perseids"],
+            [],
+            null,
+            "Low",
+            10m,
+            "Perseids Meteor Shower Peak",
+            [],
+            ["meteor streaks"],
+            ["Use bestViewingWindowLocal"],
+            [],
+            ["Venus", "Jupiter"]);
+
+        var actual = (bool)method.Invoke(null, [intelligence, text])!;
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void QuestionDrivenVisualSpec_SerializesMeteorTimingStrategyValidationFacts()
+    {
+        var spec = new QuestionDrivenVisualSpec(
+            "event-1",
+            "IN-RJ-UDAIPUR",
+            "en",
+            3,
+            "When",
+            "Timing",
+            "When should I watch?",
+            "Watch from midnight to pre-dawn.",
+            "Best viewing window is 2026-12-14 00:00–05:00 IST.",
+            "00:00–05:00 IST",
+            6,
+            "meteor shower timing",
+            ["2026-12-14", "00:00–05:00 IST", "Midnight to pre-dawn"],
+            ["time:2026-12-14 00:00–05:00 IST marker"],
+            ["Meteor timing cues"],
+            DateTimeOffset.Parse("2026-06-11T00:00:00Z"),
+            "MeteorShower",
+            false,
+            "2026-12-14 00:00–05:00 IST",
+            new Dictionary<string, string>
+            {
+                ["bestViewingWindowLocal"] = "2026-12-14 00:00–05:00 IST",
+                ["eventType"] = "MeteorShower",
+                ["requiredTimingCue"] = "00:00–05:00 IST"
+            });
+
+        var json = System.Text.Json.JsonSerializer.Serialize(spec, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        Assert.Contains("bestViewingWindowLocal", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("strategyValidationFacts", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("00:00–05:00 IST", json, StringComparison.OrdinalIgnoreCase);
+    }
+
 }
