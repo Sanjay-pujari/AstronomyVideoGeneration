@@ -48,6 +48,59 @@ public sealed class AstronomyInfographicRenderer(
             ? [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)]
             : [];
 
+    private static bool IsNamedFullMoonVisual(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase)
+            || spec.DrawableVisualObjects?.Any(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase)
+                && (obj.Phase?.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) ?? false)) == true
+            || spec.ProgrammaticLayers.Any(layer => layer.Contains("drawable-object:Moon", StringComparison.OrdinalIgnoreCase));
+
+    private static string ResolveMoonLabel(QuestionDrivenVisualSpec spec)
+        => spec.DrawableVisualObjects?.FirstOrDefault(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))?.Label
+            ?? (spec.OverlayText.FirstOrDefault(text => text.Contains("Snow Moon", StringComparison.OrdinalIgnoreCase)) is not null ? "Snow Moon" : "Full Moon");
+
+    private static void DrawNamedFullMoonVisual(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, int width, int height)
+    {
+        if (!IsNamedFullMoonVisual(spec)) return;
+
+        var shortForm = width < 1400;
+        var center = ResolveMoonCenter(spec.SceneNumber, width, height, shortForm);
+        var radius = ResolveMoonRadius(spec.SceneNumber, width, shortForm);
+        var glow = Color.ParseHex("#DCEBFF");
+        ctx.Fill(glow.WithAlpha(.10f), new EllipsePolygon(center.X, center.Y, radius * 2.65f));
+        ctx.Fill(glow.WithAlpha(.18f), new EllipsePolygon(center.X, center.Y, radius * 1.85f));
+        ctx.Fill(glow.WithAlpha(.28f), new EllipsePolygon(center.X, center.Y, radius * 1.32f));
+        ctx.Fill(Color.ParseHex("#FFF6D7"), new EllipsePolygon(center.X, center.Y, radius));
+        ctx.Fill(Color.ParseHex("#D8C79D").WithAlpha(.18f), new EllipsePolygon(center.X - radius * .28f, center.Y - radius * .18f, radius * .20f));
+        ctx.Fill(Color.ParseHex("#C9B88F").WithAlpha(.13f), new EllipsePolygon(center.X + radius * .25f, center.Y + radius * .08f, radius * .16f));
+        ctx.Fill(Color.ParseHex("#EEE0B8").WithAlpha(.18f), new EllipsePolygon(center.X - radius * .02f, center.Y + radius * .28f, radius * .12f));
+
+        var fonts = shortForm ? EditorialFonts.CreateScaled(.86f) : EditorialFonts.Create();
+        var label = ResolveMoonLabel(spec);
+        var labelX = Math.Clamp(center.X - radius * 1.22f, 48f, width - 420f);
+        var labelY = Math.Clamp(center.Y + radius + (shortForm ? 38f : 24f), 80f, height - 230f);
+        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(labelX, labelY), WrappingLength = shortForm ? 360 : 460 }, label, Color.ParseHex("#FFF6D7"));
+        if (spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) || spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.82f), shortForm ? 4 : 5, new PathBuilder().AddLine(new PointF(center.X - radius * 1.65f, center.Y + radius * 1.05f), new PointF(center.X - radius * .72f, center.Y + radius * .45f)).Build());
+            ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(Math.Max(42, center.X - radius * 2.15f), center.Y + radius * 1.12f), WrappingLength = 260 }, "E horizon", Color.ParseHex("#F6C177"));
+        }
+    }
+
+    private static PointF ResolveMoonCenter(int sceneNumber, int width, int height, bool shortForm)
+    {
+        var x = sceneNumber switch { 2 or 4 => .34f, 3 => .68f, 5 => .58f, 6 => .50f, _ => .56f };
+        var y = shortForm
+            ? sceneNumber switch { 2 => .38f, 3 => .32f, 4 => .36f, 5 => .35f, 6 => .34f, _ => .31f }
+            : sceneNumber switch { 2 => .39f, 3 => .31f, 4 => .38f, 5 => .34f, 6 => .33f, _ => .30f };
+        return new PointF(width * x, height * y);
+    }
+
+    private static float ResolveMoonRadius(int sceneNumber, int width, bool shortForm)
+    {
+        var baseRadius = shortForm ? width * .145f : width * .078f;
+        return sceneNumber switch { 1 => baseRadius * 1.18f, 5 => baseRadius * 1.06f, 6 => baseRadius * 1.10f, _ => baseRadius };
+    }
+
     private async Task<Image<Rgba32>> RenderApprovedLongFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
     {
         var image = await AstronomyVisualCompositionEngine.ComposeAsync(new AstronomyVisualCompositionRequest(
@@ -66,6 +119,7 @@ public sealed class AstronomyInfographicRenderer(
         image.Mutate(ctx =>
         {
             backgroundLayer.RenderEventSpecificForeground(ctx, spec);
+            DrawNamedFullMoonVisual(ctx, spec, AstronomyInfographicRenderVariant.LongForm.Width, AstronomyInfographicRenderVariant.LongForm.Height);
             skyGuidanceLayer.Render(ctx, spec, fonts);
             if (spec.UsesLocalPlanetAssets && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)) celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
             educationalLayer.Render(ctx, spec, fonts);
@@ -97,6 +151,7 @@ public sealed class AstronomyInfographicRenderer(
         {
             DrawShortFormAtmosphere(ctx, spec.SceneNumber, variant.Width, variant.Height);
             DrawNativeShortFormVisual(ctx, spec, venusAssetPath, jupiterAssetPath);
+            DrawNamedFullMoonVisual(ctx, spec, variant.Width, variant.Height);
             DrawNativeShortFormText(ctx, spec, fonts, variant);
             DrawPortraitVignette(ctx, variant.Width, variant.Height);
         });

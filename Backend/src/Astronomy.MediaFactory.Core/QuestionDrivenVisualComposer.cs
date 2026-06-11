@@ -109,7 +109,17 @@ public sealed record QuestionDrivenVisualSpec(
     string EventType,
     bool UsesLocalPlanetAssets,
     string? BestViewingWindowLocal = null,
-    IReadOnlyDictionary<string, string>? StrategyValidationFacts = null);
+    IReadOnlyDictionary<string, string>? StrategyValidationFacts = null,
+    IReadOnlyList<SceneDrawableVisualObject>? DrawableVisualObjects = null,
+    IReadOnlyList<string>? RequiredVisualObjects = null);
+
+public sealed record SceneDrawableVisualObject(
+    string ObjectType,
+    string? Phase = null,
+    string? Size = null,
+    bool Glow = false,
+    string? Label = null,
+    string? Placement = null);
 
 
 public sealed record AstronomyInfographicDesignRequest(
