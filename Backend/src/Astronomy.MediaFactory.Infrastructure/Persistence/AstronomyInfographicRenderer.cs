@@ -65,6 +65,7 @@ public sealed class AstronomyInfographicRenderer(
         var fonts = EditorialFonts.Create();
         image.Mutate(ctx =>
         {
+            backgroundLayer.RenderEventSpecificForeground(ctx, spec);
             skyGuidanceLayer.Render(ctx, spec, fonts);
             if (spec.UsesLocalPlanetAssets && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)) celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
             educationalLayer.Render(ctx, spec, fonts);
@@ -335,6 +336,11 @@ public sealed class AstronomyBackgroundLayerRenderer
         => spec.EventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase)
             || spec.BackgroundPrompt.Contains("meteor", StringComparison.OrdinalIgnoreCase)
             || spec.ProgrammaticLayers.Any(layer => layer.Contains("meteor", StringComparison.OrdinalIgnoreCase));
+
+    public void RenderEventSpecificForeground(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec)
+    {
+        if (IsMeteorVisual(spec)) RenderMeteorStreaks(ctx, spec.SceneNumber);
+    }
 
     public void RenderVignette(IImageProcessingContext ctx)
     {
