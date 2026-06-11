@@ -117,7 +117,7 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
             if (MentionsMoon(primaryObject) && MentionsJupiter(eventTitle)) yield return "Moon Meets Jupiter";
             if (!string.IsNullOrWhiteSpace(primaryObject)) yield return $"{primaryObject} Tonight";
             if (!string.IsNullOrWhiteSpace(direction)) yield return $"Look {direction} Tonight";
-            yield return "Venus After Sunset";
+            yield return "Venus Tonight";
         }
 
         foreach (var hook in request.TopPerformingHooks)

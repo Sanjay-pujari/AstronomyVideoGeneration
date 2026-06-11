@@ -269,7 +269,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return $"Moon Meets {hero.ObjectName}";
             return "Rare Sky Event";
         }
-        if (hero.ObjectName.Contains("venus", StringComparison.OrdinalIgnoreCase)) return "Venus After Sunset";
+        if (hero.ObjectName.Contains("venus", StringComparison.OrdinalIgnoreCase)) return "Venus Tonight";
         if (hero.ObjectName.Contains("saturn", StringComparison.OrdinalIgnoreCase)) return "Saturn Before Sunrise";
         if (hero.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "Moon Tonight";
         return $"{hero.ObjectName} Tonight";

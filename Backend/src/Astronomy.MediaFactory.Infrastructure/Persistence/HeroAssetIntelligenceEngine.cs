@@ -39,7 +39,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
-    private const string SelectedHeroHook = "LOOK WEST TONIGHT";
+    private const string DefaultHeroHook = "TONIGHT'S SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
     private static readonly HeroImageSpec[] HeroImageSpecs =
@@ -155,7 +155,7 @@ public sealed class HeroAssetStoryGenerator(
         var storyResponse = await GenerateHeroAssetStoryAsync(request, cancellationToken);
         var warnings = new List<string>(storyResponse.Warnings);
         var hookScores = BuildHookScores(storyResponse.HeroStory);
-        var selectedHook = SelectedHeroHook;
+        var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -204,7 +204,7 @@ public sealed class HeroAssetStoryGenerator(
         warnings.AddRange(storyValidationIssues);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = SelectedHeroHook;
+        var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -254,7 +254,7 @@ public sealed class HeroAssetStoryGenerator(
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = SelectedHeroHook;
+        var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -325,7 +325,7 @@ public sealed class HeroAssetStoryGenerator(
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = SelectedHeroHook;
+        var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -1005,7 +1005,7 @@ public sealed class HeroAssetStoryGenerator(
     private static string DeriveHeroHook(HeroStorySourceDto storySource)
     {
         var what = Clean(storySource.What);
-        if (string.IsNullOrWhiteSpace(what)) return SelectedHeroHook;
+        if (string.IsNullOrWhiteSpace(what)) return DefaultHeroHook;
         var firstSentence = what.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? what;
         return firstSentence.Length <= 44 ? firstSentence : firstSentence[..44].Trim();
     }
@@ -1097,20 +1097,15 @@ public sealed class HeroAssetStoryGenerator(
     {
         var candidates = new List<string>
         {
-            SelectedHeroHook,
-            "DON'T MISS THIS TONIGHT",
-            "TWO BRIGHT PLANETS TOGETHER",
-            "LOOK UP AFTER SUNSET",
+            DefaultHeroHook,
+            "LOOK UP TONIGHT",
             "EVENING SKY HIGHLIGHT"
         };
 
         if (!string.IsNullOrWhiteSpace(heroStory.HeroHook))
             candidates.Add(heroStory.HeroHook.ToUpperInvariant());
         if (!string.IsNullOrWhiteSpace(heroStory.HeroAction) && heroStory.HeroAction.Contains("west", StringComparison.OrdinalIgnoreCase))
-            candidates.Add("FACE WEST AFTER SUNSET");
-        if (!string.IsNullOrWhiteSpace(heroStory.HeroVisualFocus) && heroStory.HeroVisualFocus.Contains("Venus", StringComparison.OrdinalIgnoreCase) && heroStory.HeroVisualFocus.Contains("Jupiter", StringComparison.OrdinalIgnoreCase))
-            candidates.Add("VENUS AND JUPITER TONIGHT");
-
+            candidates.Add("FACE WEST TONIGHT");
         return candidates
             .Select(CleanHook)
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
@@ -1214,7 +1209,7 @@ public sealed class HeroAssetStoryGenerator(
                 new HeroLayoutBlueprintDto(
                     $"Top: {selectedHook}",
                     "Center: Venus + Jupiter",
-                    "Bottom: After Sunset",
+                    "Bottom: Best viewing time",
                     "Twilight")),
             new(
                 "Portrait",
@@ -1223,7 +1218,7 @@ public sealed class HeroAssetStoryGenerator(
                 new HeroLayoutBlueprintDto(
                     $"Top: {selectedHook}",
                     "Center: Venus + Jupiter",
-                    "Bottom: Look West After Sunset",
+                    "Bottom: Viewing direction",
                     "Twilight"))
         ];
 

@@ -27,7 +27,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailCompositionModelFileName = "thumbnail-composition-model.json";
     private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
     private const string ThumbnailLayoutValidationFileName = "thumbnail-layout-validation.json";
-    private const string SelectedThumbnailHook = "DON'T MISS THIS TONIGHT";
+    private const string DefaultThumbnailHook = "TONIGHT'S SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
 
@@ -438,8 +438,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         var warnings = new List<string>();
         var hookScores = BuildThumbnailHookScores(heroStory);
-        var selectedHookScore = hookScores.First(score => string.Equals(score.Hook, SelectedThumbnailHook, StringComparison.OrdinalIgnoreCase));
-        var selectedHook = selectedHookScore.ClarityScore >= 80 ? SelectedThumbnailHook : SelectTopHook(hookScores);
+        var selectedHook = SelectTopHook(hookScores);
+        var selectedHookScore = hookScores.First(score => string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase));
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -448,9 +448,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .ToArray();
 
         var recommendedSourceScene = ResolveRecommendedSourceScene(compositionModel);
-        var thumbnailCopy = new ThumbnailCopyDto(selectedHook, "Venus + Jupiter", "After Sunset");
-        var scores = BuildReadinessScores(hookScores.First(score => string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)));
-        var visualFocus = "Large Venus and Jupiter close together above twilight horizon.";
+        var thumbnailCopy = new ThumbnailCopyDto(
+            selectedHook,
+            DeriveSecondaryThumbnailText(heroStory),
+            DeriveMicroThumbnailText(heroStory));
+        var scores = BuildReadinessScores(selectedHookScore);
+        var visualFocus = CleanTextElement(heroStory.HeroVisualFocus, "Timely sky event above the local horizon.");
         var emotion = "Curiosity + Wonder";
         warnings.AddRange(ValidateReadiness(thumbnailCopy, visualFocus, emotion, scores));
 
@@ -539,10 +542,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private ThumbnailCompositionModelDto BuildThumbnailCompositionModel(ThumbnailAssetGenerationRequest request, ThumbnailIntelligenceDto intelligence)
     {
-        var primaryHook = SelectedThumbnailHook;
-        var secondaryText = "Venus + Jupiter";
-        var microText = "After Sunset";
-        var visualFocus = CleanTextElement(intelligence.VisualFocus, "Large Venus and Jupiter close together above twilight horizon.");
+        var primaryHook = CleanTextElement(intelligence.ThumbnailCopy.PrimaryText, DefaultThumbnailHook);
+        var secondaryText = CleanTextElement(intelligence.ThumbnailCopy.SecondaryText, "Sky Event");
+        var microText = CleanTextElement(intelligence.ThumbnailCopy.MicroText, "Tonight");
+        var visualFocus = CleanTextElement(intelligence.VisualFocus, "Timely sky event above the local horizon.");
         var textElementCount = new[] { primaryHook, secondaryText, microText }.Count(text => !string.IsNullOrWhiteSpace(text));
         var readinessScore = ClampScore(intelligence.Scores.ThumbnailReadinessScore);
 
@@ -628,25 +631,54 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var candidates = new List<string>
         {
-            "DON'T MISS THIS TONIGHT",
-            "TWO BRIGHT PLANETS TOGETHER",
-            "VENUS AND JUPITER TONIGHT",
-            "SEE THIS AFTER SUNSET",
-            "LOOK WEST TONIGHT"
+            DefaultThumbnailHook,
+            "LOOK UP TONIGHT",
+            "SKY HIGHLIGHT TONIGHT",
+            "SEE THE SKY TONIGHT"
         };
 
         if (!string.IsNullOrWhiteSpace(heroStory.HeroHook))
             candidates.Add(heroStory.HeroHook.ToUpperInvariant());
+        if (!string.IsNullOrWhiteSpace(heroStory.HeroAction))
+            candidates.Add(heroStory.HeroAction.ToUpperInvariant());
+        if (!string.IsNullOrWhiteSpace(heroStory.HeroStorySource.What))
+            candidates.Add(SummarizeThumbnailText(heroStory.HeroStorySource.What).ToUpperInvariant());
 
         return candidates
             .Select(CleanHook)
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(ScoreThumbnailHook)
-            .OrderByDescending(score => string.Equals(score.Hook, SelectedThumbnailHook, StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(score => score.TotalScore)
+            .OrderByDescending(score => score.TotalScore)
             .ThenBy(score => score.Hook)
             .ToArray();
+    }
+
+
+    private static string DeriveSecondaryThumbnailText(HeroAssetStoryDto heroStory)
+    {
+        var fromWhat = SummarizeThumbnailText(heroStory.HeroStorySource.What);
+        if (!string.IsNullOrWhiteSpace(fromWhat)) return fromWhat;
+        var fromFocus = SummarizeThumbnailText(heroStory.HeroVisualFocus);
+        if (!string.IsNullOrWhiteSpace(fromFocus)) return fromFocus;
+        return "Sky Event";
+    }
+
+    private static string DeriveMicroThumbnailText(HeroAssetStoryDto heroStory)
+    {
+        var fromAction = SummarizeThumbnailText(heroStory.HeroAction);
+        if (!string.IsNullOrWhiteSpace(fromAction)) return fromAction;
+        var fromWhen = SummarizeThumbnailText(heroStory.HeroStorySource.When);
+        if (!string.IsNullOrWhiteSpace(fromWhen)) return fromWhen;
+        return "Tonight";
+    }
+
+    private static string SummarizeThumbnailText(string? value)
+    {
+        var cleaned = CleanTextElement(value, string.Empty);
+        if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
+        var firstSentence = cleaned.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? cleaned;
+        return firstSentence.Length <= 24 ? firstSentence : firstSentence[..24].Trim();
     }
 
     private static ThumbnailHookScoreDto ScoreThumbnailHook(string hook)
@@ -703,7 +735,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     }
 
     private static string SelectTopHook(IReadOnlyList<ThumbnailHookScoreDto> hookScores)
-        => hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).FirstOrDefault()?.Hook ?? SelectedThumbnailHook;
+        => hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).FirstOrDefault()?.Hook ?? DefaultThumbnailHook;
 
     private static ThumbnailReadinessScoresDto BuildReadinessScores(ThumbnailHookScoreDto selectedHookScore)
     {
@@ -1020,13 +1052,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static void ValidateThumbnailImageInputs(ThumbnailIntelligenceDto intelligence, ThumbnailCompositionModelDto composition, ThumbnailSceneManifestDto manifest)
     {
         var textElements = new[] { composition.PrimaryHook, composition.SecondaryText, composition.MicroText }.Where(text => !string.IsNullOrWhiteSpace(text)).ToArray();
-        if (!string.Equals(composition.PrimaryHook, SelectedThumbnailHook, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(intelligence.ThumbnailCopy.PrimaryText, SelectedThumbnailHook, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail image generation validation failed: primary hook must be DON'T MISS THIS TONIGHT.");
-        if (!string.Equals(composition.SecondaryText, "Venus + Jupiter", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail image generation validation failed: secondary text must be Venus + Jupiter.");
-        if (!string.Equals(composition.MicroText, "After Sunset", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail image generation validation failed: micro text must be After Sunset.");
+        if (string.IsNullOrWhiteSpace(composition.PrimaryHook)
+            || string.IsNullOrWhiteSpace(intelligence.ThumbnailCopy.PrimaryText)
+            || !string.Equals(composition.PrimaryHook, intelligence.ThumbnailCopy.PrimaryText, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail image generation validation failed: primary hook must match thumbnail intelligence.");
+        if (string.IsNullOrWhiteSpace(composition.SecondaryText))
+            throw new ArgumentException("Thumbnail image generation validation failed: secondary text is required.");
+        if (string.IsNullOrWhiteSpace(composition.MicroText))
+            throw new ArgumentException("Thumbnail image generation validation failed: micro text is required.");
         if (textElements.Length != 3)
             throw new ArgumentException("Thumbnail image generation validation failed: exactly 3 text blocks are required.");
         if (new[] { composition.PrimaryHook, composition.SecondaryText, composition.MicroText, composition.VisualFocus, manifest.SelectionReason }.Any(ContainsForbiddenThumbnailText))
