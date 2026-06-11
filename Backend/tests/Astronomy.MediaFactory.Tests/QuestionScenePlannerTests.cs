@@ -75,6 +75,31 @@ public sealed class QuestionScenePlannerTests
         Assert.True(File.Exists(result.GeneratedFiles.Single()));
     }
 
+
+    [Fact]
+    public async Task GenerateQuestionScenePlanAsync_AllowsMeteorShowerGeneratedSetUsingStrategyContract()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(db);
+        evt.EventType = "MeteorShower";
+        evt.Title = "Perseids Meteor Shower Peak";
+        evt.EventCode = "PERSEIDS_2026";
+        SeedMeteorQuestionSet(db, evt.Id, AstronomyQuestionSetStatus.Generated);
+
+        var planner = CreatePlanner(db, workingDirectory);
+        var result = await planner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventId: evt.Id.ToString("D"),
+            Language: "en",
+            DryRun: true,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(6, result.SceneCount);
+        Assert.Contains("QuestionAnswerSet status is Generated but passed validation.", result.Warnings);
+    }
+
     [Fact]
     public async Task GenerateQuestionScenePlanAsync_RejectsLatestGeneratedQuestionSetWhenValidationFails()
     {
@@ -94,7 +119,10 @@ public sealed class QuestionScenePlannerTests
     }
 
     private static QuestionScenePlanner CreatePlanner(MediaFactoryDbContext db, string workingDirectory)
-        => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<QuestionScenePlanner>.Instance);
+        => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), CreateStrategyResolver(), NullLogger<QuestionScenePlanner>.Instance);
+
+    private static MediaEventStrategyResolver CreateStrategyResolver()
+        => new([new MeteorShowerStrategy(), new PlanetPairingStrategy(), new ConjunctionStrategy(), new NamedFullMoonStrategy(), new NewMoonStrategy(), new LunarEclipseStrategy(), new SolarEclipseStrategy(), new GenericAstronomyEventStrategy()]);
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
@@ -158,6 +186,30 @@ public sealed class QuestionScenePlannerTests
                 Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", "Find bright Venus first, then look slightly nearby for Jupiter.", 4),
                 Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", "Venus and Jupiter appear only 1.63° apart, creating a striking planetary pairing.", 5),
                 Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", "If skies are clear, step outside after sunset and enjoy the view.", 6)
+            ]
+        });
+        db.SaveChanges();
+    }
+
+
+    private static void SeedMeteorQuestionSet(MediaFactoryDbContext db, Guid eventId, string status)
+    {
+        db.AstronomyQuestionAnswerSets.Add(new AstronomyQuestionAnswerSet
+        {
+            AstronomyEventIntelligenceId = eventId,
+            RegionId = "IN-RJ-UDAIPUR",
+            Language = "en",
+            Version = "v1",
+            Status = status,
+            GeneratedUtc = DateTimeOffset.Parse("2026-08-13T14:00:00Z"),
+            Answers =
+            [
+                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", "Perseids Meteor Shower Peak peaks as Earth crosses space debris, producing bright meteor streaks.", 1),
+                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", "Look northeast after midnight; meteors can appear anywhere across the dark sky.", 2),
+                Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", "Best viewing is 2026-08-13 00:30–04:30 IST, when the sky is darkest.", 3),
+                Answer(AstronomyQuestionTypes.How, "How do I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adjust.", 4),
+                Answer(AstronomyQuestionTypes.Why, "Why is this event special?", "Why it matters", "Perseids Meteor Shower Peak is one of the strongest annual meteor showers, with low moon interference improving viewing quality.", 5),
+                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", "Set a reminder for the peak night, check weather, and pick a dark open location.", 6)
             ]
         });
         db.SaveChanges();
