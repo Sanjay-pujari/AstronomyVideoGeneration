@@ -111,7 +111,8 @@ public sealed record QuestionDrivenVisualSpec(
     string? BestViewingWindowLocal = null,
     IReadOnlyDictionary<string, string>? StrategyValidationFacts = null,
     IReadOnlyList<SceneDrawableVisualObject>? DrawableVisualObjects = null,
-    IReadOnlyList<string>? RequiredVisualObjects = null);
+    IReadOnlyList<string>? RequiredVisualObjects = null,
+    VisualSourceResolutionResult? VisualSourceResolution = null);
 
 public sealed record SceneDrawableVisualObject(
     string ObjectType,

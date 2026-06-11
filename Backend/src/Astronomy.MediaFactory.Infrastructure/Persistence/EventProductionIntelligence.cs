@@ -553,6 +553,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         }
         if (!ContainsToken(text, intelligence.ShortTitle) && !ContainsToken(text, intelligence.Title)) errors.Add("Output does not mention the event title or short title.");
         if (!HasBestViewingWindowEvidence(intelligence, text)) errors.Add("Output does not use bestViewingWindowLocal.");
+        foreach (var stale in new[] { "Golden Pilot", "golden pilot" })
+            if (ContainsToken(text, stale)) errors.Add($"Output contains stale Golden Pilot term '{stale}'.");
         if (strategyDefinition is null)
         {
             foreach (var forbidden in intelligence.ForbiddenTerms.Where(f => !string.IsNullOrWhiteSpace(f)))
@@ -580,6 +582,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     private static IReadOnlyList<string> ResolveForbiddenTermsForFinalValidation(ProductionEventIntelligence intelligence, MediaEventStrategyDefinition strategyDefinition, IReadOnlyList<string> sourceNotes)
     {
         var candidateTerms = strategyDefinition.ForbiddenUnrelatedObjects
+            .Concat(["Golden Pilot", "golden pilot", "7:23 PM IST"])
             .Concat(intelligence.ForbiddenTerms)
             .Concat(intelligence.ForbiddenObjectNames ?? [])
             .Where(term => !string.IsNullOrWhiteSpace(term))
@@ -824,9 +827,71 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             return;
         }
 
+        ValidateVisualSourceResolverMetadata(context, errors);
+
         var result = strategy.Validate(context);
         warnings.AddRange(result.Warnings);
         errors.AddRange(result.Errors);
+    }
+
+
+    private static void ValidateVisualSourceResolverMetadata(SceneValidationContext context, List<string> errors)
+    {
+        var required = (context.Intelligence.RequiredVisualObjects ?? [])
+            .Concat(context.Intelligence.PrimaryObjects)
+            .Concat(context.Intelligence.SecondaryObjects)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var (path, json) in context.InfographicSpecs)
+        {
+            using var doc = JsonDocument.Parse(json);
+            var specText = json;
+            if (required.Length > 0)
+            {
+                if (TryGetVisualSourceType(doc.RootElement, out var sourceType) && sourceType.Equals("GenericFallback", StringComparison.OrdinalIgnoreCase))
+                    errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: GenericFallback cannot be used when required visual objects exist.");
+
+                foreach (var requiredObject in required)
+                    if (!ContainsToken(specText, requiredObject))
+                        errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: required visual object '{requiredObject}' is missing from spec/metadata.");
+            }
+
+            foreach (var forbidden in context.Intelligence.ForbiddenObjectNames ?? [])
+                if (ContainsToken(ExtractSpecGeneratedText(doc.RootElement), forbidden))
+                    errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: forbidden object name '{forbidden}' appears in generated spec content.");
+        }
+    }
+
+    private static bool TryGetVisualSourceType(JsonElement root, out string sourceType)
+    {
+        sourceType = string.Empty;
+        if (root.TryGetProperty("visualSourceResolution", out var resolution)
+            && resolution.TryGetProperty("sourceType", out var sourceTypeProperty)
+            && sourceTypeProperty.ValueKind == JsonValueKind.String)
+        {
+            sourceType = sourceTypeProperty.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(sourceType);
+        }
+        if (root.TryGetProperty("strategyValidationFacts", out var facts)
+            && facts.TryGetProperty("visualSourceType", out sourceTypeProperty)
+            && sourceTypeProperty.ValueKind == JsonValueKind.String)
+        {
+            sourceType = sourceTypeProperty.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(sourceType);
+        }
+        return false;
+    }
+
+    private static string ExtractSpecGeneratedText(JsonElement root)
+    {
+        var parts = new List<string>();
+        foreach (var propertyName in new[] { "backgroundPrompt", "overlayText", "programmaticLayers", "accessibilityCues", "drawableVisualObjects" })
+        {
+            if (root.TryGetProperty(propertyName, out var property)) parts.Add(property.ToString());
+        }
+        return string.Join(' ', parts);
     }
 
     private static string ResolveCurrentRunFile(string root, string fileName)

@@ -510,6 +510,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyAssetPlanningService, AstronomyAssetPlanningService>();
         services.AddScoped<IEventProductionIntelligenceAdapter, AstronomyEventProductionIntelligenceAdapter>();
         services.AddScoped<IMediaEventStrategyResolver, MediaEventStrategyResolver>();
+        services.AddScoped<IVisualSourceResolver, DefaultVisualSourceResolver>();
         services.AddScoped<IMediaEventStrategy, MeteorShowerStrategy>();
         services.AddScoped<IMediaEventStrategy, PlanetPairingStrategy>();
         services.AddScoped<IMediaEventStrategy, ConjunctionStrategy>();
