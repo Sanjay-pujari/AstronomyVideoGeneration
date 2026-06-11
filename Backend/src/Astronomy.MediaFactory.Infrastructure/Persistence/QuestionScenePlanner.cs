@@ -11,6 +11,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed class QuestionScenePlanner(
     MediaFactoryDbContext db,
     IOptions<RenderingOptions> renderingOptions,
+    IMediaEventStrategyResolver strategyResolver,
     ILogger<QuestionScenePlanner> logger) : IQuestionScenePlanner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -37,24 +38,6 @@ public sealed class QuestionScenePlanner(
     private static readonly Regex GuidPattern = new("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}", RegexOptions.Compiled);
     private static readonly Regex FilePattern = new(@"\b[\w\-.]+\.(json|png|jpg|jpeg|mp3|wav|mp4|mov|webm|txt)\b|(?:[A-Za-z]:[\\/]|[\\/])(?:[^\s\\/]+[\\/])+[^\s]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex LocalClockTimePattern = new(@"\b(?:[01]?\d|2[0-3]):[0-5]\d\s?(?:AM|PM|am|pm)?\b|\b(?:1[0-2]|0?[1-9])\s?(?:AM|PM|am|pm)\b", RegexOptions.Compiled);
-    private static readonly string[] WhySignificanceTerms =
-    [
-        "°",
-        "angular separation",
-        "rarity",
-        "rare",
-        "uncommon",
-        "close pairing",
-        "planetary pairing",
-        "brightness",
-        "bright",
-        "event stands out",
-        "alignment",
-        "meteor",
-        "meteor shower",
-        "annual shower",
-        "moon interference"
-    ];
     private static readonly (string Term, Regex Pattern)[] InternalTermPatterns =
     [
         ("GUID", ExactTermPattern("GUID")),
@@ -167,7 +150,7 @@ public sealed class QuestionScenePlanner(
     }
 
 
-    private static QuestionAnswerValidationResponse ValidateGeneratedQuestionSet(AstronomyQuestionAnswerSet set)
+    private QuestionAnswerValidationResponse ValidateGeneratedQuestionSet(AstronomyQuestionAnswerSet set)
     {
         var checks = ValidateQuestionSetForApproval(set);
         var approvedCount = checks.Count(c => c.Approved);
@@ -177,9 +160,10 @@ public sealed class QuestionScenePlanner(
         return new QuestionAnswerValidationResponse(set.AstronomyEventIntelligenceId.ToString("D"), isApproved, score, checks, []);
     }
 
-    private static IReadOnlyList<QuestionAnswerValidationCheckDto> ValidateQuestionSetForApproval(AstronomyQuestionAnswerSet set)
+    private IReadOnlyList<QuestionAnswerValidationCheckDto> ValidateQuestionSetForApproval(AstronomyQuestionAnswerSet set)
     {
         var checks = new List<QuestionAnswerValidationCheckDto>();
+        var contract = strategyResolver.Resolve(set.AstronomyEventIntelligence?.EventType ?? string.Empty, set.AstronomyEventIntelligence?.Title ?? string.Empty).QuestionQualityContract;
         var answersByType = set.Answers
             .GroupBy(a => a.QuestionType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.OrderBy(a => a.DisplayOrder).First(), StringComparer.OrdinalIgnoreCase);
@@ -199,7 +183,7 @@ public sealed class QuestionScenePlanner(
 
             var text = Clean(answer.AnswerText);
             ValidateViewerFacingLanguage(type, text, issues, recommendations);
-            ValidateSceneRole(type, text, issues, recommendations);
+            ValidateSceneRole(type, text, contract, issues, recommendations);
             ValidateVisualReadiness(type, text, issues, recommendations);
             ValidateAccessibility(type, text, issues, recommendations);
 
@@ -218,29 +202,25 @@ public sealed class QuestionScenePlanner(
         }
     }
 
-    private static void ValidateSceneRole(string questionType, string text, List<string> issues, List<string> recommendations)
+    private static void ValidateSceneRole(string questionType, string text, QuestionQualityContract contract, List<string> issues, List<string> recommendations)
     {
+        var requiredIntents = RequiredIntentsFor(questionType, contract);
+        foreach (var intent in requiredIntents)
+        {
+            if (intent.AcceptedPhrases.Count == 0 || intent.AcceptedPhrases.Any(phrase => ContainsIntentPhrase(text, phrase)))
+                continue;
+
+            issues.Add($"{questionType.ToUpperInvariant()} missing required intent '{intent.Intent}'. Accepted cues: {string.Join(", ", intent.AcceptedPhrases)}.");
+            recommendations.Add($"Add viewer-facing wording that satisfies the '{intent.Intent}' intent without using internal labels.");
+        }
+
         switch (questionType)
         {
             case AstronomyQuestionTypes.What:
-                if (!ContainsAny(text, "will", "appears", "appear", "happening", "highlight", "sky") || StartsWithAny(text, "if ", "look ", "find "))
+                if (StartsWithAny(text, "if ", "look ", "find "))
                 {
                     issues.Add("WHAT must work as the opening overview.");
                     recommendations.Add("Summarize the event in one clean opening sentence that names what the viewer will see.");
-                }
-                break;
-            case AstronomyQuestionTypes.Action:
-                if (!ContainsAny(text, "step outside", "watch", "enjoy", "look", "view", "try", "mark", "clear skies"))
-                {
-                    issues.Add("ACTION must work as the closing mark.");
-                    recommendations.Add("End with a simple viewer action, such as stepping outside if skies are clear.");
-                }
-                break;
-            case AstronomyQuestionTypes.Where:
-                if (!ContainsAny(text, "north", "south", "east", "west", "horizon", "above", "sky"))
-                {
-                    issues.Add("WHERE must include a direction or horizon cue.");
-                    recommendations.Add("Include a compass direction, horizon reference, or altitude cue.");
                 }
                 break;
             case AstronomyQuestionTypes.When:
@@ -250,21 +230,28 @@ public sealed class QuestionScenePlanner(
                     recommendations.Add("Use a viewer-facing local time, such as '7:23 PM IST', instead of UTC.");
                 }
                 break;
-            case AstronomyQuestionTypes.How:
-                if (!ContainsAny(text, "find", "look", "use", "start", "scan", "locate", "face", "follow"))
-                {
-                    issues.Add("HOW must include a practical finding instruction.");
-                    recommendations.Add("Tell the viewer what to find first and where to look next.");
-                }
-                break;
-            case AstronomyQuestionTypes.Why:
-                if (!WhySignificanceTerms.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase)))
-                {
-                    issues.Add("WHY must include significance, closeness, rarity, brightness, or event meaning.");
-                    recommendations.Add("Explain why the event matters by mentioning closeness, rarity, brightness, separation, or alignment meaning.");
-                }
-                break;
         }
+    }
+
+
+    private static IReadOnlyList<QuestionQualityIntentGroup> RequiredIntentsFor(string questionType, QuestionQualityContract contract)
+        => questionType switch
+        {
+            AstronomyQuestionTypes.What => contract.WhatRequiredIntents,
+            AstronomyQuestionTypes.Where => contract.WhereRequiredIntents,
+            AstronomyQuestionTypes.When => contract.WhenRequiredIntents,
+            AstronomyQuestionTypes.How => contract.HowRequiredIntents,
+            AstronomyQuestionTypes.Why => contract.WhyRequiredIntents,
+            AstronomyQuestionTypes.Action => contract.ActionRequiredIntents,
+            _ => []
+        };
+
+    private static bool ContainsIntentPhrase(string text, string phrase)
+    {
+        if (string.IsNullOrWhiteSpace(phrase)) return false;
+        return phrase.Length <= 2 || phrase.Any(char.IsPunctuation)
+            ? text.Contains(phrase, StringComparison.OrdinalIgnoreCase)
+            : TokenContains(text, phrase);
     }
 
     private static void ValidateVisualReadiness(string questionType, string text, List<string> issues, List<string> recommendations)
@@ -286,8 +273,6 @@ public sealed class QuestionScenePlanner(
         }
     }
 
-    private static bool ContainsAny(string text, params string[] terms)
-        => terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
 
     private static bool StartsWithAny(string text, params string[] terms)
         => terms.Any(term => text.StartsWith(term, StringComparison.OrdinalIgnoreCase));
