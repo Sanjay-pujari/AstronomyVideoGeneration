@@ -916,15 +916,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             return BuildLongFormVideoAssemblyIntelligence(request);
 
         var targetDurationSeconds = ResolveShortFormTargetDuration(request);
-        var baseSceneDurations = new[]
-        {
-            new VideoAssemblySceneDurationDto("Hook", 3.0, "Stop scroll"),
-            new VideoAssemblySceneDurationDto("What", 4.0, "Show Venus and Jupiter"),
-            new VideoAssemblySceneDurationDto("Why", 4.0, "Explain why it matters"),
-            new VideoAssemblySceneDurationDto("Where", 3.0, "Tell where to look"),
-            new VideoAssemblySceneDurationDto("When", 3.0, "Tell best viewing time"),
-            new VideoAssemblySceneDurationDto("Action", 3.0, "Call to action")
-        };
+        var baseSceneDurations = BuildShortFormRecommendedSceneDurations(request);
         var baseTotal = baseSceneDurations.Sum(scene => scene.DurationSeconds);
         var sceneDurations = baseSceneDurations.Select(scene => scene with
         {
@@ -955,6 +947,263 @@ public sealed partial class VideoAssemblyIntelligenceService(
             "question-engine/scene-approval-v3/short/",
             null);
     }
+
+    private IReadOnlyList<VideoAssemblySceneDurationDto> BuildShortFormRecommendedSceneDurations(VideoAssemblyGenerationRequest request)
+    {
+        var eventInfo = request.ProductionContext?.ProductionEventIntelligence;
+        var scenesByQuestion = LoadShortFormPurposeSources(request)
+            .GroupBy(scene => scene.QuestionType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        return ShortFormSectionOrder.Select(section => new VideoAssemblySceneDurationDto(
+            section,
+            ResolveShortFormBaseDuration(section),
+            ResolveShortFormScenePurpose(section, eventInfo, scenesByQuestion))).ToArray();
+    }
+
+    private static double ResolveShortFormBaseDuration(string section)
+        => section switch
+        {
+            "Hook" => 3.0,
+            "What" => 4.0,
+            "Why" => 4.0,
+            "Where" => 3.0,
+            "When" => 3.0,
+            "Action" => 3.0,
+            _ => 3.0
+        };
+
+    private static string ResolveShortFormScenePurpose(
+        string section,
+        ProductionEventIntelligence? eventInfo,
+        IReadOnlyDictionary<string, VideoAssemblyPurposeSource> scenesByQuestion)
+    {
+        if (IsMeteorShower(eventInfo))
+        {
+            var title = FirstNonEmpty(eventInfo?.ShortTitle, eventInfo?.Title, "meteor shower peak");
+            var direction = NormalizeMeteorDirection(FirstNonEmpty(eventInfo?.SkyDirectionHint, FindSourceText(scenesByQuestion, AstronomyQuestionTypes.Where), "east-to-overhead viewing direction"));
+            var window = FirstNonEmpty(eventInfo?.BestViewingWindowLocal, eventInfo?.LocalPeakTime, FindSourceText(scenesByQuestion, AstronomyQuestionTypes.When), "the best viewing window");
+            return section switch
+            {
+                "Hook" => $"Introduce {title}",
+                "What" => $"Show {direction} viewing direction",
+                "Why" => $"Show best viewing window {window}",
+                "Where" => "Explain dark-sky/no-telescope viewing",
+                "When" => "Show meteor streaks/radiant/low moon interference",
+                "Action" => "Closing reminder/check weather/dark open place",
+                _ => "Explain dark-sky/no-telescope viewing"
+            };
+        }
+
+        var questionType = SectionToQuestionType(section);
+        var source = scenesByQuestion.TryGetValue(questionType, out var scene) ? scene : null;
+        var sourceText = FirstNonEmpty(source?.CaptionText, source?.NarrationText, source?.ViewerTakeaway, source?.SourceAnswer, source?.ScenePurpose);
+        if (!string.IsNullOrWhiteSpace(sourceText))
+            return BuildPurposeFromSource(section, sourceText!);
+
+        var titleFallback = FirstNonEmpty(eventInfo?.ShortTitle, eventInfo?.Title, "the sky event");
+        var directionFallback = FirstNonEmpty(eventInfo?.SkyDirectionHint, "the approved sky direction");
+        var windowFallback = FirstNonEmpty(eventInfo?.BestViewingWindowLocal, eventInfo?.LocalPeakTime, "the approved viewing window");
+        return section switch
+        {
+            "Hook" => $"Introduce {titleFallback}",
+            "What" => $"Show {titleFallback}",
+            "Why" => "Explain why it matters",
+            "Where" => $"Show where to look: {directionFallback}",
+            "When" => $"Show best viewing window {windowFallback}",
+            "Action" => "Closing reminder/check weather/open place",
+            _ => $"Show {titleFallback}"
+        };
+    }
+
+    private static string BuildPurposeFromSource(string section, string sourceText)
+    {
+        var text = TrimPurpose(sourceText);
+        return section switch
+        {
+            "Hook" => $"Introduce {text}",
+            "What" => $"Show {text}",
+            "Why" => $"Explain {text}",
+            "Where" => $"Show {text}",
+            "When" => $"Show {text}",
+            "Action" => $"Closing reminder: {text}",
+            _ => text
+        };
+    }
+
+    private static string TrimPurpose(string value)
+    {
+        var normalized = Regex.Replace(value.Trim(), @"\s+", " ").Trim(' ', '.');
+        var words = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length <= 12 ? normalized : string.Join(' ', words.Take(12));
+    }
+
+    private static string SectionToQuestionType(string section)
+        => section switch
+        {
+            "Hook" => AstronomyQuestionTypes.What,
+            "What" => AstronomyQuestionTypes.What,
+            "Why" => AstronomyQuestionTypes.Why,
+            "Where" => AstronomyQuestionTypes.Where,
+            "When" => AstronomyQuestionTypes.When,
+            "Action" => AstronomyQuestionTypes.Action,
+            _ => section
+        };
+
+    private static bool IsMeteorShower(ProductionEventIntelligence? eventInfo)
+        => string.Equals(eventInfo?.EventType, "MeteorShower", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeMeteorDirection(string direction)
+    {
+        var value = Regex.Replace(direction.Trim(), @"\s+", " ");
+        value = value.Replace("east to overhead", "east-to-overhead", StringComparison.OrdinalIgnoreCase)
+            .Replace("east-to overhead", "east-to-overhead", StringComparison.OrdinalIgnoreCase)
+            .Replace("east to-overhead", "east-to-overhead", StringComparison.OrdinalIgnoreCase);
+        return value.Contains("east-to-overhead", StringComparison.OrdinalIgnoreCase) ? "east-to-overhead" : value;
+    }
+
+    private static string? FindSourceText(IReadOnlyDictionary<string, VideoAssemblyPurposeSource> scenesByQuestion, string questionType)
+        => scenesByQuestion.TryGetValue(questionType, out var scene)
+            ? FirstNonEmpty(scene.CaptionText, scene.NarrationText, scene.ViewerTakeaway, scene.SourceAnswer)
+            : null;
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private IReadOnlyList<VideoAssemblyPurposeSource> LoadShortFormPurposeSources(VideoAssemblyGenerationRequest request)
+    {
+        var sources = new List<VideoAssemblyPurposeSource>();
+        var questionRoot = ResolveQuestionEngineRoot(request.EventId, request.RegionId);
+        AddNarrationPurposeSources(Path.Combine(questionRoot, "question-driven-narration.json"), sources);
+        AddEnrichedPlanPurposeSources(Path.Combine(questionRoot, "question-driven-scene-plan.enriched.json"), sources);
+        AddSceneApprovalPurposeSources(Path.Combine(questionRoot, SceneApprovalDirectoryName, "short"), sources);
+        return sources
+            .GroupBy(source => source.SceneNumber)
+            .OrderBy(group => group.Key)
+            .Select(group => group.First())
+            .ToArray();
+    }
+
+    private static void AddNarrationPurposeSources(string path, List<VideoAssemblyPurposeSource> sources)
+    {
+        if (!File.Exists(path)) return;
+        var narration = TryDeserialize<QuestionDrivenNarrationDto>(path);
+        if (narration is null) return;
+        sources.AddRange(narration.Scenes.Select(scene => new VideoAssemblyPurposeSource(
+            scene.SceneNumber,
+            scene.QuestionType,
+            scene.ScenePurpose,
+            scene.SourceAnswer,
+            scene.ViewerTakeaway,
+            scene.NarrationText,
+            scene.CaptionText)));
+    }
+
+    private static void AddEnrichedPlanPurposeSources(string path, List<VideoAssemblyPurposeSource> sources)
+    {
+        if (!File.Exists(path)) return;
+        var plan = TryDeserialize<EnrichedQuestionScenePlanDto>(path);
+        if (plan is null) return;
+        sources.AddRange(plan.Scenes.Select(scene => new VideoAssemblyPurposeSource(
+            scene.SceneNumber,
+            scene.QuestionType,
+            scene.ScenePurpose,
+            scene.SourceAnswer,
+            scene.ViewerTakeaway,
+            scene.NarrationIntent,
+            scene.OverlayIntent)));
+    }
+
+    private static void AddSceneApprovalPurposeSources(string root, List<VideoAssemblyPurposeSource> sources)
+    {
+        if (!Directory.Exists(root)) return;
+        foreach (var path in Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            using var doc = TryParseJsonFile(path);
+            if (doc is null) continue;
+            var sceneNumber = TryGetInt(doc.RootElement, "sceneNumber") ?? TryParseSceneNumberFromPath(path);
+            if (sceneNumber is null) continue;
+            var questionType = TryGetString(doc.RootElement, "questionType") ?? string.Empty;
+            sources.Add(new VideoAssemblyPurposeSource(
+                sceneNumber.Value,
+                questionType,
+                TryGetString(doc.RootElement, "scenePurpose") ?? TryGetString(doc.RootElement, "purpose") ?? string.Empty,
+                TryGetString(doc.RootElement, "sourceAnswer") ?? string.Empty,
+                TryGetString(doc.RootElement, "viewerTakeaway") ?? TryGetString(doc.RootElement, "description") ?? string.Empty,
+                TryGetString(doc.RootElement, "narrationText") ?? TryGetString(doc.RootElement, "narration") ?? string.Empty,
+                TryGetString(doc.RootElement, "overlayText") ?? TryGetString(doc.RootElement, "captionText") ?? string.Empty));
+        }
+    }
+
+    private static T? TryDeserialize<T>(string path)
+    {
+        try { return JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOptions); }
+        catch (JsonException) { return default; }
+        catch (IOException) { return default; }
+    }
+
+    private static JsonDocument? TryParseJsonFile(string path)
+    {
+        try { return JsonDocument.Parse(File.ReadAllText(path)); }
+        catch (JsonException) { return null; }
+        catch (IOException) { return null; }
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object) return null;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.NameEquals(propertyName) && property.Value.ValueKind == JsonValueKind.String)
+                return property.Value.GetString();
+            var nested = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array ? TryGetStringRecursive(property.Value, propertyName) : null;
+            if (!string.IsNullOrWhiteSpace(nested)) return nested;
+        }
+        return null;
+    }
+
+    private static string? TryGetStringRecursive(JsonElement element, string propertyName)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (property.NameEquals(propertyName) && property.Value.ValueKind == JsonValueKind.String)
+                        return property.Value.GetString();
+                    var nested = TryGetStringRecursive(property.Value, propertyName);
+                    if (!string.IsNullOrWhiteSpace(nested)) return nested;
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    var nested = TryGetStringRecursive(item, propertyName);
+                    if (!string.IsNullOrWhiteSpace(nested)) return nested;
+                }
+                break;
+        }
+        return null;
+    }
+
+    private static int? TryGetInt(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object) return null;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.NameEquals(propertyName) && property.Value.TryGetInt32(out var value))
+                return value;
+        }
+        return null;
+    }
+
+    private static int? TryParseSceneNumberFromPath(string path)
+    {
+        var match = Regex.Match(Path.GetFileName(path), @"scene-(\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
+    }
+
+    private sealed record VideoAssemblyPurposeSource(int SceneNumber, string QuestionType, string ScenePurpose, string SourceAnswer, string ViewerTakeaway, string NarrationText, string CaptionText);
 
     private VideoAssemblyIntelligenceDto BuildLongFormVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
     {
