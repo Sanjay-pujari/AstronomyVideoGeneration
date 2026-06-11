@@ -87,7 +87,7 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var phase in PhaseDefinitions())
         {
             if (phase.No < startPhaseNo || phase.No > endPhaseNo) continue;
-            if (request.RetryFailedOnly && PreviousPhaseSucceeded(context, phase.No))
+            if (request.RetryFailedOnly && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, phase.Name, ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
                 phaseResults.Add(skipped);
@@ -159,6 +159,14 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
+    private static bool PreviousPhaseRequiredOutputsExist(ProductionPhaseContext context, int phaseNo)
+        => phaseNo switch
+        {
+            6 => File.Exists(BuildEnrichedScenePlanPath(context)),
+            7 => File.Exists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json")),
+            _ => true
+        };
+
     private async Task<ProductionPhaseResult> ExecutePhaseAsync(ProductionPhaseContext context, int phaseNo, string phaseName, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> action, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow;
@@ -200,12 +208,18 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseEnrichScenePlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        var enrichedPath = BuildEnrichedScenePlanPath(context);
         var response = await sceneIntentEnricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(context.EventId, context.Request.RegionId, context.Request.Language, DryRun: false, OverwriteExisting: context.OverwriteExisting, ProductionContext: context.ExecutionContext), cancellationToken);
-        return response.GeneratedFiles;
+        if (!response.IsValid)
+            throw new InvalidOperationException("Phase 6 scene plan enrichment failed validation: " + string.Join(" | ", response.Warnings));
+
+        await ValidatePhase6EnrichedScenePlanContractAsync(context, enrichedPath, cancellationToken);
+        return response.GeneratedFiles.Concat([enrichedPath]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        RequireFile(BuildEnrichedScenePlanPath(context), "Enriched question-driven scene plan");
         var narrationRequest = BuildQuestionDrivenNarrationRequest(context);
         ValidatePhase7NarrationRequest(narrationRequest, context);
         var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(narrationRequest, cancellationToken);
@@ -216,6 +230,70 @@ public sealed partial class ProductionPipelineExecutionService(
         return outputs;
     }
 
+
+
+    private static string BuildEnrichedScenePlanPath(ProductionPhaseContext context)
+        => Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");
+
+    private static async Task ValidatePhase6EnrichedScenePlanContractAsync(ProductionPhaseContext context, string enrichedPath, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(enrichedPath))
+            throw new InvalidOperationException($"Phase 6 scene plan enrichment did not write required output file at '{NormalizePath(enrichedPath)}'.");
+
+        var json = await File.ReadAllTextAsync(enrichedPath, cancellationToken);
+        var plan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(json, JsonOptions)
+            ?? throw new InvalidOperationException("Phase 6 enriched scene plan could not be parsed.");
+
+        var issues = new List<string>();
+        if (!plan.IsValid)
+            issues.Add("enriched plan is marked invalid");
+        if (plan.Scenes.Count == 0)
+            issues.Add("enriched plan must include at least one scene");
+        if (plan.Diagnostics?.LeakageTermsFound is { Count: > 0 })
+            issues.Add("diagnostics reported forbidden leakage: " + string.Join(", ", plan.Diagnostics.LeakageTermsFound));
+
+        var generatedFields = ExtractEnrichedSceneGeneratedText(plan).ToArray();
+        var requiredObjects = ResolveRequiredVisualObjectsForPhase6(context, plan).ToArray();
+        foreach (var requiredObject in requiredObjects)
+        {
+            if (!generatedFields.Any(field => ContainsToken(field, requiredObject)))
+                issues.Add($"required visual object '{requiredObject}' was not present in enriched scene intents");
+        }
+
+        var forbiddenTerms = BuildForbiddenTermsForStrategy(context).ToArray();
+        foreach (var forbiddenTerm in forbiddenTerms)
+        {
+            if (generatedFields.Any(field => ContainsToken(field, forbiddenTerm)))
+                issues.Add($"forbidden term '{forbiddenTerm}' was present in enriched scene intents");
+        }
+
+        if (issues.Count > 0)
+            throw new InvalidOperationException("Phase 6 enriched scene plan failed output contract validation: " + string.Join("; ", issues));
+    }
+
+    private static IEnumerable<string> ResolveRequiredVisualObjectsForPhase6(ProductionPhaseContext context, EnrichedQuestionScenePlanDto plan)
+    {
+        var requiredObjects = plan.Diagnostics?.RequiredVisualObjects is { Count: > 0 } diagnosticRequiredObjects
+            ? diagnosticRequiredObjects
+            : context.ProductionEventIntelligence.RequiredVisualObjects ?? Array.Empty<string>();
+
+        return requiredObjects
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> ExtractEnrichedSceneGeneratedText(EnrichedQuestionScenePlanDto plan)
+    {
+        foreach (var scene in plan.Scenes)
+        {
+            yield return scene.ViewerTakeaway;
+            yield return scene.NarrationIntent;
+            yield return scene.VisualIntent;
+            yield return scene.ImagePromptIntent;
+            yield return scene.OverlayIntent;
+            yield return scene.AccessibilityIntent;
+        }
+    }
 
     private static QuestionDrivenNarrationRequest BuildQuestionDrivenNarrationRequest(ProductionPhaseContext context)
     {
@@ -1179,6 +1257,12 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
     {
         var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
+        if (context.StartPhaseNo <= 6 && context.EndPhaseNo >= 6)
+        {
+            DeleteFileIfExists(BuildEnrichedScenePlanPath(context), deletedFiles);
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-06-validation.json"), deletedFiles);
+        }
+
         if (context.StartPhaseNo <= 7 && context.EndPhaseNo >= 7)
         {
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
