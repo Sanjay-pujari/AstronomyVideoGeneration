@@ -680,40 +680,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException($"Required TTS narration text is empty or missing: {source}.");
         }
 
-        narrationText = narrationText.Trim();
-        if (profile == ScenePresentationProfile.ShortForm && EstimateSpokenDurationSeconds(narrationText) < ShortFormTargetMinimumEstimatedDurationSeconds)
-        {
-            narrationText = ExpandShortNarrationForTargetDuration(narrationText);
-            if (!string.IsNullOrWhiteSpace(narrationPath))
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(narrationPath) ?? ".");
-                await File.WriteAllTextAsync(narrationPath, narrationText, cancellationToken);
-            }
-        }
-
-        return narrationText;
+        return narrationText.Trim();
     }
 
-
-    private static string ExpandShortNarrationForTargetDuration(string narrationText)
-    {
-        var expanded = narrationText.Trim();
-        var additions = new[]
-        {
-            "Keep the view simple and use the approved direction, timing, and safety notes before you step outside.",
-            "Give your eyes a moment to adjust, check local clouds, and watch from a clear open spot.",
-            "If conditions cooperate, the whole check is quick, practical, and easy to share."
-        };
-
-        foreach (var addition in additions)
-        {
-            if (EstimateSpokenDurationSeconds(expanded) >= ShortFormTargetMinimumEstimatedDurationSeconds)
-                break;
-            expanded = $"{expanded} {addition}";
-        }
-
-        return expanded;
-    }
 
     private string BuildTtsDebugOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
         => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), "phase-15-debug.json");
@@ -1000,31 +969,16 @@ public sealed partial class VideoAssemblyIntelligenceService(
     {
         var sceneScripts = new[]
         {
-            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), $"Don’t miss this sky event tonight.", title),
-            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), $"The event centers on {objects}, matched to the approved plan.", objects),
-            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), BuildShortFormWhyNarration(scientificContext), "Why it matters"),
+            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), $"{title} is a sky highlight.", title),
+            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), $"Watch for {objects}.", objects),
+            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), "Dark skies make it easier to notice.", "Why it matters"),
             new VideoNarrationSceneScriptDto("Where", GetDuration(durations, "Where", 3.0), $"Look toward {direction}.", direction),
             new VideoNarrationSceneScriptDto("When", GetDuration(durations, "When", 3.0), $"Best viewing is {window}.", window),
-            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Check clouds, choose a safe open spot, and set a reminder.", "Set a reminder")
+            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Choose a safe open spot, check clouds, and set a reminder.", "Set a reminder")
         };
 
-        var estimatedDuration = EstimateSpokenDurationSeconds(string.Join(" ", sceneScripts.Select(scene => scene.Narration)));
-        if (estimatedDuration >= ShortFormTargetMinimumEstimatedDurationSeconds)
-            return NormalizeShortFormSceneDurations(sceneScripts, Math.Clamp(estimatedDuration, ShortFormTargetMinimumEstimatedDurationSeconds, ShortFormTargetMaximumEstimatedDurationSeconds));
-
-        var expanded = sceneScripts.Select(scene => scene.SceneKey switch
-        {
-            "Hook" => scene with { Narration = $"{scene.Narration} This is a quick, beginner-friendly sky check." },
-            "What" => scene with { Narration = $"{scene.Narration} Watch for the brightest approved objects rather than searching the whole sky." },
-            "Why" => scene with { Narration = $"{scene.Narration} The timing makes the view easier to notice from ordinary locations." },
-            "Where" => scene with { Narration = $"{scene.Narration} Avoid trees, buildings, and bright lights when you can." },
-            "When" => scene with { Narration = $"{scene.Narration} A few minutes early gives you time to find the direction." },
-            "Action" => scene with { Narration = $"{scene.Narration} Step outside, look up, and share the moment if the sky is clear." },
-            _ => scene
-        }).ToArray();
-
-        var expandedDuration = Math.Clamp(EstimateSpokenDurationSeconds(string.Join(" ", expanded.Select(scene => scene.Narration))), ShortFormTargetMinimumEstimatedDurationSeconds, ShortFormTargetMaximumEstimatedDurationSeconds);
-        return NormalizeShortFormSceneDurations(expanded, expandedDuration);
+        var estimatedDuration = Math.Clamp(EstimateSpokenDurationSeconds(string.Join(" ", sceneScripts.Select(scene => scene.Narration))), ShortFormTargetMinimumEstimatedDurationSeconds, ShortFormTargetMaximumEstimatedDurationSeconds);
+        return NormalizeShortFormSceneDurations(sceneScripts, estimatedDuration);
     }
 
 
