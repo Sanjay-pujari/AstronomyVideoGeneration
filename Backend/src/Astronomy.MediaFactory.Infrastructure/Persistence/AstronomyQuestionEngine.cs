@@ -412,8 +412,9 @@ public sealed class AstronomyQuestionEngine(
     private static string AnswerText(QuestionAnswerSetDto set, string questionType)
         => set.Answers.FirstOrDefault(a => string.Equals(a.QuestionType, questionType, StringComparison.OrdinalIgnoreCase))?.AnswerText ?? string.Empty;
 
-    private static IReadOnlyList<QuestionAnswerValidationCheckDto> ValidateQuestionSetForApproval(QuestionAnswerSetDto set)
+    private IReadOnlyList<QuestionAnswerValidationCheckDto> ValidateQuestionSetForApproval(QuestionAnswerSetDto set)
     {
+        var contract = strategyResolver.Resolve(set.EventType, set.EventTitle).QuestionQualityContract;
         var checks = new List<QuestionAnswerValidationCheckDto>();
         var answersByType = set.Answers
             .GroupBy(a => a.QuestionType, StringComparer.OrdinalIgnoreCase)
@@ -434,7 +435,7 @@ public sealed class AstronomyQuestionEngine(
 
             var text = Clean(answer.AnswerText);
             ValidateViewerFacingLanguage(type, text, issues, recommendations);
-            ValidateSceneRole(type, text, issues, recommendations);
+            ValidateSceneRole(type, text, set, contract, issues, recommendations);
             ValidateVisualReadiness(type, text, issues, recommendations);
             ValidateAccessibility(type, text, issues, recommendations);
 
@@ -470,29 +471,30 @@ public sealed class AstronomyQuestionEngine(
         }
     }
 
-    private static void ValidateSceneRole(string questionType, string text, List<string> issues, List<string> recommendations)
+    private static void ValidateSceneRole(string questionType, string text, QuestionAnswerSetDto set, QuestionQualityContract contract, List<string> issues, List<string> recommendations)
     {
+        var requiredIntents = RequiredIntentsFor(questionType, contract);
+        foreach (var intent in requiredIntents)
+        {
+            if (intent.AcceptedPhrases.Count == 0 || intent.AcceptedPhrases.Any(phrase => ContainsIntentPhrase(text, phrase)))
+                continue;
+
+            issues.Add($"{questionType.ToUpperInvariant()} missing required intent '{intent.Intent}'. Accepted cues: {string.Join(", ", intent.AcceptedPhrases)}.");
+            recommendations.Add($"Add viewer-facing wording that satisfies the '{intent.Intent}' intent without using internal labels.");
+        }
+
         switch (questionType)
         {
             case AstronomyQuestionTypes.What:
-                if (!ContainsAny(text, "will", "appears", "appear", "happening", "highlight", "sky") || StartsWithAny(text, "if ", "look ", "find "))
+                if (StartsWithAny(text, "if ", "look ", "find "))
                 {
                     issues.Add("WHAT must work as the opening overview.");
-                    recommendations.Add("Summarize the event in one clean opening sentence that names what the viewer will see.");
+                    recommendations.Add("Start with what the event is and what the viewer will see, not an instruction.");
                 }
-                break;
-            case AstronomyQuestionTypes.Action:
-                if (!ContainsAny(text, "step outside", "watch", "enjoy", "look", "view", "try", "mark", "clear skies", "reminder", "save", "check", "prepare"))
+                if (!MentionsEventIdentityOrObject(set, text))
                 {
-                    issues.Add("ACTION must work as the closing mark.");
-                    recommendations.Add("End with a simple viewer action, such as stepping outside if skies are clear.");
-                }
-                break;
-            case AstronomyQuestionTypes.Where:
-                if (!ContainsAny(text, "north", "south", "east", "west", "horizon", "above", "sky"))
-                {
-                    issues.Add("WHERE must include a direction or horizon cue.");
-                    recommendations.Add("Include a compass direction, horizon reference, or altitude cue.");
+                    issues.Add("WHAT must mention the event title, event type, or source object in public language.");
+                    recommendations.Add("Name the event, the public event type, or the main visible object in the opening answer.");
                 }
                 break;
             case AstronomyQuestionTypes.When:
@@ -502,22 +504,51 @@ public sealed class AstronomyQuestionEngine(
                     recommendations.Add("Use a viewer-facing local time, such as '7:23 PM IST', instead of UTC.");
                 }
                 break;
-            case AstronomyQuestionTypes.How:
-                if (!ContainsAny(text, "find", "look", "use", "start", "scan", "locate", "face", "follow"))
-                {
-                    issues.Add("HOW must include a practical finding instruction.");
-                    recommendations.Add("Tell the viewer what to find first and where to look next.");
-                }
-                break;
-            case AstronomyQuestionTypes.Why:
-                if (!WhySignificanceTerms.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase)))
-                {
-                    issues.Add("WHY must include significance, closeness, rarity, brightness, or event meaning.");
-                    recommendations.Add("Explain why the event matters by mentioning closeness, rarity, brightness, separation, or alignment meaning.");
-                }
-                break;
         }
     }
+
+    private static IReadOnlyList<QuestionQualityIntentGroup> RequiredIntentsFor(string questionType, QuestionQualityContract contract)
+        => questionType switch
+        {
+            AstronomyQuestionTypes.What => contract.WhatRequiredIntents,
+            AstronomyQuestionTypes.Where => contract.WhereRequiredIntents,
+            AstronomyQuestionTypes.When => contract.WhenRequiredIntents,
+            AstronomyQuestionTypes.How => contract.HowRequiredIntents,
+            AstronomyQuestionTypes.Why => contract.WhyRequiredIntents,
+            AstronomyQuestionTypes.Action => contract.ActionRequiredIntents,
+            _ => []
+        };
+
+    private static bool ContainsIntentPhrase(string text, string phrase)
+    {
+        if (string.IsNullOrWhiteSpace(phrase)) return false;
+        return phrase.Length <= 2 || phrase.Any(char.IsPunctuation)
+            ? text.Contains(phrase, StringComparison.OrdinalIgnoreCase)
+            : TokenContains(text, phrase);
+    }
+
+    private static bool MentionsEventIdentityOrObject(QuestionAnswerSetDto set, string text)
+    {
+        foreach (var token in PublicIdentityTokens(set.EventTitle).Concat(PublicIdentityTokens(set.EventType)))
+            if (ContainsIntentPhrase(text, token)) return true;
+        return false;
+    }
+
+    private static IEnumerable<string> PublicIdentityTokens(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) yield break;
+        foreach (Match match in Regex.Matches(value.Replace('_', ' ').Replace('-', ' '), @"[\p{L}\p{N}]{3,}"))
+        {
+            var token = match.Value;
+            if (IsGenericIdentityToken(token)) continue;
+            yield return token;
+        }
+    }
+
+    private static bool IsGenericIdentityToken(string token)
+        => token.Equals("peak", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("title", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("event", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateVisualReadiness(string questionType, string text, List<string> issues, List<string> recommendations)
     {

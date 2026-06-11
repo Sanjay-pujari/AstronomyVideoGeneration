@@ -69,9 +69,22 @@ public sealed record QuestionAnswerSetBuildContext(
     string TimeZoneAbbreviation,
     DateTimeOffset GeneratedUtc);
 
+public sealed record QuestionQualityIntentGroup(
+    string Intent,
+    IReadOnlyList<string> AcceptedPhrases);
+
+public sealed record QuestionQualityContract(
+    IReadOnlyList<QuestionQualityIntentGroup> WhatRequiredIntents,
+    IReadOnlyList<QuestionQualityIntentGroup> WhereRequiredIntents,
+    IReadOnlyList<QuestionQualityIntentGroup> WhenRequiredIntents,
+    IReadOnlyList<QuestionQualityIntentGroup> HowRequiredIntents,
+    IReadOnlyList<QuestionQualityIntentGroup> WhyRequiredIntents,
+    IReadOnlyList<QuestionQualityIntentGroup> ActionRequiredIntents);
+
 public interface IMediaEventStrategy
 {
     string EventType { get; }
+    QuestionQualityContract QuestionQualityContract { get; }
     bool CanHandle(string eventType, string title);
     MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence);
     QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context);

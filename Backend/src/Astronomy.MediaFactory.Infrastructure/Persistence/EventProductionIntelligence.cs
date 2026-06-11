@@ -124,6 +124,37 @@ public sealed class MediaEventStrategyResolver(IEnumerable<IMediaEventStrategy> 
 public abstract class MediaEventStrategyBase : IMediaEventStrategy
 {
     public abstract string EventType { get; }
+
+    public virtual QuestionQualityContract QuestionQualityContract => DefaultQuestionQualityContract;
+
+    protected static QuestionQualityIntentGroup Intent(string intent, params string[] acceptedPhrases) => new(intent, acceptedPhrases);
+
+    protected static readonly QuestionQualityContract DefaultQuestionQualityContract = new(
+        WhatRequiredIntents:
+        [
+            Intent("opening overview", "will", "appears", "appear", "happening", "highlight", "sky", "event", "means"),
+            Intent("viewer-visible outcome", "see", "watch", "view", "visible", "highlight", "sky", "appears", "streaks", "alignment")
+        ],
+        WhereRequiredIntents:
+        [
+            Intent("sky orientation", "north", "south", "east", "west", "horizon", "above", "sky", "visible", "open")
+        ],
+        WhenRequiredIntents:
+        [
+            Intent("viewer timing", "best viewing", "watch during", "stargazing is", "time", "window", "peak")
+        ],
+        HowRequiredIntents:
+        [
+            Intent("practical observing instruction", "find", "look", "use", "start", "scan", "locate", "face", "follow", "avoid", "eyes adjust", "binoculars", "certified eclipse glasses", "solar filters")
+        ],
+        WhyRequiredIntents:
+        [
+            Intent("event significance", "°", "angular separation", "rarity", "rare", "uncommon", "close pairing", "brightness", "bright", "alignment", "meteor", "full moon", "lunar", "eclipse", "culture", "scientific", "Milky Way", "dark sky")
+        ],
+        ActionRequiredIntents:
+        [
+            Intent("closing call to action", "step outside", "watch", "enjoy", "look", "view", "try", "mark", "clear skies", "reminder", "save", "check", "prepare", "choose", "plan", "pick")
+        ]);
     public abstract bool CanHandle(string eventType, string title);
     public abstract MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence);
     public virtual QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
@@ -232,6 +263,13 @@ public abstract class MediaEventStrategyBase : IMediaEventStrategy
 public sealed class MeteorShowerStrategy : MediaEventStrategyBase
 {
     public override string EventType => "MeteorShower";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("meteor overview", "meteor shower", "meteor streaks", "space debris", "shooting stars"), Intent("visible outcome", "producing", "will see", "bright meteor", "streaks")],
+        WhereRequiredIntents: [Intent("radiant or open-sky direction", "north", "south", "east", "west", "overhead", "radiant", "anywhere", "dark sky", "open sky")],
+        WhenRequiredIntents: [Intent("dark viewing window", "best viewing", "midnight", "pre-dawn", "darkest", "night", "00:", "01:", "02:", "03:", "04:", "05:")],
+        HowRequiredIntents: [Intent("naked-eye dark-sky guidance", "no telescope", "naked eye", "dark location", "avoid city lights", "avoid bright lights", "eyes 20 minutes", "eyes adjust", "lie back", "watch patiently")],
+        WhyRequiredIntents: [Intent("meteor-shower significance", "strongest annual meteor showers", "annual meteor shower", "meteor", "moon interference", "dark sky", "illumination", "viewing quality")],
+        ActionRequiredIntents: [Intent("meteor viewing CTA", "set a reminder", "save", "check weather", "pick a dark", "choose a dark", "plan viewing", "dark open location")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || title.Contains("meteor", StringComparison.OrdinalIgnoreCase);
 
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(
@@ -280,6 +318,13 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
 public sealed class PlanetPairingStrategy : MediaEventStrategyBase
 {
     public override string EventType => "PlanetPairing";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("pairing overview", "will appear close", "pairing", "close together", "sky")],
+        WhereRequiredIntents: [Intent("direction and altitude", "north", "south", "east", "west", "horizon", "above")],
+        WhenRequiredIntents: [Intent("viewer-friendly time", "best viewing", "AM", "PM", "IST", "shortly after sunset", "peak")],
+        HowRequiredIntents: [Intent("object-finding instruction", "find", "look", "nearby", "binoculars", "horizon", "scan")],
+        WhyRequiredIntents: [Intent("pairing significance", "°", "close pairing", "bright", "close together", "easy to notice")],
+        ActionRequiredIntents: [Intent("pairing CTA", "set a reminder", "save", "check", "clear", "enjoy", "watch")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("PlanetPairing", StringComparison.OrdinalIgnoreCase) || title.Contains("planet pairing", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Objects", "Time", "Direction", "Separation", "CTA"], ["Intro", "Objects", "Geometry", "Timing", "Finding guide", "Viewing tips", "Photo tip", "CTA"], ["two bright planets", "twilight gradient", "horizon guide", "clean labels"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "clear, elegant, orientation-first", ["Close Pairing", "Look West", "Tonight"], ["meteor shower", "radiant", "eclipse shadow"], ["Name both planets and angular context."]);
 
@@ -306,6 +351,13 @@ public sealed class PlanetPairingStrategy : MediaEventStrategyBase
 public sealed class ConjunctionStrategy : MediaEventStrategyBase
 {
     public override string EventType => "Conjunction";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("conjunction overview", "conjunction", "alignment", "form", "sky")],
+        WhereRequiredIntents: [Intent("direction and altitude", "north", "south", "east", "west", "horizon", "above")],
+        WhenRequiredIntents: [Intent("viewer-friendly time", "best viewing", "AM", "PM", "IST", "shortly after sunset", "peak")],
+        HowRequiredIntents: [Intent("alignment finding instruction", "find", "scan", "look", "same part of the sky", "clear horizon")],
+        WhyRequiredIntents: [Intent("alignment significance", "°", "alignment", "conjunction", "visually striking", "easy to compare")],
+        ActionRequiredIntents: [Intent("conjunction CTA", "save", "watch", "clear", "set a reminder", "check")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "What aligns", "Best time", "Where", "How close", "CTA"], ["Intro", "Conjunction geometry", "Local timing", "Sky direction", "Finding guide", "Why it matters", "Viewing reminder", "CTA"], ["aligned objects", "subtle orbit lines", "horizon compass", "cinematic sky"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "precise, calm, factual", ["Close Conjunction", "Tonight", "Look Up"], ["meteor shower", "radiant"], ["Do not describe unrelated planets."]);
 
@@ -314,7 +366,7 @@ public sealed class ConjunctionStrategy : MediaEventStrategyBase
         var objects = AllObjectsPhrase(intelligence, "the conjunction objects");
         var names = Objects(intelligence, "the first object", "the second object");
         var how = names.Length >= 2 ? $"Find {names[0]} first, then scan nearby for {names[1]} in the same part of the sky." : $"Use a clear horizon and scan {FormattedDirection(intelligence)} for {objects}.";
-        var why = intelligence.AngularSeparationDegrees.HasValue ? $"{objects} appear only {intelligence.AngularSeparationDegrees.Value:0.##}° apart, making the alignment visually striking." : $"{objects} share the same part of our sky, making the conjunction easy to compare.";
+        var why = intelligence.AngularSeparationDegrees.HasValue ? $"{objects} appear only {intelligence.AngularSeparationDegrees.Value:0.##}° apart, making the alignment visually striking." : $"{objects} appear close in the same part of our sky, making the bright conjunction easy to compare.";
         return CreateSet(intelligence, context,
         [
             Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objects} form a conjunction, an apparent alignment in {context.LocationName}’s sky.", 1),
@@ -332,6 +384,13 @@ public sealed class ConjunctionStrategy : MediaEventStrategyBase
 public sealed class NamedFullMoonStrategy : MediaEventStrategyBase
 {
     public override string EventType => "NamedFullMoon";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("full-moon overview", "named full moon", "full moon", "fully illuminated", "Moon appears")],
+        WhereRequiredIntents: [Intent("moonrise direction", "north", "south", "east", "west", "horizon", "moonrise")],
+        WhenRequiredIntents: [Intent("moonrise time", "best viewing", "moonrise", "AM", "PM", "IST")],
+        HowRequiredIntents: [Intent("moon finding instruction", "use the open horizon", "follow the bright Moon", "find", "look", "rises higher")],
+        WhyRequiredIntents: [Intent("full-moon meaning", "full moon", "lunar", "culture", "seasonal", "public skywatching")],
+        ActionRequiredIntents: [Intent("moon CTA", "save", "check clouds", "check weather", "prepare", "clear eastern view", "watch")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("FullMoon", StringComparison.OrdinalIgnoreCase) || title.Contains("full moon", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Moon name", "Rise time", "Where", "Viewing tip", "CTA"], ["Intro", "Name and meaning", "Local moonrise", "Direction", "Visual expectations", "Photo tips", "Weather note", "CTA"], ["large moon", "warm horizon", "landscape silhouette", "clean lunar labels"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "warm, cultural, observational", ["Full Moon Tonight", "Moonrise", "Look East"], ["meteor shower", "planet conjunction"], ["Use local moonrise or best viewing window."]);
 
@@ -350,6 +409,13 @@ public sealed class NamedFullMoonStrategy : MediaEventStrategyBase
 public sealed class NewMoonStrategy : MediaEventStrategyBase
 {
     public override string EventType => "NewMoon";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("new-moon overview", "New Moon", "Moon is hidden", "darker night sky", "dark sky")],
+        WhereRequiredIntents: [Intent("dark-site direction", "dark open sky", "away from city lights", "north", "south", "east", "west", "sky")],
+        WhenRequiredIntents: [Intent("dark-sky window", "best stargazing", "moonlight is absent", "dark-sky window", "21:", "22:", "23:", "00:", "01:", "02:", "03:", "04:")],
+        HowRequiredIntents: [Intent("stargazing guidance", "eyes adjust", "scan", "darkest sky", "star map", "constellations")],
+        WhyRequiredIntents: [Intent("dark-sky significance", "dark sky", "Milky Way", "faint stars", "clusters", "moonlight")],
+        ActionRequiredIntents: [Intent("stargazing CTA", "save", "check weather", "prepare", "plan", "dark-sky window", "low-light observing spot")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("NewMoon", StringComparison.OrdinalIgnoreCase) || title.Contains("new moon", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Dark sky", "Best night", "Where", "What to see", "CTA"], ["Intro", "Why new moon matters", "Local dark window", "Best targets", "Viewing tips", "Safety/weather", "Planning reminder", "CTA"], ["dark sky", "Milky Way hint", "star field", "open landscape"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal)], "quiet, inviting, dark-sky focused", ["Darkest Night", "New Moon", "Stargazing"], ["full moon glare", "conjunction-only visuals"], ["Emphasize dark-sky opportunity."]);
 
@@ -368,6 +434,13 @@ public sealed class NewMoonStrategy : MediaEventStrategyBase
 public sealed class LunarEclipseStrategy : MediaEventStrategyBase
 {
     public override string EventType => "LunarEclipse";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("lunar-eclipse overview", "lunar eclipse", "Earth’s shadow", "Earth shadow", "Moon", "eclipse")],
+        WhereRequiredIntents: [Intent("moon direction", "north", "south", "east", "west", "horizon", "Moon is visible")],
+        WhenRequiredIntents: [Intent("phase timing", "watch during", "phase", "phases", "AM", "PM", "IST")],
+        HowRequiredIntents: [Intent("phase watching guidance", "find the Moon", "watch each shadow phase", "binoculars", "closer view")],
+        WhyRequiredIntents: [Intent("eclipse significance", "lunar eclipse", "Earth’s shadow", "copper red", "Moon", "eclipse")],
+        ActionRequiredIntents: [Intent("eclipse CTA", "save", "check weather", "choose", "clear Moon-facing view", "phase times")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("LunarEclipse", StringComparison.OrdinalIgnoreCase) || title.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Eclipse type", "Timing", "Where", "Viewing safety", "CTA"], ["Intro", "Eclipse geometry", "Local phases", "Sky direction", "Color/brightness expectations", "Viewing tips", "Weather reminder", "CTA"], ["Moon in shadow", "Earth shadow arc", "red lunar tint", "phase timeline"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint)], "dramatic, precise, reassuring", ["Lunar Eclipse", "Watch Time", "Moon Turns Red"], ["solar filter instructions", "meteor radiant"], ["Use phase times if available."]);
 
@@ -386,6 +459,13 @@ public sealed class LunarEclipseStrategy : MediaEventStrategyBase
 public sealed class SolarEclipseStrategy : MediaEventStrategyBase
 {
     public override string EventType => "SolarEclipse";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("solar-eclipse overview", "solar eclipse", "Moon covers", "Sun", "sky")],
+        WhereRequiredIntents: [Intent("safe visibility guidance", "visible", "visibility", "Sun safely filtered", "local sky", "sky")],
+        WhenRequiredIntents: [Intent("safe eclipse timing", "watch during", "certified eye protection", "AM", "PM", "IST")],
+        HowRequiredIntents: [Intent("eye-safety instruction", "certified eclipse glasses", "solar filters", "eye protection", "view the Sun")],
+        WhyRequiredIntents: [Intent("solar-eclipse significance", "solar eclipse", "rare", "dramatic", "Moon and Sun align", "align")],
+        ActionRequiredIntents: [Intent("safe eclipse CTA", "check weather", "save", "prepare", "certified eclipse glasses", "before viewing")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("SolarEclipse", StringComparison.OrdinalIgnoreCase) || title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Eclipse type", "Timing", "Where visible", "Eye safety", "CTA"], ["Intro", "Eclipse geometry", "Local circumstances", "Visibility map", "Eye safety", "What to expect", "Weather reminder", "CTA"], ["Sun and Moon silhouette", "eclipse path", "certified eclipse glasses", "clean safety labels"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.VisibilityRegion)], "urgent, safety-first, precise", ["Solar Eclipse", "Eye Safety", "Visible From"], ["meteor shower", "naked-eye Sun viewing"], ["Never imply direct Sun viewing without certified protection."]);
 
