@@ -132,9 +132,23 @@ public sealed record VideoAssemblyGenerationResponse(
     double MusicVolumeMultiplier = 0,
     string FfmpegAudioFilter = "",
     bool MusicMixApplied = false,
+    VideoDurationContractValidationDto? DurationValidation = null,
     string OutputMode = "",
     VideoAssemblyFullPipelineFormResult? ShortForm = null,
     VideoAssemblyFullPipelineFormResult? LongForm = null);
+
+public sealed record VideoDurationRangeDto(
+    double MinSeconds,
+    double MaxSeconds);
+
+public sealed record VideoDurationContractValidationDto(
+    string PlannedFormat,
+    string ProfileName,
+    VideoDurationRangeDto TargetDurationRange,
+    VideoDurationRangeDto AcceptableDurationRange,
+    double ActualDurationSeconds,
+    bool Passed,
+    string Reason);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -206,7 +220,8 @@ public sealed record VideoNarrationScriptDto(
     VideoNarrationTtsPlanDto TtsPlan,
     VideoNarrationScriptScoresDto Scores,
     IReadOnlyList<string> Warnings,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    VideoDurationContractValidationDto? DurationValidation = null);
 
 public sealed record VideoNarrationScriptStyleDto(
     string Tone,
@@ -242,7 +257,8 @@ public sealed record VideoTtsTimingsDto(
     string TtsProvider,
     string VoiceUsed,
     DateTimeOffset GeneratedUtc,
-    VideoTtsAudioValidationDto? AudioValidation = null);
+    VideoTtsAudioValidationDto? AudioValidation = null,
+    VideoDurationContractValidationDto? DurationValidation = null);
 
 public sealed record VideoTtsAudioValidationDto(
     bool IsSilentAudio,
@@ -270,7 +286,8 @@ public sealed record LongFormVideoTtsTimingsDto(
     string TtsProvider,
     string VoiceUsed,
     VideoTtsAudioValidationDto AudioValidation,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    VideoDurationContractValidationDto? DurationValidation = null);
 
 public sealed record LongFormVideoTtsSectionTimingDto(
     string SectionKey,
@@ -299,7 +316,8 @@ public sealed record VideoAssemblyPlanDto(
     VideoAssemblySceneMappingValidationDto SceneMappingValidation,
     VideoAssemblyRenderMusicPlanDto RenderMusicPlan,
     IReadOnlyList<string> Warnings,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    VideoDurationContractValidationDto? DurationValidation = null);
 
 public sealed record VideoAssemblyPlanSegmentDto(
     string SceneKey,
@@ -387,4 +405,5 @@ public sealed record VideoRenderValidationDto(
     double FinalVideoDurationSeconds = 0,
     string OutputResolution = "",
     int Fps = 0,
+    VideoDurationContractValidationDto? DurationValidation = null,
     IReadOnlyList<string>? Warnings = null);

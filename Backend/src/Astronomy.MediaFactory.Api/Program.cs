@@ -445,6 +445,7 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 response.VideoNarrationScriptGenerated,
                 response.VideoNarrationScriptPath,
                 response.TotalEstimatedDurationSeconds,
+                response.DurationValidation,
                 response.TtsReady,
                 response.GeneratedFiles
             });
@@ -461,6 +462,7 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 response.AudioFilePath,
                 response.TimingsFilePath,
                 response.ActualDurationSeconds,
+                response.DurationValidation,
                 response.TtsProvider,
                 response.AudioValidationPassed
             });
@@ -478,6 +480,7 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 ScenePresentationProfileUsed = response.ScenePresentationProfileUsed.ToString(),
                 SectionCount = response.SegmentCount,
                 response.TotalDurationSeconds,
+                response.DurationValidation,
                 BackgroundMusicPlanned = response.BackgroundMusicPlanned,
                 ReadyForRender = response.ReadyForRender
             });
@@ -494,6 +497,7 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 response.ReadyForRender,
                 response.SegmentCount,
                 response.TotalDurationSeconds,
+                response.DurationValidation,
                 response.GeneratedFiles
             });
         }
@@ -508,6 +512,7 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 response.VideoRendered,
                 response.FinalVideoPath,
                 response.FinalVideoDurationSeconds,
+                response.DurationValidation,
                 response.OutputResolution,
                 response.AudioTrackPresent,
                 response.BackgroundMusicApplied,
@@ -525,6 +530,7 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 response.VideoRendered,
                 response.FinalVideoPath,
                 response.FinalVideoDurationSeconds,
+                response.DurationValidation,
                 response.OutputResolution,
                 response.AudioTrackPresent,
                 response.BackgroundMusicRequested,
