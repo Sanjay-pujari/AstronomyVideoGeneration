@@ -15,6 +15,7 @@ public sealed class QuestionDrivenNarrationGenerator(
     private const string ReviewFileName = "question-driven-narration-review.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InternalTerms = ["question engine", "scene purpose", "metadata", "json", "source answer"];
+    private static readonly string[] MeteorShowerForbiddenLeakageTerms = ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST", "western horizon", "planet pairing", "object pairing"];
 
     private static readonly IReadOnlyDictionary<string, NarrationTemplate> Templates = new Dictionary<string, NarrationTemplate>(StringComparer.OrdinalIgnoreCase)
     {
@@ -84,7 +85,8 @@ public sealed class QuestionDrivenNarrationGenerator(
             ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
 
         var narration = BuildNarration(enrichedPlan, request);
-        var review = BuildReview(narration, warnings);
+        ValidateNarrationHasNoForbiddenLeakage(narration, request.ProductionContext);
+        var review = BuildReview(narration, warnings, request.ProductionContext);
         if (!review.IsValid)
         {
             warnings.AddRange(review.Checks.Where(check => !check.Passed).Select(check => check.Message));
@@ -111,23 +113,29 @@ public sealed class QuestionDrivenNarrationGenerator(
 
     private static QuestionDrivenNarrationDto BuildNarration(EnrichedQuestionScenePlanDto enrichedPlan, QuestionDrivenNarrationRequest request)
     {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var isProductionStrategyDriven = request.ProductionContext is not null && intelligence is not null;
         var scenes = enrichedPlan.Scenes.Select(scene =>
         {
             if (!Templates.TryGetValue(scene.QuestionType, out var template))
                 throw new ArgumentException($"No narration template exists for questionType '{scene.QuestionType}'.");
+
+            var strategyNarration = isProductionStrategyDriven
+                ? BuildStrategyDrivenNarration(scene, intelligence!, request.ProductionContext!)
+                : null;
 
             return new QuestionDrivenNarrationSceneDto(
                 scene.SceneNumber,
                 Clean(scene.QuestionType),
                 Clean(scene.ScenePurpose),
                 Clean(scene.ViewerQuestion),
-                Clean(scene.ViewerTakeaway),
-                Clean(scene.SourceAnswer),
-                Clean(scene.NarrationIntent),
-                template.NarrationText,
-                template.EstimatedDurationSeconds,
-                template.VoiceDirection,
-                template.CaptionText);
+                Clean(strategyNarration?.ViewerTakeaway ?? scene.ViewerTakeaway),
+                Clean(strategyNarration?.SourceAnswer ?? scene.SourceAnswer),
+                Clean(strategyNarration?.NarrationIntent ?? scene.NarrationIntent),
+                strategyNarration?.NarrationText ?? template.NarrationText,
+                strategyNarration?.EstimatedDurationSeconds ?? template.EstimatedDurationSeconds,
+                strategyNarration?.VoiceDirection ?? template.VoiceDirection,
+                strategyNarration?.CaptionText ?? template.CaptionText);
         }).ToArray();
 
         return new QuestionDrivenNarrationDto(
@@ -139,7 +147,65 @@ public sealed class QuestionDrivenNarrationGenerator(
             DateTimeOffset.UtcNow);
     }
 
-    private static QuestionDrivenNarrationReviewDto BuildReview(QuestionDrivenNarrationDto narration, IReadOnlyList<string> warnings)
+    private static StrategyNarrationLine? BuildStrategyDrivenNarration(EnrichedQuestionSceneDto scene, ProductionEventIntelligence intelligence, ProductionPipelineExecutionContext context)
+    {
+        if (IsMeteorShower(intelligence, context))
+            return BuildMeteorShowerNarration(scene, intelligence);
+
+        var title = Clean(intelligence.Title, "this astronomy event");
+        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, intelligence.LocalPeakTime, "the best local viewing window");
+        var direction = FirstNonEmpty(intelligence.SkyDirectionHint, "the relevant part of the sky");
+        var objects = FormatList((intelligence.ResolvedObjectNames ?? intelligence.PrimaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).ToArray(), title);
+        var source = Clean(scene.SourceAnswer);
+        var fact = source.Length == 0 || ContainsAny(source, intelligence.ForbiddenTerms.Concat(intelligence.ForbiddenObjectNames ?? []))
+            ? $"{title} is the approved production event for {context.RegionId ?? intelligence.VisibilityRegion ?? "the selected region"}."
+            : source;
+
+        return scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => Line($"{title} is the sky event to watch, centered on {objects} and the current approved production plan.", $"{title}: what to watch.", fact),
+            "where" => Line($"Look toward {direction}; use the production plan’s local sky guidance rather than any cached pilot direction.", $"Look toward {direction}.", $"Sky direction: {direction}."),
+            "when" => Line($"The best local viewing window is {window}, based on the current event intelligence.", $"Best window: {window}.", $"Best viewing window: {window}."),
+            "how" => Line($"Use the current strategy guidance: {FormatList(intelligence.ViewerInstructions, "check the sky conditions, choose a clear view, and observe safely")}.", "Use the current observing guidance.", string.Join(' ', intelligence.ViewerInstructions)),
+            "why" => Line($"This matters because {FirstNonEmpty(intelligence.ScientificContext, title + " has strong local skywatching value")}.", "Why this event matters.", FirstNonEmpty(intelligence.ScientificContext, title)),
+            "action" => Line($"If conditions cooperate, save the {window} window, check weather, and follow the current plan for {title}.", "Save the window and check weather.", $"CTA for {title}: {window}."),
+            _ => Line(fact, ShortenCaption(fact), fact)
+        };
+    }
+
+    private static StrategyNarrationLine BuildMeteorShowerNarration(EnrichedQuestionSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var title = Clean(intelligence.Title, "Meteor Shower");
+        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, "midnight to pre-dawn");
+        var direction = FirstNonEmpty(intelligence.SkyDirectionHint, "east to overhead after 10 PM");
+        var moon = FirstNonEmpty(intelligence.MoonInterference, "low moon interference");
+        var source = scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => $"{title} peaks with meteor streaks from the shower radiant across the whole sky.",
+            "where" => $"Look {direction}; meteors can appear anywhere across a dark open sky.",
+            "when" => $"Best viewing is {window}, when the sky is darkest.",
+            "how" => "No telescope is needed; choose a dark sky, avoid bright lights, and let your eyes adapt.",
+            "why" => $"{title} is a strong annual meteor shower with {moon.ToLowerInvariant()} improving viewing quality.",
+            "action" => $"Set a reminder for {window}, check weather, and choose a dark sky location.",
+            _ => $"{title}: meteor streaks, radiant, dark sky, and naked-eye viewing."
+        };
+
+        return scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => Line($"{title} is the event to watch: meteor streaks from the radiant crossing the whole dark sky.", $"{title}: meteor streaks.", source),
+            "where" => Line($"Look {direction}; use a dark open sky because meteors can streak anywhere overhead.", $"Look {direction}.", source),
+            "when" => Line($"Best viewing is {window}, with the darkest hours giving the shower its strongest chance.", $"Best viewing: {window}.", source),
+            "how" => Line("No telescope is needed. Pick a dark sky, avoid city lights, lie back, and let your eyes adapt for 20 minutes.", "No telescope; find dark sky.", source),
+            "why" => Line($"{title} is one of the strong annual meteor showers, and {moon.ToLowerInvariant()} helps keep the sky darker for meteor streaks.", $"Strong shower; {moon.ToLowerInvariant()}.", source),
+            "action" => Line($"Set a reminder for {window}, check weather, and choose a dark sky spot with a wide view overhead.", "Set reminder and check weather.", source),
+            _ => Line(source, ShortenCaption(source), source)
+        };
+    }
+
+    private static StrategyNarrationLine Line(string narration, string caption, string sourceAnswer)
+        => new(Clean(sourceAnswer), "Strategy-driven narration from ProductionEventIntelligence and MediaEventStrategy.", Clean(narration), 9, "Clear, practical, wonder-led, and locally useful.", Clean(caption), Clean(caption));
+
+    private static QuestionDrivenNarrationReviewDto BuildReview(QuestionDrivenNarrationDto narration, IReadOnlyList<string> warnings, ProductionPipelineExecutionContext? productionContext)
     {
         var checks = new List<QuestionDrivenNarrationReviewCheckDto>();
         AddCheck(checks, "narrationTextNonEmpty", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.NarrationText)), "narrationText non-empty for every scene.");
@@ -153,6 +219,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "whatFirst", string.Equals(narration.Scenes.FirstOrDefault()?.QuestionType, AstronomyQuestionTypes.What, StringComparison.OrdinalIgnoreCase), "what scene is first.");
         AddCheck(checks, "oneQuestionPerScene", narration.Scenes.Select(scene => scene.QuestionType).Distinct(StringComparer.OrdinalIgnoreCase).Count() == narration.Scenes.Count, "each scene focuses on exactly one question type.");
         AddCheck(checks, "captionsShorterThanNarration", narration.Scenes.All(scene => scene.CaptionText.Length < scene.NarrationText.Length), "caption text should be shorter than narration text.");
+        AddCheck(checks, "noForbiddenUnrelatedTerms", !NarrationContainsForbiddenLeakage(narration, productionContext, out _), "narration plan must not contain forbidden unrelated event terms.");
 
         return new QuestionDrivenNarrationReviewDto(
             narration.EventId,
@@ -166,6 +233,33 @@ public sealed class QuestionDrivenNarrationGenerator(
             DateTimeOffset.UtcNow);
     }
 
+    private static void ValidateNarrationHasNoForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext)
+    {
+        if (NarrationContainsForbiddenLeakage(narration, productionContext, out var hits))
+            throw new InvalidOperationException("Question-driven narration validation failed: forbidden unrelated terms detected: " + string.Join(", ", hits.Distinct(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static bool NarrationContainsForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext, out IReadOnlyList<string> hits)
+    {
+        var forbidden = BuildForbiddenLeakageTerms(productionContext);
+        var combined = string.Join(' ', narration.Scenes.Select(scene => $"{scene.SourceAnswer} {scene.ViewerTakeaway} {scene.NarrationIntent} {scene.NarrationText} {scene.CaptionText}"));
+        hits = forbidden.Where(term => ContainsToken(combined, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return hits.Count > 0;
+    }
+
+    private static IReadOnlyList<string> BuildForbiddenLeakageTerms(ProductionPipelineExecutionContext? productionContext)
+    {
+        var intelligence = productionContext?.ProductionEventIntelligence;
+        var terms = new List<string>();
+        if (intelligence is not null)
+        {
+            terms.AddRange(intelligence.ForbiddenTerms);
+            terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
+            if (IsMeteorShower(intelligence, productionContext)) terms.AddRange(MeteorShowerForbiddenLeakageTerms);
+        }
+        return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     private static bool SceneHasNoInternalTerms(QuestionDrivenNarrationSceneDto scene)
     {
         var combined = $"{scene.NarrationText} {scene.CaptionText} {scene.VoiceDirection}";
@@ -174,6 +268,35 @@ public sealed class QuestionDrivenNarrationGenerator(
 
     private static void AddCheck(List<QuestionDrivenNarrationReviewCheckDto> checks, string name, bool passed, string message)
         => checks.Add(new QuestionDrivenNarrationReviewCheckDto(name, passed, message));
+
+    private static bool IsMeteorShower(ProductionEventIntelligence intelligence, ProductionPipelineExecutionContext? context)
+        => (context?.EventType ?? intelligence.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || (context?.MediaEventStrategy?.EventType ?? intelligence.StrategyId ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || intelligence.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsAny(string value, IEnumerable<string> terms)
+        => terms.Any(term => ContainsToken(value, term));
+
+    private static bool ContainsToken(string value, string? term)
+        => !string.IsNullOrWhiteSpace(term) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string FormatList(IEnumerable<string> values, string fallback)
+    {
+        var clean = values.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return clean.Length == 0 ? fallback : string.Join(", ", clean);
+    }
+
+    private static string ShortenCaption(string value)
+    {
+        value = Clean(value);
+        if (value.Length <= 52) return value;
+        return value[..49].TrimEnd() + "...";
+    }
+
+    private sealed record StrategyNarrationLine(string SourceAnswer, string NarrationIntent, string NarrationText, int EstimatedDurationSeconds, string VoiceDirection, string CaptionText, string ViewerTakeaway);
 
     private void ValidateRequest(QuestionDrivenNarrationRequest request)
     {
@@ -261,6 +384,12 @@ public sealed class QuestionDrivenNarrationGenerator(
     }
 
     private static string Clean(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
+
+    private static string Clean(string? value, string fallback)
+    {
+        var cleaned = string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? fallback : cleaned;
+    }
 
     private sealed record NarrationTemplate(
         string NarrationIntent,
