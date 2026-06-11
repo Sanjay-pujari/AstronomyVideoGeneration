@@ -186,11 +186,44 @@ public sealed class QuestionDrivenNarrationGenerator(
             throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
-        if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Question-driven narration generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en.", nameof(request));
+        if (IsGoldenPilotRequest(request) || IsDbApprovedPlanExecution(request))
+            return;
+
+        throw new ArgumentException("Question-driven narration generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en or a DB-approved Astronomy V1 production plan.", nameof(request));
     }
+
+    private static bool IsGoldenPilotRequest(QuestionDrivenNarrationRequest request)
+        => string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDbApprovedPlanExecution(QuestionDrivenNarrationRequest request)
+    {
+        var context = request.ProductionContext;
+        if (context is null) return false;
+        if (!context.UseProductionPipeline || !context.IsDbApprovedPlanExecution) return false;
+        if (!context.ContentGenerationPlanExists || context.ContentGenerationPlanId is null || context.ContentGenerationPlanId == Guid.Empty) return false;
+        if (!context.AstronomyEventIntelligenceExists || context.AstronomyEventIntelligenceId is null || context.AstronomyEventIntelligenceId == Guid.Empty) return false;
+        if (!string.Equals(request.EventId, context.AstronomyEventIntelligenceId.Value.ToString("D"), StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrWhiteSpace(context.SourceExternalEventId)) return false;
+        if (!IsAllowedPlanStatus(context.ContentGenerationPlanStatus) && !IsAllowedPlanStatus(context.ContentGenerationPlanPlanStatus)) return false;
+        if (!context.AutoGenerateAllowed) return false;
+        if (string.Equals(context.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.Equals(context.ContentStrategy, "SkipAutoGeneration", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.Equals(context.ContentStrategy, "EducationalOnly", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(context.RegionId, request.RegionId, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(context.Language, request.Language, StringComparison.OrdinalIgnoreCase)) return false;
+
+        return context.RequestedOutputs?.Any(output =>
+            string.Equals(output, "ShortVideo", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(output, "LongVideo", StringComparison.OrdinalIgnoreCase)) == true;
+    }
+
+    private static bool IsAllowedPlanStatus(string? status)
+        => string.Equals(status, "Draft", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "Planned", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "Approved", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "Ready", StringComparison.OrdinalIgnoreCase);
 
     private string BuildPlanPath(string eventId, string regionId, string fileName)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine", fileName);

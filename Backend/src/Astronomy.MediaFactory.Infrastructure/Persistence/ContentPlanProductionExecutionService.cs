@@ -48,6 +48,7 @@ public sealed class ContentPlanProductionExecutionService(
             ?? throw new ArgumentException($"ContentGenerationPlan '{request.ContentGenerationPlanId}' is not linked to AstronomyEventIntelligence.", nameof(request));
 
         var productionRequest = mapper.Map(plan, intelligence);
+        var executionContext = BuildExecutionContext(plan, intelligence, productionRequest);
         var outputRoot = BuildPlanOutputRoot(productionRequest);
         logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
         var warnings = new List<string>(productionRequest.Warnings);
@@ -85,7 +86,8 @@ public sealed class ContentPlanProductionExecutionService(
                 intelligence.Id,
                 outputRoot,
                 DryRun: false,
-                OverwriteExisting: request.OverwriteExisting), cancellationToken);
+                OverwriteExisting: request.OverwriteExisting,
+                ExecutionContext: executionContext), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
             errors.AddRange(pipelineResult.Errors);
@@ -129,6 +131,25 @@ public sealed class ContentPlanProductionExecutionService(
             return BuildResult(false, false, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors);
         }
     }
+
+
+    private static ProductionPipelineExecutionContext BuildExecutionContext(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest)
+        => new(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: plan.Id,
+            AstronomyEventIntelligenceId: intelligence.Id,
+            SourceExternalEventId: plan.SourceExternalEventId,
+            IsDbApprovedPlanExecution: true,
+            ContentGenerationPlanExists: true,
+            ContentGenerationPlanStatus: plan.Status,
+            ContentGenerationPlanPlanStatus: plan.PlanStatus,
+            AstronomyEventIntelligenceExists: true,
+            AutoGenerateAllowed: intelligence.AutoGenerateAllowed,
+            VerificationStatus: intelligence.VerificationStatus,
+            ContentStrategy: intelligence.ContentStrategy,
+            RegionId: plan.RegionId,
+            Language: plan.Language,
+            RequestedOutputs: productionRequest.RequestedOutputs);
 
     private async Task WritePlanInputAsync(string outputRoot, ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, CancellationToken cancellationToken)
     {

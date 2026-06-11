@@ -4,7 +4,8 @@ public sealed record AstronomyVisualAssetStrategyRequest(
     string EventId,
     string RegionId,
     string Language = "en",
-    bool DryRun = true);
+    bool DryRun = true,
+    ProductionPipelineExecutionContext? ProductionContext = null);
 
 public sealed record AstronomyVisualAssetStrategyResponse(
     string EventId,
