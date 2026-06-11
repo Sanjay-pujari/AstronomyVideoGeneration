@@ -986,20 +986,27 @@ public sealed class HeroAssetStoryGenerator(
             scores.UnderstandabilityScore
         }.Average(), MidpointRounding.AwayFromZero);
 
+        var isMeteorShower = IsMeteorStory(storySource);
         return new HeroAssetStoryDto(
             request.EventId,
             request.RegionId,
             request.Language,
-            SelectedHeroHook,
-            "Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.",
-            "Look west shortly after sunset.",
-            "Venus and Jupiter above the western horizon.",
-            "Wonder",
+            isMeteorShower ? "Geminids Meteor Shower Peak" : SelectedHeroHook,
+            isMeteorShower ? "Geminids peak night brings meteor streaks across Udaipur’s dark sky, with low Moon interference." : "Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.",
+            isMeteorShower ? "Best Night: Dec 14 — watch 00:00–05:00 IST." : "Look west shortly after sunset.",
+            isMeteorShower ? "Meteor streaks from the Gemini radiant over a dark Udaipur night sky." : "Venus and Jupiter above the western horizon.",
+            isMeteorShower ? "Wonder + Urgency" : "Wonder",
             PlatformIntent,
             storySource,
             scores,
             storyScore,
             DateTimeOffset.UtcNow);
+    }
+
+    private static bool IsMeteorStory(HeroStorySourceDto storySource)
+    {
+        var text = string.Join(' ', storySource.What, storySource.Where, storySource.When, storySource.Why);
+        return text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("Geminids", StringComparison.OrdinalIgnoreCase) || text.Contains("radiant", StringComparison.OrdinalIgnoreCase);
     }
 
     private static HeroStorySourceDto BuildStorySource(

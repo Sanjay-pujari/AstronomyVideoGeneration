@@ -235,6 +235,55 @@ public sealed class AstronomyQuestionEngineTests
         Assert.Equal(0, await db.AstronomyQuestionAnswerSets.CountAsync());
     }
 
+    [Fact]
+    public async Task GenerateQuestionAnswersAsync_UsesMeteorShowerViewingWindowAndDarkSkyGuidance()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "GEMINIDS_2026",
+            eventType: "MeteorShower",
+            objectName: "Geminids",
+            metadataJson: """
+                {
+                  "skyDirectionHint": "East to overhead after 10 PM",
+                  "bestViewingWindowLocal": "2026-12-14 00:00–05:00 IST",
+                  "moonInterference": "Low",
+                  "moonIlluminationPercent": 8,
+                  "radiantVisibilityNote": "The Gemini radiant climbs higher late evening, but meteors can appear anywhere."
+                }
+                """);
+        evt.Title = "Geminids Meteor Shower Peak";
+        evt.TimeZone = "Asia/Kolkata";
+        evt.PeakUtc = DateTimeOffset.Parse("2026-12-14T06:00:00Z");
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, workingDirectory);
+        var result = await service.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventIds: [evt.EventCode],
+            DryRun: true), CancellationToken.None);
+
+        var answers = result.QuestionSets.Single().Answers.ToDictionary(a => a.QuestionType, a => a.AnswerText);
+        Assert.Contains("Geminids", answers[AstronomyQuestionTypes.What]);
+        Assert.Contains("meteor", answers[AstronomyQuestionTypes.What], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("East to overhead after 10 PM", answers[AstronomyQuestionTypes.Where]);
+        Assert.Contains("dark, open sky", answers[AstronomyQuestionTypes.Where]);
+        Assert.Contains("2026-12-14 00:00–05:00 IST", answers[AstronomyQuestionTypes.When]);
+        Assert.DoesNotContain("11:30", answers[AstronomyQuestionTypes.When]);
+        Assert.Contains("No telescope", answers[AstronomyQuestionTypes.How]);
+        Assert.Contains("20 minutes", answers[AstronomyQuestionTypes.How]);
+        Assert.Contains("strongest annual meteor showers", answers[AstronomyQuestionTypes.Why]);
+        Assert.Contains("low moon interference", answers[AstronomyQuestionTypes.Why], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Dec 13/14", answers[AstronomyQuestionTypes.Action]);
+
+        var combinedAnswers = string.Join(" ", answers.Values);
+        Assert.DoesNotContain("conjunction", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Venus", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Jupiter", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static AstronomyQuestionEngine CreateService(MediaFactoryDbContext db, string workingDirectory)
         => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<AstronomyQuestionEngine>.Instance);
 

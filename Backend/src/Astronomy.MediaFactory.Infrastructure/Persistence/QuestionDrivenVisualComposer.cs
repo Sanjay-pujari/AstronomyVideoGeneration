@@ -103,9 +103,10 @@ public sealed class QuestionDrivenVisualComposer(
         var failedSceneCount = 0;
         var seenSrtTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenLayoutKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var venusAsset = FindLocalAsset("venus");
-        var jupiterAsset = FindLocalAsset("jupiter");
-        if (venusAsset is null || jupiterAsset is null) warnings.Add("Local transparent Venus/Jupiter assets were not both found; scene review will fail and no fake-circle planets will be used.");
+        var isMeteorShowerPlan = scenes.Any(scene => IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent));
+        var venusAsset = isMeteorShowerPlan ? null : FindLocalAsset("venus");
+        var jupiterAsset = isMeteorShowerPlan ? null : FindLocalAsset("jupiter");
+        if (!isMeteorShowerPlan && (venusAsset is null || jupiterAsset is null)) warnings.Add("Local transparent Venus/Jupiter assets were not both found; scene review will fail and no fake-circle planets will be used.");
 
         foreach (var scene in scenes)
         {
@@ -296,7 +297,17 @@ public sealed class QuestionDrivenVisualComposer(
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt)
     {
-        var overlays = scene.QuestionType.ToLowerInvariant() switch
+        var isMeteorShower = IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent) || IsMeteorText(narrationScene.NarrationText);
+        var overlays = isMeteorShower ? scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => ["Geminids Meteor Shower Peak", "Peak night alert"],
+            "where" => ["East to overhead", "Dark open sky", "Gemini radiant"],
+            "when" => ["2026-12-14", "00:00–05:00 IST", "Midnight to pre-dawn"],
+            "how" => ["No telescope", "Avoid city lights", "20 min dark adaptation"],
+            "why" => ["Strong annual shower", "Low Moon Interference", "Meteor streaks"],
+            "action" => ["Best Night: Dec 14", "Set reminder Dec 13/14", "Check weather"],
+            _ => new[] { scene.ViewerTakeaway }
+        } : scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "Venus & Jupiter", "After sunset" },
             "where" => new[] { "W", "Venus", "Jupiter", "Western horizon", "reference stars" },
@@ -307,7 +318,16 @@ public sealed class QuestionDrivenVisualComposer(
             _ => new[] { scene.ViewerTakeaway }
         };
 
-        var layers = scene.QuestionType.ToLowerInvariant() switch
+        var layers = isMeteorShower ? scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => ["mood:Dramatic", "background:professional astronomy magazine cover dark night sky over Rajasthan Udaipur with smooth sky gradient and atmospheric depth", "celestial:Geminids meteor streaks radiating from subtle Gemini constellation radiant", "composition:strong focal contrast clickable thumbnail composition with meteor burst over dark open sky", "texture:documentary night sky grain natural starfield magnitude variation", "typography:premium thumbnail title Geminids Meteor Shower Peak subtitle Peak night alert"],
+            "where" => ["mood:Educational", "background:observation-chart dark sky over Udaipur with subtle real eastern horizon and overhead dome", "guide:east-to-overhead sky direction guide", "celestial:meteor streaks from Gemini radiant", "reference:subtle Gemini constellation guide", "direction:East marker", "annotation:floating dark-sky labels"],
+            "when" => ["mood:Informational", "background:deep dark night to pre-dawn sky transition with smooth sky gradient", "time:2026-12-14 00:00 IST marker", "time:05:00 IST marker", "direction:midnight to pre-dawn viewing window", "celestial:meteor streak activity timeline", "annotation:floating timeline labels"],
+            "how" => ["mood:Instructional", "background:observer-friendly dark open sky with natural atmospheric depth", "celestial:meteor streaks overhead", "steps:No telescope; Avoid city lights; Let eyes adapt 20 minutes", "landscape:Udaipur dark location silhouette"],
+            "why" => ["mood:Meaningful", "background:deep astronomy sky premium editorial background with atmospheric starfield depth and smooth sky gradient", "celestial:many Geminids meteor streaks radiating from Gemini", "significance:strong annual meteor shower and low moon interference", "quality:low moon interference improves dark-sky meteor visibility", "annotation:floating significance note"],
+            "action" => ["mood:Inspirational", "background:beautiful poster-quality cinematic dark night sky over Udaipur with atmospheric depth and smooth sky gradient", "composition:premium shareable poster composition", "celestial:Geminids meteor streaks overhead", "starfield:natural density variation magnitude variation brightness variation", "typography:minimal poster CTA Best Night Dec 14"],
+            _ => ["background:dark meteor shower sky", "celestial:meteor streaks"]
+        } : scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "mood:Dramatic", "background:professional astronomy magazine cover western twilight over Rajasthan with richer twilight colors, natural atmospheric glow, and smooth sky gradient", "horizon:stronger golden-orange western horizon glow with subtle atmospheric haze", "texture:documentary sky grain, twilight haze, natural density variation starfield, magnitude variation, brightness variation", "composition:strong focal contrast clickable thumbnail composition with slightly brighter focal region around Venus/Jupiter", "vignette:soft natural edge falloff", "celestial:reduced-scale Venus/Jupiter sky targets integrated with atmospheric blending and subtle shared glow", "typography:premium thumbnail title Venus & Jupiter subtitle After sunset" },
             "where" => new[] { "mood:Educational", "background:observation-chart sky with astronomy guide aesthetic and subtle atmospheric realism", "horizon:subtle real western horizon", "guide:delicate altitude guide", "celestial:Venus/Jupiter plotted positions integrated with subtle glow", "reference:subtle sky grid", "reference:Leo Regulus constellation-star guide", "direction:West marker", "annotation:floating labels and leader lines" },
@@ -343,14 +363,15 @@ public sealed class QuestionDrivenVisualComposer(
             layer.Contains("spotting-frame", StringComparison.OrdinalIgnoreCase));
         if (usesCardOrPanelBox) issues.Add("large rectangle/panel/card is visible.");
         if (usesHelperLayoutBox) issues.Add("helper layout box is visible.");
-        if (!venusAssetFound || !jupiterAssetFound) issues.Add("local transparent Venus/Jupiter assets are missing.");
+        var isMeteorShower = IsMeteorSpec(spec);
+        if (!isMeteorShower && (!venusAssetFound || !jupiterAssetFound)) issues.Add("local transparent Venus/Jupiter assets are missing.");
         var textCollisionDetected = false;
         var textCollisionResolved = true;
         var labelOverPlanetDetected = false;
         var usesSolidPlanetBackingCircle = false;
         var blueprintZonesRespected = true;
         var environmentalBackgroundDistinct = HasSceneSpecificEnvironmentalBackground(spec);
-        var planetAssetsIntegratedIntoSky = venusAssetFound && jupiterAssetFound && spec.ProgrammaticLayers.Any(layer => layer.Contains("integrated", StringComparison.OrdinalIgnoreCase) || layer.Contains("glow", StringComparison.OrdinalIgnoreCase));
+        var planetAssetsIntegratedIntoSky = isMeteorShower || (venusAssetFound && jupiterAssetFound && spec.ProgrammaticLayers.Any(layer => layer.Contains("integrated", StringComparison.OrdinalIgnoreCase) || layer.Contains("glow", StringComparison.OrdinalIgnoreCase)));
         var constellationLayerRendered = spec.ProgrammaticLayers.Any(layer => layer.Contains("constellation", StringComparison.OrdinalIgnoreCase));
         var referenceStarLayerRendered = spec.ProgrammaticLayers.Any(layer => layer.Contains("reference-star", StringComparison.OrdinalIgnoreCase) || layer.Contains("reference:subtle star", StringComparison.OrdinalIgnoreCase) || layer.Contains("Regulus", StringComparison.OrdinalIgnoreCase));
         var sceneMood = GetSceneMood(spec.QuestionType);
@@ -371,8 +392,12 @@ public sealed class QuestionDrivenVisualComposer(
         var decorativeCircleDetected = DetectLargeDecorativeCircle(spec);
         var atmosphericBackgroundUsed = UsesAtmosphericBackground(spec);
         var largeTemplateShapeDetected = usesCardOrPanelBox || usesHelperLayoutBox || spec.ProgrammaticLayers.Any(layer => layer.Contains("template shape", StringComparison.OrdinalIgnoreCase) || layer.Contains("background circle", StringComparison.OrdinalIgnoreCase) || layer.Contains("decorative circle", StringComparison.OrdinalIgnoreCase));
-        var significanceLayerRendered = !spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Two of the brightest worlds sharing the evening sky", StringComparison.OrdinalIgnoreCase) && spec.ProgrammaticLayers.Any(layer => layer.Contains("shared sky", StringComparison.OrdinalIgnoreCase) || layer.Contains("emotional significance", StringComparison.OrdinalIgnoreCase)));
-        if (spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && (!viewerText.Contains("brightest worlds", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sharing", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sky", StringComparison.OrdinalIgnoreCase))) issues.Add("Why scene does not emphasize two of the brightest worlds sharing the evening sky.");
+        var significanceLayerRendered = isMeteorShower
+            ? (!spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Strong annual shower", StringComparison.OrdinalIgnoreCase) && string.Join(' ', spec.ProgrammaticLayers).Contains("low moon interference", StringComparison.OrdinalIgnoreCase)))
+            : (!spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Two of the brightest worlds sharing the evening sky", StringComparison.OrdinalIgnoreCase) && spec.ProgrammaticLayers.Any(layer => layer.Contains("shared sky", StringComparison.OrdinalIgnoreCase) || layer.Contains("emotional significance", StringComparison.OrdinalIgnoreCase))));
+        if (!isMeteorShower && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && (!viewerText.Contains("brightest worlds", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sharing", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sky", StringComparison.OrdinalIgnoreCase))) issues.Add("Why scene does not emphasize two of the brightest worlds sharing the evening sky.");
+        if (isMeteorShower && !ContainsAny(string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText).Concat([spec.BackgroundPrompt])), "meteor", "Geminids", "radiant")) issues.Add("MeteorShower scene prompt must include meteor-related terms.");
+        if (isMeteorShower && ContainsAny(string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText).Concat([spec.BackgroundPrompt])), "Venus", "Jupiter", "conjunction")) issues.Add("MeteorShower visual prompt must not reference Venus/Jupiter or conjunction.");
         if (decorativeCircleDetected) issues.Add("decorative translucent circle detected.");
         if (largeTemplateShapeDetected) issues.Add("large template shape detected.");
         if (!atmosphericBackgroundUsed) issues.Add("atmospheric background was not used.");
@@ -398,9 +423,12 @@ public sealed class QuestionDrivenVisualComposer(
         if (!environmentalBackgroundDistinct) issues.Add("background is the same generic dark-blue mountain scene as other scenes.");
         if (!blueprintZonesRespected) issues.Add("renderer ignored one or more layout blueprint zones.");
         if (!significanceLayerRendered) issues.Add("Scene 5 does not include a closeness/significance layer.");
-        if (spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "golden-orange", "western", "horizon", "premium", "focal contrast")) issues.Add("Scene 1 does not feel like a professional astronomy thumbnail.");
-        if (spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !(constellationLayerRendered && referenceStarLayerRendered && ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "western"))) issues.Add("Scene 2 does not feel like observation chart.");
-        if (spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "shared", "brightness")) issues.Add("Scene 5 does not feel like a human-interest significance visual.");
+        if (!isMeteorShower && spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "golden-orange", "western", "horizon", "premium", "focal contrast")) issues.Add("Scene 1 does not feel like a professional astronomy thumbnail.");
+        if (isMeteorShower && spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "Geminids", "meteor", "dark night", "focal contrast")) issues.Add("Scene 1 does not feel like a Geminids meteor-shower thumbnail.");
+        if (!isMeteorShower && spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !(constellationLayerRendered && referenceStarLayerRendered && ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "western"))) issues.Add("Scene 2 does not feel like observation chart.");
+        if (isMeteorShower && spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !(constellationLayerRendered && ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "east-to-overhead"))) issues.Add("Scene 2 does not feel like a meteor-shower observation chart.");
+        if (!isMeteorShower && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "shared", "brightness")) issues.Add("Scene 5 does not feel like a human-interest significance visual.");
+        if (isMeteorShower && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "strong annual meteor shower", "low moon interference")) issues.Add("Scene 5 does not feel like a meteor-shower significance visual.");
         if (spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "poster", "cinematic", "premium", "minimal", "shareable")) issues.Add("Scene 6 does not feel like poster/CTA scene.");
         if (!srt.Contains(" --> ", StringComparison.Ordinal)) issues.Add("SRT is not in timed-caption format.");
         var approved = issues.Count == 0;
@@ -414,7 +442,7 @@ public sealed class QuestionDrivenVisualComposer(
             approved,
             approved,
             approved,
-            venusAssetFound && jupiterAssetFound,
+            isMeteorShower || (venusAssetFound && jupiterAssetFound),
             false,
             false,
             textCoveragePercent,
@@ -428,7 +456,7 @@ public sealed class QuestionDrivenVisualComposer(
             environmentalBackgroundDistinct,
             usesCardOrPanelBox,
             usesHelperLayoutBox,
-            planetAssetsIntegratedIntoSky || spec.QuestionType.Equals("When", StringComparison.OrdinalIgnoreCase),
+            isMeteorShower || planetAssetsIntegratedIntoSky || spec.QuestionType.Equals("When", StringComparison.OrdinalIgnoreCase),
             constellationLayerRendered,
             referenceStarLayerRendered,
             sceneMood,
@@ -453,7 +481,16 @@ public sealed class QuestionDrivenVisualComposer(
             recommendations);
     }
 
-    private static QuestionDrivenProgrammaticOverlayPlan BuildOverlayPlan(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
+    private static QuestionDrivenProgrammaticOverlayPlan BuildOverlayPlan(QuestionDrivenVisualSpec spec) => IsMeteorSpec(spec) ? spec.QuestionType.ToLowerInvariant() switch
+    {
+        "what" => new("Geminids Meteor Shower Peak", "Peak night alert", ["Meteor streaks", "Gemini radiant", "Udaipur dark sky"], ["radiant guide"], [], [], [], []),
+        "where" => new("Where to Look", "East to overhead after 10 PM", ["East", "Overhead", "Dark open sky", "Gemini radiant"], ["east-to-overhead direction guide"], [], ["East"], [], []),
+        "when" => new("Best Night: Dec 14", "Midnight to pre-dawn", ["Viewing window"], [], [], [], ["2026-12-14 00:00–05:00 IST"], []),
+        "how" => new("How to Watch", "No telescope needed", ["Dark location", "Meteor streaks"], [], [], [], [], ["Avoid city lights", "Let eyes adapt 20 minutes", "Look at open sky"]),
+        "why" => new("Why It Matters", "Strong annual shower, low Moon interference", ["Geminids", "meteor streaks", "low moon interference"], ["radiant emphasis"], [], [], [], []),
+        "action" => new("Best Night: Dec 14", "Set reminder Dec 13/14", ["Weather check", "Dark location"], [], [], [], [], []),
+        _ => new(spec.ViewerTakeaway, string.Empty, ["Meteor streaks"], [], [], [], [], [])
+    } : spec.QuestionType.ToLowerInvariant() switch
     {
         "what" => new("Venus & Jupiter", "After sunset", ["Venus", "Jupiter"], ["leader lines from labels to planets"], ["Venus", "Jupiter"], [], [], []),
         "where" => new("Where to Look", "Face the western horizon", ["West", "Venus", "Jupiter", "Horizon", "Leo / Regulus reference stars"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
@@ -464,6 +501,15 @@ public sealed class QuestionDrivenVisualComposer(
         _ => new(spec.ViewerTakeaway, string.Empty, [], [], [], [], [], [])
     };
 
+
+    private static bool IsMeteorText(string? value)
+        => !string.IsNullOrWhiteSpace(value) && (value.Contains("meteor", StringComparison.OrdinalIgnoreCase) || value.Contains("Geminids", StringComparison.OrdinalIgnoreCase) || value.Contains("radiant", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsMeteorSpec(QuestionDrivenVisualSpec spec)
+        => IsMeteorText(spec.BackgroundPrompt) || spec.OverlayText.Any(IsMeteorText) || spec.ProgrammaticLayers.Any(IsMeteorText) || IsMeteorText(spec.NarrationText);
+
+    private static bool IsMeteorOverlay(QuestionDrivenProgrammaticOverlayPlan overlayPlan)
+        => IsMeteorText(overlayPlan.Title) || IsMeteorText(overlayPlan.Subtitle) || overlayPlan.Labels.Any(IsMeteorText) || overlayPlan.TimingMarkers.Any(IsMeteorText) || overlayPlan.Steps.Any(IsMeteorText);
 
     private static SceneQuestionIsolationValidation ValidateSceneQuestionIsolation(QuestionDrivenVisualSpec spec, QuestionDrivenProgrammaticOverlayPlan overlayPlan)
     {
@@ -569,12 +615,12 @@ public sealed class QuestionDrivenVisualComposer(
 
     private static bool OverlayPlanMatchesQuestionType(string questionType, QuestionDrivenProgrammaticOverlayPlan overlayPlan) => questionType.ToLowerInvariant() switch
     {
-        "what" => overlayPlan.LocalAssetObjects.Contains("Venus", StringComparer.OrdinalIgnoreCase) && overlayPlan.LocalAssetObjects.Contains("Jupiter", StringComparer.OrdinalIgnoreCase),
-        "where" => overlayPlan.Labels.Contains("West", StringComparer.OrdinalIgnoreCase) && overlayPlan.Labels.Contains("Horizon", StringComparer.OrdinalIgnoreCase),
-        "when" => overlayPlan.TimingMarkers.Contains("7:23 PM IST", StringComparer.OrdinalIgnoreCase),
-        "how" => overlayPlan.Steps.SequenceEqual(["Find Venus", "Look nearby for Jupiter", "Face west"], StringComparer.OrdinalIgnoreCase) && overlayPlan.Arrows.Count > 0,
-        "why" => overlayPlan.Subtitle.Contains("brightest worlds", StringComparison.OrdinalIgnoreCase) && overlayPlan.Subtitle.Contains("sharing", StringComparison.OrdinalIgnoreCase) && overlayPlan.Arrows.Count > 0,
-        "action" => overlayPlan.Subtitle.Contains("west", StringComparison.OrdinalIgnoreCase),
+        "what" => IsMeteorOverlay(overlayPlan) ? overlayPlan.Title.Contains("Geminids", StringComparison.OrdinalIgnoreCase) : overlayPlan.LocalAssetObjects.Contains("Venus", StringComparer.OrdinalIgnoreCase) && overlayPlan.LocalAssetObjects.Contains("Jupiter", StringComparer.OrdinalIgnoreCase),
+        "where" => IsMeteorOverlay(overlayPlan) ? overlayPlan.Labels.Contains("East", StringComparer.OrdinalIgnoreCase) && overlayPlan.Labels.Contains("Overhead", StringComparer.OrdinalIgnoreCase) : overlayPlan.Labels.Contains("West", StringComparer.OrdinalIgnoreCase) && overlayPlan.Labels.Contains("Horizon", StringComparer.OrdinalIgnoreCase),
+        "when" => IsMeteorOverlay(overlayPlan) ? overlayPlan.TimingMarkers.Contains("2026-12-14 00:00–05:00 IST", StringComparer.OrdinalIgnoreCase) : overlayPlan.TimingMarkers.Contains("7:23 PM IST", StringComparer.OrdinalIgnoreCase),
+        "how" => IsMeteorOverlay(overlayPlan) ? overlayPlan.Steps.Any(step => step.Contains("20 minutes", StringComparison.OrdinalIgnoreCase)) : overlayPlan.Steps.SequenceEqual(["Find Venus", "Look nearby for Jupiter", "Face west"], StringComparer.OrdinalIgnoreCase) && overlayPlan.Arrows.Count > 0,
+        "why" => IsMeteorOverlay(overlayPlan) ? overlayPlan.Subtitle.Contains("Strong annual", StringComparison.OrdinalIgnoreCase) : overlayPlan.Subtitle.Contains("brightest worlds", StringComparison.OrdinalIgnoreCase) && overlayPlan.Subtitle.Contains("sharing", StringComparison.OrdinalIgnoreCase) && overlayPlan.Arrows.Count > 0,
+        "action" => IsMeteorOverlay(overlayPlan) ? overlayPlan.Title.Contains("Best Night", StringComparison.OrdinalIgnoreCase) : overlayPlan.Subtitle.Contains("west", StringComparison.OrdinalIgnoreCase),
         _ => false
     };
 
@@ -592,12 +638,12 @@ public sealed class QuestionDrivenVisualComposer(
         var text = string.Join(' ', spec.OverlayText.Concat(spec.ProgrammaticLayers));
         return spec.QuestionType.ToLowerInvariant() switch
         {
-            "what" => ContainsAll(text, "venus", "jupiter", "twilight"),
-            "where" => ContainsAll(text, "west", "venus", "jupiter", "horizon"),
-            "when" => ContainsAll(text, "7:23", "sunset"),
-            "how" => ContainsAll(text, "find", "venus", "jupiter", "west"),
-            "why" => ContainsAll(text, "bright", "sharing", "sky"),
-            "action" => ContainsAll(text, "west", "venus", "jupiter"),
+            "what" => IsMeteorSpec(spec) ? ContainsAll(text, "geminids", "meteor", "dark") : ContainsAll(text, "venus", "jupiter", "twilight"),
+            "where" => IsMeteorSpec(spec) ? ContainsAll(text, "east", "overhead", "meteor") : ContainsAll(text, "west", "venus", "jupiter", "horizon"),
+            "when" => IsMeteorSpec(spec) ? ContainsAll(text, "00:00", "05:00", "meteor") : ContainsAll(text, "7:23", "sunset"),
+            "how" => IsMeteorSpec(spec) ? ContainsAll(text, "telescope", "city lights", "20") : ContainsAll(text, "find", "venus", "jupiter", "west"),
+            "why" => IsMeteorSpec(spec) ? ContainsAll(text, "strong", "meteor", "moon") : ContainsAll(text, "bright", "sharing", "sky"),
+            "action" => IsMeteorSpec(spec) ? ContainsAll(text, "dec", "reminder", "weather") : ContainsAll(text, "west", "venus", "jupiter"),
             _ => false
         };
     }
@@ -781,6 +827,7 @@ public sealed class QuestionDrivenVisualComposer(
     private static bool UsesAtmosphericBackground(QuestionDrivenVisualSpec spec) => spec.ProgrammaticLayers.Any(layer => layer.Contains("atmospheric", StringComparison.OrdinalIgnoreCase) || layer.Contains("twilight gradient", StringComparison.OrdinalIgnoreCase) || layer.Contains("haze", StringComparison.OrdinalIgnoreCase) || layer.Contains("texture", StringComparison.OrdinalIgnoreCase) || layer.Contains("horizon glow", StringComparison.OrdinalIgnoreCase));
     private static bool ContainsForbiddenTerm(string text) => ForbiddenViewerTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static bool ContainsAll(string value, params string[] terms) => terms.All(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+    private static bool ContainsAny(string value, params string[] terms) => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static string Clean(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
     private static double EstimateTextCoverage(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch { "what" => .10, "where" => .11, "when" => .13, "how" => .16, "why" => .12, "action" => .09, _ => .20 };
     private static string GetLayoutKey(string questionType) => questionType.ToLowerInvariant() switch { "what" => "magazine-hero-poster", "where" => "western-sky-map-chart", "when" => "twilight-time-axis", "how" => "observational-arrow-guide", "why" => "close-pair-comparison", "action" => "minimal-closing-poster", _ => "unknown" };

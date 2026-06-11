@@ -49,7 +49,11 @@ public sealed class QuestionScenePlanner(
         "brightness",
         "bright",
         "event stands out",
-        "alignment"
+        "alignment",
+        "meteor",
+        "meteor shower",
+        "annual shower",
+        "moon interference"
     ];
     private static readonly (string Term, Regex Pattern)[] InternalTermPatterns =
     [
