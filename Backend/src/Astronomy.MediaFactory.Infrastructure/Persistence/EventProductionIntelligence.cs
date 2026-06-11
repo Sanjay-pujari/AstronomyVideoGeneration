@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -125,6 +126,93 @@ public abstract class MediaEventStrategyBase : IMediaEventStrategy
     public abstract string EventType { get; }
     public abstract bool CanHandle(string eventType, string title);
     public abstract MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence);
+    public virtual QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => BuildGenericQuestionAnswerSet(intelligence, context);
+
+    protected static QuestionAnswerSetDto CreateSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context, IReadOnlyList<QuestionAnswerDto> answers)
+        => new(null, context.AstronomyEventIntelligenceId, context.EventCode, intelligence.Title, intelligence.EventType, context.RegionId, context.Language, context.Version, AstronomyQuestionSetStatus.Generated, context.GeneratedUtc, answers);
+
+    protected static QuestionAnswerDto Answer(string type, string question, string title, string answer, int order)
+        => new(null, type, question, title, Clean(answer), order);
+
+    protected static string ObjectPhrase(ProductionEventIntelligence intelligence, string fallback = "the main sky target")
+        => JoinNatural(Objects(intelligence, fallback).Take(3).ToArray());
+
+    protected static string AllObjectsPhrase(ProductionEventIntelligence intelligence, string fallback = "the main sky target")
+        => JoinNatural(Objects(intelligence, fallback));
+
+    protected static string ViewingTime(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)
+            ? intelligence.BestViewingWindowLocal!
+            : !string.IsNullOrWhiteSpace(intelligence.LocalPeakTime)
+                ? intelligence.LocalPeakTime!
+                : $"around {context.LocalPeakTime:h:mm tt} {context.TimeZoneAbbreviation}";
+
+    protected static string Direction(ProductionEventIntelligence intelligence)
+        => !string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint) ? intelligence.SkyDirectionHint! : "the clearest open sky";
+
+    protected static string FormattedDirection(ProductionEventIntelligence intelligence)
+        => FormatSkyDirection(Direction(intelligence));
+
+    protected static QuestionAnswerSetDto BuildGenericQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+    {
+        var objects = ObjectPhrase(intelligence);
+        return CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objects} will be the highlight in {context.LocationName}’s sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {FormattedDirection(intelligence)} with a clear horizon.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {ViewingTime(intelligence, context)}, near the peak of the event.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", $"Find {objects} first, then use {(!string.IsNullOrWhiteSpace(intelligence.ReferenceObject) ? intelligence.ReferenceObject : "a clear open horizon")} as your guide.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", $"This {Humanize(intelligence.EventType)} matters because it highlights a notable alignment or change in the sky.", 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", "If skies are clear, set a reminder and step outside at the best time.", 6)
+        ]);
+    }
+
+    protected static string FormatSkyDirection(string? direction)
+    {
+        if (string.IsNullOrWhiteSpace(direction)) return "the clearest open sky";
+        var normalized = direction.Trim().ToLowerInvariant()
+            .Replace(" direction", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace(" sky", string.Empty, StringComparison.OrdinalIgnoreCase);
+        return normalized switch
+        {
+            "north" => "the northern sky",
+            "northeast" or "north-east" => "the northeastern sky",
+            "east" => "the eastern sky",
+            "southeast" or "south-east" => "the southeastern sky",
+            "south" => "the southern sky",
+            "southwest" or "south-west" => "the southwestern sky",
+            "west" => "the western sky",
+            "northwest" or "north-west" => "the northwestern sky",
+            _ => normalized
+        };
+    }
+
+    protected static string FormatAltitude(decimal? altitude)
+    {
+        if (!altitude.HasValue) return "comfortably";
+        var rounded = Math.Round(altitude.Value);
+        return rounded switch
+        {
+            >= 25 and <= 35 => "about one-third",
+            >= 15 and < 25 => "not far",
+            > 35 and <= 55 => "about halfway",
+            > 55 => "high",
+            _ => "low"
+        };
+    }
+
+    protected static string JoinNatural(IReadOnlyList<string> values) => values.Count switch
+    {
+        0 => "the main sky target",
+        1 => values[0],
+        2 => $"{values[0]} and {values[1]}",
+        _ => $"{string.Join(", ", values.Take(values.Count - 1))}, and {values[^1]}"
+    };
+
+    protected static string Clean(string text) => Regex.Replace(text, "\\s+", " ").Trim();
+    protected static string Humanize(string value) => string.IsNullOrWhiteSpace(value) ? "astronomy event" : value.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
+    protected static bool IsEvening(DateTimeOffset localPeak) => localPeak.Hour is >= 17 and <= 21;
 
     protected static string[] StandardQuestions =>
     [
@@ -157,6 +245,36 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
         ["Peak Night", "Midnight–Pre-dawn", "Low Moon", "Look East to Overhead"],
         ["Venus", "Jupiter", "conjunction", "planet pairing", "object pairing"],
         ["Use bestViewingWindowLocal instead of a daytime localPeakTime.", "Mention no telescope needed.", "Mention dark sky and moon interference."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+    {
+        var showerName = intelligence.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? intelligence.Title : $"{intelligence.Title} meteor shower";
+        var bestWindow = ViewingTime(intelligence, context);
+        var direction = Direction(intelligence);
+        var moonInterference = string.IsNullOrWhiteSpace(intelligence.MoonInterference) ? "low" : intelligence.MoonInterference!;
+        var moonPhrase = intelligence.MoonIlluminationPercent.HasValue
+            ? $"{moonInterference.ToLowerInvariant()} moon interference at about {Math.Round(intelligence.MoonIlluminationPercent.Value):0}% illumination"
+            : $"{moonInterference.ToLowerInvariant()} moon interference";
+        var reminder = FormatMeteorReminderNight(bestWindow, context.LocalPeakTime);
+        return CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{showerName} peaks as Earth crosses space debris, producing bright meteor streaks.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction}; {(!string.IsNullOrWhiteSpace(intelligence.ReferenceObject) ? intelligence.ReferenceObject : "meteors can appear anywhere across the dark sky")}.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"Best viewing is {bestWindow}, when the sky is darkest.", 3),
+            Answer(AstronomyQuestionTypes.How, "How do I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adjust.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is this event special?", "Why it matters", $"{showerName} is one of the strongest annual meteor showers, with {moonPhrase} improving viewing quality.", 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", $"Set a reminder for {reminder}, check weather, and pick a dark open location.", 6)
+        ]);
+    }
+
+    private static string FormatMeteorReminderNight(string bestWindow, DateTimeOffset localPeak)
+    {
+        var date = localPeak.Date;
+        var match = Regex.Match(bestWindow ?? string.Empty, @"(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})");
+        if (match.Success && int.TryParse(match.Groups["year"].Value, out var year) && int.TryParse(match.Groups["month"].Value, out var month) && int.TryParse(match.Groups["day"].Value, out var day))
+            date = new DateTime(year, month, day);
+        return $"the night of {date.AddDays(-1):MMM d}/{date:dd}";
+    }
 }
 
 public sealed class PlanetPairingStrategy : MediaEventStrategyBase
@@ -164,6 +282,25 @@ public sealed class PlanetPairingStrategy : MediaEventStrategyBase
     public override string EventType => "PlanetPairing";
     public override bool CanHandle(string eventType, string title) => eventType.Contains("PlanetPairing", StringComparison.OrdinalIgnoreCase) || title.Contains("planet pairing", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Objects", "Time", "Direction", "Separation", "CTA"], ["Intro", "Objects", "Geometry", "Timing", "Finding guide", "Viewing tips", "Photo tip", "CTA"], ["two bright planets", "twilight gradient", "horizon guide", "clean labels"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "clear, elegant, orientation-first", ["Close Pairing", "Look West", "Tonight"], ["meteor shower", "radiant", "eclipse shadow"], ["Name both planets and angular context."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+    {
+        var objects = AllObjectsPhrase(intelligence, "the two sky objects");
+        var names = Objects(intelligence, "the first object", "the second object");
+        var how = names.Length >= 2 ? $"Find bright {names[0]} first, then look slightly nearby for {names[1]}; binoculars are optional." : $"Find {objects} near {FormattedDirection(intelligence)}; binoculars are optional.";
+        var why = intelligence.AngularSeparationDegrees.HasValue ? $"{objects} appear only {intelligence.AngularSeparationDegrees.Value:0.##}° apart, creating a striking close pairing." : $"{objects} are bright objects appearing close together, making the pairing easy to notice.";
+        return CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objects} will appear close together in {context.LocationName}’s sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {FormattedDirection(intelligence)}, {FormatAltitude(intelligence.AltitudeDegrees)} above the horizon.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {ViewingTime(intelligence, context)}, {DescribeViewingTime(context.LocalPeakTime)}.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", how, 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", why, 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", "If skies are clear, set a reminder and enjoy the close pairing.", 6)
+        ]);
+    }
+
+    private static string DescribeViewingTime(DateTimeOffset localPeak) => IsEvening(localPeak) ? "shortly after sunset" : "near the peak of the event";
 }
 
 public sealed class ConjunctionStrategy : MediaEventStrategyBase
@@ -171,6 +308,25 @@ public sealed class ConjunctionStrategy : MediaEventStrategyBase
     public override string EventType => "Conjunction";
     public override bool CanHandle(string eventType, string title) => eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "What aligns", "Best time", "Where", "How close", "CTA"], ["Intro", "Conjunction geometry", "Local timing", "Sky direction", "Finding guide", "Why it matters", "Viewing reminder", "CTA"], ["aligned objects", "subtle orbit lines", "horizon compass", "cinematic sky"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "precise, calm, factual", ["Close Conjunction", "Tonight", "Look Up"], ["meteor shower", "radiant"], ["Do not describe unrelated planets."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+    {
+        var objects = AllObjectsPhrase(intelligence, "the conjunction objects");
+        var names = Objects(intelligence, "the first object", "the second object");
+        var how = names.Length >= 2 ? $"Find {names[0]} first, then scan nearby for {names[1]} in the same part of the sky." : $"Use a clear horizon and scan {FormattedDirection(intelligence)} for {objects}.";
+        var why = intelligence.AngularSeparationDegrees.HasValue ? $"{objects} appear only {intelligence.AngularSeparationDegrees.Value:0.##}° apart, making the alignment visually striking." : $"{objects} share the same part of our sky, making the conjunction easy to compare.";
+        return CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objects} form a conjunction, an apparent alignment in {context.LocationName}’s sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {FormattedDirection(intelligence)}, {FormatAltitude(intelligence.AltitudeDegrees)} above the horizon.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {ViewingTime(intelligence, context)}, {DescribeViewingTime(context.LocalPeakTime)}.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", how, 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", why, 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", "If skies are clear, save the time and watch the alignment.", 6)
+        ]);
+    }
+
+    private static string DescribeViewingTime(DateTimeOffset localPeak) => IsEvening(localPeak) ? "shortly after sunset" : "near the peak of the event";
 }
 
 public sealed class NamedFullMoonStrategy : MediaEventStrategyBase
@@ -178,6 +334,17 @@ public sealed class NamedFullMoonStrategy : MediaEventStrategyBase
     public override string EventType => "NamedFullMoon";
     public override bool CanHandle(string eventType, string title) => eventType.Contains("FullMoon", StringComparison.OrdinalIgnoreCase) || title.Contains("full moon", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Moon name", "Rise time", "Where", "Viewing tip", "CTA"], ["Intro", "Name and meaning", "Local moonrise", "Direction", "Visual expectations", "Photo tips", "Weather note", "CTA"], ["large moon", "warm horizon", "landscape silhouette", "clean lunar labels"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "warm, cultural, observational", ["Full Moon Tonight", "Moonrise", "Look East"], ["meteor shower", "planet conjunction"], ["Use local moonrise or best viewing window."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{intelligence.Title} is a named full moon, when the Moon appears fully illuminated.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {FormattedDirection(intelligence)} with an open horizon for moonrise.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {ViewingTime(intelligence, context)}, when the full moon is easy to see.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", "Use the open horizon first, then follow the bright Moon as it rises higher.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", "A named full moon connects a bright lunar view with seasonal culture and public skywatching interest.", 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Watch moonrise", "Save the moonrise time, check clouds, and prepare a clear eastern view.", 6)
+        ]);
 }
 
 public sealed class NewMoonStrategy : MediaEventStrategyBase
@@ -185,6 +352,17 @@ public sealed class NewMoonStrategy : MediaEventStrategyBase
     public override string EventType => "NewMoon";
     public override bool CanHandle(string eventType, string title) => eventType.Contains("NewMoon", StringComparison.OrdinalIgnoreCase) || title.Contains("new moon", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Dark sky", "Best night", "Where", "What to see", "CTA"], ["Intro", "Why new moon matters", "Local dark window", "Best targets", "Viewing tips", "Safety/weather", "Planning reminder", "CTA"], ["dark sky", "Milky Way hint", "star field", "open landscape"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal)], "quiet, inviting, dark-sky focused", ["Darkest Night", "New Moon", "Stargazing"], ["full moon glare", "conjunction-only visuals"], ["Emphasize dark-sky opportunity."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", "New Moon means the Moon is hidden in glare, giving a darker night sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Choose a dark open sky away from city lights, especially toward {FormattedDirection(intelligence)}.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best stargazing is {ViewingTime(intelligence, context)}, when moonlight is absent.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", "Let your eyes adjust, scan the darkest sky, and use a star map for constellations.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", "New Moon matters because dark sky improves faint stars, clusters, and Milky Way viewing.", 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Plan stargazing", "Save the dark-sky window, check weather, and prepare a low-light observing spot.", 6)
+        ]);
 }
 
 public sealed class LunarEclipseStrategy : MediaEventStrategyBase
@@ -192,6 +370,17 @@ public sealed class LunarEclipseStrategy : MediaEventStrategyBase
     public override string EventType => "LunarEclipse";
     public override bool CanHandle(string eventType, string title) => eventType.Contains("LunarEclipse", StringComparison.OrdinalIgnoreCase) || title.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Eclipse type", "Timing", "Where", "Viewing safety", "CTA"], ["Intro", "Eclipse geometry", "Local phases", "Sky direction", "Color/brightness expectations", "Viewing tips", "Weather reminder", "CTA"], ["Moon in shadow", "Earth shadow arc", "red lunar tint", "phase timeline"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint)], "dramatic, precise, reassuring", ["Lunar Eclipse", "Watch Time", "Moon Turns Red"], ["solar filter instructions", "meteor radiant"], ["Use phase times if available."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{intelligence.Title} will show Earth’s shadow crossing the Moon in the sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {FormattedDirection(intelligence)} where the Moon is visible above the horizon.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Eclipse timing", $"Watch during {ViewingTime(intelligence, context)} to follow the eclipse phases.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I watch it?", "How to observe", "Find the Moon, watch each shadow phase, and use binoculars only for a closer view.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", "A lunar eclipse is special because Earth’s shadow can turn the Moon copper red.", 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", "Save the phase times, check weather, and choose a clear Moon-facing view.", 6)
+        ]);
 }
 
 public sealed class SolarEclipseStrategy : MediaEventStrategyBase
@@ -199,6 +388,17 @@ public sealed class SolarEclipseStrategy : MediaEventStrategyBase
     public override string EventType => "SolarEclipse";
     public override bool CanHandle(string eventType, string title) => eventType.Contains("SolarEclipse", StringComparison.OrdinalIgnoreCase) || title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Eclipse type", "Timing", "Where visible", "Eye safety", "CTA"], ["Intro", "Eclipse geometry", "Local circumstances", "Visibility map", "Eye safety", "What to expect", "Weather reminder", "CTA"], ["Sun and Moon silhouette", "eclipse path", "certified eclipse glasses", "clean safety labels"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.VisibilityRegion)], "urgent, safety-first, precise", ["Solar Eclipse", "Eye Safety", "Visible From"], ["meteor shower", "naked-eye Sun viewing"], ["Never imply direct Sun viewing without certified protection."]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{intelligence.Title} will happen when the Moon covers part of the Sun in the sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where is it visible?", "Where visible", $"Use local sky visibility for {intelligence.VisibilityRegion ?? context.LocationName} and keep the Sun safely filtered.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Eclipse timing", $"Watch during {ViewingTime(intelligence, context)} using certified eye protection throughout.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I watch safely?", "Eye safety", "Use certified eclipse glasses or solar filters every time you view the Sun.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", "A solar eclipse is rare and dramatic because Moon and Sun align from our viewpoint.", 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Prepare safely", "Check weather, save the time, and prepare certified eclipse glasses before viewing.", 6)
+        ]);
 }
 
 public sealed class GenericAstronomyEventStrategy : MediaEventStrategyBase
