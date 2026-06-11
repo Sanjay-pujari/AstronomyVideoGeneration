@@ -474,9 +474,9 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.InRange(saved.TotalEstimatedDurationSeconds, 18.0, 22.0);
         Assert.Equal("Excited but clear", saved.ScriptStyle.Tone);
         Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.SceneScripts.Select(scene => scene.SceneKey));
-        Assert.Contains("sky event", saved.SceneScripts[0].Narration, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sky highlight", saved.SceneScripts[0].Narration, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("safe open spot", saved.SceneScripts[^1].Narration, StringComparison.OrdinalIgnoreCase);
-        Assert.InRange(CountTestWords(saved.FullNarrationText), 45, 90);
+        Assert.InRange(CountTestWords(saved.FullNarrationText), 26, 44);
         Assert.True(saved.TtsPlan.TtsRequired);
         Assert.Equal("NeutralEnergetic", saved.TtsPlan.RecommendedVoice);
         Assert.Equal("video-tts-audio.mp3", saved.TtsPlan.OutputFileName);

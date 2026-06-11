@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class ProductionPipelineExecutionService(
+public sealed partial class ProductionPipelineExecutionService(
     IQuestionEngine questionEngine,
     IQuestionScenePlanner scenePlanner,
     IQuestionSceneIntentEnricher sceneIntentEnricher,
@@ -25,6 +25,16 @@ public sealed class ProductionPipelineExecutionService(
     ILogger<ProductionPipelineExecutionService> logger) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
+    private const double LongNarrationSecondsPerWord = 60.0 / 150.0;
+    private const int ShortNarrationMinimumWords = 26;
+    private const int ShortNarrationMaximumWords = 44;
+    private const double ShortNarrationMinimumSeconds = 15.0;
+    private const double ShortNarrationMaximumSeconds = 25.0;
+    private const int LongNarrationMinimumWords = 300;
+    private const int LongNarrationMaximumWords = 450;
+    private const double LongNarrationMinimumSeconds = 120.0;
+    private const double LongNarrationMaximumSeconds = 180.0;
 
     public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
         => RunAsync(request, cancellationToken);
@@ -347,8 +357,228 @@ public sealed class ProductionPipelineExecutionService(
         var scriptPath = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-narration-script.json") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-narration-script.json");
         var target = Path.Combine(context.ExecutionContext.NarrationRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.txt");
         CopyFile(scriptPath, target, outputs, jsonNarrationToText: true);
+        var validationPath = await ValidateNarrationContractAsync(context, profile, scriptPath, target, cancellationToken);
+        outputs.Add(validationPath);
         return outputs;
     }
+
+    private async Task<string> ValidateNarrationContractAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    {
+        if (profile == ScenePresentationProfile.ShortForm)
+        {
+            var initial = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, cancellationToken);
+            if (!initial.IsValid && initial.WordCount > ShortNarrationMaximumWords)
+            {
+                await CondenseShortNarrationAsync(context, scriptPath, narrationPath, cancellationToken);
+            }
+        }
+
+        var report = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, cancellationToken);
+        Directory.CreateDirectory(Path.GetDirectoryName(report.ValidationPath)!);
+        await File.WriteAllTextAsync(report.ValidationPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+        if (!report.IsValid)
+            throw new InvalidOperationException($"{profile} narration validation failed before TTS: " + string.Join("; ", report.Errors));
+
+        return report.ValidationPath;
+    }
+
+    private async Task<NarrationValidationReport> BuildNarrationValidationReportAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    {
+        var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var validationPath = Path.Combine(context.ExecutionContext.NarrationRoot!, profileFolder, "narration-validation.json");
+        var text = File.Exists(narrationPath) ? (await File.ReadAllTextAsync(narrationPath, cancellationToken)).Trim() : string.Empty;
+        if (string.IsNullOrWhiteSpace(text) && File.Exists(scriptPath))
+            text = ExtractNarrationText(await File.ReadAllTextAsync(scriptPath, cancellationToken)).Trim();
+
+        var wordCount = CountSpokenWords(text);
+        var estimatedDurationSeconds = Math.Round(wordCount * (profile == ScenePresentationProfile.ShortForm ? CalibratedShortNarrationSecondsPerWord : LongNarrationSecondsPerWord), 3, MidpointRounding.AwayFromZero);
+        var errors = new List<string>();
+        var warnings = new List<string>();
+        var forbiddenHits = BuildForbiddenTermsForStrategy(context).Where(term => ContainsToken(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var titlePresent = HasRequiredTitle(text, context.ProductionEventIntelligence);
+        var viewingWindowPresent = HasRequiredViewingWindow(text, context.ProductionEventIntelligence);
+        var actionCtaPresent = HasActionCta(text, profile, scriptPath);
+        var completeEventStoryPresent = profile == ScenePresentationProfile.ShortForm || HasCompleteLongEventStory(text, scriptPath);
+
+        if (string.IsNullOrWhiteSpace(text)) errors.Add($"Narration text is empty or missing: {NormalizePath(narrationPath)}.");
+        if (profile == ScenePresentationProfile.ShortForm)
+        {
+            if (wordCount < ShortNarrationMinimumWords || wordCount > ShortNarrationMaximumWords)
+                errors.Add($"Short narration word count must be {ShortNarrationMinimumWords}-{ShortNarrationMaximumWords} words for the calibrated TTS voice; actualWordCount={wordCount}.");
+            if (estimatedDurationSeconds < ShortNarrationMinimumSeconds || estimatedDurationSeconds > ShortNarrationMaximumSeconds)
+                errors.Add($"Short narration estimated duration must be {ShortNarrationMinimumSeconds:0}-{ShortNarrationMaximumSeconds:0} seconds before TTS; estimatedDurationSeconds={estimatedDurationSeconds:0.###}.");
+            if (!titlePresent) errors.Add("Short narration must include the event title or short title.");
+            if (!viewingWindowPresent) errors.Add("Short narration must include the viewing window.");
+            if (!actionCtaPresent) errors.Add("Short narration must include an action CTA.");
+        }
+        else
+        {
+            if (wordCount < LongNarrationMinimumWords || wordCount > LongNarrationMaximumWords)
+                errors.Add($"Long narration word count must be {LongNarrationMinimumWords}-{LongNarrationMaximumWords} words; actualWordCount={wordCount}.");
+            if (estimatedDurationSeconds < LongNarrationMinimumSeconds || estimatedDurationSeconds > LongNarrationMaximumSeconds)
+                errors.Add($"Long narration estimated duration must be {LongNarrationMinimumSeconds:0}-{LongNarrationMaximumSeconds:0} seconds before TTS; estimatedDurationSeconds={estimatedDurationSeconds:0.###}.");
+            if (!completeEventStoryPresent) errors.Add("Long narration must include the complete event story section sequence.");
+        }
+
+        if (forbiddenHits.Length > 0)
+            errors.Add("Narration contains forbidden terms for the selected event strategy: " + string.Join(", ", forbiddenHits));
+
+        return new NarrationValidationReport(
+            ValidationPath: validationPath,
+            Profile: profile.ToString(),
+            NarrationPath: NormalizePath(narrationPath),
+            ScriptPath: NormalizePath(scriptPath),
+            IsValid: errors.Count == 0,
+            WordCount: wordCount,
+            MinimumWords: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMinimumWords : LongNarrationMinimumWords,
+            MaximumWords: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMaximumWords : LongNarrationMaximumWords,
+            EstimatedDurationSeconds: estimatedDurationSeconds,
+            MinimumDurationSeconds: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMinimumSeconds : LongNarrationMinimumSeconds,
+            MaximumDurationSeconds: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMaximumSeconds : LongNarrationMaximumSeconds,
+            SecondsPerWord: profile == ScenePresentationProfile.ShortForm ? CalibratedShortNarrationSecondsPerWord : LongNarrationSecondsPerWord,
+            TitlePresent: titlePresent,
+            ViewingWindowPresent: viewingWindowPresent,
+            ActionCtaPresent: actionCtaPresent,
+            CompleteEventStoryPresent: completeEventStoryPresent,
+            ForbiddenTermsChecked: BuildForbiddenTermsForStrategy(context).ToArray(),
+            ForbiddenTermHits: forbiddenHits,
+            Warnings: warnings,
+            Errors: errors);
+    }
+
+    private static async Task CondenseShortNarrationAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    {
+        var intelligence = context.ProductionEventIntelligence;
+        var title = FirstNonEmpty(intelligence.ShortTitle, intelligence.Title, "This sky event");
+        var direction = FirstNonEmpty(intelligence.SkyDirectionHint, "the approved sky direction");
+        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, intelligence.LocalPeakTime, "the approved viewing window");
+        var action = "Choose a dark open place, check clouds, and set a reminder.";
+        var condensed = $"{title} is a sky highlight. Watch {direction} during {window}. {action}".Trim();
+
+        Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
+        await File.WriteAllTextAsync(narrationPath, condensed, cancellationToken);
+        if (!File.Exists(scriptPath)) return;
+
+        var json = await File.ReadAllTextAsync(scriptPath, cancellationToken);
+        try
+        {
+            var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(json, JsonOptions);
+            if (script is null) return;
+            var scenes = BuildCondensedShortSceneScripts(condensed, Math.Round(CountSpokenWords(condensed) * CalibratedShortNarrationSecondsPerWord, 3, MidpointRounding.AwayFromZero));
+            var updated = script with
+            {
+                FullNarrationText = condensed,
+                TotalEstimatedDurationSeconds = scenes.Sum(scene => scene.DurationSeconds),
+                SceneScripts = scenes,
+                Warnings = script.Warnings.Concat(["Short narration was condensed by Phase 13 narration-duration contract before TTS."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            };
+            await File.WriteAllTextAsync(scriptPath, JsonSerializer.Serialize(updated, JsonOptions), cancellationToken);
+        }
+        catch (JsonException)
+        {
+            // narration.txt remains the source consumed by TTS; leave unparseable script untouched.
+        }
+    }
+
+    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildCondensedShortSceneScripts(string condensed, double totalDurationSeconds)
+    {
+        var chunks = SplitIntoSixNarrationChunks(condensed);
+        var wordCounts = chunks.Select(CountSpokenWords).Select(count => Math.Max(1, count)).ToArray();
+        var totalWords = wordCounts.Sum();
+        var keys = new[] { "Hook", "What", "Why", "Where", "When", "Action" };
+        return keys.Select((key, index) => new VideoNarrationSceneScriptDto(
+            key,
+            Math.Round(totalDurationSeconds * wordCounts[index] / totalWords, 3, MidpointRounding.AwayFromZero),
+            chunks[index],
+            key == "Action" ? "Set a reminder" : chunks[index])).ToArray();
+    }
+
+    private static string[] SplitIntoSixNarrationChunks(string text)
+    {
+        var words = SpokenWordRegex().Matches(text).Select(match => match.Value).ToArray();
+        if (words.Length == 0) return ["Narration", "Narration", "Narration", "Narration", "Narration", "Set a reminder"];
+        return Enumerable.Range(0, 6)
+            .Select(index => string.Join(" ", words.Skip((int)Math.Floor(words.Length * index / 6.0)).Take((int)Math.Floor(words.Length * (index + 1) / 6.0) - (int)Math.Floor(words.Length * index / 6.0))))
+            .Select((chunk, index) => string.IsNullOrWhiteSpace(chunk) ? (index == 5 ? "Set a reminder" : words[Math.Min(index, words.Length - 1)]) : chunk)
+            .ToArray();
+    }
+
+    private static bool HasRequiredTitle(string text, ProductionEventIntelligence intelligence)
+        => ContainsMeaningfulPhrase(text, intelligence.ShortTitle) || ContainsMeaningfulPhrase(text, intelligence.Title);
+
+    private static bool HasRequiredViewingWindow(string text, ProductionEventIntelligence intelligence)
+        => ContainsMeaningfulPhrase(text, intelligence.BestViewingWindowLocal)
+            || ContainsMeaningfulPhrase(text, intelligence.PreferredViewingWindow)
+            || ContainsMeaningfulPhrase(text, intelligence.LocalPeakTime)
+            || ContainsMeaningfulPhrase(text, "viewing window");
+
+    private static bool HasActionCta(string text, ScenePresentationProfile profile, string scriptPath)
+    {
+        if (profile == ScenePresentationProfile.LongForm && ScriptContainsSceneKey(scriptPath, "Action")) return true;
+        var ctaPhrases = new[] { "set a reminder", "check clouds", "choose", "watch", "look", "step outside", "subscribe", "share", "save" };
+        return ctaPhrases.Any(phrase => ContainsToken(text, phrase));
+    }
+
+    private static bool HasCompleteLongEventStory(string text, string scriptPath)
+    {
+        var required = new[] { "Hook", "WhatIsHappening", "WhyItMatters", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" };
+        return required.All(key => ScriptContainsSceneKey(scriptPath, key)) && !string.IsNullOrWhiteSpace(text);
+    }
+
+    private static bool ScriptContainsSceneKey(string scriptPath, string sceneKey)
+    {
+        if (!File.Exists(scriptPath)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(scriptPath));
+            if (!doc.RootElement.TryGetProperty("sceneScripts", out var scenes) || scenes.ValueKind != JsonValueKind.Array) return false;
+            return scenes.EnumerateArray().Any(scene => scene.TryGetProperty("sceneKey", out var key) && string.Equals(key.GetString(), sceneKey, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private static bool ContainsMeaningfulPhrase(string text, string? phrase)
+    {
+        if (string.IsNullOrWhiteSpace(phrase)) return false;
+        var normalizedText = NormalizeForPhraseMatch(text);
+        var normalizedPhrase = NormalizeForPhraseMatch(phrase);
+        if (normalizedPhrase.Length < 3) return false;
+        return normalizedText.Contains(normalizedPhrase, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeForPhraseMatch(string value)
+        => string.Concat((value ?? string.Empty).ToLowerInvariant().Where(char.IsLetterOrDigit));
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))!.Trim();
+
+    private static int CountSpokenWords(string narration)
+        => string.IsNullOrWhiteSpace(narration) ? 0 : SpokenWordRegex().Matches(narration).Count;
+
+    [GeneratedRegex(@"[\p{L}\p{N}]+(?:['’\u2010-\u2015-][\p{L}\p{N}]+)?")]
+    private static partial Regex SpokenWordRegex();
+
+    private sealed record NarrationValidationReport(
+        string ValidationPath,
+        string Profile,
+        string NarrationPath,
+        string ScriptPath,
+        bool IsValid,
+        int WordCount,
+        int MinimumWords,
+        int MaximumWords,
+        double EstimatedDurationSeconds,
+        double MinimumDurationSeconds,
+        double MaximumDurationSeconds,
+        double SecondsPerWord,
+        bool TitlePresent,
+        bool ViewingWindowPresent,
+        bool ActionCtaPresent,
+        bool CompleteEventStoryPresent,
+        IReadOnlyList<string> ForbiddenTermsChecked,
+        IReadOnlyList<string> ForbiddenTermHits,
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<string> Errors);
 
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
