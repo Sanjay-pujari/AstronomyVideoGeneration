@@ -76,7 +76,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     {
         ["Hook"] = "scene-001-final.png",
         ["WhatIsHappening"] = "scene-001-final.png",
-        ["WhyTheyAppearClose"] = "scene-005-final.png",
+        ["WhyItMatters"] = "scene-005-final.png",
         ["WhereToLook"] = "scene-002-final.png",
         ["WhenToLook"] = "scene-003-final.png",
         ["HowToObserve"] = "scene-004-final.png",
@@ -1413,7 +1413,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             var hookUsesScene001 = SegmentUsesScene(visualByScene, "Hook", "scene-001-final.png");
             var whatUsesScene001 = SegmentUsesScene(visualByScene, "WhatIsHappening", "scene-001-final.png")
                 && SegmentUsesScene(visualByScene, "WhatYouWillSee", "scene-001-final.png");
-            var whyUsesScene005 = SegmentUsesScene(visualByScene, "WhyTheyAppearClose", "scene-005-final.png")
+            var whyUsesScene005 = SegmentUsesScene(visualByScene, "WhyItMatters", "scene-005-final.png")
                 && SegmentUsesScene(visualByScene, "InterestingFact", "scene-005-final.png");
             var whereUsesScene002 = SegmentUsesScene(visualByScene, "WhereToLook", "scene-002-final.png");
             var whenUsesScene003 = SegmentUsesScene(visualByScene, "WhenToLook", "scene-003-final.png")
@@ -1483,7 +1483,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             "Hook" => "SlowZoom",
             "WhatIsHappening" => "SubtleKenBurns",
 
-            "WhyTheyAppearClose" => "SlowZoomOut",
+            "WhyItMatters" => "SlowZoomOut",
             "WhereToLook" => "SlowPan",
             "WhenToLook" => "SubtleKenBurns",
             "HowToObserve" => "SlowZoom",
@@ -1920,7 +1920,13 @@ public sealed partial class VideoAssemblyIntelligenceService(
         => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailLandscapeFileName);
 
     private static string ResolveAssemblyVisualAssetPath(string sceneKey, string thumbnailPath, string sceneApprovalRoot, ScenePresentationProfile profile)
-        => Path.Combine(sceneApprovalRoot, (profile == ScenePresentationProfile.ShortForm ? AssemblySceneVisualMap : LongFormAssemblySceneVisualMap)[sceneKey]);
+    {
+        var visualMap = profile == ScenePresentationProfile.ShortForm ? AssemblySceneVisualMap : LongFormAssemblySceneVisualMap;
+        if (!visualMap.TryGetValue(sceneKey, out var visualFileName))
+            throw new ArgumentException($"Video assembly validation failed: no approved visual asset mapping exists for scene '{sceneKey}' in the {profile} profile.");
+
+        return Path.Combine(sceneApprovalRoot, visualFileName);
+    }
 
     private static string ResolveVideoAssemblyIntelligenceFileName(ScenePresentationProfile profile)
         => profile == ScenePresentationProfile.ShortForm ? VideoAssemblyIntelligenceFileName : LongVideoAssemblyIntelligenceFileName;

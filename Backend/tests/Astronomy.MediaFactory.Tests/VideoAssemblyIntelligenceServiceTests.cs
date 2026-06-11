@@ -11,6 +11,7 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class VideoAssemblyIntelligenceServiceTests
 {
+    private static readonly string[] LongFormSectionOrder = ["Hook", "WhatIsHappening", "WhyItMatters", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action"];
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private static JsonSerializerOptions CreateJsonOptions()
     {
@@ -115,7 +116,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(180, saved.TargetDurationSeconds);
         Assert.Equal(ScenePresentationProfile.LongForm, saved.RecommendedScenePresentationProfile);
         Assert.EndsWith("scene-approval-v3/long/", saved.RecommendedSceneDirectory);
-        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, saved.LongFormSections);
+        Assert.Equal(LongFormSectionOrder, saved.LongFormSections);
     }
 
 
@@ -183,7 +184,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         var saved = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
         Assert.NotNull(saved);
         Assert.Equal("YouTubeLong", saved!.Platform);
-        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, saved.SceneScripts.Select(scene => scene.SceneKey));
+        Assert.Equal(LongFormSectionOrder, saved.SceneScripts.Select(scene => scene.SceneKey));
         Assert.InRange(saved.TotalEstimatedDurationSeconds, 120, 180);
 
         var totalWords = CountTestWords(saved.FullNarrationText);
@@ -249,7 +250,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.True(root.GetProperty("audioValidation").GetProperty("audioValidationPassed").GetBoolean());
         Assert.False(root.TryGetProperty("sceneTimings", out _));
         var sectionTimings = root.GetProperty("sectionTimings").EnumerateArray().ToArray();
-        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, sectionTimings.Select(section => section.GetProperty("sectionKey").GetString()));
+        Assert.Equal(LongFormSectionOrder, sectionTimings.Select(section => section.GetProperty("sectionKey").GetString()));
         Assert.Equal(0.0, sectionTimings[0].GetProperty("startSeconds").GetDouble());
         Assert.Equal(root.GetProperty("actualDurationSeconds").GetDouble(), sectionTimings[^1].GetProperty("endSeconds").GetDouble(), 3);
         Assert.All(sectionTimings, section => Assert.False(string.IsNullOrWhiteSpace(section.GetProperty("narration").GetString())));
@@ -287,7 +288,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(planPath.Replace('\\', '/'), result.VideoAssemblyPlanPath);
         Assert.Equal(ScenePresentationProfile.LongForm, result.ScenePresentationProfileUsed);
         Assert.True(result.ReadyForRender);
-        Assert.Equal(13, result.SegmentCount);
+        Assert.Equal(LongFormSectionOrder.Length, result.SegmentCount);
         Assert.Equal(157.44, result.TotalDurationSeconds);
         Assert.True(result.RenderUsedLongScenes);
         Assert.False(result.RenderUsedShortScenes);
@@ -312,28 +313,32 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.True(root.GetProperty("validation").GetProperty("readyForRender").GetBoolean());
 
         var segments = root.GetProperty("segments").EnumerateArray().ToArray();
-        Assert.Equal(13, segments.Length);
-        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, segments.Select(segment => segment.GetProperty("sectionKey").GetString()));
+        Assert.Equal(LongFormSectionOrder.Length, segments.Length);
+        Assert.Equal(LongFormSectionOrder, segments.Select(segment => segment.GetProperty("sectionKey").GetString()));
         Assert.Equal(0.0, segments[0].GetProperty("startSeconds").GetDouble());
-        Assert.Equal(13.455, segments[0].GetProperty("endSeconds").GetDouble());
-        Assert.Equal(13.455, segments[0].GetProperty("durationSeconds").GetDouble());
+        Assert.Equal(14.313, segments[0].GetProperty("endSeconds").GetDouble());
+        Assert.Equal(14.313, segments[0].GetProperty("durationSeconds").GetDouble());
         Assert.Equal("None", segments[0].GetProperty("transitionIn").GetString());
         Assert.Equal("CrossFade", segments[0].GetProperty("transitionOut").GetString());
         Assert.Equal("SlowZoom", segments[0].GetProperty("motion").GetString());
         Assert.All(segments, segment => Assert.Contains(segment.GetProperty("motion").GetString(), new[] { "SubtleKenBurns", "SlowPan", "SlowZoom", "SlowZoomOut" }));
-        Assert.EndsWith("scene-001-final.png", segments[0].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-001-final.png", segments[1].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-001-final.png", segments[2].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-005-final.png", segments[3].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-005-final.png", segments[4].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-002-final.png", segments[5].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-003-final.png", segments[6].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-004-final.png", segments[7].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-001-final.png", segments[8].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-005-final.png", segments[9].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-004-final.png", segments[10].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-003-final.png", segments[11].GetProperty("visualAssetPath").GetString());
-        Assert.EndsWith("scene-006-final.png", segments[12].GetProperty("visualAssetPath").GetString());
+        var expectedVisualAssets = new[]
+        {
+            "scene-001-final.png",
+            "scene-001-final.png",
+            "scene-005-final.png",
+            "scene-002-final.png",
+            "scene-003-final.png",
+            "scene-004-final.png",
+            "scene-001-final.png",
+            "scene-005-final.png",
+            "scene-004-final.png",
+            "scene-003-final.png",
+            "scene-006-final.png"
+        };
+        Assert.Equal(expectedVisualAssets.Length, segments.Length);
+        for (var i = 0; i < expectedVisualAssets.Length; i++)
+            Assert.EndsWith(expectedVisualAssets[i], segments[i].GetProperty("visualAssetPath").GetString());
         Assert.Equal(157.44, segments[^1].GetProperty("endSeconds").GetDouble());
         Assert.Equal("None", segments[^1].GetProperty("transitionOut").GetString());
     }
@@ -879,8 +884,14 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         await File.WriteAllBytesAsync(Path.Combine(videoAssemblyRoot, "video-long-tts-audio.mp3"), BuildTestWaveAudioBytes(157.44));
 
         var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(Path.Combine(videoAssemblyRoot, "video-long-narration-script.json")), JsonOptions)!;
-        var starts = new[] { 0.000, 13.455, 25.547, 37.639, 49.731, 61.823, 73.915, 86.007, 98.099, 110.191, 122.283, 134.375, 146.467 };
-        var ends = new[] { 13.455, 25.547, 37.639, 49.731, 61.823, 73.915, 86.007, 98.099, 110.191, 122.283, 134.375, 146.467, 157.44 };
+        const double actualDurationSeconds = 157.44;
+        var sectionCount = script.SceneScripts.Count;
+        var starts = Enumerable.Range(0, sectionCount)
+            .Select(index => Math.Round(actualDurationSeconds * index / sectionCount, 3, MidpointRounding.AwayFromZero))
+            .ToArray();
+        var ends = Enumerable.Range(1, sectionCount)
+            .Select(index => index == sectionCount ? actualDurationSeconds : Math.Round(actualDurationSeconds * index / sectionCount, 3, MidpointRounding.AwayFromZero))
+            .ToArray();
         var sectionTimings = script.SceneScripts.Select((scene, index) => new LongFormVideoTtsSectionTimingDto(scene.SceneKey, starts[index], ends[index], scene.Narration)).ToArray();
         var timings = new LongFormVideoTtsTimingsDto(
             EventId,
