@@ -182,4 +182,55 @@ public sealed class EventProductionIntelligenceTests
         Assert.Contains("00:00–05:00 IST", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ProductionQualityValidator_UsesSceneValidationStrategyForGeminids()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-strategy-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "Geminids MeteorShower scene plan with meteor streaks, radiant hint, dark sky, east to overhead direction, and best viewing window 2026-12-14 00:00–05:00 IST.");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.enriched.json"), "Geminids enriched plan: bestViewingWindowLocal 2026-12-14 00:00–05:00 IST, radiant high after midnight, dark sky.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), "{\"title\":\"Geminids Meteor Shower Peak\",\"visual\":\"meteor streaks across a dark sky with radiant hint\",\"time\":\"2026-12-14 00:00–05:00 IST\"}");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), "{\"checks\":[\"meteor streaks visible\",\"radiant hint visible\",\"dark sky readable\",\"no forbidden object leakage\"]}");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Watch the Geminids from midnight to pre-dawn under a dark sky; meteors radiate from Gemini.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nGeminids meteor streaks are best from 00:00–05:00 IST.\n");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "MeteorShower",
+            "Geminids Meteor Shower Peak",
+            "Geminids",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"),
+            DateTimeOffset.Parse("2026-12-14T06:00:00Z"),
+            "11:30 +05:30",
+            "2026-12-14 00:00–05:00 IST",
+            "east to overhead",
+            "India",
+            ["Geminids"],
+            [],
+            null,
+            "Low",
+            10m,
+            "Geminids Meteor Shower Peak",
+            [],
+            ["meteor streaks", "radiant hint", "dark sky"],
+            ["Use bestViewingWindowLocal"],
+            [],
+            ["Venus", "Jupiter"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new MeteorShowerSceneValidationStrategy(),
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Empty(result.Errors);
+    }
+
 }

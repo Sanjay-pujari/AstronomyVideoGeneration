@@ -105,6 +105,40 @@ public sealed record ProductionValidationResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
+
+public sealed record SceneValidationRequirement(
+    string Code,
+    string Description,
+    bool Required = true);
+
+public sealed record SceneValidationContext(
+    ProductionEventIntelligence Intelligence,
+    string CurrentRunRoot,
+    string SceneRoot,
+    IReadOnlyDictionary<string, string> InfographicSpecs,
+    IReadOnlyDictionary<string, string> NarrationTexts,
+    IReadOnlyDictionary<string, string> SrtFiles,
+    IReadOnlyDictionary<string, string> ReviewJson,
+    IReadOnlyDictionary<string, string> ScenePlanJson,
+    IReadOnlyDictionary<string, string> SupplementalFiles);
+
+public sealed record SceneValidationResult(
+    bool IsValid,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+public interface IEventSceneValidationStrategy
+{
+    string EventType { get; }
+    IReadOnlyList<SceneValidationRequirement> GetRequirements(ProductionEventIntelligence intelligence);
+    SceneValidationResult Validate(SceneValidationContext context);
+}
+
+public interface IEventSceneValidationStrategyResolver
+{
+    IEventSceneValidationStrategy Resolve(string eventType);
+}
+
 public interface IProductionPipelineQualityValidator
 {
     Task<ProductionValidationResult> ValidateBeforeVideoAssemblyAsync(

@@ -488,7 +488,7 @@ public sealed class GenericAstronomyEventStrategy : MediaEventStrategyBase
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "What", "When", "Where", "How", "CTA"], ["Intro", "Event context", "Best time", "Sky direction", "Viewing guide", "Scientific context", "Reminder", "CTA"], ["cinematic night sky", "local horizon", "clean astronomy labels"], [nameof(ProductionEventIntelligence.LocalPeakTime)], "clear, factual, viewer-first", ["Sky Event", "Watch Time", "Look Up"], [], ["Avoid generic-only output; use event title, objects, timing, and direction."]);
 }
 
-public sealed class ProductionPipelineQualityValidator : IProductionPipelineQualityValidator
+public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStrategyResolver sceneValidationStrategyResolver) : IProductionPipelineQualityValidator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -534,13 +534,6 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
         if (!HasBestViewingWindowEvidence(intelligence, text)) errors.Add("Output does not use bestViewingWindowLocal.");
         foreach (var forbidden in intelligence.ForbiddenTerms.Where(f => !string.IsNullOrWhiteSpace(f)))
             if (ContainsToken(text, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
-        if (intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!ContainsToken(text, "meteor")) errors.Add("Meteor shower output must include meteor-specific terminology.");
-            if (ContainsToken(text, "11:30 AM") || ContainsToken(text, "11:30AM")) errors.Add("Meteor shower output uses the incorrect daytime localPeakTime as best viewing time.");
-            foreach (var required in new[] { "dark", "telescope", "moon" })
-                if (!ContainsToken(text, required)) warnings.Add($"Meteor shower output should mention '{required}'.");
-        }
     }
 
     private static void ValidateScenePlan(ProductionEventIntelligence intelligence, string eventWorkingRoot, List<string> warnings, List<string> errors)
@@ -579,46 +572,23 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
             if (!Directory.EnumerateFiles(profileRoot, "scene-*-final.png").Any()) errors.Add($"Current-run {profile} scene images are missing.");
         }
 
-        if (!Directory.EnumerateFiles(sceneRoot, "scene-*-infographic-spec.json", SearchOption.TopDirectoryOnly).Any()) errors.Add("Current-run scene infographic specs are missing.");
-        if (!Directory.EnumerateFiles(sceneRoot, "scene-*-review.json", SearchOption.TopDirectoryOnly).Any()) errors.Add("Current-run scene reviews are missing.");
+        var context = ReadCurrentRunSceneValidationContext(intelligence, currentRunRoot, sceneRoot);
+        if (context.InfographicSpecs.Count == 0) errors.Add("Current-run scene infographic specs are missing.");
+        if (context.ReviewJson.Count == 0) errors.Add("Current-run scene reviews are missing.");
 
-        if (!intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return;
+        var strategy = sceneValidationStrategyResolver.Resolve(intelligence.EventType);
+        var requirements = strategy.GetRequirements(intelligence);
+        if (requirements.Count == 0) warnings.Add($"Scene validation strategy '{strategy.EventType}' returned no requirements.");
 
-        var currentSceneText = ReadSceneText(sceneRoot);
-        var timingSceneText = ReadMeteorTimingValidationText(currentRunRoot, sceneRoot);
-        if (string.IsNullOrWhiteSpace(currentSceneText) && string.IsNullOrWhiteSpace(timingSceneText))
+        if (!HasReadableSceneValidationText(context))
         {
-            errors.Add("MeteorShower scene validation found no current-run scene spec, review, narration, SRT, or scene-plan timing text.");
+            errors.Add($"{strategy.EventType} scene validation found no current-run infographic spec, narration, SRT, review, scene-plan, or enriched-scene-plan text.");
             return;
         }
 
-        if (!HasBestViewingWindowEvidence(intelligence, timingSceneText))
-            errors.Add("MeteorShower scene specs/reviews do not include bestViewingWindowLocal in the current-run timing content.");
-
-        foreach (var forbidden in intelligence.ForbiddenTerms.Concat(intelligence.ForbiddenObjectNames ?? []).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase))
-            if (ContainsToken(currentSceneText, forbidden)) errors.Add($"MeteorShower current-run scene specs/reviews contain forbidden unrelated term '{forbidden}'.");
-
-        if (!ContainsToken(currentSceneText, "meteor")) errors.Add("MeteorShower current-run scene specs/reviews must include meteor-specific terminology.");
-        if (!ContainsToken(currentSceneText, "radiant")) errors.Add("MeteorShower current-run scene specs/reviews must include a radiant hint.");
-        if (!ContainsToken(currentSceneText, "dark")) errors.Add("MeteorShower current-run scene specs/reviews must include dark-sky readability guidance.");
-        if (!ContainsToken(currentSceneText, "telescope")) errors.Add("MeteorShower current-run scene specs/reviews must include no-telescope guidance.");
-
-        foreach (var sceneNumber in new[] { 1, 3, 5 })
-        {
-            var sceneText = ReadSceneTextForNumber(sceneRoot, sceneNumber);
-            if (!ContainsToken(sceneText, "meteor") || !ContainsAnyToken(sceneText, "streak", "streaks"))
-                errors.Add($"MeteorShower scene {sceneNumber:000} must validate visible meteor streak intent in current-run specs/reviews.");
-        }
-
-        var polishPath = Path.Combine(sceneRoot, "short", "shortform-polish-validation.json");
-        if (!File.Exists(polishPath)) errors.Add("MeteorShower shortform-polish-validation.json is missing from the current-run short scene folder.");
-        else
-        {
-            var polish = File.ReadAllText(polishPath);
-            if (ContainsToken(polish, "scene5PlanetProximityEnhanced")) errors.Add("MeteorShower shortform-polish-validation.json must not use PlanetPairing scene5PlanetProximityEnhanced checks.");
-            foreach (var required in new[] { "meteorStreaksVisible", "radiantHintVisible", "darkSkyReadable", "noTelescopeMessageClear", "viewingWindowVisible", "noForbiddenObjectLeakage" })
-                if (!ContainsToken(polish, required)) errors.Add($"MeteorShower shortform-polish-validation.json is missing strategy-aware check '{required}'.");
-        }
+        var result = strategy.Validate(context);
+        warnings.AddRange(result.Warnings);
+        errors.AddRange(result.Errors);
     }
 
     private static string ResolveCurrentRunFile(string root, string fileName)
@@ -635,58 +605,58 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
         return Path.Combine(root, "question-engine", directoryName);
     }
 
-    private static string ReadSceneText(string sceneRoot)
+    private static SceneValidationContext ReadCurrentRunSceneValidationContext(ProductionEventIntelligence intelligence, string currentRunRoot, string sceneRoot)
     {
-        if (!Directory.Exists(sceneRoot)) return string.Empty;
-        return string.Join('\n', Directory.EnumerateFiles(sceneRoot, "scene-*.json", SearchOption.AllDirectories)
-            .Where(IsCurrentSceneValidationSource)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(File.ReadAllText));
+        return new(
+            intelligence,
+            currentRunRoot,
+            sceneRoot,
+            ReadMatchingFiles(sceneRoot, "scene-*-infographic-spec.json", SearchOption.TopDirectoryOnly),
+            ReadMatchingFiles(sceneRoot, "scene-*-narration.txt", SearchOption.AllDirectories),
+            ReadMatchingFiles(sceneRoot, "scene-*.srt", SearchOption.AllDirectories),
+            ReadMatchingFiles(sceneRoot, "scene-*-review.json", SearchOption.TopDirectoryOnly),
+            ReadScenePlanFiles(currentRunRoot),
+            ReadSupplementalSceneFiles(sceneRoot));
     }
 
-    private static string ReadSceneTextForNumber(string sceneRoot, int sceneNumber)
-    {
-        if (!Directory.Exists(sceneRoot)) return string.Empty;
-        var prefix = $"scene-{sceneNumber:000}-";
-        return string.Join('\n', Directory.EnumerateFiles(sceneRoot, "scene-*.json", SearchOption.AllDirectories)
-            .Where(path => Path.GetFileName(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            .Where(IsCurrentSceneValidationSource)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(File.ReadAllText));
-    }
+    private static bool HasReadableSceneValidationText(SceneValidationContext context)
+        => context.InfographicSpecs.Count > 0
+            || context.NarrationTexts.Count > 0
+            || context.SrtFiles.Count > 0
+            || context.ReviewJson.Count > 0
+            || context.ScenePlanJson.Count > 0
+            || context.SupplementalFiles.Count > 0;
 
-    private static bool IsCurrentSceneValidationSource(string path)
+    private static IReadOnlyDictionary<string, string> ReadScenePlanFiles(string currentRunRoot)
     {
-        var fileName = Path.GetFileName(path);
-        return fileName.EndsWith("-infographic-spec.json", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith("-review.json", StringComparison.OrdinalIgnoreCase);
-    }
-
-
-    private static string ReadMeteorTimingValidationText(string currentRunRoot, string sceneRoot)
-    {
-        var candidates = new List<string>
+        var candidates = new[]
         {
-            Path.Combine(sceneRoot, "scene-003-infographic-spec.json"),
-            Path.Combine(sceneRoot, "scene-003-narration.txt"),
-            Path.Combine(sceneRoot, "scene-003.srt"),
-            ResolveCurrentRunFile(currentRunRoot, "question-driven-narration.json"),
-            ResolveCurrentRunFile(currentRunRoot, "question-driven-scene-plan.enriched.json")
+            ResolveCurrentRunFile(currentRunRoot, "question-driven-scene-plan.json"),
+            ResolveCurrentRunFile(currentRunRoot, "question-driven-scene-plan.enriched.json"),
+            ResolveCurrentRunFile(currentRunRoot, "question-driven-narration.json")
         };
+        return ReadExistingFiles(candidates);
+    }
 
-        candidates.AddRange(Directory.Exists(sceneRoot)
-            ? Directory.EnumerateFiles(sceneRoot, "*overlay*.json", SearchOption.AllDirectories)
-            : []);
-        candidates.AddRange(Directory.Exists(sceneRoot)
-            ? Directory.EnumerateFiles(sceneRoot, "*overlay*.txt", SearchOption.AllDirectories)
-            : []);
+    private static IReadOnlyDictionary<string, string> ReadSupplementalSceneFiles(string sceneRoot)
+    {
+        if (!Directory.Exists(sceneRoot)) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return ReadExistingFiles(Directory.EnumerateFiles(sceneRoot, "*overlay*.json", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(sceneRoot, "*overlay*.txt", SearchOption.AllDirectories))
+            .Concat(Directory.EnumerateFiles(sceneRoot, "shortform-polish-validation.json", SearchOption.AllDirectories)));
+    }
 
-        return string.Join('\n', candidates
+    private static IReadOnlyDictionary<string, string> ReadMatchingFiles(string root, string searchPattern, SearchOption searchOption)
+        => Directory.Exists(root)
+            ? ReadExistingFiles(Directory.EnumerateFiles(root, searchPattern, searchOption))
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlyDictionary<string, string> ReadExistingFiles(IEnumerable<string> paths)
+        => paths
             .Where(File.Exists)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(File.ReadAllText));
-    }
+            .ToDictionary(path => path, File.ReadAllText, StringComparer.OrdinalIgnoreCase);
 
     private static bool HasBestViewingWindowEvidence(ProductionEventIntelligence intelligence, string text)
     {
