@@ -27,6 +27,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
     private const string NarrationFileName = "question-driven-narration.json";
+    private const string ProductionEventIntelligenceFileName = "production-event-intelligence.json";
     private const string SceneApprovalDirectoryName = "scene-approval-v3";
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string HeroAssetStoryFileName = "hero-asset-story.json";
@@ -35,6 +36,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
     private const string HeroCompositionModelFileName = "hero-composition-model.json";
     private const string HeroLayoutValidationFileName = "hero-layout-validation.json";
+    private const string HeroFileName = "hero.png";
     private const string HeroLandscapeFileName = "hero-landscape.png";
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
@@ -49,15 +51,17 @@ public sealed class HeroAssetStoryGenerator(
         new("Portrait", HeroPortraitFileName, 1080, 1920)
     ];
 
-    private static readonly string[] ApprovedSceneFileNames =
+    private static readonly string[] RequiredSceneIds =
     [
-        "scene-001-final.png",
-        "scene-002-final.png",
-        "scene-003-final.png",
-        "scene-004-final.png",
-        "scene-005-final.png",
-        "scene-006-final.png"
+        "scene-001",
+        "scene-002",
+        "scene-003",
+        "scene-004",
+        "scene-005",
+        "scene-006"
     ];
+
+    private static readonly string[] ScenePresentationProfiles = ["long", "short"];
 
     public async Task<HeroAssetStoryGenerationResponse> GenerateHeroAssetStoryAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
     {
@@ -127,6 +131,7 @@ public sealed class HeroAssetStoryGenerator(
     public async Task<HeroAssetGenerationResponse> GenerateHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        _activeProductionContext = request.ProductionContext;
         ValidateRequest(request);
 
         var phase = request.Phase?.Trim().ToLowerInvariant();
@@ -154,7 +159,7 @@ public sealed class HeroAssetStoryGenerator(
 
         var storyResponse = await GenerateHeroAssetStoryAsync(request, cancellationToken);
         var warnings = new List<string>(storyResponse.Warnings);
-        var hookScores = BuildHookScores(storyResponse.HeroStory);
+        var hookScores = await BuildHookScoresAsync(storyResponse.HeroStory, request, cancellationToken);
         var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
@@ -203,7 +208,7 @@ public sealed class HeroAssetStoryGenerator(
         var storyValidationIssues = ValidateStory(heroStory);
         warnings.AddRange(storyValidationIssues);
 
-        var hookScores = BuildHookScores(heroStory);
+        var hookScores = await BuildHookScoresAsync(heroStory, request, cancellationToken);
         var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
@@ -253,7 +258,7 @@ public sealed class HeroAssetStoryGenerator(
         heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
-        var hookScores = BuildHookScores(heroStory);
+        var hookScores = await BuildHookScoresAsync(heroStory, request, cancellationToken);
         var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
@@ -324,7 +329,7 @@ public sealed class HeroAssetStoryGenerator(
         heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
-        var hookScores = BuildHookScores(heroStory);
+        var hookScores = await BuildHookScoresAsync(heroStory, request, cancellationToken);
         var selectedHook = SelectTopHook(hookScores);
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
@@ -455,6 +460,14 @@ public sealed class HeroAssetStoryGenerator(
             foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, selectedSceneManifest, compositionModel!, planetAssets, cancellationToken))
                 generatedFiles.Add(imagePath);
 
+            var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
+            var landscapePath = Path.Combine(heroAssetsRoot, HeroLandscapeFileName);
+            if (File.Exists(landscapePath))
+            {
+                File.Copy(landscapePath, heroPath, overwrite: true);
+                generatedFiles.Add(NormalizePath(heroPath));
+            }
+
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
                 .Where(File.Exists)
@@ -467,16 +480,17 @@ public sealed class HeroAssetStoryGenerator(
         var heroSceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
         var heroCompositionModelGenerated = request.DryRun || File.Exists(compositionModelPath);
         var layoutValidationGenerated = request.DryRun || File.Exists(layoutValidationPath);
-        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && heroCompositionModelGenerated && layoutValidationGenerated && generatedFiles.Count > 3;
+        var heroImageGenerated = request.DryRun || File.Exists(Path.Combine(heroAssetsRoot, HeroFileName));
+        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && heroCompositionModelGenerated && layoutValidationGenerated && heroImageGenerated && generatedFiles.Any(file => Path.GetFileName(file).Equals(HeroFileName, StringComparison.OrdinalIgnoreCase));
         if (!request.DryRun && !imageGenerationExecuted)
         {
-            warnings.Add("Hero asset image generation failed validation: no image files were generated.");
+            warnings.Add("Hero asset image generation failed validation: hero.png was not generated.");
             isValid = false;
         }
 
-        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated || !heroCompositionModelGenerated || !layoutValidationGenerated)
+        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated || !heroCompositionModelGenerated || !layoutValidationGenerated || !heroImageGenerated)
         {
-            warnings.Add("Hero asset image generation failed validation: selected scene manifest, composition model, and layout validation are required before image generation.");
+            warnings.Add("Hero asset image generation failed validation: hero.png, selected scene manifest, composition model, and layout validation are required before image generation.");
             isValid = false;
         }
 
@@ -554,7 +568,7 @@ public sealed class HeroAssetStoryGenerator(
 
     private static void DeleteExistingHeroImageOutputs(string heroAssetsRoot)
     {
-        foreach (var fileName in new[] { HeroLandscapeFileName, HeroSquareFileName, HeroPortraitFileName })
+        foreach (var fileName in new[] { HeroFileName, HeroLandscapeFileName, HeroSquareFileName, HeroPortraitFileName })
         {
             var path = Path.Combine(heroAssetsRoot, fileName);
             if (File.Exists(path))
@@ -789,6 +803,9 @@ public sealed class HeroAssetStoryGenerator(
 
     private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveHeroCelestialTextures(string celestialAssetsRoot, ProductionEventIntelligence? intelligence, HeroAssetStoryDto heroStory)
     {
+        if (!RequiresNamedLocalCelestialAssets(intelligence, heroStory))
+            return [];
+
         var forbidden = new HashSet<string>(intelligence?.ForbiddenObjectNames ?? [], StringComparer.OrdinalIgnoreCase);
         var names = new[]
             {
@@ -800,15 +817,56 @@ public sealed class HeroAssetStoryGenerator(
             .Where(values => values is not null)
             .SelectMany(values => values!)
             .Select(Clean)
-            .Where(name => !string.IsNullOrWhiteSpace(name) && !forbidden.Contains(name))
+            .Where(name => IsNamedPlanetAsset(name) && !forbidden.Contains(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(3)
             .ToArray();
+
+        if (names.Length == 0 && intelligence is null)
+        {
+            names = KnownPlanetAssetNames
+                .Where(name => ContainsToken(heroStory.HeroStorySource.What, name) || ContainsToken(heroStory.HeroMessage, name) || ContainsToken(heroStory.HeroVisualFocus, name))
+                .Take(3)
+                .ToArray();
+        }
 
         return names
             .Select(name => new AstronomyVisualPlanetAsset(name, ResolvePlanetTexture(celestialAssetsRoot, name)))
             .ToArray();
     }
+
+    private static bool RequiresNamedLocalCelestialAssets(ProductionEventIntelligence? intelligence, HeroAssetStoryDto heroStory)
+    {
+        var eventType = intelligence?.EventType ?? string.Empty;
+        var strategyId = intelligence?.StrategyId ?? string.Empty;
+        if (IsMeteorEventType(eventType) || IsMeteorStory(heroStory.HeroStorySource))
+            return false;
+
+        if (ContainsPlanetPairingContract(eventType) || ContainsPlanetPairingContract(strategyId))
+            return true;
+
+        return intelligence is null && KnownPlanetAssetNames.Count(name => ContainsToken(heroStory.HeroStorySource.What, name) || ContainsToken(heroStory.HeroMessage, name)) >= 2;
+    }
+
+    private static bool ContainsPlanetPairingContract(string value)
+        => value.Contains("PlanetPairing", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("Conjunction", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMeteorEventType(string value)
+        => value.Contains("Meteor", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNamedPlanetAsset(string value)
+        => KnownPlanetAssetNames.Contains(value, StringComparer.OrdinalIgnoreCase);
+
+    private static bool ContainsToken(string haystack, string needle)
+    {
+        if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
+        return haystack.Split(new[] { ' ', ',', '.', ';', ':', '!', '?', '/', '\\', '-', '—', '–', '(', ')', '[', ']' }, StringSplitOptions.RemoveEmptyEntries)
+            .Any(token => string.Equals(token, needle, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static readonly string[] KnownPlanetAssetNames = ["Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Moon", "Sun"];
 
     private static string? ResolvePlanetTexture(string celestialAssetsRoot, string objectName)
     {
@@ -951,19 +1009,7 @@ public sealed class HeroAssetStoryGenerator(
 
     private async Task<IReadOnlyList<ApprovedHeroSceneCandidate>> LoadApprovedSceneCandidatesAsync(string questionEngineRoot, CancellationToken cancellationToken)
     {
-        var sceneApprovalRoot = Path.Combine(questionEngineRoot, SceneApprovalDirectoryName);
-        if (!Directory.Exists(sceneApprovalRoot))
-            return [];
-
-        var approvedSceneFiles = Directory.EnumerateFiles(sceneApprovalRoot, "scene-*.png", SearchOption.AllDirectories)
-            .Select(path => new { Path = path, SceneId = (Path.GetFileNameWithoutExtension(path) ?? string.Empty).Replace("-final", string.Empty, StringComparison.OrdinalIgnoreCase) })
-            .Where(file => !string.IsNullOrWhiteSpace(file.SceneId))
-            .GroupBy(file => file.SceneId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
-                group => NormalizePath(group.OrderByDescending(file => Path.GetFileNameWithoutExtension(file.Path).EndsWith("-final", StringComparison.OrdinalIgnoreCase)).ThenBy(file => file.Path, StringComparer.OrdinalIgnoreCase).First().Path),
-                StringComparer.OrdinalIgnoreCase);
-
+        var approvedSceneFiles = ResolveApprovedSceneFiles(questionEngineRoot);
         if (approvedSceneFiles.Count == 0)
             return [];
 
@@ -991,6 +1037,8 @@ public sealed class HeroAssetStoryGenerator(
     private static string FormatSceneId(int sceneNumber) => $"scene-{sceneNumber:000}";
 
     private sealed record HeroImageSpec(string Variant, string FileName, int Width, int Height);
+
+    private sealed record ApprovedSceneFileCandidate(string SceneId, string Path, int Priority);
 
     private sealed record HeroAssetVisualReviewDto(
         bool UsesSharedAstronomyVisualComposer,
@@ -1115,9 +1163,10 @@ public sealed class HeroAssetStoryGenerator(
     }
 
 
-    private static IReadOnlyList<HeroHookScoreDto> BuildHookScores(HeroAssetStoryDto heroStory)
+    private async Task<IReadOnlyList<HeroHookScoreDto>> BuildHookScoresAsync(HeroAssetStoryDto heroStory, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
     {
-        var candidates = BuildHookCandidates(heroStory);
+        var intelligence = await LoadProductionEventIntelligenceAsync(request, cancellationToken);
+        var candidates = BuildHookCandidates(heroStory, intelligence);
         return candidates
             .Select(ScoreHook)
             .OrderByDescending(score => score.TotalScore)
@@ -1125,24 +1174,84 @@ public sealed class HeroAssetStoryGenerator(
             .ToArray();
     }
 
-    private static IReadOnlyList<string> BuildHookCandidates(HeroAssetStoryDto heroStory)
+    private async Task<ProductionEventIntelligence?> LoadProductionEventIntelligenceAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (request.ProductionContext?.ProductionEventIntelligence is not null)
+            return request.ProductionContext.ProductionEventIntelligence;
+
+        var path = BuildProductionEventIntelligencePath(request.EventId, request.RegionId);
+        if (!File.Exists(path))
+            return null;
+
+        return JsonSerializer.Deserialize<ProductionEventIntelligence>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions);
+    }
+
+    private static IReadOnlyList<string> BuildHookCandidates(HeroAssetStoryDto heroStory, ProductionEventIntelligence? intelligence)
     {
         var candidates = new List<string>
         {
             DefaultHeroHook,
             "LOOK UP TONIGHT",
-            "EVENING SKY HIGHLIGHT"
+            "EVENING SKY HIGHLIGHT",
+            "DON'T MISS THIS TONIGHT"
         };
 
-        if (!string.IsNullOrWhiteSpace(heroStory.HeroHook))
-            candidates.Add(heroStory.HeroHook.ToUpperInvariant());
+        AddHookCandidate(candidates, heroStory.HeroHook);
+        AddHookCandidate(candidates, heroStory.HeroAction);
+        AddHookCandidate(candidates, heroStory.HeroMessage);
+        AddHookCandidate(candidates, heroStory.HeroVisualFocus);
+        AddHookCandidate(candidates, heroStory.HeroStorySource.What);
+        AddHookCandidate(candidates, heroStory.HeroStorySource.Where);
+        AddHookCandidate(candidates, heroStory.HeroStorySource.When);
+        AddHookCandidate(candidates, heroStory.HeroStorySource.Why);
+
         if (!string.IsNullOrWhiteSpace(heroStory.HeroAction) && heroStory.HeroAction.Contains("west", StringComparison.OrdinalIgnoreCase))
             candidates.Add("FACE WEST TONIGHT");
+        if (IsMeteorStory(heroStory.HeroStorySource))
+            candidates.AddRange(["METEORS TONIGHT", "WATCH THE DARK SKY", "PEAK VIEWING WINDOW"]);
+
+        if (intelligence is not null)
+        {
+            AddHookCandidate(candidates, intelligence.ShortTitle);
+            AddHookCandidate(candidates, intelligence.Title);
+            AddHookCandidate(candidates, intelligence.BestViewingWindowLocal);
+            AddHookCandidate(candidates, intelligence.LocalPeakTime);
+            AddHookCandidate(candidates, intelligence.SkyDirectionHint);
+            AddHookCandidates(candidates, intelligence.HeroCopyCandidates);
+            AddHookCandidates(candidates, intelligence.ThumbnailCopyCandidates);
+            AddHookCandidates(candidates, intelligence.ViewerInstructions);
+            AddHookCandidates(candidates, intelligence.VisualMotifs);
+            AddHookCandidates(candidates, intelligence.SceneStrategy);
+            AddHookCandidates(candidates, intelligence.RequiredVisualObjects);
+        }
+
         return candidates
             .Select(CleanHook)
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static void AddHookCandidates(List<string> candidates, IEnumerable<string>? values)
+    {
+        if (values is null) return;
+        foreach (var value in values)
+            AddHookCandidate(candidates, value);
+    }
+
+    private static void AddHookCandidate(List<string> candidates, string? value)
+    {
+        var candidate = SummarizeHookCandidate(value);
+        if (!string.IsNullOrWhiteSpace(candidate))
+            candidates.Add(candidate);
+    }
+
+    private static string SummarizeHookCandidate(string? value)
+    {
+        var cleaned = Clean(value ?? string.Empty).Trim('.', '!', '?');
+        if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
+        var words = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', words.Take(Math.Min(words.Length, 5)));
     }
 
     private static HeroHookScoreDto ScoreHook(string hook)
@@ -1164,6 +1273,9 @@ public sealed class HeroAssetStoryGenerator(
             scrollStoppingScore += 5;
             understandabilityScore += 8;
         }
+
+        if (hook.StartsWith("LOOK", StringComparison.OrdinalIgnoreCase))
+            scrollStoppingScore += 1;
 
         if (hook.Contains("WEST", StringComparison.OrdinalIgnoreCase) || hook.Contains("SUNSET", StringComparison.OrdinalIgnoreCase))
         {
@@ -1327,10 +1439,70 @@ public sealed class HeroAssetStoryGenerator(
 
     private IReadOnlyList<string> FindMissingApprovedSceneAssets(string questionEngineRoot)
     {
-        var sceneApprovalRoot = Path.Combine(questionEngineRoot, SceneApprovalDirectoryName);
-        return ApprovedSceneFileNames
-            .Where(fileName => !File.Exists(Path.Combine(sceneApprovalRoot, fileName)))
+        var approvedScenes = ResolveApprovedSceneFiles(questionEngineRoot);
+        return RequiredSceneIds
+            .Where(sceneId => !approvedScenes.ContainsKey(sceneId))
+            .Select(sceneId => $"{sceneId}.png or {sceneId}-final.png")
             .ToArray();
+    }
+
+    private IReadOnlyDictionary<string, string> ResolveApprovedSceneFiles(string questionEngineRoot)
+    {
+        var candidates = EnumerateApprovedSceneFiles(BuildNormalizedSceneApprovalRoot(questionEngineRoot), normalized: true)
+            .Concat(EnumerateApprovedSceneFiles(Path.Combine(questionEngineRoot, SceneApprovalDirectoryName), normalized: false));
+
+        return candidates
+            .GroupBy(candidate => candidate.SceneId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => NormalizePath(group.OrderBy(candidate => candidate.Priority).ThenBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase).First().Path),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<ApprovedSceneFileCandidate> EnumerateApprovedSceneFiles(string sceneApprovalRoot, bool normalized)
+    {
+        if (string.IsNullOrWhiteSpace(sceneApprovalRoot) || !Directory.Exists(sceneApprovalRoot))
+            yield break;
+
+        foreach (var profile in ScenePresentationProfiles)
+        {
+            var profileRoot = Path.Combine(sceneApprovalRoot, profile);
+            if (!Directory.Exists(profileRoot))
+                continue;
+
+            foreach (var path in Directory.EnumerateFiles(profileRoot, "scene-*.png", SearchOption.TopDirectoryOnly))
+            {
+                var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+                var sceneId = fileNameWithoutExtension.Replace("-final", string.Empty, StringComparison.OrdinalIgnoreCase);
+                if (!RequiredSceneIds.Contains(sceneId, StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                var isFinal = fileNameWithoutExtension.EndsWith("-final", StringComparison.OrdinalIgnoreCase);
+                var profilePriority = string.Equals(profile, "long", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+                var priority = normalized
+                    ? profilePriority
+                    : 10 + profilePriority + (isFinal ? 0 : 4);
+                yield return new ApprovedSceneFileCandidate(sceneId, path, priority);
+            }
+        }
+    }
+
+    private string BuildNormalizedSceneApprovalRoot(string questionEngineRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(_activeProductionContext?.PlanRoot))
+            return Path.Combine(_activeProductionContext!.PlanRoot!, SceneApprovalDirectoryName);
+
+        var eventRoot = Directory.GetParent(questionEngineRoot)?.FullName;
+        return string.IsNullOrWhiteSpace(eventRoot) ? Path.Combine(questionEngineRoot, SceneApprovalDirectoryName) : Path.Combine(eventRoot, SceneApprovalDirectoryName);
+    }
+
+    private string BuildProductionEventIntelligencePath(string eventId, string regionId)
+    {
+        if (!string.IsNullOrWhiteSpace(_activeProductionContext?.PlanRoot))
+            return Path.Combine(_activeProductionContext!.PlanRoot!, "plan-input", ProductionEventIntelligenceFileName);
+
+        var eventRoot = Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId));
+        return Path.Combine(eventRoot, "plan-input", ProductionEventIntelligenceFileName);
     }
 
     private static void EnsureInputFile(string path, string fileName)
