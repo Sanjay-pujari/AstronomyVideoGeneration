@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -39,6 +40,18 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
             VisualMotifs = definition.VisualMotifs,
             SceneStrategy = definition.SceneStoryArcShort.Concat(definition.SceneStoryArcLong).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             ForbiddenTerms = definition.ForbiddenUnrelatedObjects,
+            StrategyId = strategy.EventType,
+            ResolvedObjectNames = seed.PrimaryObjects.Concat(seed.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            ForbiddenObjectNames = definition.ForbiddenUnrelatedObjects,
+            RequiredVisualObjects = definition.RequiredVisualObjects ?? seed.PrimaryObjects,
+            RequiredNarrationFacts = definition.RequiredNarrationFacts ?? definition.RequiredFactualFields,
+            PreferredViewingWindow = seed.BestViewingWindowLocal ?? seed.LocalPeakTime,
+            ViewingSafetyRules = definition.ViewingSafetyRules ?? [],
+            ThumbnailCopyCandidates = definition.ThumbnailHooks,
+            HeroCopyCandidates = definition.HeroCopyCandidates ?? definition.ThumbnailHooks,
+            ShortSceneArc = definition.SceneStoryArcShort,
+            LongSceneArc = definition.SceneStoryArcLong,
+            ValidationRules = definition.ValidationRules,
             QualityWarnings = seed.QualityWarnings.Concat(BuildQualityWarnings(seed, definition)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
     }
@@ -122,7 +135,11 @@ public abstract class MediaEventStrategyBase : IMediaEventStrategy
         "Why is this event special?",
         "What should I do now?"
     ];
+
+    protected static string[] Objects(ProductionEventIntelligence intelligence, params string[] fallback)
+        => intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(fallback.FirstOrDefault() ?? "sky target").Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 }
+
 
 public sealed class MeteorShowerStrategy : MediaEventStrategyBase
 {
@@ -270,7 +287,13 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
     }
 
     private static bool ContainsToken(string haystack, string needle)
-        => !string.IsNullOrWhiteSpace(needle) && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+    {
+        if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
+        var trimmed = needle.Trim();
+        if (trimmed.Any(char.IsWhiteSpace) || trimmed.Any(ch => !char.IsLetterOrDigit(ch)))
+            return haystack.Contains(trimmed, StringComparison.OrdinalIgnoreCase);
+        return Regex.IsMatch(haystack, $"(?<![\p{{L}}\p{{N}}]){Regex.Escape(trimmed)}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
 
     private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken)
     {

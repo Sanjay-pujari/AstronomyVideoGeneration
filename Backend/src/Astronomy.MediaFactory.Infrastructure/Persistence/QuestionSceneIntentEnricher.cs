@@ -81,8 +81,8 @@ public sealed class QuestionSceneIntentEnricher(
         ValidateRequest(request);
 
         var warnings = new List<string>();
-        var inputPath = BuildPlanPath(request.EventId, request.RegionId, InputFileName);
-        var outputPath = BuildPlanPath(request.EventId, request.RegionId, OutputFileName);
+        var inputPath = BuildPlanPath(request.EventId, request.RegionId, InputFileName, request.ProductionContext);
+        var outputPath = BuildPlanPath(request.EventId, request.RegionId, OutputFileName, request.ProductionContext);
 
         if (!File.Exists(inputPath))
             throw new ArgumentException($"Question-driven scene plan was not found at '{inputPath.Replace('\\', '/')}'.", nameof(request));
@@ -261,8 +261,10 @@ public sealed class QuestionSceneIntentEnricher(
         return supportedValues.FirstOrDefault(supported => string.Equals(supported, cleaned, StringComparison.OrdinalIgnoreCase)) ?? cleaned;
     }
 
-    private string BuildPlanPath(string eventId, string regionId, string fileName)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine", fileName);
+    private string BuildPlanPath(string eventId, string regionId, string fileName, ProductionPipelineExecutionContext? productionContext = null)
+        => !string.IsNullOrWhiteSpace(productionContext?.QuestionRoot)
+            ? Path.Combine(productionContext!.QuestionRoot!, fileName)
+            : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine", fileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

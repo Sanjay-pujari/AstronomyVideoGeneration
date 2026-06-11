@@ -20,9 +20,6 @@ public sealed class QuestionDrivenVisualComposer(
     IAstronomyInfographicRenderer infographicRenderer,
     ILogger<QuestionDrivenVisualComposer> logger) : IQuestionDrivenVisualComposer, IEditorialAstronomyInfographicComposer
 {
-    private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
-    private const string GoldenRegionId = "IN-RJ-UDAIPUR";
-    private const string GoldenLanguage = "en";
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
     private const string NarrationFileName = "question-driven-narration.json";
@@ -71,7 +68,7 @@ public sealed class QuestionDrivenVisualComposer(
         var generatedFiles = new List<string>();
         var plannedScenes = new List<QuestionDrivenPlannedScene>();
         var sceneValidation = new List<SceneQuestionIsolationValidation>();
-        var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
+        var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId, request.ProductionContext);
         var outputRoot = Path.Combine(questionEngineRoot, OutputDirectoryName);
         var longOutputRoot = Path.Combine(outputRoot, "long");
         var shortOutputRoot = Path.Combine(outputRoot, "short");
@@ -93,7 +90,7 @@ public sealed class QuestionDrivenVisualComposer(
             ?? throw new ArgumentException("Question-driven narration could not be parsed.", nameof(request));
 
         var scenes = enrichedPlan.Scenes.OrderBy(s => s.SceneNumber).ToArray();
-        if (scenes.Length != 6) throw new ArgumentException("Editorial astronomy infographic composition requires exactly 6 golden pilot scenes.", nameof(request));
+        if (scenes.Length == 0) throw new ArgumentException("Editorial astronomy infographic composition requires at least one strategy-driven scene.", nameof(request));
 
         var finalImageCount = 0;
         var srtCount = 0;
@@ -834,8 +831,8 @@ public sealed class QuestionDrivenVisualComposer(
     private static string GetLayoutTemplate(string questionType) => questionType.ToLowerInvariant() switch { "what" => "AstronomyMagazineCover", "where" => "ObservationChart", "when" => "TimelineInfographic", "how" => "ObservationGuide", "why" => "SignificanceGraphic", "action" => "AstronomyPoster", _ => "Unknown" };
     private static int CountQuestions(JsonDocument document) => document.RootElement.TryGetProperty("questions", out var q) && q.ValueKind == JsonValueKind.Array ? q.GetArrayLength() : document.RootElement.TryGetProperty("questionAnswers", out var qa) && qa.ValueKind == JsonValueKind.Array ? qa.GetArrayLength() : 0;
     private static void EnsureInputFile(string path, string logicalName) { if (!File.Exists(path)) throw new ArgumentException($"Required {logicalName} input file was not found at '{NormalizePath(path)}'."); }
-    private void ValidateRequest(QuestionDrivenVisualGenerationRequest request) { if (string.IsNullOrWhiteSpace(request.EventId) || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase) || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Editorial astronomy infographic composition requires a non-empty event id for IN-RJ-UDAIPUR / en.", nameof(request)); }
-    private string BuildQuestionEngineRoot(string eventId, string regionId) => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine");
+    private void ValidateRequest(QuestionDrivenVisualGenerationRequest request) { if (string.IsNullOrWhiteSpace(request.EventId) || string.IsNullOrWhiteSpace(request.RegionId) || string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Editorial astronomy infographic composition requires event id, region id, and language.", nameof(request)); }
+    private string BuildQuestionEngineRoot(string eventId, string regionId, ProductionPipelineExecutionContext? productionContext = null) => !string.IsNullOrWhiteSpace(productionContext?.QuestionRoot) ? productionContext!.QuestionRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine");
     private string ResolveWorkingDirectoryRoot()
     {
         var configured = string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

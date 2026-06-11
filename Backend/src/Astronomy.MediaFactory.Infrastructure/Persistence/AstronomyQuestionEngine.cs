@@ -100,7 +100,7 @@ public sealed class AstronomyQuestionEngine(
                 warnings.Add($"Question answers already exist for '{SafeTitle(evt)}'; returning the existing set because overwriteExisting is false.");
                 var existingDto = ToDto(existing);
                 questionSets.Add(existingDto);
-                generatedFiles.Add(await WriteQuestionSetFileAsync(existingDto, cancellationToken));
+                generatedFiles.Add(await WriteQuestionSetFileAsync(existingDto, request.ProductionContext, cancellationToken));
                 continue;
             }
 
@@ -115,7 +115,7 @@ public sealed class AstronomyQuestionEngine(
                 continue;
             }
 
-            generatedFiles.Add(await WriteQuestionSetFileAsync(setDto, cancellationToken));
+            generatedFiles.Add(await WriteQuestionSetFileAsync(setDto, request.ProductionContext, cancellationToken));
 
             if (!request.DryRun)
             {
@@ -565,14 +565,20 @@ public sealed class AstronomyQuestionEngine(
     private static Regex ExactTermPattern(string term)
         => new($"(?<![A-Za-z0-9]){Regex.Escape(term)}(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private async Task<string> WriteQuestionSetFileAsync(QuestionAnswerSetDto set, CancellationToken cancellationToken)
+    private async Task<string> WriteQuestionSetFileAsync(QuestionAnswerSetDto set, ProductionPipelineExecutionContext? productionContext, CancellationToken cancellationToken)
     {
         var eventFolder = set.AstronomyEventIntelligenceId.ToString("D");
-        var outputPath = Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(set.RegionId), "events", eventFolder, "question-engine", "question-answer-set.json");
+        var questionRoot = ResolveQuestionRoot(productionContext, set.RegionId, eventFolder);
+        var outputPath = Path.Combine(questionRoot, "question-answer-set.json");
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(set, JsonOptions), cancellationToken);
         return outputPath.Replace('\\', '/');
     }
+
+    private string ResolveQuestionRoot(ProductionPipelineExecutionContext? productionContext, string regionId, string eventFolder)
+        => !string.IsNullOrWhiteSpace(productionContext?.QuestionRoot)
+            ? productionContext!.QuestionRoot!
+            : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", eventFolder, "question-engine");
 
     private string ResolveWorkingDirectoryRoot() => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
 

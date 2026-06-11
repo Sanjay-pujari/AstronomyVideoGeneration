@@ -13,9 +13,6 @@ public sealed class AstronomyVisualAssetStrategyService(
     IOptions<AzureOpenAIForImageOptions> imageOptions,
     IRuntimeAssetPathResolver assetPathResolver) : IAstronomyVisualAssetStrategyService
 {
-    private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
-    private const string GoldenRegionId = "IN-RJ-UDAIPUR";
-    private const string GoldenLanguage = "en";
     private static readonly string[] RequiredProductionObjects = ["venus", "jupiter"];
     private static readonly string[] InventoryObjects = ["venus", "jupiter", "mercury", "moon", "saturn"];
     private static readonly string[] PreferredAssetFileNames = ["hero-transparent.png", "hero.png", "cinematic.png", "closeup.png"];
@@ -23,7 +20,7 @@ public sealed class AstronomyVisualAssetStrategyService(
     public Task<AstronomyVisualAssetStrategyResponse> ResolveAstronomyVisualAssetStrategyAsync(AstronomyVisualAssetStrategyRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateGoldenRequest(request);
+        ValidateDynamicRequest(request);
 
         var rendering = renderingOptions.Value;
         var celestial = celestialAssetsOptions.Value;
@@ -155,7 +152,7 @@ public sealed class AstronomyVisualAssetStrategyService(
         return Task.FromResult(new AstronomyVisualAssetStrategyResponse(
             request.EventId,
             request.RegionId,
-            string.IsNullOrWhiteSpace(request.Language) ? GoldenLanguage : request.Language,
+            string.IsNullOrWhiteSpace(request.Language) ? "en" : request.Language,
             ready,
             strategy,
             scenes,
@@ -164,14 +161,10 @@ public sealed class AstronomyVisualAssetStrategyService(
             recommendations));
     }
 
-    private static void ValidateGoldenRequest(AstronomyVisualAssetStrategyRequest request)
+    private static void ValidateDynamicRequest(AstronomyVisualAssetStrategyRequest request)
     {
-        if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(string.IsNullOrWhiteSpace(request.Language) ? GoldenLanguage : request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("Astronomy visual asset strategy resolution is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en.", nameof(request));
-        }
+        if (string.IsNullOrWhiteSpace(request.EventId)) throw new ArgumentException("eventId is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("regionId is required.", nameof(request));
     }
 
     private string? ResolveObjectAsset(string objectKey)

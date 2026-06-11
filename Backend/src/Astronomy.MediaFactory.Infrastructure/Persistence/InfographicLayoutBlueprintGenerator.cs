@@ -10,9 +10,6 @@ public sealed class InfographicLayoutBlueprintGenerator(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<InfographicLayoutBlueprintGenerator> logger) : IInfographicLayoutBlueprintGenerator
 {
-    private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
-    private const string GoldenRegionId = "IN-RJ-UDAIPUR";
-    private const string GoldenLanguage = "en";
     private const string BlueprintFileName = "scene-001-layout-blueprint.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InputFileNames =
@@ -25,7 +22,7 @@ public sealed class InfographicLayoutBlueprintGenerator(
     public async Task<InfographicLayoutBlueprintResponse> GenerateInfographicLayoutBlueprintAsync(InfographicLayoutBlueprintRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateGoldenRequest(request);
+        ValidateDynamicRequest(request);
 
         var warnings = new List<string>();
         var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
@@ -220,17 +217,11 @@ public sealed class InfographicLayoutBlueprintGenerator(
         if (scene is null || !predicate(scene)) warnings.Add(message);
     }
 
-    private static void ValidateGoldenRequest(InfographicLayoutBlueprintRequest request)
+    private static void ValidateDynamicRequest(InfographicLayoutBlueprintRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.EventId)) throw new ArgumentException("eventId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("language is required.", nameof(request));
-        if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("Infographic layout blueprint generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en.", nameof(request));
-        }
     }
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)

@@ -21,7 +21,19 @@ public sealed record ProductionEventIntelligence(
     IReadOnlyList<string> VisualMotifs,
     IReadOnlyList<string> SceneStrategy,
     IReadOnlyList<string> QualityWarnings,
-    IReadOnlyList<string> ForbiddenTerms);
+    IReadOnlyList<string> ForbiddenTerms,
+    string? StrategyId = null,
+    IReadOnlyList<string>? ResolvedObjectNames = null,
+    IReadOnlyList<string>? ForbiddenObjectNames = null,
+    IReadOnlyList<string>? RequiredVisualObjects = null,
+    IReadOnlyList<string>? RequiredNarrationFacts = null,
+    string? PreferredViewingWindow = null,
+    IReadOnlyList<string>? ViewingSafetyRules = null,
+    IReadOnlyList<string>? ThumbnailCopyCandidates = null,
+    IReadOnlyList<string>? HeroCopyCandidates = null,
+    IReadOnlyList<string>? ShortSceneArc = null,
+    IReadOnlyList<string>? LongSceneArc = null,
+    IReadOnlyList<string>? ValidationRules = null);
 
 public sealed record MediaEventStrategyDefinition(
     string EventType,
@@ -33,7 +45,15 @@ public sealed record MediaEventStrategyDefinition(
     string NarrationTone,
     IReadOnlyList<string> ThumbnailHooks,
     IReadOnlyList<string> ForbiddenUnrelatedObjects,
-    IReadOnlyList<string> ValidationRules);
+    IReadOnlyList<string> ValidationRules,
+    int SceneCount = 6,
+    IReadOnlyList<string>? HeroFraming = null,
+    IReadOnlyList<string>? NarrationOutline = null,
+    IReadOnlyList<string>? AssemblySections = null,
+    IReadOnlyList<string>? RequiredVisualObjects = null,
+    IReadOnlyList<string>? RequiredNarrationFacts = null,
+    IReadOnlyList<string>? ViewingSafetyRules = null,
+    IReadOnlyList<string>? HeroCopyCandidates = null);
 
 public interface IMediaEventStrategy
 {
