@@ -149,7 +149,9 @@ public sealed class ContentPlanProductionExecutionService(
             ContentStrategy: intelligence.ContentStrategy,
             RegionId: plan.RegionId,
             Language: plan.Language,
-            RequestedOutputs: productionRequest.RequestedOutputs);
+            RequestedOutputs: productionRequest.RequestedOutputs,
+            Category: productionRequest.Category,
+            PlannedFormat: productionRequest.PlannedFormat);
 
     private async Task WritePlanInputAsync(string outputRoot, ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, CancellationToken cancellationToken)
     {
