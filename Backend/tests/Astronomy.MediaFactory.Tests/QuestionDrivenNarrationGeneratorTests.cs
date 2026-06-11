@@ -87,7 +87,7 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             "OTHER-REGION",
             "en"), CancellationToken.None));
 
-        Assert.Contains("golden pilot event", ex.Message);
+        Assert.Contains("Approved enriched question-driven scene plan was not found", ex.Message);
     }
 
 
@@ -207,7 +207,7 @@ public sealed class QuestionDrivenNarrationGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateQuestionDrivenNarrationAsync_RejectsDbApprovedProductionPlanWhenCategoryIsNotRareEventAlert()
+    public async Task GenerateQuestionDrivenNarrationAsync_AllowsDbApprovedProductionPlanWhenCategoryIsNotRareEventAlert()
     {
         const string geminidsEventId = "e60aa11f-ad8c-440f-ad49-2079a435f8c1";
         var planId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
@@ -232,15 +232,53 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             Category: "DailySkyGuide",
             PlannedFormat: "ShortVideo");
 
-        var ex = await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
             geminidsEventId,
             RegionId,
             "en",
             DryRun: true,
             OverwriteExisting: false,
-            ProductionContext: context), CancellationToken.None));
+            ProductionContext: context), CancellationToken.None);
 
-        Assert.Contains("DB-approved Astronomy V1 production plan", ex.Message);
+        Assert.True(result.IsValid);
+        Assert.Equal(geminidsEventId, result.EventId);
+    }
+
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_AllowsNamedFullMoonProductionPlanAndUsesMoonIntelligence()
+    {
+        const string fullMoonEventId = "5b84d088-7102-4d5f-b0c0-8cea19091ea6";
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, BuildEnrichedPlan(fullMoonEventId));
+        var generator = CreateGenerator(workingDirectory);
+        var context = BuildNamedFullMoonProductionContext(Guid.Parse(fullMoonEventId));
+
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            fullMoonEventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: true,
+            ProductionContext: context,
+            PlanId: context.ContentGenerationPlanId,
+            EventType: "NamedFullMoon",
+            Title: "Snow Moon Full Moon",
+            ShortTitle: "Snow Moon",
+            PrimaryObjects: ["Moon"],
+            SecondaryObjects: [],
+            LocalPeakTime: "2026-02-02 04:39 IST",
+            SkyDirectionHint: "eastern sky after sunset and high overhead near midnight",
+            BestViewingWindowLocal: "2026-02-01 evening to 2026-02-02 pre-dawn IST",
+            StrategyId: "NamedFullMoon",
+            SourceOfEventId: "AstronomyEventIntelligenceId"), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        var combined = string.Join(" ", result.Narration.Scenes.Select(scene => $"{scene.SourceAnswer} {scene.ViewerTakeaway} {scene.NarrationText} {scene.CaptionText}"));
+        Assert.Contains("Snow Moon Full Moon", combined);
+        Assert.Contains("Moon", combined);
+        Assert.DoesNotContain("Venus", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Jupiter", combined, StringComparison.OrdinalIgnoreCase);
     }
 
 
@@ -298,6 +336,62 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             ProductionEventIntelligence: intelligence,
             MediaEventStrategy: new MeteorShowerStrategy());
     }
+
+    private static ProductionPipelineExecutionContext BuildNamedFullMoonProductionContext(Guid intelligenceId)
+    {
+        var planId = Guid.Parse("1e3f4ab7-65d0-46d9-9a86-a68a3cb7d979");
+        var intelligence = new ProductionEventIntelligence(
+            Domain: "Astronomy",
+            EventType: "NamedFullMoon",
+            Title: "Snow Moon Full Moon",
+            ShortTitle: "Snow Moon",
+            EventDate: DateTimeOffset.Parse("2026-02-01T23:09:00Z"),
+            PeakUtc: DateTimeOffset.Parse("2026-02-01T23:09:00Z"),
+            LocalPeakTime: "2026-02-02 04:39 IST",
+            BestViewingWindowLocal: "2026-02-01 evening to 2026-02-02 pre-dawn IST",
+            SkyDirectionHint: "eastern sky after sunset and high overhead near midnight",
+            VisibilityRegion: RegionId,
+            PrimaryObjects: ["Moon"],
+            SecondaryObjects: [],
+            ViewingQuality: "Good",
+            MoonInterference: "full Moon is the event target",
+            MoonIlluminationPercent: 100,
+            ScientificContext: "The Snow Moon is February's named full Moon and appears bright through the night.",
+            ViewerInstructions: ["Watch the Moon rise", "Use binoculars for lunar texture", "Choose a clear eastern view"],
+            VisualMotifs: ["full Moon", "lunar disc", "moonlit sky"],
+            SceneStrategy: [],
+            QualityWarnings: [],
+            ForbiddenTerms: ["Venus", "Jupiter", "planet pairing", "meteor shower"],
+            StrategyId: "NamedFullMoon",
+            ResolvedObjectNames: ["Moon"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"],
+            RequiredVisualObjects: ["Moon", "full Moon", "lunar disc"],
+            RequiredNarrationFacts: ["Snow Moon", "Moon", "2026-02-02 04:39 IST"],
+            PreferredViewingWindow: "2026-02-01 evening to 2026-02-02 pre-dawn IST");
+
+        return new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: planId,
+            AstronomyEventIntelligenceId: intelligenceId,
+            SourceExternalEventId: "snow-moon-full-moon-2026",
+            IsDbApprovedPlanExecution: true,
+            ContentGenerationPlanExists: true,
+            ContentGenerationPlanStatus: "ProductionRunning",
+            ContentGenerationPlanPlanStatus: "ProductionRunning",
+            AstronomyEventIntelligenceExists: true,
+            AutoGenerateAllowed: false,
+            VerificationStatus: "Verified",
+            ContentStrategy: "LocalViewingGuide",
+            RegionId: RegionId,
+            Language: "en",
+            RequestedOutputs: ["ShortVideo", "LongVideo"],
+            Category: "FullMoon",
+            PlannedFormat: "ShortAndLongVideo",
+            EventType: "NamedFullMoon",
+            ProductionEventIntelligence: intelligence,
+            MediaEventStrategy: new NamedFullMoonStrategy());
+    }
+
 
     private static QuestionDrivenNarrationGenerator CreateGenerator(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<QuestionDrivenNarrationGenerator>.Instance);

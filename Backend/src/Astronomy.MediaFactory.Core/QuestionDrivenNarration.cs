@@ -6,7 +6,18 @@ public sealed record QuestionDrivenNarrationRequest(
     string Language = "en",
     bool DryRun = true,
     bool OverwriteExisting = false,
-    ProductionPipelineExecutionContext? ProductionContext = null);
+    ProductionPipelineExecutionContext? ProductionContext = null,
+    Guid? PlanId = null,
+    string? EventType = null,
+    string? Title = null,
+    string? ShortTitle = null,
+    IReadOnlyList<string>? PrimaryObjects = null,
+    IReadOnlyList<string>? SecondaryObjects = null,
+    string? LocalPeakTime = null,
+    string? SkyDirectionHint = null,
+    string? BestViewingWindowLocal = null,
+    string? StrategyId = null,
+    string? SourceOfEventId = null);
 
 public sealed record QuestionDrivenNarrationResponse(
     string EventId,

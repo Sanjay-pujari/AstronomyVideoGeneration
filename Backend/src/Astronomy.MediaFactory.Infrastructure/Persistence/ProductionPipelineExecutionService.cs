@@ -45,14 +45,15 @@ public sealed partial class ProductionPipelineExecutionService(
         ArgumentNullException.ThrowIfNull(request.Request);
 
         var productionRequest = request.Request;
-        var eventId = request.AstronomyEventIntelligenceId.ToString("D");
+        var eventIdResolution = ResolveAstronomyEventId(request);
+        var eventId = eventIdResolution.EventId?.ToString("D") ?? string.Empty;
         var warnings = new List<string>(productionRequest.Warnings);
         var errors = new List<string>();
         var generatedFiles = new List<string>();
         var outputRoot = request.OutputRoot;
         var productionIntelligence = intelligenceAdapter.Normalize(request);
         var strategy = strategyResolver.Resolve(productionIntelligence.EventType, productionIntelligence.Title);
-        var executionContext = BuildProductionExecutionContext(request.ExecutionContext, productionRequest, request.AstronomyEventIntelligenceId, outputRoot, productionIntelligence, strategy);
+        var executionContext = BuildProductionExecutionContext(request.ExecutionContext, productionRequest, eventIdResolution.EventId ?? Guid.Empty, outputRoot, productionIntelligence, strategy);
         var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 19);
         var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 19, startPhaseNo, 19);
         var phaseResults = new List<ProductionPhaseResult>();
@@ -64,7 +65,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
-        var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite);
+        var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite);
         if (request.OverwriteExisting)
             ClearPhaseRangeOutputsForOverwrite(context);
 
@@ -205,13 +206,94 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
+        var narrationRequest = BuildQuestionDrivenNarrationRequest(context);
+        ValidatePhase7NarrationRequest(narrationRequest, context);
+        var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(narrationRequest, cancellationToken);
         var outputs = new List<string>(response.GeneratedFiles);
         Directory.CreateDirectory(context.ExecutionContext.SceneRoot!);
         CopyFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration.json"), outputs);
         CopyFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration-review.json"), outputs);
         return outputs;
     }
+
+
+    private static QuestionDrivenNarrationRequest BuildQuestionDrivenNarrationRequest(ProductionPhaseContext context)
+    {
+        var source = ResolveEventIdSource(context);
+        var eventId = source.EventId?.ToString("D") ?? string.Empty;
+        var intelligence = context.ProductionEventIntelligence;
+        return new QuestionDrivenNarrationRequest(
+            eventId,
+            context.Request.RegionId,
+            context.Request.Language,
+            DryRun: false,
+            OverwriteExisting: context.OverwriteExisting,
+            ProductionContext: context.ExecutionContext,
+            PlanId: context.Request.PlanId,
+            EventType: FirstNonEmpty(intelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType),
+            Title: FirstNonEmpty(intelligence.Title, context.Request.Title),
+            ShortTitle: FirstNonEmpty(intelligence.ShortTitle, context.Request.ShortTitle),
+            PrimaryObjects: intelligence.PrimaryObjects.Count > 0 ? intelligence.PrimaryObjects : context.Request.PrimaryObjects,
+            SecondaryObjects: intelligence.SecondaryObjects.Count > 0 ? intelligence.SecondaryObjects : context.Request.SecondaryObjects,
+            LocalPeakTime: FirstNonEmpty(intelligence.LocalPeakTime, context.Request.LocalPeakTime),
+            SkyDirectionHint: FirstNonEmpty(intelligence.SkyDirectionHint, context.Request.SkyDirectionHint),
+            BestViewingWindowLocal: FirstNonEmpty(intelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal),
+            StrategyId: FirstNonEmpty(intelligence.StrategyId, context.MediaEventStrategy.EventType),
+            SourceOfEventId: source.Source);
+    }
+
+    private static void ValidatePhase7NarrationRequest(QuestionDrivenNarrationRequest request, ProductionPhaseContext context)
+    {
+        var diagnostics = BuildPhase7NarrationDiagnostics(request, context);
+        if (diagnostics.PlanIdPresent && diagnostics.EventIdPresent && diagnostics.RegionIdPresent && diagnostics.LanguagePresent)
+            return;
+
+        throw new ArgumentException(
+            "Phase 7 narration request mapping is incomplete: "
+            + $"planIdPresent={diagnostics.PlanIdPresent}, "
+            + $"eventIdPresent={diagnostics.EventIdPresent}, "
+            + $"regionIdPresent={diagnostics.RegionIdPresent}, "
+            + $"languagePresent={diagnostics.LanguagePresent}, "
+            + $"eventType={diagnostics.EventType ?? "<null>"}, "
+            + $"strategyId={diagnostics.StrategyId ?? "<null>"}, "
+            + $"sourceOfEventId={diagnostics.SourceOfEventId ?? "<null>"}.",
+            nameof(request));
+    }
+
+    private static Phase7NarrationDiagnostics BuildPhase7NarrationDiagnostics(QuestionDrivenNarrationRequest request, ProductionPhaseContext context)
+        => new(
+            PlanIdPresent: (request.PlanId ?? context.ExecutionContext.ContentGenerationPlanId ?? context.Request.PlanId) != Guid.Empty,
+            EventIdPresent: Guid.TryParse(request.EventId, out var eventGuid) && eventGuid != Guid.Empty,
+            RegionIdPresent: !string.IsNullOrWhiteSpace(request.RegionId),
+            LanguagePresent: !string.IsNullOrWhiteSpace(request.Language),
+            EventType: FirstNonEmpty(request.EventType, context.ProductionEventIntelligence.EventType, context.Request.EventType),
+            StrategyId: FirstNonEmpty(request.StrategyId, context.ProductionEventIntelligence.StrategyId, context.MediaEventStrategy.EventType),
+            SourceOfEventId: request.SourceOfEventId);
+
+    private static (Guid? EventId, string Source) ResolveEventIdSource(ProductionPhaseContext context)
+    {
+        if (context.AstronomyEventIntelligenceId != Guid.Empty) return (context.AstronomyEventIntelligenceId, "ProductionPipelineRequest.AstronomyEventIntelligenceId");
+        if (context.ExecutionContext.AstronomyEventIntelligenceId is { } contextEventId && contextEventId != Guid.Empty) return (contextEventId, "ProductionPipelineExecutionContext.AstronomyEventIntelligenceId");
+        if (context.ExecutionContext.ProductionExecutionContext?.AstronomyEventIntelligenceId is { } contractEventId && contractEventId != Guid.Empty) return (contractEventId, "ProductionExecutionContext.AstronomyEventIntelligenceId");
+        return (null, "missing");
+    }
+
+    private static (Guid? EventId, string Source) ResolveAstronomyEventId(ProductionPipelineRequest request)
+    {
+        if (request.AstronomyEventIntelligenceId != Guid.Empty) return (request.AstronomyEventIntelligenceId, "ProductionPipelineRequest.AstronomyEventIntelligenceId");
+        if (request.ExecutionContext?.AstronomyEventIntelligenceId is { } contextEventId && contextEventId != Guid.Empty) return (contextEventId, "ProductionPipelineExecutionContext.AstronomyEventIntelligenceId");
+        if (request.ExecutionContext?.ProductionExecutionContext?.AstronomyEventIntelligenceId is { } contractEventId && contractEventId != Guid.Empty) return (contractEventId, "ProductionExecutionContext.AstronomyEventIntelligenceId");
+        return (null, "missing");
+    }
+
+    private sealed record Phase7NarrationDiagnostics(
+        bool PlanIdPresent,
+        bool EventIdPresent,
+        bool RegionIdPresent,
+        bool LanguagePresent,
+        string? EventType,
+        string? StrategyId,
+        string? SourceOfEventId);
 
     private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
@@ -1014,7 +1096,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var validationPath = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry);
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo, phaseName, status = status.ToString(), startedUtc = started, finishedUtc = finished, durationMs = result.DurationMs, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = outputFiles, inputFiles, outputFiles, warnings, errors, reason, canRetry }, JsonOptions), cancellationToken);
+        var phase7NarrationDiagnostics = phaseNo == 7
+            ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
+            : null;
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo, phaseName, status = status.ToString(), startedUtc = started, finishedUtc = finished, durationMs = result.DurationMs, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = outputFiles, inputFiles, outputFiles, warnings, errors, reason, canRetry, phase7NarrationDiagnostics }, JsonOptions), cancellationToken);
         return result;
     }
 
