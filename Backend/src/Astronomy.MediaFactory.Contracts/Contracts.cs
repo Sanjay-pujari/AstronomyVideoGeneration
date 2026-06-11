@@ -320,9 +320,11 @@ public enum VideoRenderProfileKind
 public sealed class VideoAssemblyOptions
 {
     public const string SectionName = "VideoAssembly";
+    public const double DefaultDurationComparisonToleranceSeconds = 0.25;
     public VideoAssemblyBackgroundMusicOptions BackgroundMusic { get; set; } = new();
     public VideoDurationProfileOptions ShortVideo { get; set; } = VideoDurationProfileOptions.ShortVideoDefaults();
     public VideoDurationProfileOptions LongVideo { get; set; } = VideoDurationProfileOptions.LongVideoDefaults();
+    public double DurationComparisonToleranceSeconds { get; set; } = DefaultDurationComparisonToleranceSeconds;
 }
 
 public sealed class VideoDurationProfileOptions
