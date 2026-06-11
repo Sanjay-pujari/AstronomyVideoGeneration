@@ -239,6 +239,47 @@ public sealed class QuestionDrivenVisualComposerTests
         }
     }
 
+    [Fact]
+    public async Task GenerateEditorialAstronomyInfographicsAsync_MeteorShowerDisablesLocalPlanetAssetsInReviews()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteMeteorInputFilesAsync(workingDirectory);
+        var composer = CreateComposer(workingDirectory);
+
+        var result = await composer.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            ProductionContext: new ProductionPipelineExecutionContext(
+                UseProductionPipeline: true,
+                ContentGenerationPlanId: null,
+                AstronomyEventIntelligenceId: null,
+                SourceExternalEventId: "GEMINIDS_2026",
+                IsDbApprovedPlanExecution: false,
+                EventType: "MeteorShower")), CancellationToken.None);
+
+        Assert.Equal(12, result.FinalImageCount);
+        Assert.All(result.PlannedScenes, scene =>
+        {
+            Assert.Contains("meteor", scene.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Venus", scene.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Jupiter", scene.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(scene.ProgrammaticOverlayPlan.LocalAssetObjects);
+        });
+
+        foreach (var sceneNumber in Enumerable.Range(1, 6))
+        {
+            var reviewPath = Path.Combine(BuildSceneApprovalPath(workingDirectory), $"scene-{sceneNumber:000}-review.json");
+            Assert.True(File.Exists(reviewPath));
+            using var reviewDocument = JsonDocument.Parse(await File.ReadAllTextAsync(reviewPath));
+            var review = reviewDocument.RootElement;
+            Assert.False(review.GetProperty("usesLocalPlanetAssets").GetBoolean());
+            Assert.False(review.GetProperty("planetAssetsIntegratedIntoSky").GetBoolean());
+        }
+    }
+
     private static QuestionDrivenVisualComposer CreateComposer(string workingDirectory)
         => new(
             Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
@@ -250,6 +291,47 @@ public sealed class QuestionDrivenVisualComposerTests
                 new EducationalLayerRenderer(),
                 new AnnotationLayerRenderer()),
             NullLogger<QuestionDrivenVisualComposer>.Instance);
+
+    private static async Task WriteMeteorInputFilesAsync(string workingDirectory)
+    {
+        var questionEngineRoot = BuildQuestionEnginePath(workingDirectory);
+        Directory.CreateDirectory(questionEngineRoot);
+        await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-answer-set.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-driven-scene-plan.enriched.json"), JsonSerializer.Serialize(BuildMeteorEnrichedPlan(), JsonOptions));
+        await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-driven-narration.json"), JsonSerializer.Serialize(BuildMeteorNarration(), JsonOptions));
+    }
+
+    private static EnrichedQuestionScenePlanDto BuildMeteorEnrichedPlan() => new(
+        EventId,
+        RegionId,
+        "en",
+        "CasualSkyWatcher",
+        "Beginner",
+        [
+            BuildScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "The Geminids meteor shower peaks with many meteor streaks in a dark sky."),
+            BuildScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Use a dark open sky from east to overhead and notice the shower radiant hint."),
+            BuildScene(3, AstronomyQuestionTypes.When, "TimingGuide", "When is the best time?", "The best meteor viewing window is 2026-12-14 00:00–05:00 IST under a dark sky."),
+            BuildScene(4, AstronomyQuestionTypes.How, "ObservationGuide", "How can I watch it?", "No telescope is needed; avoid city lights and let your eyes adapt for meteor streaks."),
+            BuildScene(5, AstronomyQuestionTypes.Why, "Significance", "Why is it special?", "The Geminids are a strong annual meteor shower with low moon interference."),
+            BuildScene(6, AstronomyQuestionTypes.Action, "ClosingAction", "What should I do now?", "Set a reminder, check weather, and pick a dark landscape for the Geminids meteor shower.")
+        ],
+        true,
+        DateTimeOffset.Parse("2026-06-07T14:00:00Z"));
+
+    private static QuestionDrivenNarrationDto BuildMeteorNarration() => new(
+        EventId,
+        RegionId,
+        "en",
+        [
+            BuildNarrationScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "The Geminids meteor shower peaks in a dark sky.", "The Geminids meteor shower brings bright meteor streaks across the dark sky.", "Geminids meteor shower peak."),
+            BuildNarrationScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Watch east to overhead from a dark open sky.", "Face a dark open sky from east to overhead and use the radiant as only a subtle hint.", "Look east to overhead."),
+            BuildNarrationScene(3, AstronomyQuestionTypes.When, "TimingGuide", "When is the best time?", "The best meteor window is 2026-12-14 00:00–05:00 IST.", "The best window is 2026-12-14 00:00–05:00 IST, from midnight to pre-dawn.", "Midnight to pre-dawn."),
+            BuildNarrationScene(4, AstronomyQuestionTypes.How, "ObservationGuide", "How can I watch it?", "No telescope; avoid city lights and let your eyes adapt.", "You need no telescope; avoid city lights, let your eyes adapt, and watch the open sky.", "No telescope needed."),
+            BuildNarrationScene(5, AstronomyQuestionTypes.Why, "Significance", "Why is it special?", "A strong annual meteor shower with low moon interference.", "The Geminids are a strong annual meteor shower, and low moon interference helps faint streaks stand out.", "Strong shower, low Moon."),
+            BuildNarrationScene(6, AstronomyQuestionTypes.Action, "ClosingAction", "What should I do now?", "Set a reminder and check weather for a dark location.", "Set a reminder, check weather, and choose a dark location with a clear open sky.", "Set a reminder.")
+        ],
+        54,
+        DateTimeOffset.Parse("2026-06-07T14:05:00Z"));
 
     private static async Task WriteInputFilesAsync(string workingDirectory)
     {

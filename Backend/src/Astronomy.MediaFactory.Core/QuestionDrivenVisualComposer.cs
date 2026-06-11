@@ -105,7 +105,9 @@ public sealed record QuestionDrivenVisualSpec(
     IReadOnlyList<string> OverlayText,
     IReadOnlyList<string> ProgrammaticLayers,
     IReadOnlyList<string> AccessibilityCues,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    string EventType,
+    bool UsesLocalPlanetAssets);
 
 
 public sealed record AstronomyInfographicDesignRequest(

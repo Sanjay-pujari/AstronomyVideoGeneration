@@ -26,7 +26,7 @@ public sealed class AstronomyInfographicRenderer(
     public async Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken, AstronomyInfographicRenderVariant? variant = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
-        var planetAssetsAvailable = !string.IsNullOrWhiteSpace(venusAssetPath) && !string.IsNullOrWhiteSpace(jupiterAssetPath) && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath);
+        var planetAssetsAvailable = spec.UsesLocalPlanetAssets && !string.IsNullOrWhiteSpace(venusAssetPath) && !string.IsNullOrWhiteSpace(jupiterAssetPath) && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath);
 
         var targetVariant = variant ?? AstronomyInfographicRenderVariant.LongForm;
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
@@ -56,8 +56,8 @@ public sealed class AstronomyInfographicRenderer(
             spec.ViewerQuestion,
             spec.ViewerTakeaway,
             spec.QuestionType,
-            BuildPlanetAssets(venusAssetPath, jupiterAssetPath),
-            mood: "WarmTwilightQuestionScene",
+            spec.UsesLocalPlanetAssets ? BuildPlanetAssets(venusAssetPath, jupiterAssetPath) : [],
+            mood: IsMeteorVisual(spec) ? "DarkMeteorShowerScene" : "WarmTwilightQuestionScene",
             westMarkerLabel: string.Empty,
             starDensity: 720,
             showReferenceOverlays: false,
@@ -66,7 +66,7 @@ public sealed class AstronomyInfographicRenderer(
         image.Mutate(ctx =>
         {
             skyGuidanceLayer.Render(ctx, spec, fonts);
-            if (File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)) celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
+            if (spec.UsesLocalPlanetAssets && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)) celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
             educationalLayer.Render(ctx, spec, fonts);
             annotationLayer.Render(ctx, spec, fonts);
             backgroundLayer.RenderVignette(ctx);
@@ -84,8 +84,8 @@ public sealed class AstronomyInfographicRenderer(
             GetShortFormCopy(spec).Title,
             GetShortFormCopy(spec).Subtitle,
             spec.QuestionType,
-            BuildPlanetAssets(venusAssetPath, jupiterAssetPath),
-            mood: "WarmTwilightQuestionScene",
+            spec.UsesLocalPlanetAssets ? BuildPlanetAssets(venusAssetPath, jupiterAssetPath) : [],
+            mood: IsMeteorVisual(spec) ? "DarkMeteorShowerScene" : "WarmTwilightQuestionScene",
             westMarkerLabel: string.Empty,
             starDensity: 520,
             showReferenceOverlays: false,
@@ -124,7 +124,11 @@ public sealed class AstronomyInfographicRenderer(
     private static void DrawNativeShortFormVisual(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath)
     {
         var layout = GetNativeShortFormLayout(spec.QuestionType);
-        if (!spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase))
+        if (IsMeteorVisual(spec))
+        {
+            DrawPortraitMeteorVisual(ctx, spec.SceneNumber);
+        }
+        else if (spec.UsesLocalPlanetAssets && !spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase))
         {
             if (File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath))
             {
@@ -134,6 +138,8 @@ public sealed class AstronomyInfographicRenderer(
                 DrawPortraitAsset(ctx, jupiterAssetPath, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D");
             }
         }
+
+        if (!spec.UsesLocalPlanetAssets) return;
 
         switch (spec.QuestionType.ToLowerInvariant())
         {
@@ -167,7 +173,25 @@ public sealed class AstronomyInfographicRenderer(
         ctx.DrawText(new RichTextOptions(captionFonts.SmallFont) { Origin = new PointF(margin, 1652), WrappingLength = textWidth }, spec.ViewerQuestion, Color.ParseHex("#B7E0FF").WithAlpha(.90f));
     }
 
-    private static (string Title, string Subtitle, string Caption) GetShortFormCopy(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
+    private static (string Title, string Subtitle, string Caption) GetShortFormCopy(QuestionDrivenVisualSpec spec)
+    {
+        if (IsMeteorVisual(spec))
+        {
+            return spec.QuestionType.ToLowerInvariant() switch
+            {
+                "what" => ("Meteor Shower Peak", "Dark sky alert", "Meteor streaks radiate from a subtle shower radiant."),
+                "where" => ("Look East to Overhead", "Dark open sky", "Use the whole dark sky and a subtle radiant hint."),
+                "when" => ("Best Window", "Midnight to pre-dawn", "Meteor activity is best under a dark sky."),
+                "how" => ("No Telescope", "Let eyes adapt", "Avoid city lights and watch the open sky."),
+                "why" => ("Strong Annual Shower", "Low Moon interference", "Dark skies help faint meteor streaks stand out."),
+                "action" => ("Set a Reminder", "Check weather", "Pick a dark landscape and watch overhead."),
+                _ => (spec.ViewerQuestion, spec.ViewerTakeaway, spec.CaptionText)
+            };
+        }
+
+        if (!spec.UsesLocalPlanetAssets) return (spec.ViewerQuestion, spec.ViewerTakeaway, spec.CaptionText);
+
+        return spec.QuestionType.ToLowerInvariant() switch
     {
         "what" => ("Venus & Jupiter", "After sunset", "Venus and Jupiter shine close tonight."),
         "where" => ("Look West", "Venus + Jupiter", "Look west, about one-third above the horizon."),
@@ -177,6 +201,7 @@ public sealed class AstronomyInfographicRenderer(
         "action" => ("Step Outside Tonight", "Look west", "Clear skies? Step outside and look west."),
         _ => (spec.ViewerQuestion, spec.ViewerTakeaway, spec.CaptionText)
     };
+    }
 
     private static PlanetPairPlacement GetNativeShortFormLayout(string questionType) => questionType.ToLowerInvariant() switch
     {
@@ -240,6 +265,27 @@ public sealed class AstronomyInfographicRenderer(
         ctx.Fill(Color.ParseHex("#05040A").WithAlpha(.82f), new RectangleF(0, 1746, 1080, 174));
     }
 
+    private static void DrawPortraitMeteorVisual(IImageProcessingContext ctx, int sceneNumber)
+    {
+        var random = new Random(53000 + sceneNumber);
+        for (var i = 0; i < 9; i++)
+        {
+            var x = 130 + random.Next(780);
+            var y = 500 + random.Next(690);
+            var length = 110 + random.Next(190);
+            var to = new PointF(x + length, y - length * .42f);
+            ctx.Draw(Color.White.WithAlpha(.56f), 3, new PathBuilder().AddLine(new PointF(x, y), to).Build());
+            ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.20f), 8, new PathBuilder().AddLine(new PointF(x - 8, y + 4), to).Build());
+        }
+        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.36f), 3, new EllipsePolygon(590, 720, 84, 52));
+        DrawPortraitText(ctx, "subtle radiant", 492, 790, 260, Color.ParseHex("#B7E0FF"), 26, FontStyle.Bold);
+    }
+
+    private static bool IsMeteorVisual(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase)
+            || spec.BackgroundPrompt.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || spec.ProgrammaticLayers.Any(layer => layer.Contains("meteor", StringComparison.OrdinalIgnoreCase));
+
     private static void DrawPortraitText(IImageProcessingContext ctx, string text, float x, float y, float width, Color color, float size, FontStyle style)
     {
         var scale = Math.Max(.5f, size / 24f);
@@ -279,10 +325,16 @@ public sealed class AstronomyBackgroundLayerRenderer
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec)
     {
         var sceneNumber = spec.SceneNumber;
-        RenderSmoothSky(ctx, sceneNumber);
+        RenderSmoothSky(ctx, sceneNumber, IsMeteorVisual(spec));
         RenderStars(ctx, sceneNumber);
-        RenderLandscape(ctx, sceneNumber);
+        if (IsMeteorVisual(spec)) RenderMeteorStreaks(ctx, sceneNumber);
+        RenderLandscape(ctx, sceneNumber, IsMeteorVisual(spec));
     }
+
+    private static bool IsMeteorVisual(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase)
+            || spec.BackgroundPrompt.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || spec.ProgrammaticLayers.Any(layer => layer.Contains("meteor", StringComparison.OrdinalIgnoreCase));
 
     public void RenderVignette(IImageProcessingContext ctx)
     {
@@ -308,14 +360,14 @@ public sealed class AstronomyBackgroundLayerRenderer
         ctx.DrawImage(vignette, 1f);
     }
 
-    private static void RenderSmoothSky(IImageProcessingContext ctx, int sceneNumber)
+    private static void RenderSmoothSky(IImageProcessingContext ctx, int sceneNumber, bool meteorVisual)
     {
-        var stops = GetSkyStops(sceneNumber);
+        var stops = meteorVisual ? GetMeteorSkyStops(sceneNumber) : GetSkyStops(sceneNumber);
         var random = new Random(18400 + sceneNumber);
         var horizonHazeColor = Color.ParseHex("#FFF1C4").ToPixel<Rgba32>();
         var upperHazeColor = Color.ParseHex("#8FD2FF").ToPixel<Rgba32>();
         var glowColor = Color.ParseHex(sceneNumber is 1 or 3 or 6 ? "#FF9A45" : "#B7E0FF").ToPixel<Rgba32>();
-        var warmHorizonStrength = sceneNumber switch { 1 => 1.42f, 6 => 1.34f, 3 => 1f, 5 => 0.54f, _ => 0.35f };
+        var warmHorizonStrength = meteorVisual ? 0.10f : sceneNumber switch { 1 => 1.42f, 6 => 1.34f, 3 => 1f, 5 => 0.54f, _ => 0.35f };
         var horizonHazeStrength = sceneNumber switch { 1 => 0.155f, 6 => 0.148f, 5 => 0.072f, _ => 0.10f };
         var focalGlowStrength = sceneNumber switch { 1 => 0.175f, 6 => 0.145f, 3 => 0.11f, 5 => 0.070f, _ => 0.032f };
         var upperHazeStrength = sceneNumber switch { 1 => 0.032f, 5 => 0.025f, 6 => 0.030f, _ => 0.018f };
@@ -364,6 +416,31 @@ public sealed class AstronomyBackgroundLayerRenderer
         });
 
         ctx.DrawImage(sky, 1f);
+    }
+
+    private static SkyColorStop[] GetMeteorSkyStops(int sceneNumber) =>
+    [
+        new(0f, Color.ParseHex("#02040B")),
+        new(.38f, Color.ParseHex(sceneNumber is 5 ? "#07112A" : "#050B1B")),
+        new(.72f, Color.ParseHex("#07101D")),
+        new(1f, Color.ParseHex("#02040A"))
+    ];
+
+    private static void RenderMeteorStreaks(IImageProcessingContext ctx, int sceneNumber)
+    {
+        var random = new Random(44000 + sceneNumber);
+        var count = sceneNumber is 1 or 5 or 6 ? 13 : 8;
+        var radiant = new PointF(sceneNumber == 2 ? 1180 : 1040, sceneNumber == 2 ? 280 : 245);
+        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.24f), 2, new EllipsePolygon(radiant.X, radiant.Y, 58, 38));
+        for (var i = 0; i < count; i++)
+        {
+            var angle = -0.92f + (float)(random.NextDouble() * .42 - .21);
+            var length = 85 + random.Next(210);
+            var start = new PointF(180 + random.Next(CanvasWidth - 360), 95 + random.Next(590));
+            var end = new PointF(start.X + MathF.Cos(angle) * length, start.Y + MathF.Sin(angle) * length);
+            ctx.Draw(Color.White.WithAlpha(.62f), 2, new PathBuilder().AddLine(start, end).Build());
+            ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.16f), 7, new PathBuilder().AddLine(new PointF(start.X - 5, start.Y + 3), end).Build());
+        }
     }
 
     private static SkyColorStop[] GetSkyStops(int sceneNumber) => sceneNumber switch
@@ -530,8 +607,16 @@ public sealed class AstronomyBackgroundLayerRenderer
         _ => []
     };
 
-    private static void RenderLandscape(IImageProcessingContext ctx, int sceneNumber)
+    private static void RenderLandscape(IImageProcessingContext ctx, int sceneNumber, bool meteorVisual)
     {
+        if (meteorVisual)
+        {
+            DrawLowHorizon(ctx, sceneNumber is 2 ? 790 : 835, "#05070D");
+            ctx.Fill(Color.Black.WithAlpha(.58f), new RectangleF(0, 900, CanvasWidth, 180));
+            DrawForegroundHaze(ctx, 700, 310, "#8FB7FF", .026f);
+            return;
+        }
+
         switch (sceneNumber)
         {
             case 1:
@@ -632,7 +717,7 @@ public sealed class CelestialObjectLayerRenderer
 {
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath)
     {
-        if (spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase)) return;
+        if (!spec.UsesLocalPlanetAssets || spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase)) return;
         var positions = PlanetLayout.GetPlacements(spec.QuestionType);
         DrawRelationshipGlow(ctx, spec.QuestionType, positions);
         DrawAsset(ctx, venusAssetPath, positions.Venus.Center, positions.Venus.Diameter, "#FFF2B8");
@@ -700,6 +785,12 @@ public sealed class SkyGuidanceLayerRenderer
 {
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts)
     {
+        if (!spec.UsesLocalPlanetAssets)
+        {
+            if (IsMeteorVisual(spec)) DrawMeteorRadiantGuide(ctx, fonts.SmallFont);
+            return;
+        }
+
         switch (spec.QuestionType.ToLowerInvariant())
         {
             case "where":
@@ -716,6 +807,17 @@ public sealed class SkyGuidanceLayerRenderer
                 DrawClosenessBracket(ctx, PlanetLayout.GetPlacements(spec.QuestionType), fonts.SmallFont);
                 break;
         }
+    }
+
+    private static bool IsMeteorVisual(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase)
+            || spec.ProgrammaticLayers.Any(layer => layer.Contains("meteor", StringComparison.OrdinalIgnoreCase));
+
+    private static void DrawMeteorRadiantGuide(IImageProcessingContext ctx, Font font)
+    {
+        var radiant = new PointF(1200, 255);
+        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.34f), 2, new EllipsePolygon(radiant.X, radiant.Y, 70, 46));
+        Text(ctx, "subtle shower radiant", font, radiant.X + 52, radiant.Y + 28, Color.ParseHex("#B7E0FF").WithAlpha(.70f), 330);
     }
 
     private static void DrawSkyGrid(IImageProcessingContext ctx)
@@ -777,6 +879,12 @@ public sealed class EducationalLayerRenderer
 {
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts)
     {
+        if (!spec.UsesLocalPlanetAssets)
+        {
+            if (IsMeteorVisual(spec)) DrawMeteorEducation(ctx, spec, fonts);
+            return;
+        }
+
         switch (spec.QuestionType.ToLowerInvariant())
         {
             case "when":
@@ -788,6 +896,34 @@ public sealed class EducationalLayerRenderer
             case "why":
                 DrawComparisonStrip(ctx, fonts.SmallFont);
                 break;
+        }
+    }
+
+    private static bool IsMeteorVisual(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase)
+            || spec.ProgrammaticLayers.Any(layer => layer.Contains("meteor", StringComparison.OrdinalIgnoreCase));
+
+    private static void DrawMeteorEducation(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts)
+    {
+        if (spec.QuestionType.Equals("When", StringComparison.OrdinalIgnoreCase))
+        {
+            Text(ctx, "Midnight to pre-dawn", fonts.TitleFont, 160, 135, Color.White, 820);
+            ctx.Draw(Color.ParseHex("#8FD2FF"), 5, new PathBuilder().AddLine(new PointF(320, 575), new PointF(1540, 575)).Build());
+            Text(ctx, "dark-sky meteor window", fonts.SmallFont, 610, 455, Color.ParseHex("#B7E0FF"), 460);
+        }
+        else if (spec.QuestionType.Equals("How", StringComparison.OrdinalIgnoreCase))
+        {
+            var items = new[] { ("1", "Avoid city lights", new PointF(150, 155)), ("2", "Let eyes adapt", new PointF(150, 265)), ("3", "Watch open sky", new PointF(150, 375)) };
+            foreach (var (n, text, p) in items)
+            {
+                ctx.Fill(Color.ParseHex("#8FD2FF"), new EllipsePolygon(p.X, p.Y + 21, 24));
+                Text(ctx, n, fonts.SubtitleFont, p.X - 9, p.Y - 4, Color.ParseHex("#061124"), 40);
+                Text(ctx, text, fonts.SubtitleFont, p.X + 50, p.Y, Color.White, 560);
+            }
+        }
+        else if (spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase))
+        {
+            Text(ctx, "Strong annual shower + low Moon interference", fonts.SmallFont, 610, 595, Color.White, 760);
         }
     }
 
@@ -841,6 +977,12 @@ public sealed class AnnotationLayerRenderer
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts)
     {
         var text = new CollisionAwareTextPainter(ctx);
+        if (!spec.UsesLocalPlanetAssets)
+        {
+            DrawTitleStack(text, spec.OverlayText.FirstOrDefault() ?? spec.ViewerTakeaway, spec.OverlayText.Skip(1).FirstOrDefault() ?? spec.CaptionText, fonts, spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) ? new RectangleF(345, 844, 1000, 118) : new RectangleF(115, 44, 900, 158));
+            return;
+        }
+
         switch (spec.QuestionType.ToLowerInvariant())
         {
             case "what":
