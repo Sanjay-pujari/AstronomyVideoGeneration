@@ -107,7 +107,9 @@ public sealed record QuestionDrivenVisualSpec(
     IReadOnlyList<string> AccessibilityCues,
     DateTimeOffset GeneratedUtc,
     string EventType,
-    bool UsesLocalPlanetAssets);
+    bool UsesLocalPlanetAssets,
+    string? BestViewingWindowLocal = null,
+    IReadOnlyDictionary<string, string>? StrategyValidationFacts = null);
 
 
 public sealed record AstronomyInfographicDesignRequest(

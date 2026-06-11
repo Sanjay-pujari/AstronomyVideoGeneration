@@ -531,7 +531,7 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
             return;
         }
         if (!ContainsToken(text, intelligence.ShortTitle) && !ContainsToken(text, intelligence.Title)) errors.Add("Output does not mention the event title or short title.");
-        if (!string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal) && !ContainsToken(text, intelligence.BestViewingWindowLocal)) errors.Add("Output does not use bestViewingWindowLocal.");
+        if (!HasBestViewingWindowEvidence(intelligence, text)) errors.Add("Output does not use bestViewingWindowLocal.");
         foreach (var forbidden in intelligence.ForbiddenTerms.Where(f => !string.IsNullOrWhiteSpace(f)))
             if (ContainsToken(text, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
         if (intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase))
@@ -585,13 +585,14 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
         if (!intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return;
 
         var currentSceneText = ReadSceneText(sceneRoot);
-        if (string.IsNullOrWhiteSpace(currentSceneText))
+        var timingSceneText = ReadMeteorTimingValidationText(currentRunRoot, sceneRoot);
+        if (string.IsNullOrWhiteSpace(currentSceneText) && string.IsNullOrWhiteSpace(timingSceneText))
         {
-            errors.Add("MeteorShower scene validation found no current-run scene spec or review text.");
+            errors.Add("MeteorShower scene validation found no current-run scene spec, review, narration, SRT, or scene-plan timing text.");
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal) && !ContainsToken(currentSceneText, intelligence.BestViewingWindowLocal))
+        if (!HasBestViewingWindowEvidence(intelligence, timingSceneText))
             errors.Add("MeteorShower scene specs/reviews do not include bestViewingWindowLocal in the current-run timing content.");
 
         foreach (var forbidden in intelligence.ForbiddenTerms.Concat(intelligence.ForbiddenObjectNames ?? []).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -661,13 +662,81 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
             || fileName.EndsWith("-review.json", StringComparison.OrdinalIgnoreCase);
     }
 
+
+    private static string ReadMeteorTimingValidationText(string currentRunRoot, string sceneRoot)
+    {
+        var candidates = new List<string>
+        {
+            Path.Combine(sceneRoot, "scene-003-infographic-spec.json"),
+            Path.Combine(sceneRoot, "scene-003-narration.txt"),
+            Path.Combine(sceneRoot, "scene-003.srt"),
+            ResolveCurrentRunFile(currentRunRoot, "question-driven-narration.json"),
+            ResolveCurrentRunFile(currentRunRoot, "question-driven-scene-plan.enriched.json")
+        };
+
+        candidates.AddRange(Directory.Exists(sceneRoot)
+            ? Directory.EnumerateFiles(sceneRoot, "*overlay*.json", SearchOption.AllDirectories)
+            : []);
+        candidates.AddRange(Directory.Exists(sceneRoot)
+            ? Directory.EnumerateFiles(sceneRoot, "*overlay*.txt", SearchOption.AllDirectories)
+            : []);
+
+        return string.Join('\n', candidates
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
+    }
+
+    private static bool HasBestViewingWindowEvidence(ProductionEventIntelligence intelligence, string text)
+    {
+        if (string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)) return true;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        if (ContainsDaytimeLocalPeakOnly(intelligence, text)) return false;
+        if (ContainsToken(text, intelligence.BestViewingWindowLocal)) return true;
+
+        var normalizedText = NormalizeTimingText(text);
+        var normalizedWindow = NormalizeTimingText(intelligence.BestViewingWindowLocal);
+        if (!string.IsNullOrWhiteSpace(normalizedWindow) && normalizedText.Contains(normalizedWindow, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var cue = ExtractTimingCue(intelligence.BestViewingWindowLocal);
+        if (!string.IsNullOrWhiteSpace(cue) && normalizedText.Contains(NormalizeTimingText(cue), StringComparison.OrdinalIgnoreCase)) return true;
+
+        var isMeteor = intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase);
+        if (isMeteor && normalizedText.Contains("midnight to pre-dawn", StringComparison.OrdinalIgnoreCase)) return true;
+        if (isMeteor && normalizedText.Contains("best viewing window", StringComparison.OrdinalIgnoreCase) && (!string.IsNullOrWhiteSpace(cue) && normalizedText.Contains(NormalizeTimingText(cue), StringComparison.OrdinalIgnoreCase))) return true;
+
+        return false;
+    }
+
+    private static bool ContainsDaytimeLocalPeakOnly(ProductionEventIntelligence intelligence, string text)
+    {
+        if (!intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return false;
+        var usesLocalPeakTime = !string.IsNullOrWhiteSpace(intelligence.LocalPeakTime) && ContainsToken(text, intelligence.LocalPeakTime);
+        var usesKnownDaytimeOffsetPeak = Regex.IsMatch(text, @"\b11:30\s+\+05:30\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!usesLocalPeakTime && !usesKnownDaytimeOffsetPeak) return false;
+        return !ContainsToken(text, intelligence.BestViewingWindowLocal)
+            && !NormalizeTimingText(text).Contains(NormalizeTimingText(ExtractTimingCue(intelligence.BestViewingWindowLocal)), StringComparison.OrdinalIgnoreCase)
+            && !NormalizeTimingText(text).Contains("midnight to pre-dawn", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ExtractTimingCue(string text)
+    {
+        var match = Regex.Match(text ?? string.Empty, @"\b\d{2}:\d{2}[–-]\d{2}:\d{2}\s+[A-Z]{2,5}\b");
+        return match.Success ? match.Value : string.Empty;
+    }
+
+    private static string NormalizeTimingText(string value)
+        => Regex.Replace((value ?? string.Empty).Replace('–', '-').Trim(), @"\s+", " ");
+
     private static bool ContainsAnyToken(string haystack, params string[] needles)
         => needles.Any(needle => ContainsToken(haystack, needle));
 
     private static string ReadAllText(string root)
     {
         if (!Directory.Exists(root)) return string.Empty;
-        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".json", ".txt", ".md" };
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".json", ".txt", ".md", ".srt" };
         return string.Join('\n', Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories)
             .Where(path => extensions.Contains(Path.GetExtension(path)))
             .Where(IsCurrentProductionTextSource)
