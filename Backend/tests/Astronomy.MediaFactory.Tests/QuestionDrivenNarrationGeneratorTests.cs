@@ -115,7 +115,9 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             ContentStrategy: "LocalViewingGuide",
             RegionId: RegionId,
             Language: "en",
-            RequestedOutputs: ["ShortVideo", "LongVideo"]);
+            RequestedOutputs: ["ShortVideo", "LongVideo"],
+            Category: "RareEventAlert",
+            PlannedFormat: "ShortAndLongVideo");
 
         var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
             geminidsEventId,
@@ -128,6 +130,84 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.True(result.IsValid);
         Assert.Equal(geminidsEventId, result.EventId);
         Assert.Equal(6, result.SceneCount);
+    }
+
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_AllowsDbApprovedRareEventVideoPlanWithProductionStatusAndNoExternalEventId()
+    {
+        const string geminidsEventId = "e60aa11f-ad8c-440f-ad49-2079a435f8c1";
+        var planId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
+        var intelligenceId = Guid.Parse(geminidsEventId);
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, BuildEnrichedPlan(geminidsEventId));
+        var generator = CreateGenerator(workingDirectory);
+        var context = new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: planId,
+            AstronomyEventIntelligenceId: intelligenceId,
+            SourceExternalEventId: null,
+            IsDbApprovedPlanExecution: true,
+            ContentGenerationPlanExists: true,
+            ContentGenerationPlanStatus: "ProductionRunning",
+            ContentGenerationPlanPlanStatus: "ProductionRunning",
+            AstronomyEventIntelligenceExists: true,
+            AutoGenerateAllowed: true,
+            VerificationStatus: "Verified",
+            ContentStrategy: "LocalViewingGuide",
+            RegionId: RegionId,
+            Language: "en",
+            RequestedOutputs: ["LongVideo"],
+            Category: "RareEventAlert",
+            PlannedFormat: "LongVideo");
+
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            geminidsEventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            ProductionContext: context), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(geminidsEventId, result.EventId);
+    }
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_RejectsDbApprovedProductionPlanWhenCategoryIsNotRareEventAlert()
+    {
+        const string geminidsEventId = "e60aa11f-ad8c-440f-ad49-2079a435f8c1";
+        var planId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
+        var intelligenceId = Guid.Parse(geminidsEventId);
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, BuildEnrichedPlan(geminidsEventId));
+        var generator = CreateGenerator(workingDirectory);
+        var context = new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: planId,
+            AstronomyEventIntelligenceId: intelligenceId,
+            SourceExternalEventId: "daily-sky",
+            IsDbApprovedPlanExecution: true,
+            ContentGenerationPlanExists: true,
+            AstronomyEventIntelligenceExists: true,
+            AutoGenerateAllowed: true,
+            VerificationStatus: "Verified",
+            ContentStrategy: "LocalViewingGuide",
+            RegionId: RegionId,
+            Language: "en",
+            RequestedOutputs: ["ShortVideo"],
+            Category: "DailySkyGuide",
+            PlannedFormat: "ShortVideo");
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            geminidsEventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            ProductionContext: context), CancellationToken.None));
+
+        Assert.Contains("DB-approved Astronomy V1 production plan", ex.Message);
     }
 
     private static QuestionDrivenNarrationGenerator CreateGenerator(string workingDirectory)

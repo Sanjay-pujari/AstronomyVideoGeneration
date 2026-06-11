@@ -180,7 +180,9 @@ public sealed record ProductionPipelineExecutionContext(
     string? ContentStrategy = null,
     string? RegionId = null,
     string? Language = null,
-    IReadOnlyList<string>? RequestedOutputs = null);
+    IReadOnlyList<string>? RequestedOutputs = null,
+    string? Category = null,
+    string? PlannedFormat = null);
 
 public sealed record ProductionPipelineRequest(
     ContentPlanProductionPipelineRequest Request,
