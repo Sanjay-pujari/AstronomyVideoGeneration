@@ -262,7 +262,8 @@ public sealed record ProductionPhaseContext(
     bool OverwriteExisting,
     int StartPhaseNo,
     int EndPhaseNo,
-    bool RetryFailedOnly);
+    bool RetryFailedOnly,
+    IReadOnlyList<string>? DeletedFilesDueToOverwrite = null);
 
 public sealed record ProductionPhaseResult(
     int PhaseNo,
