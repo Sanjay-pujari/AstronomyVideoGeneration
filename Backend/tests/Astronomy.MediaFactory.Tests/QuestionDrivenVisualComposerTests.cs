@@ -290,6 +290,7 @@ public sealed class QuestionDrivenVisualComposerTests
                 new SkyGuidanceLayerRenderer(),
                 new EducationalLayerRenderer(),
                 new AnnotationLayerRenderer()),
+            new DefaultVisualSourceResolver(),
             NullLogger<QuestionDrivenVisualComposer>.Instance);
 
     private static async Task WriteMeteorInputFilesAsync(string workingDirectory)
