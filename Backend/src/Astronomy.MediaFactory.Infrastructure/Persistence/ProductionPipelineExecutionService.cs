@@ -16,6 +16,7 @@ public sealed class ProductionPipelineExecutionService(
     IThumbnailAssetIntelligenceService thumbnailEngine,
     IVideoAssemblyIntelligenceService videoAssemblyEngine,
     IEventProductionIntelligenceAdapter intelligenceAdapter,
+    IMediaEventStrategyResolver strategyResolver,
     IProductionPipelineQualityValidator qualityValidator,
     IOptions<RenderingOptions> renderingOptions,
     ILogger<ProductionPipelineExecutionService> logger) : IProductionPipelineExecutionService
@@ -33,9 +34,10 @@ public sealed class ProductionPipelineExecutionService(
         var errors = new List<string>();
         var generatedFiles = new List<string>();
         var outputRoot = request.OutputRoot;
-        var executionContext = request.ExecutionContext;
         var productionIntelligence = intelligenceAdapter.Normalize(request);
-        var eventWorkingRoot = BuildEventWorkingRoot(productionRequest, eventId);
+        var strategy = strategyResolver.Resolve(productionIntelligence.EventType, productionIntelligence.Title);
+        var executionContext = BuildProductionExecutionContext(request.ExecutionContext, productionRequest, request.AstronomyEventIntelligenceId, outputRoot, productionIntelligence, strategy);
+        var eventWorkingRoot = executionContext.QuestionRoot is { Length: > 0 } ? Directory.GetParent(executionContext.QuestionRoot)?.FullName ?? outputRoot : BuildEventWorkingRoot(productionRequest, eventId);
 
         if (request.OverwriteExisting)
         {
@@ -115,7 +117,8 @@ public sealed class ProductionPipelineExecutionService(
                 OverwriteExisting = request.OverwriteExisting,
                 OutputMode = "Production",
                 ShortForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeShort", ScenePresentationProfile = ScenePresentationProfile.ShortForm, TargetDurationSeconds = 60, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 12, DuckMusicUnderNarration = true },
-                LongForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeLong", ScenePresentationProfile = ScenePresentationProfile.LongForm, TargetDurationSeconds = 360, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 10, DuckMusicUnderNarration = true }
+                LongForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeLong", ScenePresentationProfile = ScenePresentationProfile.LongForm, TargetDurationSeconds = 360, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 10, DuckMusicUnderNarration = true },
+                ProductionContext = executionContext
             }, cancellationToken);
             generatedFiles.AddRange(assemblyResponse.GeneratedFiles);
 
@@ -151,6 +154,42 @@ public sealed class ProductionPipelineExecutionService(
         return path;
     }
 
+    private ProductionPipelineExecutionContext BuildProductionExecutionContext(ProductionPipelineExecutionContext? baseContext, ContentPlanProductionPipelineRequest request, Guid eventId, string planRoot, ProductionEventIntelligence intelligence, IMediaEventStrategy strategy)
+    {
+        var year = request.ScheduledUtc?.Year ?? request.PeakUtc?.Year ?? request.StartUtc?.Year ?? DateTimeOffset.UtcNow.Year;
+        var questionRoot = Path.Combine(planRoot, "question-engine");
+        var sceneRoot = Path.Combine(planRoot, "scene-approval-v3");
+        var heroRoot = Path.Combine(planRoot, "hero");
+        var thumbnailRoot = Path.Combine(planRoot, "thumbnails");
+        var narrationRoot = Path.Combine(planRoot, "narration");
+        var ttsRoot = Path.Combine(planRoot, "tts");
+        var videoAssemblyRoot = Path.Combine(planRoot, "video-assembly");
+        var validationRoot = Path.Combine(planRoot, "validation");
+        var contract = new ProductionExecutionContext(request.PlanId, eventId, request.RegionId, request.Language, year, request.EventType, request.Category, planRoot, questionRoot, sceneRoot, heroRoot, thumbnailRoot, narrationRoot, ttsRoot, videoAssemblyRoot, validationRoot, intelligence, strategy);
+        return (baseContext ?? new ProductionPipelineExecutionContext(true, request.PlanId, eventId, request.SourceExternalEventId, true)) with
+        {
+            ContentGenerationPlanId = request.PlanId,
+            AstronomyEventIntelligenceId = eventId,
+            RegionId = request.RegionId,
+            Language = request.Language,
+            Category = request.Category,
+            Year = year,
+            EventType = request.EventType,
+            PlanRoot = planRoot,
+            QuestionRoot = questionRoot,
+            SceneRoot = sceneRoot,
+            HeroRoot = heroRoot,
+            ThumbnailRoot = thumbnailRoot,
+            NarrationRoot = narrationRoot,
+            TtsRoot = ttsRoot,
+            VideoAssemblyRoot = videoAssemblyRoot,
+            ValidationRoot = validationRoot,
+            ProductionEventIntelligence = intelligence,
+            MediaEventStrategy = strategy,
+            ProductionExecutionContext = contract
+        };
+    }
+
     private string BuildEventWorkingRoot(ContentPlanProductionPipelineRequest request, string eventId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", Sanitize(request.RegionId), "events", eventId);
 
@@ -176,13 +215,19 @@ public sealed class ProductionPipelineExecutionService(
     {
         var copied = new List<string>();
         var eventRoot = BuildEventWorkingRoot(request, eventId);
+        if (Directory.Exists(Path.Combine(outputRoot, "question-engine")))
+            eventRoot = outputRoot;
         CopyFile(Path.Combine(eventRoot, "question-engine", "question-answer-set.json"), Path.Combine(outputRoot, "question-engine", "questions.json"), copied);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "short"), Path.Combine(outputRoot, "scene-approval-v3", "short"), copied, renameFinalScenes: true);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "long"), Path.Combine(outputRoot, "scene-approval-v3", "long"), copied, renameFinalScenes: true);
         CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-landscape.png"), Path.Combine(outputRoot, "thumbnails", "landscape.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-square.png"), Path.Combine(outputRoot, "thumbnails", "square.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-portrait.png"), Path.Combine(outputRoot, "thumbnails", "portrait.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "thumbnails", "thumbnail-landscape.png"), Path.Combine(outputRoot, "thumbnails", "landscape.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "thumbnails", "thumbnail-square.png"), Path.Combine(outputRoot, "thumbnails", "square.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "thumbnails", "thumbnail-portrait.png"), Path.Combine(outputRoot, "thumbnails", "portrait.png"), copied);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "video-narration-script.json"), Path.Combine(outputRoot, "narration", "short", "narration.txt"), copied, jsonNarrationToText: true);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "long", "video-long-narration-script.json"), Path.Combine(outputRoot, "narration", "long", "narration.txt"), copied, jsonNarrationToText: true);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "video-tts-audio.mp3"), Path.Combine(outputRoot, "tts", "short", "narration.wav"), copied);
@@ -223,6 +268,7 @@ public sealed class ProductionPipelineExecutionService(
     private static void CopyFile(string source, string target, List<string> copied, bool jsonNarrationToText = false)
     {
         if (!File.Exists(source)) return;
+        if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) return;
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         if (jsonNarrationToText)
         {

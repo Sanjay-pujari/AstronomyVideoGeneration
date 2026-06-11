@@ -88,7 +88,7 @@ public sealed class QuestionScenePlanner(
 
         var warnings = new List<string>();
         var questionSet = await ResolveQuestionSetAsync(request, warnings, cancellationToken);
-        var outputPath = BuildOutputPath(questionSet.AstronomyEventIntelligenceId, request.RegionId);
+        var outputPath = BuildOutputPath(questionSet.AstronomyEventIntelligenceId, request.RegionId, request.ProductionContext);
 
         if (!request.OverwriteExisting && File.Exists(outputPath))
         {
@@ -449,8 +449,11 @@ public sealed class QuestionScenePlanner(
             throw new ArgumentException("language is required.", nameof(request));
     }
 
-    private string BuildOutputPath(Guid eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", eventId.ToString("D"), "question-engine", "question-driven-scene-plan.json");
+    private string BuildOutputPath(Guid eventId, string regionId, ProductionPipelineExecutionContext? productionContext)
+        => Path.Combine(!string.IsNullOrWhiteSpace(productionContext?.QuestionRoot)
+            ? productionContext!.QuestionRoot!
+            : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", eventId.ToString("D"), "question-engine"),
+            "question-driven-scene-plan.json");
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

@@ -42,6 +42,8 @@ public sealed class VideoAssemblyGenerationRequest
     public VideoAssemblyFormRequest? ShortForm { get; set; }
 
     public VideoAssemblyFormRequest? LongForm { get; set; }
+
+    public ProductionPipelineExecutionContext? ProductionContext { get; set; }
 }
 
 public sealed class VideoAssemblyFormRequest

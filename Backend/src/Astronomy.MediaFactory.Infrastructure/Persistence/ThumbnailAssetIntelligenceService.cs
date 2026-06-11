@@ -15,9 +15,6 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions> renderingOptions) : IThumbnailAssetIntelligenceService
 {
-    private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
-    private const string GoldenRegionId = "IN-RJ-UDAIPUR";
-    private const string GoldenLanguage = "en";
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string ThumbnailAssetsDirectoryName = "thumbnail-assets";
     private const string QuestionEngineDirectoryName = "question-engine";
@@ -32,10 +29,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailLayoutValidationFileName = "thumbnail-layout-validation.json";
     private const string SelectedThumbnailHook = "DON'T MISS THIS TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private ProductionPipelineExecutionContext? _activeProductionContext;
 
     public async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailAssetsAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        _activeProductionContext = request.ProductionContext;
         ValidateRequest(request);
 
         if (string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase))
@@ -1143,20 +1142,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             && !string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase)
             && !IsImageGenerationPhase(request.Phase))
             throw new ArgumentException("Only thumbnail asset phases 'Intelligence', 'Composition', 'SceneSelection', and 'ImageGeneration' are supported in this endpoint version.", nameof(request));
-        if (string.IsNullOrWhiteSpace(request.EventId)
-            || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail intelligence generation requires a non-empty event id for IN-RJ-UDAIPUR / en.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.EventId) || string.IsNullOrWhiteSpace(request.RegionId) || string.IsNullOrWhiteSpace(request.Language))
+            throw new ArgumentException("Thumbnail intelligence generation requires event id, region id, and language.", nameof(request));
     }
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.QuestionRoot) ? _activeProductionContext!.QuestionRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
 
     private string BuildHeroAssetsRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.HeroRoot) ? _activeProductionContext!.HeroRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
 
     private string BuildThumbnailAssetsRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.ThumbnailRoot) ? _activeProductionContext!.ThumbnailRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName);
 
     private string BuildThumbnailIntelligenceOutputPath(string eventId, string regionId)
         => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailIntelligenceFileName);

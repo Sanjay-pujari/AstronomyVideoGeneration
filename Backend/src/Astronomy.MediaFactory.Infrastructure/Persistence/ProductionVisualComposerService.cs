@@ -275,10 +275,10 @@ public sealed class ProductionVisualComposerService(
 
     private static string SceneActionHint(SceneVisualSpec spec) => spec.SceneNumber switch
     {
-        1 => "Tonight’s target is easy to spot with a clear western view",
-        2 => "Identify Venus first, then look above it for Jupiter",
-        3 => "Use the horizon, wait for twilight, then scan upward",
-        4 => "Step outside after sunset if the sky is clear",
+        1 => $"Tonight’s target: {string.Join(" + ", spec.Objects.Take(2))}",
+        2 => $"Use the approved direction: {spec.Direction}",
+        3 => "Use the viewing guide, then scan the sky",
+        4 => $"Step outside during {spec.BestViewingTime} if the sky is clear",
         _ => string.Join(" • ", spec.Objects.Take(3))
     };
 
@@ -293,8 +293,8 @@ public sealed class ProductionVisualComposerService(
 
     private static string DirectionMarkerBody(SceneVisualSpec spec) => spec.SceneNumber switch
     {
-        1 => "Face west after sunset",
-        2 => $"Venus below Jupiter\n{spec.Direction}",
+        1 => $"Face {spec.Direction}",
+        2 => $"{string.Join(" + ", spec.Objects.Take(2))}\n{spec.Direction}",
         3 => "Clear horizon\nDark-adapted eyes",
         4 => $"Clear skies over {CleanLocationName(spec.Location)}",
         _ => $"{spec.Direction}\n{spec.BestViewingTime}"
@@ -420,8 +420,8 @@ public sealed class ProductionVisualComposerService(
         if (objects.Length == 0) objects = ExtractKnownObjects($"{plan.Title} {intelligence?.Title} {intelligence?.Summary} {sidecar.SearchText} {string.Join(' ', sceneHints.Values.Select(s => s.Narration))}").ToArray();
         var eventTitle = FirstNonEmpty(plan.Title, intelligence?.Title, plan.AstronomyContentOpportunity?.Title, string.Join(" and ", objects), "Tonight's sky event");
         var location = FirstNonEmpty(intelligence?.LocationName, intelligence?.RegionId, plan.RegionId);
-        var direction = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["direction", "observationDirection", "lookDirection", "azimuthDirection"]), sidecar.Direction, FindDirection(eventTitle + " " + intelligence?.Summary + " " + sidecar.SearchText), "western sky");
-        var rawBestTime = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["bestViewingTime", "bestTime", "viewingTime", "localViewingTime"]), sidecar.BestViewingTime, FormatViewingTime(intelligence?.PeakUtc, intelligence?.TimeZone, plan.RegionId), "after sunset");
+        var direction = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["direction", "observationDirection", "lookDirection", "azimuthDirection", "skyDirectionHint"]), sidecar.Direction, FindDirection(eventTitle + " " + intelligence?.Summary + " " + sidecar.SearchText), "open sky");
+        var rawBestTime = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["bestViewingWindowLocal", "bestViewingTime", "bestTime", "viewingTime", "localViewingTime"]), sidecar.BestViewingTime, FormatViewingTime(intelligence?.PeakUtc, intelligence?.TimeZone, plan.RegionId), "best local viewing window");
         var bestTime = NormalizeViewingTime(rawBestTime, intelligence?.PeakUtc, intelligence?.TimeZone, plan.RegionId);
         var notes = BuildViewerFacingNotes(intelligence?.Summary, intelligence?.Description, sidecar.VisibilityNotes, plan.PlanningReason, location, objects);
         return new EventContext(FirstNonEmpty(intelligence?.EventType, plan.PrimaryAstronomyEventTypeCode, "Sky event"), eventTitle, objects, location, direction, bestTime, notes);
@@ -430,17 +430,15 @@ public sealed class ProductionVisualComposerService(
     private static SceneVisualSpec BuildVisualSpec(int sceneNumber, ContentGenerationPlan plan, EventContext evt, SceneHint scene)
     {
         var purpose = ResolvePurpose(sceneNumber, scene.Purpose);
-        var objects = EnsureVenusJupiterObjects(evt.Objects);
-        var eventTitle = objects.Any(o => o.Contains("venus", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Contains("jupiter", StringComparison.OrdinalIgnoreCase))
-            ? "Venus and Jupiter Tonight"
-            : evt.EventTitle;
+        var objects = ResolveEventObjects(evt);
+        var eventTitle = evt.EventTitle;
         var direction = NormalizeViewerDirection(evt.Direction);
-        var bestViewingTime = FirstNonEmpty(evt.BestViewingTime, "after sunset");
+        var bestViewingTime = FirstNonEmpty(evt.BestViewingTime, "best local viewing window");
         var overlay = BuildSceneOverlay(sceneNumber, evt.Location, direction, bestViewingTime);
         var style = sceneNumber switch
         {
             2 => "identification-focused astronomy layout with clear object placement",
-            3 => "educational step-by-step western horizon viewing guide",
+            3 => "educational step-by-step event viewing guide",
             4 => "warm cinematic closing reminder astronomy scene",
             _ => "high-impact twilight astronomy hook scene"
         };
@@ -463,32 +461,31 @@ public sealed class ProductionVisualComposerService(
             true);
     }
 
-    private static IReadOnlyList<string> EnsureVenusJupiterObjects(IReadOnlyList<string> source)
+    private static IReadOnlyList<string> ResolveEventObjects(EventContext evt)
     {
-        var result = source.Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (!result.Any(o => o.Contains("venus", StringComparison.OrdinalIgnoreCase))) result.Insert(0, "Venus");
-        if (!result.Any(o => o.Contains("jupiter", StringComparison.OrdinalIgnoreCase))) result.Add("Jupiter");
+        var result = evt.Objects.Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (result.Count == 0) result.Add(evt.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "meteor shower radiant" : evt.EventTitle);
         return result;
     }
 
     private static IReadOnlyList<string> BuildSceneOverlay(int sceneNumber, string location, string direction, string bestViewingTime) => sceneNumber switch
     {
-        1 => ["Venus & Jupiter Tonight", "Look West After Sunset"],
-        2 => ["Venus below Jupiter", $"Best {NormalizeBestViewingLine(bestViewingTime)}", NormalizeWesternSkyLine(direction)],
-        3 => ["Find a clear western horizon", "Wait after sunset", "Let your eyes adjust"],
-        4 => ["Don’t miss this pairing", $"Clear skies over {CleanLocationName(location)}"],
-        _ => ["Look west after sunset"]
+        1 => ["Sky event tonight", NormalizeBestViewingLine(bestViewingTime)],
+        2 => [NormalizeWesternSkyLine(direction), $"Best {NormalizeBestViewingLine(bestViewingTime)}"],
+        3 => ["Use the approved viewing guide", "Let your eyes adjust"],
+        4 => [$"Clear skies over {CleanLocationName(location)}", "Set a reminder"],
+        _ => [NormalizeWesternSkyLine(direction)]
     };
 
     private static string BuildSceneImagePrompt(int sceneNumber, string eventTitle, string location, string direction, string bestViewingTime)
     {
-        const string backgroundOnly = "AI background only: provide twilight sky and horizon mood, no planets, no labels, no arrows, no text, no UI cards.";
+        const string backgroundOnly = "AI background only: provide event-appropriate sky and horizon mood, no unrelated planets, no labels, no arrows, no text, no UI cards.";
         return sceneNumber switch
         {
-            1 => $"Hook scene for {eventTitle}: attention-grabbing western twilight over {location}, dramatic sunset glow, open sky for programmatic Venus and Jupiter assets. Purpose: make viewers instantly know a bright pairing is happening tonight. {backgroundOnly}",
-            2 => $"Identification scene for {eventTitle}: clean western-sky observing background over {location}, uncluttered horizon, space reserved for Venus below Jupiter and a {bestViewingTime} callout. Purpose: show which objects to watch and when. {backgroundOnly}",
-            3 => $"Viewing guide scene: practical clear {direction} horizon background after sunset, simple foreground silhouette, open space for arrows, direction marker, and three action steps. Purpose: teach viewers how to find the pairing. {backgroundOnly}",
-            4 => $"Payoff and CTA scene for {eventTitle}: peaceful clear evening sky over {location}, warm closing mood, open sky for final planet pairing reminder. Purpose: encourage viewers not to miss it. {backgroundOnly}",
+            1 => $"Hook scene for {eventTitle}: attention-grabbing event-specific sky over {location}, open sky for the approved astronomy objects. Purpose: make viewers instantly understand the event. {backgroundOnly}",
+            2 => $"Identification scene for {eventTitle}: clean observing background toward {direction} over {location}, space reserved for event objects and a {bestViewingTime} callout. Purpose: show what to watch and when. {backgroundOnly}",
+            3 => $"Viewing guide scene: practical clear {direction} background during {bestViewingTime}, simple foreground silhouette, open space for arrows, direction marker, and action steps. Purpose: teach viewers how to find the event. {backgroundOnly}",
+            4 => $"Payoff and CTA scene for {eventTitle}: peaceful event-appropriate sky over {location}, warm closing mood, open sky for final reminder. Purpose: encourage viewers to use the approved viewing window. {backgroundOnly}",
             _ => $"Viewer-facing astronomy background for {eventTitle} over {location}. {backgroundOnly}"
         };
     }
@@ -594,7 +591,7 @@ public sealed class ProductionVisualComposerService(
 
     private static string NormalizeViewerDirection(string value)
     {
-        var normalized = FirstNonEmpty(value, "western sky").ToLowerInvariant();
+        var normalized = FirstNonEmpty(value, "open sky").ToLowerInvariant();
         if (normalized.Contains("west", StringComparison.OrdinalIgnoreCase)) return "western sky";
         if (normalized.Contains("east", StringComparison.OrdinalIgnoreCase)) return "eastern sky";
         if (normalized.Contains("north", StringComparison.OrdinalIgnoreCase)) return "northern sky";
@@ -612,7 +609,7 @@ public sealed class ProductionVisualComposerService(
         if (clean.StartsWith("viewing:", StringComparison.OrdinalIgnoreCase)) clean = clean[8..].Trim();
         if (clean.StartsWith("around ", StringComparison.OrdinalIgnoreCase)) return clean;
         if (Regex.IsMatch(clean, @"^\d{1,2}:\d{2}\s*[AP]M\b", RegexOptions.IgnoreCase)) return "around " + clean;
-        return FirstNonEmpty(clean, "after sunset");
+        return FirstNonEmpty(clean, "best local viewing window");
     }
 
     private static string CleanLocationName(string location)
@@ -661,7 +658,7 @@ public sealed class ProductionVisualComposerService(
         });
 
         return normalized.Contains("UTC", StringComparison.OrdinalIgnoreCase)
-            ? FirstNonEmpty(FormatViewingTime(peakUtc, timeZone, regionId), "after sunset")
+            ? FirstNonEmpty(FormatViewingTime(peakUtc, timeZone, regionId), "best local viewing window")
             : normalized;
     }
 

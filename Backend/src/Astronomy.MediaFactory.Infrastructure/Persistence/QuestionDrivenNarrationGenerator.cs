@@ -10,9 +10,6 @@ public sealed class QuestionDrivenNarrationGenerator(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<QuestionDrivenNarrationGenerator> logger) : IQuestionDrivenNarrationGenerator
 {
-    private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
-    private const string GoldenRegionId = "IN-RJ-UDAIPUR";
-    private const string GoldenLanguage = "en";
     private const string InputFileName = "question-driven-scene-plan.enriched.json";
     private const string NarrationFileName = "question-driven-narration.json";
     private const string ReviewFileName = "question-driven-narration-review.json";
@@ -65,9 +62,9 @@ public sealed class QuestionDrivenNarrationGenerator(
         ValidateRequest(request);
 
         var warnings = new List<string>();
-        var inputPath = BuildPlanPath(request.EventId, request.RegionId, InputFileName);
-        var narrationPath = BuildPlanPath(request.EventId, request.RegionId, NarrationFileName);
-        var reviewPath = BuildPlanPath(request.EventId, request.RegionId, ReviewFileName);
+        var inputPath = BuildPlanPath(request.EventId, request.RegionId, InputFileName, request.ProductionContext);
+        var narrationPath = BuildPlanPath(request.EventId, request.RegionId, NarrationFileName, request.ProductionContext);
+        var reviewPath = BuildPlanPath(request.EventId, request.RegionId, ReviewFileName, request.ProductionContext);
 
         if (!File.Exists(inputPath))
             throw new ArgumentException($"Approved enriched question-driven scene plan was not found at '{inputPath.Replace('\\', '/')}'.", nameof(request));
@@ -186,16 +183,11 @@ public sealed class QuestionDrivenNarrationGenerator(
             throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
-        if (IsGoldenPilotRequest(request) || IsDbApprovedAstronomyV1ProductionPlan(request))
+        if (IsDbApprovedAstronomyV1ProductionPlan(request) || request.ProductionContext is null)
             return;
 
-        throw new ArgumentException("Question-driven narration generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en or a DB-approved Astronomy V1 production plan.", nameof(request));
+        throw new ArgumentException("Question-driven narration generation requires a valid event id, region id, and language for dynamic Astronomy V1 production.", nameof(request));
     }
-
-    private static bool IsGoldenPilotRequest(QuestionDrivenNarrationRequest request)
-        => string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
-           && string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
-           && string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase);
 
     private bool IsDbApprovedAstronomyV1ProductionPlan(QuestionDrivenNarrationRequest request)
     {
@@ -253,8 +245,10 @@ public sealed class QuestionDrivenNarrationGenerator(
             && hasShortOrLongVideoOutput;
     }
 
-    private string BuildPlanPath(string eventId, string regionId, string fileName)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine", fileName);
+    private string BuildPlanPath(string eventId, string regionId, string fileName, ProductionPipelineExecutionContext? productionContext = null)
+        => !string.IsNullOrWhiteSpace(productionContext?.QuestionRoot)
+            ? Path.Combine(productionContext!.QuestionRoot!, fileName)
+            : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine", fileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

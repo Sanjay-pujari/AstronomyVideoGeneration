@@ -62,7 +62,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const double SilenceRmsThresholdDb = -60.0;
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006"];
     private static readonly string[] RequiredAssemblySceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
-    private static readonly string[] LongFormSectionOrder = ["Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action"];
+    private static readonly string[] LongFormSectionOrder = ["Hook", "WhatIsHappening", "WhyItMatters", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action"];
     private static readonly IReadOnlyDictionary<string, string> AssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["Hook"] = "scene-001-final.png",
@@ -76,8 +76,6 @@ public sealed partial class VideoAssemblyIntelligenceService(
     {
         ["Hook"] = "scene-001-final.png",
         ["WhatIsHappening"] = "scene-001-final.png",
-        ["AboutVenus"] = "scene-001-final.png",
-        ["AboutJupiter"] = "scene-005-final.png",
         ["WhyTheyAppearClose"] = "scene-005-final.png",
         ["WhereToLook"] = "scene-002-final.png",
         ["WhenToLook"] = "scene-003-final.png",
@@ -89,6 +87,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         ["Action"] = "scene-006-final.png"
     };
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private ProductionPipelineExecutionContext? _activeProductionContext;
 
 
     private static JsonSerializerOptions CreateJsonOptions()
@@ -150,7 +149,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             DuckMusicUnderNarration = form?.DuckMusicUnderNarration ?? request.DuckMusicUnderNarration,
             ScenePresentationProfile = form?.ScenePresentationProfile ?? profile,
             ShortForm = request.ShortForm,
-            LongForm = request.LongForm
+            LongForm = request.LongForm,
+            ProductionContext = request.ProductionContext
         };
 
     private static bool ShouldRunShortForm(VideoAssemblyGenerationRequest request)
@@ -176,6 +176,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     public async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        _activeProductionContext = request.ProductionContext;
         ValidateRequest(request);
 
         if (string.Equals(request.Phase, "FullPipeline", StringComparison.OrdinalIgnoreCase))
@@ -807,14 +808,20 @@ public sealed partial class VideoAssemblyIntelligenceService(
             return BuildLongFormVideoNarrationScript(request, intelligence);
 
         var durations = intelligence.RecommendedSceneDurations.ToDictionary(scene => scene.SceneKey, scene => scene.DurationSeconds, StringComparer.OrdinalIgnoreCase);
+        var eventInfo = request.ProductionContext?.ProductionEventIntelligence;
+        var title = eventInfo?.ShortTitle ?? eventInfo?.Title ?? "This sky event";
+        var objects = string.Join(" + ", (eventInfo?.ResolvedObjectNames ?? eventInfo?.PrimaryObjects ?? []).Take(2));
+        if (string.IsNullOrWhiteSpace(objects)) objects = title;
+        var direction = eventInfo?.SkyDirectionHint ?? "the approved sky direction";
+        var window = eventInfo?.BestViewingWindowLocal ?? eventInfo?.LocalPeakTime ?? "the approved viewing window";
         var sceneScripts = new[]
         {
-            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), "Don't miss this tonight.", "DON'T MISS THIS TONIGHT"),
-            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), "Venus and Jupiter will shine close together after sunset.", "Venus + Jupiter"),
-            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), "Two of the brightest worlds will share the evening sky.", "Two bright worlds"),
-            new VideoNarrationSceneScriptDto("Where", GetDuration(durations, "Where", 3.0), "Look toward the western sky.", "Look West"),
-            new VideoNarrationSceneScriptDto("When", GetDuration(durations, "When", 3.0), "The best time is shortly after sunset.", "After Sunset"),
-            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Step outside tonight and look west.", "Step Outside Tonight")
+            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), $"{title} is the sky event to watch.", title),
+            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), $"The event centers on {objects}, with visuals matched to the approved plan.", objects),
+            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), eventInfo?.ScientificContext ?? $"{title} is worth watching because the geometry is viewer-friendly.", "Why it matters"),
+            new VideoNarrationSceneScriptDto("Where", GetDuration(durations, "Where", 3.0), $"Look toward {direction}.", direction),
+            new VideoNarrationSceneScriptDto("When", GetDuration(durations, "When", 3.0), $"Best viewing is {window}.", window),
+            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Check clouds, choose a safe open spot, and use the approved viewing window.", "Set a reminder")
         };
 
         return new VideoNarrationScriptDto(
@@ -834,7 +841,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private static VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
     {
-        var sceneScripts = BuildBalancedLongFormSceneScripts();
+        var sceneScripts = BuildBalancedLongFormSceneScripts(request.ProductionContext?.ProductionEventIntelligence);
         var fullNarrationText = string.Join(" ", sceneScripts.Select(scene => scene.Narration));
         var totalEstimatedDurationSeconds = EstimateSpokenDurationSeconds(fullNarrationText);
 
@@ -853,13 +860,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
             DateTimeOffset.UtcNow);
     }
 
-    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts()
+    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts(ProductionEventIntelligence? eventInfo)
     {
-        var scripts = LongFormSectionOrder.Select(section => new VideoNarrationSceneScriptDto(
-            section,
-            EstimateSpokenDurationSeconds(BuildLongFormNarration(section)),
-            BuildLongFormNarration(section),
-            ResolveLongFormOnScreenText(section))).ToArray();
+        var sections = eventInfo?.ValidationRules is not null ? LongFormSectionOrder : LongFormSectionOrder;
+        var scripts = sections.Select(section =>
+        {
+            var narration = BuildLongFormNarration(section, eventInfo);
+            return new VideoNarrationSceneScriptDto(section, EstimateSpokenDurationSeconds(narration), narration, ResolveLongFormOnScreenText(section, eventInfo));
+        }).ToArray();
 
         var totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
         if (totalDuration < LongFormMinimumEstimatedDurationSeconds)
@@ -890,10 +898,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
         => section switch
         {
             "Hook" => "Keep expectations simple and enjoy the view as a calm evening marker.",
-            "WhatIsHappening" => "The event is about line of sight, brightness, and timing.",
-            "AboutVenus" => "Its brightness makes it a reliable first target in twilight.",
-            "AboutJupiter" => "Its steady glow gives viewers a second point for comparison.",
-            "WhyTheyAppearClose" => "This is normal orbital geometry, seen from our moving planet.",
+            "WhatIsHappening" => "The event is about line of sight, brightness, timing, and local visibility.",
+            "WhyItMatters" => "This is the event-specific reason viewers should use the approved plan.",
             "WhereToLook" => "A clearer horizon usually makes the pairing easier to notice.",
             "WhenToLook" => "Local sunset time and clouds can change the best minute.",
             "HowToObserve" => "Move slowly and let the sky become darker around you.",
@@ -919,9 +925,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         {
             "Hook" => "Invite curiosity",
             "WhatIsHappening" => "Explain the sky event in simple terms",
-            "AboutVenus" => "Describe Venus as a bright evening object",
-            "AboutJupiter" => "Describe Jupiter as a bright planetary target",
-            "WhyTheyAppearClose" => "Clarify apparent sky closeness",
+            "WhyItMatters" => "Explain why this event matters",
             "WhereToLook" => "Give direction cue",
             "WhenToLook" => "Give timing cue",
             "HowToObserve" => "Give practical observation guidance",
@@ -933,35 +937,38 @@ public sealed partial class VideoAssemblyIntelligenceService(
             _ => "Educational section"
         };
 
-    private static string BuildLongFormNarration(string section)
-        => section switch
+    private static string BuildLongFormNarration(string section, ProductionEventIntelligence? eventInfo)
+    {
+        var title = eventInfo?.ShortTitle ?? eventInfo?.Title ?? "this sky event";
+        var objects = string.Join(" and ", (eventInfo?.ResolvedObjectNames ?? eventInfo?.PrimaryObjects ?? []).Take(3));
+        if (string.IsNullOrWhiteSpace(objects)) objects = title;
+        var direction = eventInfo?.SkyDirectionHint ?? "the approved sky direction";
+        var window = eventInfo?.BestViewingWindowLocal ?? eventInfo?.LocalPeakTime ?? "the approved viewing window";
+        return section switch
         {
-            "Hook" => "Tonight's sky offers an easy place to begin: Venus and Jupiter shining in the evening twilight. They look close together from Earth, making a bright, calm target soon after sunset.",
-            "WhatIsHappening" => "This guide is about an apparent planetary pairing, not a collision or rare danger. Venus and Jupiter are far apart in space, but they appear in the same region of our sky.",
-            "AboutVenus" => "Venus often looks like the brightest steady point after sunset when it is visible. Its thick clouds reflect sunlight well, so beginners can usually spot it before many stars appear.",
-            "AboutJupiter" => "Jupiter is much farther away, but it is large enough to shine clearly in a darkening sky. It may look steady and slightly softer than Venus, especially near twilight.",
-            "WhyTheyAppearClose" => "The close pairing comes from perspective. Earth, Venus, and Jupiter each follow separate orbits around the Sun, while our viewpoint projects their positions onto the same sky background.",
-            "WhereToLook" => "Start by facing the western horizon, because this evening view happens after sunset. Pick a safe open spot with fewer trees, buildings, or bright lights blocking the lower sky.",
-            "WhenToLook" => "Begin looking shortly after sunset, as the sky turns deeper blue but before the planets sink too low. If the horizon is hazy, check again a few minutes later.",
-            "HowToObserve" => "Use your eyes first, then binoculars if you have them. Hold still, let your eyes adjust, and compare the two points rather than expecting telescope-like detail.",
-            "WhatYouWillSee" => "Expect two bright points, not large planet disks. Venus should appear especially brilliant, while Jupiter may look a little dimmer, steady, and close by in the same sky area.",
-            "InterestingFact" => "Planet pairings are helpful for learning the sky because they reveal motion from night to night. A small change in spacing can show how planets slowly shift against the stars.",
-            "ObservationTips" => "Check for clouds before going outside, and give yourself a clear view toward the west. If you take a photo, steady the phone and keep the scene simple.",
-            "Recap" => "Here is the simple plan: go out after sunset, face west, and find the two brightest points near each other. Remember, the closeness is apparent from Earth.",
-            "Action" => "If your sky is clear, step outside tonight for a quiet minute and look west. Share the view with someone nearby, and notice how simple astronomy can feel.",
+            "Hook" => $"{title} gives viewers a clear reason to look up, with the story, timing, and visuals tied to the approved event plan.",
+            "WhatIsHappening" => eventInfo?.ScientificContext ?? $"This guide explains what is happening with {objects} in simple viewer language.",
+            "WhyItMatters" => $"The event matters because it is observable from the selected region and has a clear viewing plan for {objects}.",
+            "WhereToLook" => $"Use the approved direction cue: look toward {direction}, then scan the wider sky around the target area.",
+            "WhenToLook" => $"Best viewing is {window}. Use that window before falling back to any single peak time.",
+            "HowToObserve" => string.Join(" ", eventInfo?.ViewerInstructions ?? ["Choose a safe open location, let your eyes adjust, and avoid bright lights."]),
+            "WhatYouWillSee" => $"Expect visuals specific to {objects}, not unrelated planet-pairing artwork or placeholder imagery.",
+            "InterestingFact" => eventInfo?.ScientificContext ?? $"The geometry behind {title} is what makes this astronomy event worth explaining.",
+            "ObservationTips" => "Check clouds, stay safe, and keep the observation simple so the sky remains the focus.",
+            "Recap" => $"Remember the plan: {objects}, {direction}, and {window}.",
+            "Action" => "Set a reminder, share the viewing window, and step outside only when conditions are safe.",
             _ => "This section continues the astronomy viewing guide using only the available event details."
         };
+    }
 
-    private static string ResolveLongFormOnScreenText(string section)
+    private static string ResolveLongFormOnScreenText(string section, ProductionEventIntelligence? eventInfo = null)
         => section switch
         {
-            "Hook" => "Venus + Jupiter Tonight",
-            "WhatIsHappening" => "Close in our sky",
-            "AboutVenus" => "Venus: very bright",
-            "AboutJupiter" => "Jupiter: steady glow",
-            "WhyTheyAppearClose" => "Perspective from Earth",
-            "WhereToLook" => "Face West",
-            "WhenToLook" => "After Sunset",
+            "Hook" => eventInfo?.ShortTitle ?? eventInfo?.Title ?? "Sky Event",
+            "WhatIsHappening" => eventInfo?.EventType ?? "What’s happening",
+            "WhyItMatters" => "Why it matters",
+            "WhereToLook" => eventInfo?.SkyDirectionHint ?? "Where to look",
+            "WhenToLook" => eventInfo?.BestViewingWindowLocal ?? eventInfo?.LocalPeakTime ?? "When to watch",
             "HowToObserve" => "Eyes first, binoculars optional",
             "WhatYouWillSee" => "Two bright points",
             "InterestingFact" => "A beginner-friendly sky marker",
@@ -1456,8 +1463,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         {
             "Hook" => "SlowZoom",
             "WhatIsHappening" => "SubtleKenBurns",
-            "AboutVenus" => "SlowPan",
-            "AboutJupiter" => "SlowZoom",
+
             "WhyTheyAppearClose" => "SlowZoomOut",
             "WhereToLook" => "SlowPan",
             "WhenToLook" => "SubtleKenBurns",
@@ -2427,16 +2433,16 @@ public sealed partial class VideoAssemblyIntelligenceService(
             renderPolish.MusicMixApplied);
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.QuestionRoot) ? _activeProductionContext!.QuestionRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
 
     private string BuildHeroAssetsRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.HeroRoot) ? _activeProductionContext!.HeroRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
 
     private string BuildThumbnailAssetsRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.ThumbnailRoot) ? _activeProductionContext!.ThumbnailRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName);
 
     private string BuildVideoAssemblyRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), VideoAssemblyDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.VideoAssemblyRoot) ? _activeProductionContext!.VideoAssemblyRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), VideoAssemblyDirectoryName);
 
     private string BuildVideoAssemblyProfileRoot(string eventId, string regionId, ScenePresentationProfile profile)
         => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), profile == ScenePresentationProfile.ShortForm ? "short" : "long");

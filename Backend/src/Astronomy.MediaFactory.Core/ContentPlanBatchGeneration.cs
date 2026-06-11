@@ -166,6 +166,26 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool DryRun,
     bool OverwriteExisting = false);
 
+public sealed record ProductionExecutionContext(
+    Guid ContentGenerationPlanId,
+    Guid AstronomyEventIntelligenceId,
+    string RegionId,
+    string Language,
+    int Year,
+    string EventType,
+    string ContentCategory,
+    string PlanRoot,
+    string QuestionRoot,
+    string SceneRoot,
+    string HeroRoot,
+    string ThumbnailRoot,
+    string NarrationRoot,
+    string TtsRoot,
+    string VideoAssemblyRoot,
+    string ValidationRoot,
+    ProductionEventIntelligence ProductionEventIntelligence,
+    IMediaEventStrategy MediaEventStrategy);
+
 public sealed record ProductionPipelineExecutionContext(
     bool UseProductionPipeline,
     Guid? ContentGenerationPlanId,
@@ -183,7 +203,21 @@ public sealed record ProductionPipelineExecutionContext(
     string? Language = null,
     IReadOnlyList<string>? RequestedOutputs = null,
     string? Category = null,
-    string? PlannedFormat = null);
+    string? PlannedFormat = null,
+    int? Year = null,
+    string? EventType = null,
+    string? PlanRoot = null,
+    string? QuestionRoot = null,
+    string? SceneRoot = null,
+    string? HeroRoot = null,
+    string? ThumbnailRoot = null,
+    string? NarrationRoot = null,
+    string? TtsRoot = null,
+    string? VideoAssemblyRoot = null,
+    string? ValidationRoot = null,
+    ProductionEventIntelligence? ProductionEventIntelligence = null,
+    IMediaEventStrategy? MediaEventStrategy = null,
+    ProductionExecutionContext? ProductionExecutionContext = null);
 
 public sealed record ProductionPipelineRequest(
     ContentPlanProductionPipelineRequest Request,

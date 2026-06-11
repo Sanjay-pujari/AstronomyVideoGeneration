@@ -24,9 +24,6 @@ public sealed class HeroAssetStoryGenerator(
     IHeroAssetSceneSelector sceneSelector,
     IHeroCompositionEngine compositionEngine) : IHeroAssetStoryGenerator
 {
-    private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
-    private const string GoldenRegionId = "IN-RJ-UDAIPUR";
-    private const string GoldenLanguage = "en";
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
     private const string NarrationFileName = "question-driven-narration.json";
@@ -44,6 +41,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
     private const string SelectedHeroHook = "LOOK WEST TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private ProductionPipelineExecutionContext? _activeProductionContext;
     private static readonly HeroImageSpec[] HeroImageSpecs =
     [
         new("Landscape", HeroLandscapeFileName, 1280, 720),
@@ -64,6 +62,7 @@ public sealed class HeroAssetStoryGenerator(
     public async Task<HeroAssetStoryGenerationResponse> GenerateHeroAssetStoryAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        _activeProductionContext = request.ProductionContext;
         ValidateRequest(request);
 
         logger.LogInformation("Generating hero asset story for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
@@ -1317,17 +1316,15 @@ public sealed class HeroAssetStoryGenerator(
             throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
-        if (string.IsNullOrWhiteSpace(request.EventId)
-            || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Hero asset story generation requires a non-empty event id for IN-RJ-UDAIPUR / en.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.EventId) || string.IsNullOrWhiteSpace(request.RegionId) || string.IsNullOrWhiteSpace(request.Language))
+            throw new ArgumentException("Hero asset story generation requires event id, region id, and language.", nameof(request));
     }
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine");
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.QuestionRoot) ? _activeProductionContext!.QuestionRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine");
 
     private string BuildHeroAssetsRoot(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
+        => !string.IsNullOrWhiteSpace(_activeProductionContext?.HeroRoot) ? _activeProductionContext!.HeroRoot! : Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
 
     private string BuildStoryOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetStoryFileName);
