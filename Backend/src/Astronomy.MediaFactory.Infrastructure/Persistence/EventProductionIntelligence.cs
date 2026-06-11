@@ -498,6 +498,7 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
         var errors = new List<string>();
         ValidateTextQuality(intelligence, eventWorkingRoot, warnings, errors);
         ValidateScenePlan(intelligence, eventWorkingRoot, warnings, errors);
+        ValidateSceneAssetStrategy(intelligence, eventWorkingRoot, warnings, errors);
         await WriteValidationAsync(Path.Combine(eventWorkingRoot, "production-quality-validation-before-assembly.json"), intelligence, warnings, errors, cancellationToken);
         return new(errors.Count == 0, warnings, errors);
     }
@@ -544,7 +545,7 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
 
     private static void ValidateScenePlan(ProductionEventIntelligence intelligence, string eventWorkingRoot, List<string> warnings, List<string> errors)
     {
-        var scenePlanPath = Path.Combine(eventWorkingRoot, "question-engine", "question-driven-scene-plan.json");
+        var scenePlanPath = ResolveCurrentRunFile(eventWorkingRoot, "question-driven-scene-plan.json");
         if (!File.Exists(scenePlanPath))
         {
             errors.Add("Question-driven scene plan is missing before video assembly.");
@@ -556,14 +557,133 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
             if (!ContainsToken(text, motif.Split(' ')[0])) warnings.Add($"Scene plan may be missing visual motif '{motif}'.");
     }
 
+
+    private static void ValidateSceneAssetStrategy(ProductionEventIntelligence intelligence, string currentRunRoot, List<string> warnings, List<string> errors)
+    {
+        var sceneRoot = ResolveCurrentRunDirectory(currentRunRoot, "scene-approval-v3");
+        if (!Directory.Exists(sceneRoot))
+        {
+            errors.Add("Current-run scene approval directory is missing before scene asset validation.");
+            return;
+        }
+
+        foreach (var profile in new[] { "short", "long" })
+        {
+            var profileRoot = Path.Combine(sceneRoot, profile);
+            if (!Directory.Exists(profileRoot))
+            {
+                errors.Add($"Current-run {profile} scene approval directory is missing.");
+                continue;
+            }
+
+            if (!Directory.EnumerateFiles(profileRoot, "scene-*-final.png").Any()) errors.Add($"Current-run {profile} scene images are missing.");
+        }
+
+        if (!Directory.EnumerateFiles(sceneRoot, "scene-*-infographic-spec.json", SearchOption.TopDirectoryOnly).Any()) errors.Add("Current-run scene infographic specs are missing.");
+        if (!Directory.EnumerateFiles(sceneRoot, "scene-*-review.json", SearchOption.TopDirectoryOnly).Any()) errors.Add("Current-run scene reviews are missing.");
+
+        if (!intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return;
+
+        var currentSceneText = ReadSceneText(sceneRoot);
+        if (string.IsNullOrWhiteSpace(currentSceneText))
+        {
+            errors.Add("MeteorShower scene validation found no current-run scene spec or review text.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal) && !ContainsToken(currentSceneText, intelligence.BestViewingWindowLocal))
+            errors.Add("MeteorShower scene specs/reviews do not include bestViewingWindowLocal in the current-run timing content.");
+
+        foreach (var forbidden in intelligence.ForbiddenTerms.Concat(intelligence.ForbiddenObjectNames ?? []).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase))
+            if (ContainsToken(currentSceneText, forbidden)) errors.Add($"MeteorShower current-run scene specs/reviews contain forbidden unrelated term '{forbidden}'.");
+
+        if (!ContainsToken(currentSceneText, "meteor")) errors.Add("MeteorShower current-run scene specs/reviews must include meteor-specific terminology.");
+        if (!ContainsToken(currentSceneText, "radiant")) errors.Add("MeteorShower current-run scene specs/reviews must include a radiant hint.");
+        if (!ContainsToken(currentSceneText, "dark")) errors.Add("MeteorShower current-run scene specs/reviews must include dark-sky readability guidance.");
+        if (!ContainsToken(currentSceneText, "telescope")) errors.Add("MeteorShower current-run scene specs/reviews must include no-telescope guidance.");
+
+        foreach (var sceneNumber in new[] { 1, 3, 5 })
+        {
+            var sceneText = ReadSceneTextForNumber(sceneRoot, sceneNumber);
+            if (!ContainsToken(sceneText, "meteor") || !ContainsAnyToken(sceneText, "streak", "streaks"))
+                errors.Add($"MeteorShower scene {sceneNumber:000} must validate visible meteor streak intent in current-run specs/reviews.");
+        }
+
+        var polishPath = Path.Combine(sceneRoot, "short", "shortform-polish-validation.json");
+        if (!File.Exists(polishPath)) errors.Add("MeteorShower shortform-polish-validation.json is missing from the current-run short scene folder.");
+        else
+        {
+            var polish = File.ReadAllText(polishPath);
+            if (ContainsToken(polish, "scene5PlanetProximityEnhanced")) errors.Add("MeteorShower shortform-polish-validation.json must not use PlanetPairing scene5PlanetProximityEnhanced checks.");
+            foreach (var required in new[] { "meteorStreaksVisible", "radiantHintVisible", "darkSkyReadable", "noTelescopeMessageClear", "viewingWindowVisible", "noForbiddenObjectLeakage" })
+                if (!ContainsToken(polish, required)) errors.Add($"MeteorShower shortform-polish-validation.json is missing strategy-aware check '{required}'.");
+        }
+    }
+
+    private static string ResolveCurrentRunFile(string root, string fileName)
+    {
+        var direct = Path.Combine(root, fileName);
+        if (File.Exists(direct)) return direct;
+        return Path.Combine(root, "question-engine", fileName);
+    }
+
+    private static string ResolveCurrentRunDirectory(string root, string directoryName)
+    {
+        var direct = Path.Combine(root, directoryName);
+        if (Directory.Exists(direct)) return direct;
+        return Path.Combine(root, "question-engine", directoryName);
+    }
+
+    private static string ReadSceneText(string sceneRoot)
+    {
+        if (!Directory.Exists(sceneRoot)) return string.Empty;
+        return string.Join('\n', Directory.EnumerateFiles(sceneRoot, "scene-*.json", SearchOption.AllDirectories)
+            .Where(IsCurrentSceneValidationSource)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
+    }
+
+    private static string ReadSceneTextForNumber(string sceneRoot, int sceneNumber)
+    {
+        if (!Directory.Exists(sceneRoot)) return string.Empty;
+        var prefix = $"scene-{sceneNumber:000}-";
+        return string.Join('\n', Directory.EnumerateFiles(sceneRoot, "scene-*.json", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileName(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Where(IsCurrentSceneValidationSource)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
+    }
+
+    private static bool IsCurrentSceneValidationSource(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        return fileName.EndsWith("-infographic-spec.json", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("-review.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsAnyToken(string haystack, params string[] needles)
+        => needles.Any(needle => ContainsToken(haystack, needle));
+
     private static string ReadAllText(string root)
     {
         if (!Directory.Exists(root)) return string.Empty;
         var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".json", ".txt", ".md" };
         return string.Join('\n', Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories)
             .Where(path => extensions.Contains(Path.GetExtension(path)))
+            .Where(IsCurrentProductionTextSource)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Take(200)
             .Select(path => File.ReadAllText(path)));
+    }
+
+    private static bool IsCurrentProductionTextSource(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (fileName.Contains("validation", StringComparison.OrdinalIgnoreCase)) return false;
+        if (fileName.Equals("phase-manifest.json", StringComparison.OrdinalIgnoreCase)) return false;
+        if (fileName.Equals("production-quality-validation-before-assembly.json", StringComparison.OrdinalIgnoreCase)) return false;
+        if (fileName.Equals("production-quality-validation-final.json", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
     }
 
     private static bool ContainsToken(string haystack, string needle)

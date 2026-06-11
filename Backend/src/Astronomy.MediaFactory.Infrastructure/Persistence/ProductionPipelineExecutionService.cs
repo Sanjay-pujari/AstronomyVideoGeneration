@@ -215,10 +215,11 @@ public sealed class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseValidateSceneAssetsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken);
+        var currentRunValidationRoot = context.ExecutionContext.QuestionRoot!;
+        var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, currentRunValidationRoot, cancellationToken);
         if (!validation.IsValid) throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", validation.Errors));
         var materialized = await MaterializeSceneApprovalAsync(context.ExecutionContext.SceneRoot!, GetSceneApprovalNormalizedRoot(context.OutputRoot), cancellationToken);
-        return materialized.Concat([Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long")]).ToArray();
+        return materialized.Concat([Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long"), Path.Combine(currentRunValidationRoot, "production-quality-validation-before-assembly.json")]).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -357,14 +358,13 @@ public sealed class ProductionPipelineExecutionService(
         var terms = new List<string>();
         terms.AddRange(intelligence.ForbiddenTerms);
         terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
-        if (IsGeminidsOrMeteorStrategy(context))
+        if (IsMeteorStrategy(context))
             terms.AddRange(["Venus", "Jupiter", "conjunction", "look west", "after sunset", "7:23 PM IST"]);
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool IsGeminidsOrMeteorStrategy(ProductionPhaseContext context)
-        => (context.ProductionEventIntelligence.Title ?? string.Empty).Contains("Geminid", StringComparison.OrdinalIgnoreCase)
-            || (context.ProductionEventIntelligence.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
+    private static bool IsMeteorStrategy(ProductionPhaseContext context)
+        => (context.ProductionEventIntelligence.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
             || (context.Request.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase)
             || (context.MediaEventStrategy.EventType ?? string.Empty).Contains("meteor", StringComparison.OrdinalIgnoreCase);
 

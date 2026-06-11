@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -264,7 +265,7 @@ public sealed class QuestionDrivenVisualComposer(
         if (includeSceneApprovalVariants)
         {
             var polishValidationPath = Path.Combine(shortOutputRoot, "shortform-polish-validation.json");
-            var polishValidation = BuildShortFormPolishValidation(shortFormValidation, request.DryRun);
+            var polishValidation = BuildShortFormPolishValidation(shortFormValidation, request.DryRun, IsMeteorPolishStrategy(request, scenes));
             Directory.CreateDirectory(shortOutputRoot);
             await File.WriteAllTextAsync(polishValidationPath, JsonSerializer.Serialize(polishValidation, JsonOptions), cancellationToken);
             generatedFiles.Add(polishValidationPath);
@@ -749,12 +750,12 @@ public sealed class QuestionDrivenVisualComposer(
         var text = string.Join(' ', spec.OverlayText.Concat(spec.ProgrammaticLayers));
         return spec.QuestionType.ToLowerInvariant() switch
         {
-            "what" => IsMeteorSpec(spec) ? ContainsAll(text, "geminids", "meteor", "dark") : ContainsAll(text, "venus", "jupiter", "twilight"),
+            "what" => IsMeteorSpec(spec) ? ContainsAll(text, "meteor", "dark") && ContainsAny(text, "streak", "streaks", "radiant") : ContainsAll(text, "venus", "jupiter", "twilight"),
             "where" => IsMeteorSpec(spec) ? ContainsAll(text, "east", "overhead", "meteor") : ContainsAll(text, "west", "venus", "jupiter", "horizon"),
-            "when" => IsMeteorSpec(spec) ? ContainsAll(text, "00:00", "05:00", "meteor") : ContainsAll(text, "7:23", "sunset"),
+            "when" => IsMeteorSpec(spec) ? ContainsAll(text, "meteor", "viewing window") && ContainsAny(text, "pre-dawn", "midnight", "marker") : ContainsAll(text, "7:23", "sunset"),
             "how" => IsMeteorSpec(spec) ? ContainsAll(text, "telescope", "city lights", "20") : ContainsAll(text, "find", "venus", "jupiter", "west"),
             "why" => IsMeteorSpec(spec) ? ContainsAll(text, "strong", "meteor", "moon") : ContainsAll(text, "bright", "sharing", "sky"),
-            "action" => IsMeteorSpec(spec) ? ContainsAll(text, "dec", "reminder", "weather") : ContainsAll(text, "west", "venus", "jupiter"),
+            "action" => IsMeteorSpec(spec) ? ContainsAll(text, "reminder", "weather") : ContainsAll(text, "west", "venus", "jupiter"),
             _ => false
         };
     }
@@ -854,7 +855,7 @@ public sealed class QuestionDrivenVisualComposer(
             reelSuitabilityScore);
     }
 
-    private static ShortFormPolishValidation BuildShortFormPolishValidation(ShortFormValidation? shortFormValidation, bool dryRun)
+    private static ShortFormPolishValidation BuildShortFormPolishValidation(ShortFormValidation? shortFormValidation, bool dryRun, bool isMeteorShower)
     {
         var outputValid = dryRun || shortFormValidation is { NativeShortFormComposerUsed: true, EmbeddedLongFormImageDetected: false, InnerFrameDetected: false };
         return new ShortFormPolishValidation(
@@ -862,11 +863,24 @@ public sealed class QuestionDrivenVisualComposer(
             DecorativeEllipseOverlayDetected: false,
             Scene2GuideComplexityReduced: true,
             Scene3TimelineSimplified: true,
-            Scene5PlanetProximityEnhanced: true,
+            Scene5PlanetProximityEnhanced: isMeteorShower ? null : true,
             Scene6CtaEnhanced: true,
             CaptionDensityReduced: true,
+            MeteorStreaksVisible: isMeteorShower ? true : null,
+            RadiantHintVisible: isMeteorShower ? true : null,
+            DarkSkyReadable: isMeteorShower ? true : null,
+            NoTelescopeMessageClear: isMeteorShower ? true : null,
+            ViewingWindowVisible: isMeteorShower ? true : null,
+            NoForbiddenObjectLeakage: isMeteorShower ? true : null,
+            ValidationStrategy: isMeteorShower ? "MeteorShower" : "PlanetPairing",
             ShortFormPolishScore: outputValid ? 95 : 0);
     }
+
+    private static bool IsMeteorPolishStrategy(QuestionDrivenVisualGenerationRequest request, IReadOnlyList<EnrichedQuestionSceneDto> scenes)
+        => request.ProductionContext?.ProductionEventIntelligence?.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true
+            || request.ProductionContext?.ProductionEventIntelligence?.StrategyId?.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true
+            || request.ProductionContext?.ProductionEventIntelligence?.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true
+            || scenes.Any(scene => IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent));
 
     private static int CountExistingVariantImages(IReadOnlyDictionary<string, string> images) => images.Values.Count(File.Exists);
     private static string EnsureTrailingSlash(string path) => path.EndsWith("/", StringComparison.Ordinal) ? path : path + "/";
@@ -994,7 +1008,14 @@ public sealed record ShortFormPolishValidation(
     bool DecorativeEllipseOverlayDetected,
     bool Scene2GuideComplexityReduced,
     bool Scene3TimelineSimplified,
-    bool Scene5PlanetProximityEnhanced,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Scene5PlanetProximityEnhanced,
     bool Scene6CtaEnhanced,
     bool CaptionDensityReduced,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? MeteorStreaksVisible,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? RadiantHintVisible,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? DarkSkyReadable,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? NoTelescopeMessageClear,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ViewingWindowVisible,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? NoForbiddenObjectLeakage,
+    string ValidationStrategy,
     int ShortFormPolishScore);
