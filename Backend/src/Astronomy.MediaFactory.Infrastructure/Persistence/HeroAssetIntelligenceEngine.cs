@@ -991,10 +991,10 @@ public sealed class HeroAssetStoryGenerator(
             request.EventId,
             request.RegionId,
             request.Language,
-            isMeteorShower ? "Geminids Meteor Shower Peak" : SelectedHeroHook,
-            isMeteorShower ? "Geminids peak night brings meteor streaks across Udaipur’s dark sky, with low Moon interference." : "Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.",
-            isMeteorShower ? "Best Night: Dec 14 — watch 00:00–05:00 IST." : "Look west shortly after sunset.",
-            isMeteorShower ? "Meteor streaks from the Gemini radiant over a dark Udaipur night sky." : "Venus and Jupiter above the western horizon.",
+            isMeteorShower ? DeriveHeroHook(storySource) : DeriveHeroHook(storySource),
+            isMeteorShower ? $"{DeriveHeroHook(storySource)} brings meteor streaks across a dark local sky, using the approved moon and viewing-window facts." : DeriveHeroPromise(storySource),
+            isMeteorShower ? DeriveTimingCue(storySource) : DeriveDirectionCue(storySource),
+            isMeteorShower ? "Meteor streaks from the shower radiant over a dark local night sky." : DeriveHeroVisualFocus(storySource),
             isMeteorShower ? "Wonder + Urgency" : "Wonder",
             PlatformIntent,
             storySource,
@@ -1003,10 +1003,30 @@ public sealed class HeroAssetStoryGenerator(
             DateTimeOffset.UtcNow);
     }
 
+    private static string DeriveHeroHook(HeroStorySourceDto storySource)
+    {
+        var what = Clean(storySource.What);
+        if (string.IsNullOrWhiteSpace(what)) return SelectedHeroHook;
+        var firstSentence = what.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? what;
+        return firstSentence.Length <= 44 ? firstSentence : firstSentence[..44].Trim();
+    }
+
+    private static string DeriveHeroPromise(HeroStorySourceDto storySource)
+        => string.IsNullOrWhiteSpace(storySource.What) ? "A timely sky event with clear local viewing guidance." : Clean(storySource.What);
+
+    private static string DeriveTimingCue(HeroStorySourceDto storySource)
+        => string.IsNullOrWhiteSpace(storySource.When) ? "Use the approved best local viewing window." : Clean(storySource.When);
+
+    private static string DeriveDirectionCue(HeroStorySourceDto storySource)
+        => string.IsNullOrWhiteSpace(storySource.Where) ? "Use the approved local sky direction." : Clean(storySource.Where);
+
+    private static string DeriveHeroVisualFocus(HeroStorySourceDto storySource)
+        => string.IsNullOrWhiteSpace(storySource.Where) ? "Clean cinematic astronomy scene based on the approved event facts." : Clean(storySource.Where);
+
     private static bool IsMeteorStory(HeroStorySourceDto storySource)
     {
         var text = string.Join(' ', storySource.What, storySource.Where, storySource.When, storySource.Why);
-        return text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("Geminids", StringComparison.OrdinalIgnoreCase) || text.Contains("radiant", StringComparison.OrdinalIgnoreCase);
+        return text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("radiant", StringComparison.OrdinalIgnoreCase);
     }
 
     private static HeroStorySourceDto BuildStorySource(

@@ -298,7 +298,8 @@ public sealed class AstronomyQuestionEngine(
         var direction = FirstMetadataValue(evt, "skyDirectionHint", "directionHint", "direction", "viewingDirection") ?? "East to overhead after 10 PM";
         var moonInterference = FirstMetadataValue(evt, "moonInterference") ?? "low";
         var moonIllumination = FirstDecimal(evt, "moonIlluminationPercent");
-        var radiantNote = FirstMetadataValue(evt, "radiantVisibilityNote") ?? "The Gemini radiant climbs higher late evening, but meteors can streak across any part of the sky.";
+        var radiantNote = FirstMetadataValue(evt, "radiantVisibilityNote") ?? "The radiant climbs higher late evening, but meteors can streak across any part of the sky.";
+        var reminderNight = FormatMeteorReminderNight(bestWindow, localPeak);
         var moonPhrase = moonIllumination.HasValue
             ? $"{moonInterference.ToLowerInvariant()} moon interference at about {Math.Round(moonIllumination.Value):0}% illumination"
             : $"{moonInterference.ToLowerInvariant()} moon interference";
@@ -315,20 +316,19 @@ public sealed class AstronomyQuestionEngine(
             AstronomyQuestionSetStatus.Generated,
             DateTimeOffset.UtcNow,
             [
-                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{showerName} peaks as Earth crosses a stream of debris, producing bright meteors from the Gemini radiant.", 1),
-                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction}; choose a dark, open sky away from city lights.", 2),
-                Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {bestWindow}, when the radiant is higher and the sky is dark.", 3),
-                Answer(AstronomyQuestionTypes.How, "How can I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adapt.", 4),
-                Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", $"{showerName} is one of the strongest annual meteor showers, with {moonPhrase} improving viewing quality.", 5),
-                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", $"Set a reminder for the night of Dec 13/14, check weather, and pick a dark location. {radiantNote}", 6)
+                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{showerName} peaks as Earth crosses a stream of debris, producing bright meteors from the shower radiant.", 1),
+                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction}; {radiantNote}", 2),
+                Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"Best viewing is {bestWindow}, when the radiant is higher and the sky is dark.", 3),
+                Answer(AstronomyQuestionTypes.How, "How do I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adapt.", 4),
+                Answer(AstronomyQuestionTypes.Why, "Why is this event special?", "Why it matters", $"{showerName} is one of the strongest annual meteor showers, with {moonPhrase} improving viewing quality.", 5),
+                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", $"Set a reminder for {reminderNight}, check weather, and pick a dark open location.", 6)
             ]);
     }
 
     private static bool IsMeteorShower(AstronomyEventIntelligence evt)
         => evt.EventType.Contains("MeteorShower", StringComparison.OrdinalIgnoreCase)
             || evt.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)
-            || SafeTitle(evt).Contains("meteor", StringComparison.OrdinalIgnoreCase)
-            || SafeTitle(evt).Contains("Geminids", StringComparison.OrdinalIgnoreCase);
+            || SafeTitle(evt).Contains("meteor", StringComparison.OrdinalIgnoreCase);
 
     private static string ShortMeteorTitle(string title)
     {
@@ -345,6 +345,20 @@ public sealed class AstronomyQuestionEngine(
         var start = new DateTimeOffset(date.Year, date.Month, date.Day, 0, 0, 0, localPeak.Offset);
         var end = start.AddHours(5);
         return $"{start:yyyy-MM-dd HH:mm}–{end:HH:mm} {timeZoneAbbreviation}";
+    }
+
+    private static string FormatMeteorReminderNight(string bestWindow, DateTimeOffset localPeak)
+    {
+        var date = localPeak.Date;
+        var match = Regex.Match(bestWindow ?? string.Empty, @"(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})");
+        if (match.Success
+            && int.TryParse(match.Groups["year"].Value, out var year)
+            && int.TryParse(match.Groups["month"].Value, out var month)
+            && int.TryParse(match.Groups["day"].Value, out var day))
+            date = new DateTime(year, month, day);
+
+        var previous = date.AddDays(-1);
+        return $"the night of {previous:MMM d}/{date:dd}";
     }
 
     private static QuestionAnswerDto Answer(string type, string question, string title, string answer, int order) => new(null, type, question, title, Clean(answer), order);

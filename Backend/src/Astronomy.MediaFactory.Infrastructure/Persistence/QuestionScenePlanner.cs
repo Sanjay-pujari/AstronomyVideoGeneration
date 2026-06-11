@@ -333,6 +333,8 @@ public sealed class QuestionScenePlanner(
         var answersByType = questionSet.Answers
             .GroupBy(a => a.QuestionType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.OrderBy(a => a.DisplayOrder).First(), StringComparer.OrdinalIgnoreCase);
+        var isMeteorShower = questionSet.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || questionSet.AstronomyEventIntelligence?.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true;
 
         var scenes = SceneOrder.Select((questionType, index) =>
         {
@@ -348,8 +350,8 @@ public sealed class QuestionScenePlanner(
                 Clean(answer.QuestionText),
                 sourceAnswer,
                 sourceAnswer,
-                BuildVisualIntent(questionType, scenePurpose, sourceAnswer),
-                BuildNarrationIntent(questionType, scenePurpose, sourceAnswer),
+                BuildVisualIntent(questionType, scenePurpose, sourceAnswer, isMeteorShower),
+                BuildNarrationIntent(questionType, scenePurpose, sourceAnswer, isMeteorShower),
                 true);
         }).ToArray();
 
@@ -393,27 +395,49 @@ public sealed class QuestionScenePlanner(
         return issues;
     }
 
-    private static string BuildVisualIntent(string questionType, string scenePurpose, string sourceAnswer) => questionType switch
+    private static string BuildVisualIntent(string questionType, string scenePurpose, string sourceAnswer, bool isMeteorShower)
     {
-        AstronomyQuestionTypes.What => $"Open with a clear overview visual that establishes the sky event: {sourceAnswer}",
-        AstronomyQuestionTypes.Where => $"Show a location or sky-direction guide that helps viewers know where to look: {sourceAnswer}",
-        AstronomyQuestionTypes.When => $"Show a timing guide focused on the best local viewing window: {sourceAnswer}",
-        AstronomyQuestionTypes.How => $"Show a practical observation guide with simple finding steps: {sourceAnswer}",
-        AstronomyQuestionTypes.Why => $"Show a significance visual that emphasizes why the event matters: {sourceAnswer}",
-        AstronomyQuestionTypes.Action => $"Close with a simple viewer action cue: {sourceAnswer}",
-        _ => $"Support the {scenePurpose} scene with visuals based on: {sourceAnswer}"
-    };
+        if (isMeteorShower)
+        {
+            var motif = "meteor streaks, dark sky, radiant hint, open local landscape, clean cinematic astronomy style, no unrelated planets";
+            return questionType switch
+            {
+                AstronomyQuestionTypes.What => $"Hook — meteor shower peak alert with {motif}: {sourceAnswer}",
+                AstronomyQuestionTypes.When => $"Best time — midnight to pre-dawn timing card over a meteor-filled dark sky: {sourceAnswer}",
+                AstronomyQuestionTypes.Where => $"Where to look — east-to-overhead sky guide with radiant hint and meteor streaks: {sourceAnswer}",
+                AstronomyQuestionTypes.How => $"Viewing tips — dark open location, no telescope, low moon interference, meteor streaks overhead: {sourceAnswer}",
+                AstronomyQuestionTypes.Why => $"Why special — cinematic meteor shower explanation with radiant/debris stream context: {sourceAnswer}",
+                AstronomyQuestionTypes.Action => $"Reminder CTA — viewer reminder over dark open landscape and meteor streaks, no unrelated planets: {sourceAnswer}",
+                _ => $"Meteor shower scene with {motif}: {sourceAnswer}"
+            };
+        }
 
-    private static string BuildNarrationIntent(string questionType, string scenePurpose, string sourceAnswer) => questionType switch
+        return questionType switch
+        {
+            AstronomyQuestionTypes.What => $"Open with a clear overview visual that establishes the sky event: {sourceAnswer}",
+            AstronomyQuestionTypes.Where => $"Show a location or sky-direction guide that helps viewers know where to look: {sourceAnswer}",
+            AstronomyQuestionTypes.When => $"Show a timing guide focused on the best local viewing window: {sourceAnswer}",
+            AstronomyQuestionTypes.How => $"Show a practical observation guide with simple finding steps: {sourceAnswer}",
+            AstronomyQuestionTypes.Why => $"Show a significance visual that emphasizes why the event matters: {sourceAnswer}",
+            AstronomyQuestionTypes.Action => $"Close with a simple viewer action cue: {sourceAnswer}",
+            _ => $"Support the {scenePurpose} scene with visuals based on: {sourceAnswer}"
+        };
+    }
+
+    private static string BuildNarrationIntent(string questionType, string scenePurpose, string sourceAnswer, bool isMeteorShower)
     {
-        AstronomyQuestionTypes.What => $"Plan narration to introduce the event using the approved answer without drafting final narration: {sourceAnswer}",
-        AstronomyQuestionTypes.Where => $"Plan narration to orient viewers toward the correct sky area without drafting final narration: {sourceAnswer}",
-        AstronomyQuestionTypes.When => $"Plan narration to explain the best viewing time without drafting final narration: {sourceAnswer}",
-        AstronomyQuestionTypes.How => $"Plan narration to turn the observation answer into simple guidance without drafting final narration: {sourceAnswer}",
-        AstronomyQuestionTypes.Why => $"Plan narration to explain the significance without drafting final narration: {sourceAnswer}",
-        AstronomyQuestionTypes.Action => $"Plan narration to end with the approved viewer action without drafting final narration: {sourceAnswer}",
-        _ => $"Plan narration intent for {scenePurpose} without drafting final narration: {sourceAnswer}"
-    };
+        var prefix = isMeteorShower ? "Use story-driven meteor-shower narration with the generated question answer; include what viewers see, when and where to look, no telescope, moon conditions, and CTA. " : string.Empty;
+        return questionType switch
+        {
+            AstronomyQuestionTypes.What => $"{prefix}Plan narration to introduce the event using the approved answer without drafting final narration: {sourceAnswer}",
+            AstronomyQuestionTypes.Where => $"{prefix}Plan narration to orient viewers toward the correct sky area without drafting final narration: {sourceAnswer}",
+            AstronomyQuestionTypes.When => $"{prefix}Plan narration to explain the best viewing time without drafting final narration: {sourceAnswer}",
+            AstronomyQuestionTypes.How => $"{prefix}Plan narration to turn the observation answer into simple guidance without drafting final narration: {sourceAnswer}",
+            AstronomyQuestionTypes.Why => $"{prefix}Plan narration to explain the significance without drafting final narration: {sourceAnswer}",
+            AstronomyQuestionTypes.Action => $"{prefix}Plan narration to end with the approved viewer action without drafting final narration: {sourceAnswer}",
+            _ => $"{prefix}Plan narration intent for {scenePurpose} without drafting final narration: {sourceAnswer}"
+        };
+    }
 
     private static void ValidateRequest(QuestionScenePlanRequest request)
     {
