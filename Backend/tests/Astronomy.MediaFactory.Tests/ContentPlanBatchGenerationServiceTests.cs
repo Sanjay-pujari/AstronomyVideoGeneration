@@ -97,7 +97,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     {
         await using var db = CreateDb();
         SeedGeminidsPlan(db);
-        var legacy = new NoOpLegacyGenerationService();
+        var legacy = new ThrowingLegacyPipeline();
         var production = new CapturingProductionExecutionService();
         var service = new ContentPlanBatchGenerationService(
             db,
@@ -122,8 +122,132 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.True(production.CapturedOverwriteExisting);
     }
 
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionFailedWithoutRetryMode_IsExcluded()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionFailed", planStatus: "ProductionFailed");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true), CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Geminids Meteor Shower Peak"
+            && warning.Reason.Contains("ProductionFailed", StringComparison.OrdinalIgnoreCase)
+            && !warning.Reason.Contains("allowed status or planStatus values are Draft, Planned, Approved, ProductionFailed", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionFailedWithRetryMode_IsSelectedAndForwardsPhaseOptions()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionFailed", planStatus: "ProductionFailed");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            OverwriteExisting: true,
+            StartPhaseNo: 1,
+            EndPhaseNo: 19,
+            RetryFailedOnly: true,
+            AllowFailedPlanRetry: true), CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.True(response.UseProductionPipeline);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(GeminidsPlanId, response.PlanId);
+        Assert.Equal(GeminidsPlanId, production.CapturedPlanId);
+        Assert.True(production.CapturedOverwriteExisting);
+        Assert.Equal(1, production.CapturedStartPhaseNo);
+        Assert.Equal(19, production.CapturedEndPhaseNo);
+        Assert.True(production.CapturedRetryFailedOnly);
+        Assert.False(legacy.WasCalled);
+    }
+
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
+
+    private static void SeedGeminidsPlan(MediaFactoryDbContext db, string status = "Planned", string planStatus = "Planned")
+    {
+        var intelligence = new AstronomyEventIntelligence
+        {
+            EventCode = "GEMINIDS-2026",
+            ExternalEventId = "geminids-2026",
+            Year = 2026,
+            Language = "en",
+            VerificationStatus = "Verified",
+            AutoGenerateAllowed = true,
+            ContentStrategy = "AutoGenerate",
+            EventType = "MeteorShower",
+            Title = "Geminids Meteor Shower Peak",
+            Summary = "Geminids",
+            StartUtc = new DateTimeOffset(2026, 12, 13, 0, 0, 0, TimeSpan.Zero),
+            PeakUtc = new DateTimeOffset(2026, 12, 14, 0, 0, 0, TimeSpan.Zero),
+            RegionId = "IN-RJ-UDAIPUR",
+            RarityScore = 9,
+            VisibilityScore = 9,
+            AudienceInterestScore = 9,
+            ContentOpportunityScore = 9
+        };
+        db.AstronomyEventIntelligences.Add(intelligence);
+
+        var plan = new ContentGenerationPlan
+        {
+            Title = "Geminids Meteor Shower Peak",
+            ContentCategoryCode = "RareEventAlert",
+            RegionId = "IN-RJ-UDAIPUR",
+            Language = "en",
+            ScheduledUtc = new DateTimeOffset(2026, 12, 14, 0, 0, 0, TimeSpan.Zero),
+            Status = status,
+            PlanStatus = planStatus,
+            Priority = 1,
+            PriorityScore = 9,
+            AstronomyEventIntelligenceId = intelligence.Id,
+            AstronomyEventIntelligence = intelligence,
+            SourceExternalEventId = "geminids-2026",
+            RequestedOutputTypesJson = "[\"Short\",\"Long\"]"
+        };
+        plan.AssignId(GeminidsPlanId);
+        db.ContentGenerationPlans.Add(plan);
+        db.SaveChanges();
+    }
 
     private sealed class CapturingProductionExecutionService : IContentPlanProductionExecutionService
     {
@@ -145,6 +269,9 @@ public sealed class ContentPlanBatchGenerationServiceTests
         public Guid CapturedPlanId { get; private set; }
         public bool CapturedDryRun { get; private set; }
         public bool CapturedOverwriteExisting { get; private set; }
+        public int? CapturedStartPhaseNo { get; private set; }
+        public int? CapturedEndPhaseNo { get; private set; }
+        public bool CapturedRetryFailedOnly { get; private set; }
 
         public Task<ContentPlanProductionExecutionResult> ExecuteContentPlanAsync(Guid contentGenerationPlanId, bool dryRun, bool overwriteExisting, CancellationToken cancellationToken)
         {
@@ -218,7 +345,12 @@ public sealed class ContentPlanBatchGenerationServiceTests
         }
 
         public Task<ContentPlanProductionExecutionResult> ExecuteContentPlanWithProductionPipelineAsync(ContentPlanProductionExecutionRequest request, CancellationToken cancellationToken)
-            => ExecuteContentPlanAsync(request.ContentGenerationPlanId, request.DryRun, request.OverwriteExisting, cancellationToken);
+        {
+            CapturedStartPhaseNo = request.StartPhaseNo;
+            CapturedEndPhaseNo = request.EndPhaseNo;
+            CapturedRetryFailedOnly = request.RetryFailedOnly;
+            return ExecuteContentPlanAsync(request.ContentGenerationPlanId, request.DryRun, request.OverwriteExisting, cancellationToken);
+        }
     }
 
     private sealed class ThrowingLegacyPipeline : IAstronomyAssetPlanningService, IAstronomyAssetProductionJobService, IVisualAssetGenerationService, ISceneRenderer

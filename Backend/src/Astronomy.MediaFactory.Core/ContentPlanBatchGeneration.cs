@@ -14,7 +14,8 @@ public sealed record BatchGenerateFromPlansRequest(
     bool OverwriteExisting = false,
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
-    bool RetryFailedOnly = false);
+    bool RetryFailedOnly = false,
+    bool AllowFailedPlanRetry = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
