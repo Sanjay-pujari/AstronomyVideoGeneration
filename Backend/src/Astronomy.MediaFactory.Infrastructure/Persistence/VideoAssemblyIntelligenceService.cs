@@ -134,17 +134,29 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private static string ResolvePlannedFormat(ScenePresentationProfile profile)
         => profile == ScenePresentationProfile.ShortForm ? "ShortVideo" : "LongVideo";
 
+    private double ResolveDurationComparisonToleranceSeconds()
+    {
+        var configured = videoAssemblyOptions?.Value.DurationComparisonToleranceSeconds ?? VideoAssemblyOptions.DefaultDurationComparisonToleranceSeconds;
+        return configured >= 0 ? configured : VideoAssemblyOptions.DefaultDurationComparisonToleranceSeconds;
+    }
+
+    private static bool IsWithinDurationRange(double actualDurationSeconds, double minSeconds, double maxSeconds, double toleranceSeconds)
+        => actualDurationSeconds >= minSeconds - toleranceSeconds && actualDurationSeconds <= maxSeconds + toleranceSeconds;
+
     private VideoDurationContractValidationDto BuildDurationValidation(ScenePresentationProfile profile, double actualDurationSeconds, bool useTargetRange, string valueLabel)
     {
+        _ = useTargetRange;
         var contract = ResolveDurationProfile(profile);
-        var min = useTargetRange ? contract.TargetDurationSecondsMin : contract.AcceptableDurationSecondsMin;
-        var max = useTargetRange ? contract.TargetDurationSecondsMax : contract.AcceptableDurationSecondsMax;
-        var passed = actualDurationSeconds >= min && actualDurationSeconds <= max;
-        var rangeName = useTargetRange ? "target" : "acceptable";
+        var toleranceSeconds = ResolveDurationComparisonToleranceSeconds();
+        var passed = IsWithinDurationRange(actualDurationSeconds, contract.AcceptableDurationSecondsMin, contract.AcceptableDurationSecondsMax, toleranceSeconds);
+        var withinTargetRange = IsWithinDurationRange(actualDurationSeconds, contract.TargetDurationSecondsMin, contract.TargetDurationSecondsMax, toleranceSeconds);
+        var warnings = passed && !withinTargetRange
+            ? new[] { "Duration outside target range but inside acceptable range." }
+            : Array.Empty<string>();
         var rounded = Math.Round(actualDurationSeconds, 3, MidpointRounding.AwayFromZero);
         var reason = passed
-            ? $"{valueLabel} is within the {rangeName} duration range."
-            : $"{valueLabel} must be {min:0.###}-{max:0.###} seconds for {ResolveDurationProfileName(profile)}.";
+            ? $"{valueLabel} is within the acceptable duration range."
+            : $"{valueLabel} must be {contract.AcceptableDurationSecondsMin:0.###}-{contract.AcceptableDurationSecondsMax:0.###} seconds for {ResolveDurationProfileName(profile)}.";
         return new VideoDurationContractValidationDto(
             ResolvePlannedFormat(profile),
             ResolveDurationProfileName(profile),
@@ -152,12 +164,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
             new VideoDurationRangeDto(contract.AcceptableDurationSecondsMin, contract.AcceptableDurationSecondsMax),
             rounded,
             passed,
-            reason);
+            reason,
+            warnings);
     }
 
     private void EnsureDurationValidationPassed(VideoDurationContractValidationDto report, string messagePrefix)
     {
-        if (!report.Passed)
+        var passedAcceptableRange = IsWithinDurationRange(report.ActualDurationSeconds, report.AcceptableDurationRange.MinSeconds, report.AcceptableDurationRange.MaxSeconds, ResolveDurationComparisonToleranceSeconds());
+        if (!passedAcceptableRange)
             throw new ArgumentException($"{messagePrefix}: {report.Reason} ActualDurationSeconds={report.ActualDurationSeconds:0.###}; plannedFormat={report.PlannedFormat}; profileName={report.ProfileName}; targetDurationRange={report.TargetDurationRange.MinSeconds:0.###}-{report.TargetDurationRange.MaxSeconds:0.###}; acceptableDurationRange={report.AcceptableDurationRange.MinSeconds:0.###}-{report.AcceptableDurationRange.MaxSeconds:0.###}.");
     }
 
@@ -2856,9 +2870,10 @@ public sealed partial class VideoAssemblyIntelligenceService(
             warnings);
     }
 
-    private static void EnsureShortFormRenderValidationPassed(VideoRenderValidationDto validation)
+    private void EnsureShortFormRenderValidationPassed(VideoRenderValidationDto validation)
     {
-        if (validation.DurationValidation is { Passed: false })
+        if (validation.DurationValidation is not null
+            && !IsWithinDurationRange(validation.DurationValidation.ActualDurationSeconds, validation.DurationValidation.AcceptableDurationRange.MinSeconds, validation.DurationValidation.AcceptableDurationRange.MaxSeconds, ResolveDurationComparisonToleranceSeconds()))
             throw new InvalidOperationException($"Video render validation failed: {validation.DurationValidation.Reason}");
         if (validation.ScenePresentationProfileUsed != ScenePresentationProfile.ShortForm)
             return;

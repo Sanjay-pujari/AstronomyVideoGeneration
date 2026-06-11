@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -22,6 +23,47 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
     private const string EventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
     private const string RegionId = "IN-RJ-UDAIPUR";
+
+
+    [Fact]
+    public void DurationValidation_UsesAcceptableRangeAsHardGateAndTargetRangeAsWarning()
+    {
+        var service = CreateService(CreateWorkingDirectory());
+
+        var targetBoundary = InvokeBuildDurationValidation(service, ScenePresentationProfile.ShortForm, 29.999, useTargetRange: true, "actualDurationSeconds");
+        Assert.True(targetBoundary.Passed);
+        Assert.Empty(targetBoundary.Warnings ?? Array.Empty<string>());
+        Assert.Equal("actualDurationSeconds is within the acceptable duration range.", targetBoundary.Reason);
+
+        var targetMiss = InvokeBuildDurationValidation(service, ScenePresentationProfile.ShortForm, 27.0, useTargetRange: true, "actualDurationSeconds");
+        Assert.True(targetMiss.Passed);
+        Assert.Contains("Duration outside target range but inside acceptable range.", targetMiss.Warnings ?? Array.Empty<string>());
+
+        var acceptableMiss = InvokeBuildDurationValidation(service, ScenePresentationProfile.ShortForm, 24.7, useTargetRange: false, "actualDurationSeconds");
+        Assert.False(acceptableMiss.Passed);
+        Assert.Empty(acceptableMiss.Warnings ?? Array.Empty<string>());
+        Assert.Contains("25-45 seconds", acceptableMiss.Reason);
+    }
+
+    [Fact]
+    public void DurationValidation_ExistingTargetRangeFailuresPassWhenInsideAcceptableRange()
+    {
+        var service = CreateService(CreateWorkingDirectory());
+        var staleTargetFailure = new VideoDurationContractValidationDto(
+            "ShortVideo",
+            "ShortVideo",
+            new VideoDurationRangeDto(30, 40),
+            new VideoDurationRangeDto(25, 45),
+            29.999,
+            false,
+            "actualDurationSeconds must be 30-40 seconds for ShortVideo.");
+
+        InvokeEnsureDurationValidationPassed(service, staleTargetFailure, "Video narration script validation failed");
+
+        var acceptableFailure = staleTargetFailure with { ActualDurationSeconds = 24.7 };
+        var error = Assert.Throws<TargetInvocationException>(() => InvokeEnsureDurationValidationPassed(service, acceptableFailure, "Video narration script validation failed"));
+        Assert.IsType<ArgumentException>(error.InnerException);
+    }
 
     [Fact]
     public async Task GenerateVideoAssemblyAsync_IntelligenceNonDryRunWritesVideoAssemblyIntelligenceOnly()
@@ -832,6 +874,21 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         }, CancellationToken.None));
 
         Assert.Contains("Required render input 'video-assembly-plan.json'", error.Message);
+    }
+
+
+    private static VideoDurationContractValidationDto InvokeBuildDurationValidation(VideoAssemblyIntelligenceService service, ScenePresentationProfile profile, double actualDurationSeconds, bool useTargetRange, string valueLabel)
+    {
+        var method = typeof(VideoAssemblyIntelligenceService).GetMethod("BuildDurationValidation", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return Assert.IsType<VideoDurationContractValidationDto>(method!.Invoke(service, [profile, actualDurationSeconds, useTargetRange, valueLabel]));
+    }
+
+    private static void InvokeEnsureDurationValidationPassed(VideoAssemblyIntelligenceService service, VideoDurationContractValidationDto report, string messagePrefix)
+    {
+        var method = typeof(VideoAssemblyIntelligenceService).GetMethod("EnsureDurationValidationPassed", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(service, [report, messagePrefix]);
     }
 
     private static VideoAssemblyIntelligenceService CreateService(string workingDirectory)

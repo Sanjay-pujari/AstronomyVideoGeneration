@@ -148,7 +148,8 @@ public sealed record VideoDurationContractValidationDto(
     VideoDurationRangeDto AcceptableDurationRange,
     double ActualDurationSeconds,
     bool Passed,
-    string Reason);
+    string Reason,
+    IReadOnlyList<string>? Warnings = null);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
