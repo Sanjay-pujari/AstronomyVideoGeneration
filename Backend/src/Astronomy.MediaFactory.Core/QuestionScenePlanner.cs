@@ -5,7 +5,8 @@ public sealed record QuestionScenePlanRequest(
     string EventId,
     string Language = "en",
     bool DryRun = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    ProductionPipelineExecutionContext? ProductionContext = null);
 
 public sealed record QuestionScenePlanResponse(
     string EventId,

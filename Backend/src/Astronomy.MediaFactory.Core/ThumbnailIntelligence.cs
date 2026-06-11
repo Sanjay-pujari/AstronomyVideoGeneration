@@ -17,6 +17,8 @@ public sealed class ThumbnailAssetGenerationRequest
     public string ThumbnailStyle { get; set; } = string.Empty;
 
     public string ThumbnailVisualStyle { get; set; } = string.Empty;
+
+    public ProductionPipelineExecutionContext? ProductionContext { get; set; }
 }
 
 public sealed record ThumbnailAssetGenerationResponse(

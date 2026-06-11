@@ -7,7 +7,8 @@ public sealed record QuestionSceneIntentEnrichmentRequest(
     string ViewerPersona = "CasualSkyWatcher",
     string KnowledgeLevel = "Beginner",
     bool DryRun = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    ProductionPipelineExecutionContext? ProductionContext = null);
 
 public sealed record QuestionSceneIntentEnrichmentResponse(
     string EventId,

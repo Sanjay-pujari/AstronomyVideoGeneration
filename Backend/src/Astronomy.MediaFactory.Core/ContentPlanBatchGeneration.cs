@@ -165,12 +165,30 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool DryRun,
     bool OverwriteExisting = false);
 
+public sealed record ProductionPipelineExecutionContext(
+    bool UseProductionPipeline,
+    Guid? ContentGenerationPlanId,
+    Guid? AstronomyEventIntelligenceId,
+    string? SourceExternalEventId,
+    bool IsDbApprovedPlanExecution,
+    bool ContentGenerationPlanExists = false,
+    string? ContentGenerationPlanStatus = null,
+    string? ContentGenerationPlanPlanStatus = null,
+    bool AstronomyEventIntelligenceExists = false,
+    bool AutoGenerateAllowed = false,
+    string? VerificationStatus = null,
+    string? ContentStrategy = null,
+    string? RegionId = null,
+    string? Language = null,
+    IReadOnlyList<string>? RequestedOutputs = null);
+
 public sealed record ProductionPipelineRequest(
     ContentPlanProductionPipelineRequest Request,
     Guid AstronomyEventIntelligenceId,
     string OutputRoot,
     bool DryRun,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    ProductionPipelineExecutionContext? ExecutionContext = null);
 
 public sealed record ProductionPipelineExecutionResult(
     bool Success,

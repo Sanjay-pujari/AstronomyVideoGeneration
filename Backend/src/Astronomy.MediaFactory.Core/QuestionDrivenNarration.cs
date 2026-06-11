@@ -5,7 +5,8 @@ public sealed record QuestionDrivenNarrationRequest(
     string RegionId,
     string Language = "en",
     bool DryRun = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    ProductionPipelineExecutionContext? ProductionContext = null);
 
 public sealed record QuestionDrivenNarrationResponse(
     string EventId,

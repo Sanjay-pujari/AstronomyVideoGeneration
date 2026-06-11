@@ -7,7 +7,8 @@ public sealed record QuestionAnswerGenerationRequest(
     int MaxEvents = 10,
     string Language = "en",
     bool DryRun = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    ProductionPipelineExecutionContext? ProductionContext = null);
 
 public sealed record QuestionAnswerValidationRequest(
     string RegionId,

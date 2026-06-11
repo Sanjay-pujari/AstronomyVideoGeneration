@@ -31,6 +31,7 @@ public sealed class ProductionPipelineExecutionService(
         var errors = new List<string>();
         var generatedFiles = new List<string>();
         var outputRoot = request.OutputRoot;
+        var executionContext = request.ExecutionContext;
 
         if (request.DryRun)
         {
@@ -45,27 +46,28 @@ public sealed class ProductionPipelineExecutionService(
                 MaxEvents: 1,
                 Language: productionRequest.Language,
                 DryRun: false,
-                OverwriteExisting: request.OverwriteExisting), cancellationToken);
+                OverwriteExisting: request.OverwriteExisting,
+                ProductionContext: executionContext), cancellationToken);
             generatedFiles.AddRange(questionResponse.GeneratedFiles);
             warnings.AddRange(questionResponse.Warnings);
 
-            var scenePlanResponse = await scenePlanner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(productionRequest.RegionId, eventId, productionRequest.Language, false, request.OverwriteExisting), cancellationToken);
+            var scenePlanResponse = await scenePlanner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(productionRequest.RegionId, eventId, productionRequest.Language, false, request.OverwriteExisting, executionContext), cancellationToken);
             generatedFiles.AddRange(scenePlanResponse.GeneratedFiles);
             warnings.AddRange(scenePlanResponse.Warnings);
 
-            var enrichmentResponse = await sceneIntentEnricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(eventId, productionRequest.RegionId, productionRequest.Language, DryRun: false, OverwriteExisting: request.OverwriteExisting), cancellationToken);
+            var enrichmentResponse = await sceneIntentEnricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(eventId, productionRequest.RegionId, productionRequest.Language, DryRun: false, OverwriteExisting: request.OverwriteExisting, ProductionContext: executionContext), cancellationToken);
             generatedFiles.AddRange(enrichmentResponse.GeneratedFiles);
             warnings.AddRange(enrichmentResponse.Warnings);
 
-            var narrationResponse = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting), cancellationToken);
+            var narrationResponse = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, executionContext), cancellationToken);
             generatedFiles.AddRange(narrationResponse.GeneratedFiles);
             warnings.AddRange(narrationResponse.Warnings);
 
-            var sceneResponse = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting), cancellationToken);
+            var sceneResponse = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, executionContext), cancellationToken);
             generatedFiles.AddRange(sceneResponse.GeneratedFiles);
             warnings.AddRange(sceneResponse.Warnings);
 
-            var heroResponse = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, HeroAssetGenerationPhase.Full), cancellationToken);
+            var heroResponse = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, HeroAssetGenerationPhase.Full, executionContext), cancellationToken);
             generatedFiles.AddRange(heroResponse.GeneratedFiles);
             warnings.AddRange(heroResponse.Warnings);
 
@@ -78,7 +80,8 @@ public sealed class ProductionPipelineExecutionService(
                 DryRun = false,
                 OverwriteExisting = request.OverwriteExisting,
                 ThumbnailStyle = "ScrollStopping",
-                ThumbnailVisualStyle = "PhotoCinematic"
+                ThumbnailVisualStyle = "PhotoCinematic",
+                ProductionContext = executionContext
             }, cancellationToken);
             generatedFiles.AddRange(thumbnailResponse.GeneratedFiles);
             if (thumbnailResponse.Warnings is not null) warnings.AddRange(thumbnailResponse.Warnings);

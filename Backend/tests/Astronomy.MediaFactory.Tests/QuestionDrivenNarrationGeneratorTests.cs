@@ -90,11 +90,51 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.Contains("golden pilot event", ex.Message);
     }
 
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_AllowsDbApprovedProductionPlanRequest()
+    {
+        const string geminidsEventId = "e60aa11f-ad8c-440f-ad49-2079a435f8c1";
+        var planId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
+        var intelligenceId = Guid.Parse(geminidsEventId);
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, BuildEnrichedPlan(geminidsEventId));
+        var generator = CreateGenerator(workingDirectory);
+        var context = new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: planId,
+            AstronomyEventIntelligenceId: intelligenceId,
+            SourceExternalEventId: "meteor-shower-geminids-2026",
+            IsDbApprovedPlanExecution: true,
+            ContentGenerationPlanExists: true,
+            ContentGenerationPlanStatus: "Planned",
+            ContentGenerationPlanPlanStatus: "Approved",
+            AstronomyEventIntelligenceExists: true,
+            AutoGenerateAllowed: true,
+            VerificationStatus: "Approximate",
+            ContentStrategy: "LocalViewingGuide",
+            RegionId: RegionId,
+            Language: "en",
+            RequestedOutputs: ["ShortVideo", "LongVideo"]);
+
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            geminidsEventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            ProductionContext: context), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(geminidsEventId, result.EventId);
+        Assert.Equal(6, result.SceneCount);
+    }
+
     private static QuestionDrivenNarrationGenerator CreateGenerator(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<QuestionDrivenNarrationGenerator>.Instance);
 
-    private static EnrichedQuestionScenePlanDto BuildEnrichedPlan() => new(
-        EventId,
+    private static EnrichedQuestionScenePlanDto BuildEnrichedPlan(string? eventId = null) => new(
+        eventId ?? EventId,
         RegionId,
         "en",
         "CasualSkyWatcher",
@@ -129,13 +169,13 @@ public sealed class QuestionDrivenNarrationGeneratorTests
 
     private static async Task WriteEnrichedQuestionDrivenScenePlanAsync(string workingDirectory, EnrichedQuestionScenePlanDto plan)
     {
-        var path = BuildPlanPath(workingDirectory, "question-driven-scene-plan.enriched.json");
+        var path = BuildPlanPath(workingDirectory, "question-driven-scene-plan.enriched.json", plan.EventId);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(plan, JsonOptions));
     }
 
-    private static string BuildPlanPath(string workingDirectory, string fileName)
-        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", fileName);
+    private static string BuildPlanPath(string workingDirectory, string fileName, string? eventId = null)
+        => Path.Combine(workingDirectory, "assets", RegionId, "events", eventId ?? EventId, "question-engine", fileName);
 
     private static string CreateWorkingDirectory()
     {
