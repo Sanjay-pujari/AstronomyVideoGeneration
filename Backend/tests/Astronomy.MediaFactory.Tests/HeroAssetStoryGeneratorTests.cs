@@ -383,6 +383,7 @@ public sealed class HeroAssetStoryGeneratorTests
             Phase: HeroAssetGenerationPhase.Images), CancellationToken.None);
 
         var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
+        var heroPath = Path.Combine(heroAssetsRoot, "hero.png");
         var landscapePath = Path.Combine(heroAssetsRoot, "hero-landscape.png");
         var squarePath = Path.Combine(heroAssetsRoot, "hero-square.png");
         var portraitPath = Path.Combine(heroAssetsRoot, "hero-portrait.png");
@@ -403,7 +404,7 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("scene-001", result.PrimaryScene);
         Assert.Equal("scene-006", result.SecondaryScene);
         Assert.Equal("scene-002", result.SupportScene);
-        Assert.Equal(6, result.GeneratedFiles.Count);
+        Assert.Equal(7, result.GeneratedFiles.Count);
         Assert.True(result.HeroCompositionModelGenerated);
         Assert.True(result.LayoutValidationGenerated);
         Assert.False(result.DuplicateBlocksDetected);
@@ -412,6 +413,7 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Contains(sceneManifestPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(compositionModelPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(layoutValidationPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(heroPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
@@ -419,6 +421,7 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(File.Exists(sceneManifestPath));
         Assert.True(File.Exists(compositionModelPath));
         Assert.True(File.Exists(layoutValidationPath));
+        Assert.True(File.Exists(heroPath));
         Assert.True(File.Exists(landscapePath));
         Assert.True(File.Exists(squarePath));
         Assert.True(File.Exists(portraitPath));
@@ -450,6 +453,7 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.False(review.GetProperty("usesManualCirclePlanets").GetBoolean());
         Assert.True(review.GetProperty("matchesApprovedSceneVisualBaseline").GetBoolean());
         Assert.Equal(3, review.GetProperty("platformVariantCount").GetInt32());
+        Assert.True(new FileInfo(heroPath).Length > 0);
         Assert.True(new FileInfo(landscapePath).Length > 0);
         Assert.True(new FileInfo(squarePath).Length > 0);
         Assert.True(new FileInfo(portraitPath).Length > 0);
@@ -513,6 +517,76 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("Where", manifest.GetProperty("supportScene").GetProperty("sceneKey").GetString());
         Assert.Equal("DirectionCue", manifest.GetProperty("supportScene").GetProperty("role").GetString());
         Assert.Equal("Use What scene as visual anchor, Action scene for CTA, and Where scene for direction cue.", manifest.GetProperty("selectionReason").GetString());
+    }
+
+
+
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_SceneSelectionPrefersNormalizedLongSceneAssetsOverStagedFinalAssets()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        await WriteNormalizedSceneAssetsAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+
+        await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.SceneSelection), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.NotNull(result.HeroSceneManifest);
+        Assert.EndsWith("scene-approval-v3/long/scene-001.png", result.HeroSceneManifest!.PrimaryScene.ImagePath);
+        Assert.EndsWith("scene-approval-v3/long/scene-006.png", result.HeroSceneManifest.SecondaryScene.ImagePath);
+        Assert.EndsWith("scene-approval-v3/long/scene-002.png", result.HeroSceneManifest.SupportScene.ImagePath);
+    }
+
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_MeteorStrategyDoesNotRequireGeminidsOrMeteorsAssetFiles()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+        var productionContext = new ProductionPipelineExecutionContext(
+            true,
+            null,
+            null,
+            null,
+            false,
+            ProductionEventIntelligence: BuildMeteorProductionEventIntelligence());
+
+        await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Images,
+            ProductionContext: productionContext), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.DoesNotContain(result.Warnings, warning => warning.Contains("Required strategy celestial assets", StringComparison.OrdinalIgnoreCase));
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(BuildOutputPath(workingDirectory))!, "hero.png")));
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(BuildOutputPath(workingDirectory))!, "hero-scene-manifest.json")));
     }
 
     [Fact]
@@ -597,6 +671,47 @@ public sealed class HeroAssetStoryGeneratorTests
             CelestialAssetsRoot = Path.Combine(workingDirectory, "assets", "celestial")
         }), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector(), new HeroCompositionEngine());
 
+
+
+    private static async Task WriteNormalizedSceneAssetsAsync(string workingDirectory)
+    {
+        var eventRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId);
+        var approvedScenePng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
+        foreach (var profile in new[] { "short", "long" })
+        {
+            var profileRoot = Path.Combine(eventRoot, "scene-approval-v3", profile);
+            Directory.CreateDirectory(profileRoot);
+            for (var sceneNumber = 1; sceneNumber <= 6; sceneNumber++)
+                await File.WriteAllBytesAsync(Path.Combine(profileRoot, $"scene-{sceneNumber:000}.png"), approvedScenePng);
+        }
+    }
+
+    private static ProductionEventIntelligence BuildMeteorProductionEventIntelligence()
+        => new(
+            "Astronomy",
+            "MeteorShower",
+            "Geminid meteor shower viewing window",
+            "Geminids peak tonight",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"),
+            DateTimeOffset.Parse("2026-12-14T02:00:00Z"),
+            "2:00 AM local",
+            "Midnight to dawn",
+            "Radiant high in the dark sky",
+            "Udaipur",
+            ["Geminids"],
+            ["Meteors"],
+            "Clear dark sky",
+            "low moon interference",
+            12,
+            "Meteor showers are stream debris crossing Earth’s orbit.",
+            ["Find a dark sky", "Watch during the viewing window"],
+            ["meteor streaks", "radiant hint", "dark sky", "low moon interference", "viewing window"],
+            ["Open on meteor streaks", "Show radiant hint", "Close with viewing window"],
+            [],
+            "MeteorShower",
+            RequiredVisualObjects: ["meteor streaks", "radiant hint", "dark sky", "low moon interference", "viewing window"],
+            HeroCopyCandidates: ["METEORS PEAK TONIGHT", "WATCH AFTER MIDNIGHT"]);
+
     private static async Task WriteInputFilesAsync(string workingDirectory)
     {
         var questionEngineRoot = BuildQuestionEnginePath(workingDirectory);
@@ -606,10 +721,14 @@ public sealed class HeroAssetStoryGeneratorTests
         await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-driven-narration.json"), JsonSerializer.Serialize(BuildNarration(), JsonOptions));
 
         var sceneApprovalRoot = Path.Combine(questionEngineRoot, "scene-approval-v3");
-        Directory.CreateDirectory(sceneApprovalRoot);
         var approvedScenePng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
-        for (var sceneNumber = 1; sceneNumber <= 6; sceneNumber++)
-            await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"scene-{sceneNumber:000}-final.png"), approvedScenePng);
+        foreach (var profile in new[] { "short", "long" })
+        {
+            var profileRoot = Path.Combine(sceneApprovalRoot, profile);
+            Directory.CreateDirectory(profileRoot);
+            for (var sceneNumber = 1; sceneNumber <= 6; sceneNumber++)
+                await File.WriteAllBytesAsync(Path.Combine(profileRoot, $"scene-{sceneNumber:000}-final.png"), approvedScenePng);
+        }
 
         await WriteCelestialTestAssetAsync(workingDirectory, "venus");
         await WriteCelestialTestAssetAsync(workingDirectory, "jupiter");
