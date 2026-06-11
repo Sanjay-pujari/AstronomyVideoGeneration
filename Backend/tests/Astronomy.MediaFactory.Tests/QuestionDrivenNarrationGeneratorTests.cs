@@ -173,6 +173,39 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.Equal(geminidsEventId, result.EventId);
     }
 
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_ProductionMeteorShowerUsesStrategyIntelligenceInsteadOfStalePilotPlan()
+    {
+        const string geminidsEventId = "e60aa11f-ad8c-440f-ad49-2079a435f8c1";
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, BuildEnrichedPlan(geminidsEventId));
+        var generator = CreateGenerator(workingDirectory);
+        var context = BuildMeteorProductionContext(Guid.Parse(geminidsEventId));
+
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            geminidsEventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: true,
+            ProductionContext: context), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        var combined = string.Join(" ", result.Narration.Scenes.Select(scene => $"{scene.SourceAnswer} {scene.ViewerTakeaway} {scene.NarrationText} {scene.CaptionText}"));
+        Assert.Contains("Geminids Meteor Shower", combined);
+        Assert.Contains("2026-12-14 00:00–05:00 IST", combined);
+        Assert.Contains("east to overhead after 10 PM", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("low moon interference", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dark sky", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("No telescope", combined);
+        Assert.DoesNotContain("Venus", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Jupiter", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("after sunset", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("look west", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("7:23 PM IST", combined, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task GenerateQuestionDrivenNarrationAsync_RejectsDbApprovedProductionPlanWhenCategoryIsNotRareEventAlert()
     {
@@ -208,6 +241,62 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             ProductionContext: context), CancellationToken.None));
 
         Assert.Contains("DB-approved Astronomy V1 production plan", ex.Message);
+    }
+
+
+    private static ProductionPipelineExecutionContext BuildMeteorProductionContext(Guid intelligenceId)
+    {
+        var planId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
+        var intelligence = new ProductionEventIntelligence(
+            Domain: "Astronomy",
+            EventType: "MeteorShower",
+            Title: "Geminids Meteor Shower",
+            ShortTitle: "Geminids",
+            EventDate: DateTimeOffset.Parse("2026-12-13T18:30:00Z"),
+            PeakUtc: DateTimeOffset.Parse("2026-12-13T18:30:00Z"),
+            LocalPeakTime: "2026-12-14 00:00 IST",
+            BestViewingWindowLocal: "2026-12-14 00:00–05:00 IST",
+            SkyDirectionHint: "east to overhead after 10 PM",
+            VisibilityRegion: RegionId,
+            PrimaryObjects: ["Geminids Meteor Shower"],
+            SecondaryObjects: [],
+            ViewingQuality: "Excellent",
+            MoonInterference: "low moon interference",
+            MoonIlluminationPercent: 20,
+            ScientificContext: "Earth crosses debris that produces bright meteor streaks from the shower radiant across the whole sky.",
+            ViewerInstructions: ["No telescope needed", "Choose a dark sky", "Watch meteor streaks across the whole sky"],
+            VisualMotifs: ["meteor streaks", "radiant", "whole sky", "dark sky"],
+            SceneStrategy: [],
+            QualityWarnings: [],
+            ForbiddenTerms: ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST"],
+            StrategyId: "MeteorShower",
+            ResolvedObjectNames: ["Geminids Meteor Shower"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"],
+            RequiredVisualObjects: ["meteor streaks", "radiant", "whole sky"],
+            RequiredNarrationFacts: ["2026-12-14 00:00–05:00 IST", "east to overhead after 10 PM", "low moon interference", "dark sky", "no telescope needed"],
+            PreferredViewingWindow: "2026-12-14 00:00–05:00 IST");
+
+        return new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: planId,
+            AstronomyEventIntelligenceId: intelligenceId,
+            SourceExternalEventId: "meteor-shower-geminids-2026",
+            IsDbApprovedPlanExecution: true,
+            ContentGenerationPlanExists: true,
+            ContentGenerationPlanStatus: "ProductionRunning",
+            ContentGenerationPlanPlanStatus: "ProductionRunning",
+            AstronomyEventIntelligenceExists: true,
+            AutoGenerateAllowed: true,
+            VerificationStatus: "Verified",
+            ContentStrategy: "LocalViewingGuide",
+            RegionId: RegionId,
+            Language: "en",
+            RequestedOutputs: ["ShortVideo", "LongVideo"],
+            Category: "RareEventAlert",
+            PlannedFormat: "ShortAndLongVideo",
+            EventType: "MeteorShower",
+            ProductionEventIntelligence: intelligence,
+            MediaEventStrategy: new MeteorShowerStrategy());
     }
 
     private static QuestionDrivenNarrationGenerator CreateGenerator(string workingDirectory)

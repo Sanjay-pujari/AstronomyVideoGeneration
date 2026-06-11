@@ -49,10 +49,13 @@ public sealed class ProductionPipelineExecutionService(
 
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
-        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "short"));
-        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "long"));
 
         var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly);
+        if (request.OverwriteExisting)
+            ClearPhaseRangeOutputsForOverwrite(context);
+
+        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "short"));
+        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "long"));
 
         if (request.DryRun)
         {
@@ -376,6 +379,32 @@ public sealed class ProductionPipelineExecutionService(
     {
         if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
             Directory.Delete(path, recursive: true);
+    }
+
+    private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
+    {
+        if (context.StartPhaseNo <= 7 && context.EndPhaseNo >= 7)
+        {
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"));
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"));
+        }
+
+        if (context.StartPhaseNo <= 8 && context.EndPhaseNo >= 8)
+        {
+            DeleteProductionSubtree(context.ExecutionContext.SceneRoot!);
+            DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"));
+        }
+
+        var firstValidationToDelete = Math.Max(context.StartPhaseNo, 7);
+        var lastValidationToDelete = Math.Min(context.EndPhaseNo, 10);
+        for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"));
+    }
+
+    private static void DeleteFileIfExists(string path)
+    {
+        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            File.Delete(path);
     }
 
     private async Task<IReadOnlyList<string>> MaterializePlanFolderAsync(ContentPlanProductionPipelineRequest request, string eventId, string outputRoot, IReadOnlyList<string> generatedFiles, CancellationToken cancellationToken)
