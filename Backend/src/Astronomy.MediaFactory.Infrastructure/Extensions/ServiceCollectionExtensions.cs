@@ -506,6 +506,17 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyCategoryReadinessService, AstronomyCategoryReadinessService>();
         services.AddScoped<IAstronomyVideoPlanningService, AstronomyVideoPlanningService>();
         services.AddScoped<IAstronomyAssetPlanningService, AstronomyAssetPlanningService>();
+        services.AddScoped<IEventProductionIntelligenceAdapter, AstronomyEventProductionIntelligenceAdapter>();
+        services.AddScoped<IMediaEventStrategyResolver, MediaEventStrategyResolver>();
+        services.AddScoped<IMediaEventStrategy, MeteorShowerStrategy>();
+        services.AddScoped<IMediaEventStrategy, PlanetPairingStrategy>();
+        services.AddScoped<IMediaEventStrategy, ConjunctionStrategy>();
+        services.AddScoped<IMediaEventStrategy, NamedFullMoonStrategy>();
+        services.AddScoped<IMediaEventStrategy, NewMoonStrategy>();
+        services.AddScoped<IMediaEventStrategy, LunarEclipseStrategy>();
+        services.AddScoped<IMediaEventStrategy, SolarEclipseStrategy>();
+        services.AddScoped<IMediaEventStrategy, GenericAstronomyEventStrategy>();
+        services.AddScoped<IProductionPipelineQualityValidator, ProductionPipelineQualityValidator>();
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
         services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();

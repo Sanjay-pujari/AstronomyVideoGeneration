@@ -15,6 +15,8 @@ public sealed class ProductionPipelineExecutionService(
     IHeroAssetIntelligenceEngine heroEngine,
     IThumbnailAssetIntelligenceService thumbnailEngine,
     IVideoAssemblyIntelligenceService videoAssemblyEngine,
+    IEventProductionIntelligenceAdapter intelligenceAdapter,
+    IProductionPipelineQualityValidator qualityValidator,
     IOptions<RenderingOptions> renderingOptions,
     ILogger<ProductionPipelineExecutionService> logger) : IProductionPipelineExecutionService
 {
@@ -32,6 +34,14 @@ public sealed class ProductionPipelineExecutionService(
         var generatedFiles = new List<string>();
         var outputRoot = request.OutputRoot;
         var executionContext = request.ExecutionContext;
+        var productionIntelligence = intelligenceAdapter.Normalize(request);
+        var eventWorkingRoot = BuildEventWorkingRoot(productionRequest, eventId);
+
+        if (request.OverwriteExisting)
+        {
+            ClearProductionOutputRoot(outputRoot);
+            DeleteProductionSubtree(eventWorkingRoot);
+        }
 
         if (request.DryRun)
         {
@@ -40,6 +50,8 @@ public sealed class ProductionPipelineExecutionService(
 
         try
         {
+            generatedFiles.Add(await WriteProductionIntelligenceAsync(outputRoot, productionIntelligence, cancellationToken));
+
             var questionResponse = await questionEngine.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
                 productionRequest.RegionId,
                 PlanIds: [productionRequest.PlanId.ToString("D")],
@@ -86,6 +98,12 @@ public sealed class ProductionPipelineExecutionService(
             generatedFiles.AddRange(thumbnailResponse.GeneratedFiles);
             if (thumbnailResponse.Warnings is not null) warnings.AddRange(thumbnailResponse.Warnings);
 
+            var preAssemblyValidation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(productionIntelligence, eventWorkingRoot, cancellationToken);
+            warnings.AddRange(preAssemblyValidation.Warnings);
+            errors.AddRange(preAssemblyValidation.Errors);
+            if (!preAssemblyValidation.IsValid)
+                logger.LogWarning("Astronomy V1 production pre-assembly validation reported blocking issues for plan {PlanId}: {Issues}", productionRequest.PlanId, string.Join(" | ", preAssemblyValidation.Errors));
+
             var assemblyResponse = await videoAssemblyEngine.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
             {
                 EventId = eventId,
@@ -104,6 +122,10 @@ public sealed class ProductionPipelineExecutionService(
             var copied = await MaterializePlanFolderAsync(productionRequest, eventId, outputRoot, generatedFiles, cancellationToken);
             generatedFiles.AddRange(copied);
 
+            var finalValidation = await qualityValidator.ValidateFinalOutputAsync(productionIntelligence, outputRoot, cancellationToken);
+            warnings.AddRange(finalValidation.Warnings);
+            errors.AddRange(finalValidation.Errors);
+
             var shortVideo = Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4");
             var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
             var shortOk = File.Exists(shortVideo);
@@ -121,10 +143,39 @@ public sealed class ProductionPipelineExecutionService(
         }
     }
 
+    private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
+        return path;
+    }
+
+    private string BuildEventWorkingRoot(ContentPlanProductionPipelineRequest request, string eventId)
+        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", Sanitize(request.RegionId), "events", eventId);
+
+    private static void ClearProductionOutputRoot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        foreach (var directory in Directory.EnumerateDirectories(path))
+        {
+            if (string.Equals(Path.GetFileName(directory), "plan-input", StringComparison.OrdinalIgnoreCase)) continue;
+            Directory.Delete(directory, recursive: true);
+        }
+        foreach (var file in Directory.EnumerateFiles(path))
+            File.Delete(file);
+    }
+
+    private static void DeleteProductionSubtree(string path)
+    {
+        if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+            Directory.Delete(path, recursive: true);
+    }
+
     private async Task<IReadOnlyList<string>> MaterializePlanFolderAsync(ContentPlanProductionPipelineRequest request, string eventId, string outputRoot, IReadOnlyList<string> generatedFiles, CancellationToken cancellationToken)
     {
         var copied = new List<string>();
-        var eventRoot = Path.Combine(ResolveWorkingDirectoryRoot(), "assets", Sanitize(request.RegionId), "events", eventId);
+        var eventRoot = BuildEventWorkingRoot(request, eventId);
         CopyFile(Path.Combine(eventRoot, "question-engine", "question-answer-set.json"), Path.Combine(outputRoot, "question-engine", "questions.json"), copied);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "short"), Path.Combine(outputRoot, "scene-approval-v3", "short"), copied, renameFinalScenes: true);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "long"), Path.Combine(outputRoot, "scene-approval-v3", "long"), copied, renameFinalScenes: true);

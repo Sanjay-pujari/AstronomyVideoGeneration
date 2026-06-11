@@ -8,7 +8,8 @@ public sealed record BatchGenerateFromPlansRequest(
     bool OnlyHighPriority = false,
     bool DryRun = true,
     IReadOnlyList<string>? PlanTitles = null,
-    bool UseProductionPipeline = false);
+    bool UseProductionPipeline = false,
+    bool OverwriteExisting = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,

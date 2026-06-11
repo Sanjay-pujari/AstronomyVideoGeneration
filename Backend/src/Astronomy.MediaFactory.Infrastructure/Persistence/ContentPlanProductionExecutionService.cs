@@ -14,7 +14,6 @@ public sealed class ContentPlanProductionExecutionService(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<ContentPlanProductionExecutionService> logger) : IContentPlanProductionExecutionService
 {
-    private static readonly Guid GeminidsPlanId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ProductionSteps =
     [
@@ -36,9 +35,6 @@ public sealed class ContentPlanProductionExecutionService(
 
     public async Task<ContentPlanProductionExecutionResult> ExecuteContentPlanWithProductionPipelineAsync(ContentPlanProductionExecutionRequest request, CancellationToken cancellationToken)
     {
-        if (request.ContentGenerationPlanId != GeminidsPlanId)
-            throw new ArgumentException("Phase 10A.3 production execution is locked to the Geminids plan only.", nameof(request));
-
         var plan = await db.ContentGenerationPlans
             .Include(p => p.AstronomyEventIntelligence)!.ThenInclude(e => e!.Objects)
             .FirstOrDefaultAsync(p => p.Id == request.ContentGenerationPlanId, cancellationToken)

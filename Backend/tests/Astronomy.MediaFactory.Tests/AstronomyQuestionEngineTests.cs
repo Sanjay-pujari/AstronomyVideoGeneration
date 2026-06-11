@@ -269,7 +269,7 @@ public sealed class AstronomyQuestionEngineTests
         Assert.Contains("Geminids", answers[AstronomyQuestionTypes.What]);
         Assert.Contains("meteor", answers[AstronomyQuestionTypes.What], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("East to overhead after 10 PM", answers[AstronomyQuestionTypes.Where]);
-        Assert.Contains("dark, open sky", answers[AstronomyQuestionTypes.Where]);
+        Assert.Contains("meteors can appear anywhere", answers[AstronomyQuestionTypes.Where], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("2026-12-14 00:00–05:00 IST", answers[AstronomyQuestionTypes.When]);
         Assert.DoesNotContain("11:30", answers[AstronomyQuestionTypes.When]);
         Assert.Contains("No telescope", answers[AstronomyQuestionTypes.How]);

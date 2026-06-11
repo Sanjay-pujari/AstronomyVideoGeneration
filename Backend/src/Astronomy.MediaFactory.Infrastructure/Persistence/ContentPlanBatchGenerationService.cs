@@ -86,7 +86,7 @@ public sealed class ContentPlanBatchGenerationService(
             var execution = await productionExecution.ExecuteContentPlanAsync(
                 selectedPlans[0].ContentGenerationPlanId,
                 request.DryRun,
-                overwriteExisting: false,
+                request.OverwriteExisting,
                 cancellationToken);
 
             return new BatchGenerateFromPlansResponse(

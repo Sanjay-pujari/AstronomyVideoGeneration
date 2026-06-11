@@ -5,7 +5,6 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionRequestMapper
 {
-    private static readonly Guid GeminidsPlanId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public ContentPlanProductionPipelineRequest Map(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence)
@@ -21,29 +20,26 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
         if (requestedOutputs.Count == 0)
             requestedOutputs = ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"];
 
-        var isGeminids = plan.Id == GeminidsPlanId;
         var primaryObjects = ResolveObjects(intelligence, primary: true);
-        if (isGeminids && primaryObjects.Count == 0) primaryObjects = ["Geminids"];
         var secondaryObjects = ResolveObjects(intelligence, primary: false);
-        if (isGeminids && secondaryObjects.Count == 0) secondaryObjects = ["Meteors"];
 
         return new ContentPlanProductionPipelineRequest(
             plan.Id,
-            isGeminids ? "RareEventAlert" : plan.ContentCategoryCode,
-            isGeminids ? "Geminids Meteor Shower Peak" : plan.Title ?? intelligence.Title,
-            isGeminids ? "Geminids" : ReadString(metadata, raw, "shortTitle") ?? intelligence.Summary ?? ShortenTitle(plan.Title ?? intelligence.Title),
-            isGeminids ? "MeteorShower" : intelligence.EventType,
+            FirstNonBlank(plan.ContentCategoryCode, intelligence.RecommendedCategory, "RareEventAlert"),
+            FirstNonBlank(plan.Title, intelligence.Title, "Astronomy event"),
+            ReadString(metadata, raw, "shortTitle") ?? intelligence.Summary ?? ShortenTitle(FirstNonBlank(plan.Title, intelligence.Title, "Astronomy event")),
+            FirstNonBlank(intelligence.EventType, plan.PrimaryAstronomyEventTypeCode, "AstronomyEvent"),
             plan.RegionId,
             plan.Language,
             primaryObjects,
             secondaryObjects,
             intelligence.StartUtc,
-            isGeminids ? DateTimeOffset.Parse("2026-12-14T06:00:00Z") : intelligence.PeakUtc,
+            intelligence.PeakUtc,
             intelligence.EndUtc,
             plan.ScheduledUtc,
-            isGeminids ? "meteor-shower-geminids-2026" : plan.SourceExternalEventId ?? intelligence.ExternalEventId,
+            FirstNonBlank(plan.SourceExternalEventId, intelligence.ExternalEventId, intelligence.EventCode),
             plan.PlannedFormat,
-            isGeminids ? ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"] : requestedOutputs,
+            requestedOutputs,
             intelligence.VisibilityScore,
             intelligence.RarityScore,
             intelligence.AudienceInterestScore,
@@ -51,18 +47,21 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
             intelligence.VerificationStatus,
             ReadString(metadata, raw, "verificationSource"),
             intelligence.ContentStrategy,
-            isGeminids ? "2026-12-14 00:00 IST" : ReadString(metadata, raw, "localPeakTime"),
-            isGeminids ? "East to overhead after 10 PM" : ReadString(metadata, raw, "skyDirectionHint", "directionHint"),
+            ReadString(metadata, raw, "localPeakTime"),
+            ReadString(metadata, raw, "skyDirectionHint", "directionHint"),
             ReadString(metadata, raw, "visibilityRegion"),
-            isGeminids ? "Low" : ReadString(metadata, raw, "moonInterference"),
-            isGeminids ? "2026-12-14 00:00–05:00 IST" : ReadString(metadata, raw, "bestViewingWindowLocal"),
-            isGeminids ? "Gemini radiant climbs high after midnight; meteors can appear anywhere in the sky." : ReadString(metadata, raw, "radiantVisibilityNote"),
-            isGeminids ? 8m : ReadDecimal(metadata, raw, "moonIlluminationPercent"),
+            ReadString(metadata, raw, "moonInterference"),
+            ReadString(metadata, raw, "bestViewingWindowLocal"),
+            ReadString(metadata, raw, "radiantVisibilityNote"),
+            ReadDecimal(metadata, raw, "moonIlluminationPercent"),
             ReadString(metadata, raw, "recommendedPublishWindow"),
             ReadStringArray(metadata, raw, "recommendedContentTypes"),
             warnings,
             sourceNotes);
     }
+
+    private static string FirstNonBlank(params string?[] values)
+        => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
 
     private static List<string> ReadRequestedOutputs(string? json)
     {

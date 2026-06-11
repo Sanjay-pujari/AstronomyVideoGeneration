@@ -91,6 +91,37 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.False(legacy.WasCalled);
     }
 
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ForwardsOverwriteExistingToProductionPipeline()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db);
+        var legacy = new NoOpLegacyGenerationService();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            OverwriteExisting: true), CancellationToken.None);
+
+        Assert.True(production.CapturedOverwriteExisting);
+    }
+
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
