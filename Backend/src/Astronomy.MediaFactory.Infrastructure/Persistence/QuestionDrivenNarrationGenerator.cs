@@ -300,33 +300,28 @@ public sealed class QuestionDrivenNarrationGenerator(
 
     private void ValidateRequest(QuestionDrivenNarrationRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.EventId))
-            throw new ArgumentException("eventId is required.", nameof(request));
-        if (string.IsNullOrWhiteSpace(request.RegionId))
-            throw new ArgumentException("regionId is required.", nameof(request));
-        if (string.IsNullOrWhiteSpace(request.Language))
-            throw new ArgumentException("language is required.", nameof(request));
+        var diagnostics = BuildNarrationRequestDiagnostics(request);
+        if (!diagnostics.EventIdPresent || !diagnostics.RegionIdPresent || !diagnostics.LanguagePresent || (request.ProductionContext is not null && !diagnostics.PlanIdPresent))
+            throw new ArgumentException("Question-driven narration generation requires a valid event id, region id, and language for dynamic Astronomy V1 production. " + FormatDiagnostics(diagnostics), nameof(request));
+
         if (IsDbApprovedAstronomyV1ProductionPlan(request) || request.ProductionContext is null)
             return;
 
-        throw new ArgumentException("Question-driven narration generation requires a valid event id, region id, and language for dynamic Astronomy V1 production.", nameof(request));
+        throw new ArgumentException("Question-driven narration generation requires a valid DB-approved Astronomy V1 production plan. " + FormatDiagnostics(diagnostics), nameof(request));
     }
 
     private bool IsDbApprovedAstronomyV1ProductionPlan(QuestionDrivenNarrationRequest request)
     {
         var context = request.ProductionContext;
+        var diagnostics = BuildNarrationRequestDiagnostics(request);
         var hasShortOrLongVideoOutput = context?.RequestedOutputs?.Any(output =>
             string.Equals(output, "ShortVideo", StringComparison.OrdinalIgnoreCase)
             || string.Equals(output, "LongVideo", StringComparison.OrdinalIgnoreCase)) == true;
 
         var useProductionPipeline = context?.UseProductionPipeline == true;
         var isDbApprovedPlanExecution = context?.IsDbApprovedPlanExecution == true;
-        var contentGenerationPlanExists = context?.ContentGenerationPlanExists == true
-            && context.ContentGenerationPlanId is not null
-            && context.ContentGenerationPlanId != Guid.Empty;
-        var astronomyEventIntelligenceExists = context?.AstronomyEventIntelligenceExists == true
-            && context.AstronomyEventIntelligenceId is not null
-            && context.AstronomyEventIntelligenceId != Guid.Empty;
+        var contentGenerationPlanExists = diagnostics.PlanIdPresent;
+        var astronomyEventIntelligenceExists = diagnostics.EventIdPresent;
         var autoGenerateAllowed = context?.AutoGenerateAllowed == true;
         var verificationStatusAllowed = !string.Equals(context?.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase);
         var contentStrategyAllowed = !string.Equals(context?.ContentStrategy, "SkipAutoGeneration", StringComparison.OrdinalIgnoreCase)
@@ -360,13 +355,30 @@ public sealed class QuestionDrivenNarrationGenerator(
         return useProductionPipeline
             && isDbApprovedPlanExecution
             && contentGenerationPlanExists
-            && astronomyEventIntelligenceExists
-            && autoGenerateAllowed
-            && verificationStatusAllowed
-            && contentStrategyAllowed
-            && categoryAllowed
-            && hasShortOrLongVideoOutput;
+            && astronomyEventIntelligenceExists;
     }
+
+    private static NarrationRequestDiagnostics BuildNarrationRequestDiagnostics(QuestionDrivenNarrationRequest request)
+        => new(
+            PlanIdPresent: (request.PlanId ?? request.ProductionContext?.ContentGenerationPlanId ?? request.ProductionContext?.ProductionExecutionContext?.ContentGenerationPlanId) is { } planId && planId != Guid.Empty,
+            EventIdPresent: Guid.TryParse(request.EventId, out var eventId) && eventId != Guid.Empty,
+            RegionIdPresent: !string.IsNullOrWhiteSpace(request.RegionId),
+            LanguagePresent: !string.IsNullOrWhiteSpace(request.Language),
+            EventType: FirstNonEmpty(request.EventType, request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType),
+            StrategyId: FirstNonEmpty(request.StrategyId, request.ProductionContext?.ProductionEventIntelligence?.StrategyId, request.ProductionContext?.MediaEventStrategy?.EventType),
+            SourceOfEventId: FirstNonEmpty(request.SourceOfEventId, request.ProductionContext?.AstronomyEventIntelligenceId is not null ? "ProductionPipelineExecutionContext.AstronomyEventIntelligenceId" : null));
+
+    private static string FormatDiagnostics(NarrationRequestDiagnostics diagnostics)
+        => $"Diagnostics: planIdPresent={diagnostics.PlanIdPresent}, eventIdPresent={diagnostics.EventIdPresent}, regionIdPresent={diagnostics.RegionIdPresent}, languagePresent={diagnostics.LanguagePresent}, eventType={diagnostics.EventType ?? "<null>"}, strategyId={diagnostics.StrategyId ?? "<null>"}, sourceOfEventId={diagnostics.SourceOfEventId ?? "<null>"}.";
+
+    private sealed record NarrationRequestDiagnostics(
+        bool PlanIdPresent,
+        bool EventIdPresent,
+        bool RegionIdPresent,
+        bool LanguagePresent,
+        string? EventType,
+        string? StrategyId,
+        string? SourceOfEventId);
 
     private string BuildPlanPath(string eventId, string regionId, string fileName, ProductionPipelineExecutionContext? productionContext = null)
         => !string.IsNullOrWhiteSpace(productionContext?.QuestionRoot)
