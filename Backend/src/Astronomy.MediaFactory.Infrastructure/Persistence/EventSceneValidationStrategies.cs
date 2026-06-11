@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 
@@ -29,6 +30,86 @@ public abstract class EventSceneValidationStrategyBase : IEventSceneValidationSt
 
     protected static string AssetText(SceneValidationContext context)
         => string.Join('\n', context.InfographicSpecs.Values.Concat(context.ReviewJson.Values));
+
+    protected static string OutputContentText(SceneValidationContext context)
+        => string.Join('\n', context.InfographicSpecs.Values.Select(ExtractGeneratedJsonText)
+            .Concat(context.ReviewJson.Values.Select(ExtractGeneratedJsonText))
+            .Concat(context.NarrationTexts.Values)
+            .Concat(context.SrtFiles.Values)
+            .Concat(context.ScenePlanJson.Values.Select(ExtractGeneratedJsonText))
+            .Concat(context.SupplementalFiles.Values.Select(ExtractGeneratedJsonText)));
+
+    private static string ExtractGeneratedJsonText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var values = new List<string>();
+            CollectGeneratedJsonText(doc.RootElement, string.Empty, values, parentIsGeneratedContent: false);
+            return string.Join(' ', values);
+        }
+        catch (JsonException)
+        {
+            return text;
+        }
+    }
+
+    private static void CollectGeneratedJsonText(JsonElement element, string propertyName, List<string> values, bool parentIsGeneratedContent)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (IsValidationMetadataField(property.Name)) continue;
+                    CollectGeneratedJsonText(property.Value, property.Name, values, parentIsGeneratedContent || IsGeneratedContentField(property.Name));
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    CollectGeneratedJsonText(item, propertyName, values, parentIsGeneratedContent || IsGeneratedContentField(propertyName));
+                break;
+            case JsonValueKind.String:
+                if (parentIsGeneratedContent || IsGeneratedContentField(propertyName)) values.Add(element.GetString() ?? string.Empty);
+                break;
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+            case JsonValueKind.Number:
+                if (parentIsGeneratedContent || IsGeneratedContentField(propertyName)) values.Add(element.ToString());
+                break;
+        }
+    }
+
+    private static bool IsGeneratedContentField(string propertyName)
+        => propertyName.Equals("title", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("subtitle", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("viewerTakeaway", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("narrationText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("captionText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("backgroundPrompt", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("overlayText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("programmaticLayers", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("accessibilityCues", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("labels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("arrows", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("localAssetObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("directionMarkers", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("timingMarkers", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("steps", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("scenePurpose", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("viewerQuestion", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsValidationMetadataField(string propertyName)
+        => propertyName.Equals("strategyValidationFacts", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("requiredVisualObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenObjectNames", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("validationRules", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("checks", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("issues", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("recommendations", StringComparison.OrdinalIgnoreCase);
+
 
     protected static bool ContainsToken(string haystack, string? needle)
     {
@@ -135,7 +216,7 @@ public sealed class MeteorShowerSceneValidationStrategy : EventSceneValidationSt
         RequireAny(errors, assetText, "MeteorShower scene validation must include meteor streaks.", "meteor streak", "meteor streaks", "streak");
         RequireAny(errors, allText, "MeteorShower scene validation must include a radiant hint.", "radiant");
         RequireAny(errors, allText, "MeteorShower scene validation must include dark-sky guidance.", "dark sky", "dark", "light pollution");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "MeteorShower scene validation", "Venus", "Jupiter", "conjunction", "planet pairing");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "MeteorShower scene validation", "Venus", "Jupiter", "conjunction", "planet pairing");
         return Result(warnings, errors);
     }
 }
@@ -159,7 +240,7 @@ public sealed class PlanetPairingSceneValidationStrategy : EventSceneValidationS
         RequireAllObjects(errors, allText, context.Intelligence, "PlanetPairing scene validation");
         RequireAny(errors, allText, "PlanetPairing scene validation must include close approach or pairing language.", "close approach", "pairing", "close together", "near", "nearby");
         RequireTimeAndDirection(errors, allText, context.Intelligence, "PlanetPairing scene validation");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "PlanetPairing scene validation");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "PlanetPairing scene validation");
         return Result(warnings, errors);
     }
 }
@@ -182,7 +263,7 @@ public sealed class ConjunctionSceneValidationStrategy : EventSceneValidationStr
         RequireAllObjects(errors, allText, context.Intelligence, "Conjunction scene validation");
         RequireAny(errors, allText, "Conjunction scene validation must include conjunction/alignment language.", "conjunction", "alignment", "align");
         RequireTimeAndDirection(errors, allText, context.Intelligence, "Conjunction scene validation");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "Conjunction scene validation");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "Conjunction scene validation");
         return Result(warnings, errors);
     }
 }
@@ -202,11 +283,54 @@ public sealed class NamedFullMoonSceneValidationStrategy : EventSceneValidationS
         var warnings = new List<string>();
         var errors = new List<string>();
         var allText = AllText(context);
+        var outputText = OutputContentText(context);
         RequireAny(errors, allText, "NamedFullMoon scene validation must use Moon/full moon language.", "Moon", "full moon");
+        RequireNamedFullMoonDrawableSpecs(errors, context);
         if (!HasViewingWindowEvidence(context.Intelligence, allText) && !ContainsToken(allText, context.Intelligence.LocalPeakTime)) errors.Add("NamedFullMoon scene validation must include moonrise/viewing time when available.");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "NamedFullMoon scene validation", "meteor", "radiant");
+        RejectForbiddenLeakage(errors, outputText, context.Intelligence, "NamedFullMoon scene validation", "meteor", "radiant", "Venus", "Jupiter", "planet conjunction");
         return Result(warnings, errors);
     }
+
+    private static void RequireNamedFullMoonDrawableSpecs(List<string> errors, SceneValidationContext context)
+    {
+        if (context.InfographicSpecs.Count == 0)
+        {
+            errors.Add("NamedFullMoon scene validation requires generated infographic specs with drawable Moon metadata.");
+            return;
+        }
+
+        foreach (var (path, json) in context.InfographicSpecs)
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("drawableVisualObjects", out var objects) || objects.ValueKind != JsonValueKind.Array)
+            {
+                errors.Add($"NamedFullMoon scene validation requires drawableVisualObjects in {Path.GetFileName(path)}.");
+                continue;
+            }
+
+            var hasMoon = objects.EnumerateArray().Any(obj =>
+                JsonStringEquals(obj, "objectType", "Moon")
+                && JsonStringEquals(obj, "phase", "FullMoon")
+                && JsonStringContains(obj, "size", "large")
+                && JsonBoolEquals(obj, "glow", true));
+            if (!hasMoon) errors.Add($"NamedFullMoon scene validation requires Moon phase=FullMoon size=large glow=true in {Path.GetFileName(path)}.");
+        }
+    }
+
+    private static bool JsonStringEquals(JsonElement obj, string propertyName, string expected)
+        => obj.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            && string.Equals(property.GetString(), expected, StringComparison.OrdinalIgnoreCase);
+
+    private static bool JsonStringContains(JsonElement obj, string propertyName, string expected)
+        => obj.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            && (property.GetString()?.Contains(expected, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool JsonBoolEquals(JsonElement obj, string propertyName, bool expected)
+        => obj.TryGetProperty(propertyName, out var property)
+            && property.ValueKind is JsonValueKind.True or JsonValueKind.False
+            && property.GetBoolean() == expected;
 }
 
 public sealed class NewMoonSceneValidationStrategy : EventSceneValidationStrategyBase
@@ -225,7 +349,7 @@ public sealed class NewMoonSceneValidationStrategy : EventSceneValidationStrateg
         var allText = AllText(context);
         RequireAny(errors, allText, "NewMoon scene validation must describe dark-sky or stargazing opportunity.", "dark sky", "stargazing", "dark", "Milky Way");
         if (ContainsToken(allText, "visible full moon") || ContainsToken(allText, "bright full moon")) errors.Add("NewMoon scene validation must not describe a visible full moon.");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "NewMoon scene validation");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "NewMoon scene validation");
         return Result(warnings, errors);
     }
 }
@@ -248,7 +372,7 @@ public sealed class LunarEclipseSceneValidationStrategy : EventSceneValidationSt
         RequireAny(errors, allText, "LunarEclipse scene validation must include Moon language.", "Moon");
         RequireAny(errors, allText, "LunarEclipse scene validation must include phase/timing language.", "phase", "timing", "watch during", "time");
         if (ContainsAnyToken(context.Intelligence.Title, "total", "blood") || ContainsAnyToken(allText, "totality", "umbra")) RequireAny(errors, allText, "LunarEclipse scene validation should include red/copper Moon language when relevant.", "red", "copper", "blood");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "LunarEclipse scene validation");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "LunarEclipse scene validation");
         return Result(warnings, errors);
     }
 }
@@ -271,7 +395,7 @@ public sealed class SolarEclipseSceneValidationStrategy : EventSceneValidationSt
         RequireAny(errors, allText, "SolarEclipse scene validation must include Sun language.", "Sun");
         RequireAny(errors, allText, "SolarEclipse scene validation must include timing language.", "timing", "watch during", "time");
         if (!(ContainsToken(allText, "certified") && ContainsAnyToken(allText, "eclipse glasses", "solar filter", "eye protection"))) errors.Add("SolarEclipse scene validation must include a certified eye-safety warning.");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "SolarEclipse scene validation");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "SolarEclipse scene validation");
         return Result(warnings, errors);
     }
 }
@@ -293,7 +417,7 @@ public sealed class GenericEventSceneValidationStrategy : EventSceneValidationSt
         if (!ContainsToken(allText, context.Intelligence.Title) && !ContainsToken(allText, context.Intelligence.ShortTitle) && !(context.Intelligence.ResolvedObjectNames ?? []).Any(o => ContainsToken(allText, o))) errors.Add("Generic scene validation must include event title, short title, or resolved object names.");
         if (!HasViewingWindowEvidence(context.Intelligence, allText) && !ContainsToken(allText, context.Intelligence.LocalPeakTime)) warnings.Add("Generic scene validation should include the event viewing time/window when available.");
         if (!string.IsNullOrWhiteSpace(context.Intelligence.SkyDirectionHint) && !ContainsToken(allText, context.Intelligence.SkyDirectionHint)) warnings.Add("Generic scene validation should include the sky direction when available.");
-        RejectForbiddenLeakage(errors, allText, context.Intelligence, "Generic scene validation");
+        RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "Generic scene validation");
         return Result(warnings, errors);
     }
 }

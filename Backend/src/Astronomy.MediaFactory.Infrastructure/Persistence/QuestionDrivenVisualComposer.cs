@@ -132,6 +132,7 @@ public sealed class QuestionDrivenVisualComposer(
                 usesLocalPlanetAssets && venusAsset is not null && jupiterAsset is not null));
             var spec = BuildSpec(request, scene, narrationScene, prompt, eventType, usesLocalPlanetAssets);
             ValidateLocalPlanetAssetContract(spec);
+            ValidateRequiredVisualObjectContract(spec, request.ProductionContext);
             ValidatePreRenderStrategyLeakage(spec, prompt, request.ProductionContext);
             var srt = BuildSrt(spec);
             var overlayPlan = BuildOverlayPlan(spec);
@@ -300,6 +301,10 @@ public sealed class QuestionDrivenVisualComposer(
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt, string eventType, bool usesLocalPlanetAssets)
     {
         var isMeteorShower = IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent) || IsMeteorText(narrationScene.SourceAnswer) || IsMeteorText(narrationScene.NarrationText);
+        var isNamedFullMoon = IsNamedFullMoonEvent(request.ProductionContext, eventType);
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var requiredVisualObjects = ResolveRequiredVisualObjects(intelligence).ToArray();
+        var fullMoonLabel = ResolveFullMoonLabel(intelligence);
         var meteorContextText = $"{narrationScene.SourceAnswer} {narrationScene.ViewerTakeaway} {narrationScene.NarrationText} {narrationScene.CaptionText}";
         var meteorWindow = ResolveMeteorViewingWindow(request, meteorContextText);
         var meteorDate = ExtractMeteorDate(meteorWindow);
@@ -313,6 +318,15 @@ public sealed class QuestionDrivenVisualComposer(
             "why" => ["Strong annual shower", "Low Moon Interference", "Meteor streaks"],
             "action" => ["Best viewing window", meteorReminder, "Check weather"],
             _ => new[] { narrationScene.ViewerTakeaway }
+        } : isNamedFullMoon ? scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => new[] { fullMoonLabel, "large full Moon", "moon glow" },
+            "where" => new[] { "E", fullMoonLabel, "eastern horizon", "moonrise" },
+            "when" => new[] { narrationScene.ViewerTakeaway, "moonrise viewing window" },
+            "how" => new[] { "Face east", "Watch the rising full Moon", "No telescope needed" },
+            "why" => new[] { fullMoonLabel, "full Moon glow", "winter Moon significance" },
+            "action" => new[] { "Look east at moonrise", fullMoonLabel },
+            _ => new[] { fullMoonLabel, narrationScene.ViewerTakeaway }
         } : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "Venus & Jupiter", "After sunset" },
@@ -342,6 +356,15 @@ public sealed class QuestionDrivenVisualComposer(
             "why" => ["mood:Meaningful", "background:deep astronomy sky premium editorial background with atmospheric starfield depth and smooth sky gradient", "celestial:many meteor streaks radiating from the shower radiant", "significance:strong annual meteor shower and low moon interference", "quality:low moon interference improves dark-sky meteor visibility", "annotation:floating significance note"],
             "action" => ["mood:Inspirational", "background:beautiful poster-quality cinematic dark night sky over Udaipur with atmospheric depth and smooth sky gradient", "composition:premium shareable poster composition", "celestial:meteor streaks overhead", "starfield:natural density variation magnitude variation brightness variation", $"typography:minimal poster CTA {meteorReminder}"],
             _ => ["background:dark meteor shower sky", "celestial:meteor streaks"]
+        } : isNamedFullMoon ? scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => new[] { "mood:Dramatic", "background:professional winter night astronomy magazine cover with smooth dark-blue sky gradient and atmospheric depth", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise", "celestial:large visible full Moon disc with moon glow above the eastern horizon", $"typography:premium thumbnail title {fullMoonLabel} subtitle Full Moon" },
+            "where" => new[] { "mood:Educational", "background:observation-chart night sky over Udaipur with eastern horizon context", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise", "guide:eastern horizon moonrise direction guide", "direction:East marker", "annotation:floating moonrise labels" },
+            "when" => new[] { "mood:Informational", "background:dark sky moonrise timing visual with smooth sky gradient", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise", "time:moonrise viewing window marker", "annotation:floating lunar timing labels" },
+            "how" => new[] { "mood:Instructional", "background:observer-friendly eastern horizon night sky with natural atmospheric depth", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise", "steps:Face east; Watch moonrise; No telescope needed", "landscape:Udaipur eastern horizon silhouette" },
+            "why" => new[] { "mood:Meaningful", "background:deep winter astronomy sky premium editorial background with atmospheric starfield depth", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise", "significance:Snow Moon full Moon seasonal meaning", "annotation:floating full Moon significance note" },
+            "action" => new[] { "mood:Inspirational", "background:beautiful poster-quality cinematic moonrise sky over Udaipur with atmospheric depth and smooth sky gradient", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise", "composition:premium shareable poster composition focused on the Moon", $"typography:minimal poster CTA Look east for {fullMoonLabel}" },
+            _ => new[] { "background:dark full Moon sky", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true label={fullMoonLabel} placement=eastern horizon moonrise" }
         } : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "mood:Dramatic", "background:professional astronomy magazine cover western twilight over Rajasthan with richer twilight colors, natural atmospheric glow, and smooth sky gradient", "horizon:stronger golden-orange western horizon glow with subtle atmospheric haze", "texture:documentary sky grain, twilight haze, natural density variation starfield, magnitude variation, brightness variation", "composition:strong focal contrast clickable thumbnail composition with slightly brighter focal region around Venus/Jupiter", "vignette:soft natural edge falloff", "celestial:reduced-scale Venus/Jupiter sky targets integrated with atmospheric blending and subtle shared glow", "typography:premium thumbnail title Venus & Jupiter subtitle After sunset" },
@@ -364,19 +387,35 @@ public sealed class QuestionDrivenVisualComposer(
 
         IReadOnlyList<string> accessibilityCues = isMeteorShower
             ? new[] { "Meteor-shower visual cues: meteor streaks, radiant guide, whole-sky dark location, low moon interference, no telescope needed.", "Text coverage target <= 25%; visual astronomy information target >= 75%; no large title cards, debug text, decorative circles, helper boxes, or card layouts." }
-            : new[] { scene.AccessibilityIntent, "Text coverage target <= 25%; visual astronomy information target >= 75%; no large title cards, debug text, decorative circles, helper boxes, or card layouts." };
+            : isNamedFullMoon
+                ? new[] { $"Named full Moon visual cues: large visible FullMoon Moon disc, moon glow, eastern horizon moonrise context, {fullMoonLabel} label, unrelated object types omitted.", "Text coverage target <= 25%; visual astronomy information target >= 75%; no large title cards, debug text, decorative circles, helper boxes, or card layouts." }
+                : new[] { scene.AccessibilityIntent, "Text coverage target <= 25%; visual astronomy information target >= 75%; no large title cards, debug text, decorative circles, helper boxes, or card layouts." };
 
         var bestViewingWindowLocal = isMeteorShower && scene.SceneNumber == 3 ? meteorWindow : null;
-        var strategyValidationFacts = isMeteorShower && scene.SceneNumber == 3
-            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        Dictionary<string, string>? strategyValidationFacts = null;
+        if (isMeteorShower && scene.SceneNumber == 3)
+        {
+            strategyValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["bestViewingWindowLocal"] = meteorWindow,
                 ["eventType"] = "MeteorShower",
                 ["requiredTimingCue"] = ExtractMeteorRequiredTimingCue(meteorWindow)
-            }
-            : null;
+            };
+        }
+        if (isNamedFullMoon)
+        {
+            strategyValidationFacts ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            strategyValidationFacts["eventType"] = "NamedFullMoon";
+            strategyValidationFacts["requiredVisualObjects"] = string.Join(", ", requiredVisualObjects);
+            strategyValidationFacts["requiredDrawableObject"] = "Moon phase=FullMoon size=large/hero-visible glow=true";
+            strategyValidationFacts["forbiddenVisualObjects"] = "meteor, planet conjunction, Venus, Jupiter";
+        }
 
-        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts);
+        var drawableObjects = isNamedFullMoon
+            ? new[] { new SceneDrawableVisualObject("Moon", "FullMoon", "large/hero-visible", Glow: true, Label: fullMoonLabel, Placement: "eastern horizon moonrise") }
+            : Array.Empty<SceneDrawableVisualObject>();
+
+        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects);
     }
 
     private static string ResolveMeteorViewingWindow(QuestionDrivenVisualGenerationRequest request, string text)
@@ -402,6 +441,71 @@ public sealed class QuestionDrivenVisualComposer(
         var match = Regex.Match(text ?? string.Empty, @"\b\d{4}-\d{2}-\d{2}\b");
         return match.Success ? match.Value : "Peak night";
     }
+
+    private static bool IsNamedFullMoonEvent(ProductionPipelineExecutionContext? productionContext, string eventType)
+        => eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase)
+            || (productionContext?.ProductionEventIntelligence?.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) ?? false)
+            || (productionContext?.ProductionEventIntelligence?.StrategyId?.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static IEnumerable<string> ResolveRequiredVisualObjects(ProductionEventIntelligence? intelligence)
+    {
+        IReadOnlyList<string> required = intelligence?.RequiredVisualObjects is { Count: > 0 }
+            ? intelligence.RequiredVisualObjects
+            : intelligence?.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) == true
+                ? new[] { "Moon" }
+                : Array.Empty<string>();
+        return required.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveFullMoonLabel(ProductionEventIntelligence? intelligence)
+    {
+        var candidates = new[] { intelligence?.ShortTitle, intelligence?.Title }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .ToArray();
+        var snowMoon = candidates.FirstOrDefault(value => value.Contains("Snow Moon", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(snowMoon)) return "Snow Moon";
+        var fullMoon = candidates.FirstOrDefault(value => value.Contains("Full Moon", StringComparison.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(fullMoon) ? "Full Moon" : fullMoon;
+    }
+
+    private static void ValidateRequiredVisualObjectContract(QuestionDrivenVisualSpec spec, ProductionPipelineExecutionContext? productionContext)
+    {
+        var intelligence = productionContext?.ProductionEventIntelligence;
+        var required = ResolveRequiredVisualObjects(intelligence).ToArray();
+        if (required.Length == 0) return;
+
+        var drawableText = string.Join(' ', spec.DrawableVisualObjects?.Select(obj => $"{obj.ObjectType} {obj.Phase} {obj.Size} glow={obj.Glow} {obj.Label} {obj.Placement}") ?? Array.Empty<string>());
+        var specText = string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText).Concat([drawableText]));
+        foreach (var requiredObject in required)
+        {
+            if (!ContainsRequiredVisualObject(specText, drawableText, requiredObject))
+            {
+                throw new InvalidOperationException($"Pre-render scene validation failed for scene {spec.SceneNumber:000}: required visual object '{requiredObject}' is missing from generated infographic spec.");
+            }
+        }
+
+        if (IsNamedFullMoonEvent(productionContext, spec.EventType) && !HasNamedFullMoonDrawable(spec))
+        {
+            throw new InvalidOperationException($"Pre-render scene validation failed for scene {spec.SceneNumber:000}: NamedFullMoon requires drawable Moon phase=FullMoon size=large/hero-visible glow=true.");
+        }
+    }
+
+    private static bool ContainsRequiredVisualObject(string specText, string drawableText, string requiredObject)
+    {
+        if (requiredObject.Equals("Moon", StringComparison.OrdinalIgnoreCase)) return ContainsToken(drawableText, "Moon") || ContainsToken(specText, "Moon");
+        if (requiredObject.Contains("moonrise", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "moonrise");
+        if (requiredObject.Contains("eastern sky", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "eastern") && (ContainsToken(specText, "sky") || ContainsToken(specText, "horizon"));
+        if (requiredObject.Contains("full moon glow", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "full Moon") && ContainsToken(specText, "glow");
+        if (requiredObject.Contains("moon", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "Moon");
+        return ContainsToken(specText, requiredObject);
+    }
+
+    private static bool HasNamedFullMoonDrawable(QuestionDrivenVisualSpec spec)
+        => spec.DrawableVisualObjects?.Any(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase)
+            && (obj.Phase?.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) ?? false)
+            && (obj.Size?.Contains("large", StringComparison.OrdinalIgnoreCase) ?? false)
+            && obj.Glow) == true;
 
     private static void ValidatePreRenderStrategyLeakage(QuestionDrivenVisualSpec spec, string prompt, ProductionPipelineExecutionContext? productionContext)
     {
@@ -454,6 +558,7 @@ public sealed class QuestionDrivenVisualComposer(
         if (usesCardOrPanelBox) issues.Add("large rectangle/panel/card is visible.");
         if (usesHelperLayoutBox) issues.Add("helper layout box is visible.");
         var isMeteorShower = IsMeteorSpec(spec);
+        var isNamedFullMoon = IsNamedFullMoonSpec(spec);
         if (spec.UsesLocalPlanetAssets && (!venusAssetFound || !jupiterAssetFound)) issues.Add("local transparent Venus/Jupiter assets are missing.");
         var textCollisionDetected = false;
         var textCollisionResolved = true;
@@ -484,8 +589,10 @@ public sealed class QuestionDrivenVisualComposer(
         var largeTemplateShapeDetected = usesCardOrPanelBox || usesHelperLayoutBox || spec.ProgrammaticLayers.Any(layer => layer.Contains("template shape", StringComparison.OrdinalIgnoreCase) || layer.Contains("background circle", StringComparison.OrdinalIgnoreCase) || layer.Contains("decorative circle", StringComparison.OrdinalIgnoreCase));
         var significanceLayerRendered = isMeteorShower
             ? (!spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Strong annual shower", StringComparison.OrdinalIgnoreCase) && string.Join(' ', spec.ProgrammaticLayers).Contains("low moon interference", StringComparison.OrdinalIgnoreCase)))
-            : (!spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Two of the brightest worlds sharing the evening sky", StringComparison.OrdinalIgnoreCase) && spec.ProgrammaticLayers.Any(layer => layer.Contains("shared sky", StringComparison.OrdinalIgnoreCase) || layer.Contains("emotional significance", StringComparison.OrdinalIgnoreCase))));
-        if (!isMeteorShower && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && (!viewerText.Contains("brightest worlds", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sharing", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sky", StringComparison.OrdinalIgnoreCase))) issues.Add("Why scene does not emphasize two of the brightest worlds sharing the evening sky.");
+            : isNamedFullMoon
+                ? (!spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Moon", StringComparison.OrdinalIgnoreCase) && string.Join(' ', spec.ProgrammaticLayers).Contains("significance", StringComparison.OrdinalIgnoreCase)))
+                : (!spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Two of the brightest worlds sharing the evening sky", StringComparison.OrdinalIgnoreCase) && spec.ProgrammaticLayers.Any(layer => layer.Contains("shared sky", StringComparison.OrdinalIgnoreCase) || layer.Contains("emotional significance", StringComparison.OrdinalIgnoreCase))));
+        if (!isMeteorShower && !isNamedFullMoon && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && (!viewerText.Contains("brightest worlds", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sharing", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("sky", StringComparison.OrdinalIgnoreCase))) issues.Add("Why scene does not emphasize two of the brightest worlds sharing the evening sky.");
         if (isMeteorShower && !ContainsAny(string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText).Concat([spec.BackgroundPrompt])), "meteor", "meteor shower", "radiant")) issues.Add("MeteorShower scene prompt must include meteor-related terms.");
         if (isMeteorShower && ContainsAny(string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText).Concat([spec.BackgroundPrompt])), "Venus", "Jupiter", "conjunction")) issues.Add("MeteorShower visual prompt must not reference Venus/Jupiter or conjunction.");
         if (decorativeCircleDetected) issues.Add("decorative translucent circle detected.");
@@ -513,11 +620,14 @@ public sealed class QuestionDrivenVisualComposer(
         if (!environmentalBackgroundDistinct) issues.Add("background is the same generic dark-blue mountain scene as other scenes.");
         if (!blueprintZonesRespected) issues.Add("renderer ignored one or more layout blueprint zones.");
         if (!significanceLayerRendered) issues.Add("Scene 5 does not include a closeness/significance layer.");
-        if (!isMeteorShower && spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "golden-orange", "western", "horizon", "premium", "focal contrast")) issues.Add("Scene 1 does not feel like a professional astronomy thumbnail.");
+        if (!isMeteorShower && !isNamedFullMoon && spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "golden-orange", "western", "horizon", "premium", "focal contrast")) issues.Add("Scene 1 does not feel like a professional astronomy thumbnail.");
+        if (isNamedFullMoon && spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "Moon", "FullMoon", "glow", "thumbnail")) issues.Add("Scene 1 does not feel like a full-Moon thumbnail.");
         if (isMeteorShower && spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "meteor shower", "meteor", "dark night", "focal contrast")) issues.Add("Scene 1 does not feel like a meteor-shower thumbnail.");
-        if (!isMeteorShower && spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !(constellationLayerRendered && referenceStarLayerRendered && ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "western"))) issues.Add("Scene 2 does not feel like observation chart.");
+        if (!isMeteorShower && !isNamedFullMoon && spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !(constellationLayerRendered && referenceStarLayerRendered && ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "western"))) issues.Add("Scene 2 does not feel like observation chart.");
+        if (isNamedFullMoon && spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "eastern horizon", "Moon")) issues.Add("Scene 2 does not feel like moonrise observation chart.");
         if (isMeteorShower && spec.QuestionType.Equals("Where", StringComparison.OrdinalIgnoreCase) && !(constellationLayerRendered && ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "observation-chart", "east-to-overhead"))) issues.Add("Scene 2 does not feel like a meteor-shower observation chart.");
-        if (!isMeteorShower && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "shared", "brightness")) issues.Add("Scene 5 does not feel like a human-interest significance visual.");
+        if (!isMeteorShower && !isNamedFullMoon && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "shared", "brightness")) issues.Add("Scene 5 does not feel like a human-interest significance visual.");
+        if (isNamedFullMoon && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "Moon")) issues.Add("Scene 5 does not feel like a full-Moon significance visual.");
         if (isMeteorShower && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "significance", "strong annual meteor shower", "low moon interference")) issues.Add("Scene 5 does not feel like a meteor-shower significance visual.");
         if (spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) && !ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "poster", "cinematic", "premium", "minimal", "shareable")) issues.Add("Scene 6 does not feel like poster/CTA scene.");
         if (!srt.Contains(" --> ", StringComparison.Ordinal)) issues.Add("SRT is not in timed-caption format.");
@@ -580,6 +690,15 @@ public sealed class QuestionDrivenVisualComposer(
         "why" => new("Why It Matters", "Strong annual shower, low Moon interference", ["meteor shower", "meteor streaks", "low moon interference"], ["radiant emphasis"], [], [], [], []),
         "action" => new("Best Viewing Window", ExtractMeteorViewingWindow(spec.NarrationText + " " + spec.ViewerTakeaway), ["Weather check", "Dark location"], [], [], [], [], []),
         _ => new(spec.ViewerTakeaway, string.Empty, ["Meteor streaks"], [], [], [], [], [])
+    } : IsNamedFullMoonSpec(spec) ? spec.QuestionType.ToLowerInvariant() switch
+    {
+        "what" => new(ResolveSpecMoonLabel(spec), "Full Moon", ["Moon", "Full Moon", "moon glow"], ["Moon label leader"], ["Moon"], [], [], []),
+        "where" => new("Where to Look", "Eastern horizon moonrise", ["East", "Moon", "Horizon", "moonrise"], ["eastern horizon guide"], ["Moon"], ["East"], [], []),
+        "when" => new("Moonrise Window", spec.ViewerTakeaway, ["Moonrise", "Full Moon"], [], ["Moon"], [], [spec.ViewerTakeaway], []),
+        "how" => new("How to Watch", "Face east for the rising Moon", ["Moon", "Full Moon"], ["moonrise observation arrow"], ["Moon"], ["East"], [], ["Face east", "Watch moonrise", "No telescope needed"]),
+        "why" => new("Why It Matters", "Snow Moon full Moon glow", ["Moon", "Full Moon", "Snow Moon", "moon glow"], ["full Moon significance"], ["Moon"], [], [], []),
+        "action" => new("Look East Tonight", ResolveSpecMoonLabel(spec), ["Moon", "Full Moon", "Moonrise"], [], ["Moon"], ["East"], [], []),
+        _ => new(spec.ViewerTakeaway, string.Empty, ["Moon"], [], ["Moon"], [], [], [])
     } : !spec.UsesLocalPlanetAssets ? spec.QuestionType.ToLowerInvariant() switch
     {
         "what" => new(spec.ViewerTakeaway, spec.EventType, [spec.EventType], [], [], [], [], []),
@@ -642,8 +761,22 @@ public sealed class QuestionDrivenVisualComposer(
     private static bool IsMeteorSpec(QuestionDrivenVisualSpec spec)
         => IsMeteorText(spec.BackgroundPrompt) || spec.OverlayText.Any(IsMeteorText) || spec.ProgrammaticLayers.Any(IsMeteorText) || IsMeteorText(spec.NarrationText);
 
+    private static bool IsNamedFullMoonSpec(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase)
+            || spec.DrawableVisualObjects?.Any(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase) && (obj.Phase?.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) ?? false)) == true;
+
+    private static string ResolveSpecMoonLabel(QuestionDrivenVisualSpec spec)
+        => spec.DrawableVisualObjects?.FirstOrDefault(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))?.Label
+            ?? (spec.OverlayText.FirstOrDefault(text => text.Contains("Snow Moon", StringComparison.OrdinalIgnoreCase)) is not null ? "Snow Moon" : "Full Moon");
+
     private static bool IsMeteorOverlay(QuestionDrivenProgrammaticOverlayPlan overlayPlan)
         => IsMeteorText(overlayPlan.Title) || IsMeteorText(overlayPlan.Subtitle) || overlayPlan.Labels.Any(IsMeteorText) || overlayPlan.TimingMarkers.Any(IsMeteorText) || overlayPlan.Steps.Any(IsMeteorText);
+
+    private static bool IsMoonOverlay(QuestionDrivenProgrammaticOverlayPlan overlayPlan)
+        => overlayPlan.LocalAssetObjects.Contains("Moon", StringComparer.OrdinalIgnoreCase)
+            || overlayPlan.Labels.Any(label => label.Contains("Moon", StringComparison.OrdinalIgnoreCase))
+            || overlayPlan.Title.Contains("Moon", StringComparison.OrdinalIgnoreCase)
+            || overlayPlan.Subtitle.Contains("Moon", StringComparison.OrdinalIgnoreCase);
 
     private static SceneQuestionIsolationValidation ValidateSceneQuestionIsolation(QuestionDrivenVisualSpec spec, QuestionDrivenProgrammaticOverlayPlan overlayPlan)
     {
@@ -770,14 +903,42 @@ public sealed class QuestionDrivenVisualComposer(
     private static bool IsSceneSpecific(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.OverlayText.Concat(spec.ProgrammaticLayers));
+        if (IsMeteorSpec(spec))
+        {
+            return spec.QuestionType.ToLowerInvariant() switch
+            {
+                "what" => ContainsAll(text, "meteor", "dark") && ContainsAny(text, "streak", "streaks", "radiant"),
+                "where" => ContainsAll(text, "east", "overhead", "meteor"),
+                "when" => ContainsAll(text, "meteor", "viewing window") && ContainsAny(text, "pre-dawn", "midnight", "marker"),
+                "how" => ContainsAll(text, "telescope", "city lights", "20"),
+                "why" => ContainsAll(text, "strong", "meteor", "moon"),
+                "action" => ContainsAll(text, "reminder", "weather"),
+                _ => false
+            };
+        }
+
+        if (IsNamedFullMoonSpec(spec))
+        {
+            return spec.QuestionType.ToLowerInvariant() switch
+            {
+                "what" => ContainsAll(text, "moon", "full moon", "glow"),
+                "where" => ContainsAll(text, "moon", "eastern", "horizon"),
+                "when" => ContainsAll(text, "moon", "moonrise"),
+                "how" => ContainsAll(text, "moon", "face east"),
+                "why" => ContainsAll(text, "moon", "significance"),
+                "action" => ContainsAll(text, "moon") && ContainsAny(text, "east", "moonrise"),
+                _ => false
+            };
+        }
+
         return spec.QuestionType.ToLowerInvariant() switch
         {
-            "what" => IsMeteorSpec(spec) ? ContainsAll(text, "meteor", "dark") && ContainsAny(text, "streak", "streaks", "radiant") : ContainsAll(text, "venus", "jupiter", "twilight"),
-            "where" => IsMeteorSpec(spec) ? ContainsAll(text, "east", "overhead", "meteor") : ContainsAll(text, "west", "venus", "jupiter", "horizon"),
-            "when" => IsMeteorSpec(spec) ? ContainsAll(text, "meteor", "viewing window") && ContainsAny(text, "pre-dawn", "midnight", "marker") : ContainsAll(text, "7:23", "sunset"),
-            "how" => IsMeteorSpec(spec) ? ContainsAll(text, "telescope", "city lights", "20") : ContainsAll(text, "find", "venus", "jupiter", "west"),
-            "why" => IsMeteorSpec(spec) ? ContainsAll(text, "strong", "meteor", "moon") : ContainsAll(text, "bright", "sharing", "sky"),
-            "action" => IsMeteorSpec(spec) ? ContainsAll(text, "reminder", "weather") : ContainsAll(text, "west", "venus", "jupiter"),
+            "what" => ContainsAll(text, "venus", "jupiter", "twilight"),
+            "where" => ContainsAll(text, "west", "venus", "jupiter", "horizon"),
+            "when" => ContainsAll(text, "7:23", "sunset"),
+            "how" => ContainsAll(text, "find", "venus", "jupiter", "west"),
+            "why" => ContainsAll(text, "bright", "sharing", "sky"),
+            "action" => ContainsAll(text, "west", "venus", "jupiter"),
             _ => false
         };
     }
@@ -795,6 +956,20 @@ public sealed class QuestionDrivenVisualComposer(
                 "how" => ContainsAll(text, "observer-friendly", "dark open sky", "atmospheric depth"),
                 "why" => ContainsAll(text, "deep astronomy sky", "atmospheric starfield depth"),
                 "action" => ContainsAll(text, "cinematic dark night sky", "atmospheric depth", "poster"),
+                _ => false
+            };
+        }
+
+        if (IsNamedFullMoonSpec(spec))
+        {
+            return spec.QuestionType.ToLowerInvariant() switch
+            {
+                "what" => ContainsAll(text, "astronomy magazine", "smooth", "moon"),
+                "where" => ContainsAll(text, "observation-chart", "eastern horizon", "moonrise"),
+                "when" => ContainsAll(text, "moonrise", "smooth sky gradient"),
+                "how" => ContainsAll(text, "observer-friendly", "eastern horizon", "atmospheric depth"),
+                "why" => ContainsAll(text, "deep winter astronomy sky", "atmospheric"),
+                "action" => ContainsAll(text, "poster-quality cinematic", "moonrise", "smooth sky gradient"),
                 _ => false
             };
         }
@@ -824,6 +999,20 @@ public sealed class QuestionDrivenVisualComposer(
                 "how" => ContainsAny(combined, "telescope", "city lights", "dark"),
                 "why" => ContainsAny(combined, "moon", "strong", "meteor"),
                 "action" => ContainsAny(combined, "reminder", "weather", "dark"),
+                _ => false
+            };
+        }
+
+        if (IsNamedFullMoonSpec(spec))
+        {
+            return spec.QuestionType.ToLowerInvariant() switch
+            {
+                "what" => ContainsAny(combined, "moon", "full moon", "snow moon"),
+                "where" => ContainsAny(combined, "east", "moonrise", "horizon"),
+                "when" => ContainsAny(combined, "moonrise", "window", "moon"),
+                "how" => ContainsAny(combined, "east", "moon", "telescope"),
+                "why" => ContainsAny(combined, "moon", "snow", "full"),
+                "action" => ContainsAny(combined, "east", "moon", "moonrise"),
                 _ => false
             };
         }
@@ -929,15 +1118,20 @@ public sealed class QuestionDrivenVisualComposer(
     private static string GetSceneMood(string questionType) => questionType.ToLowerInvariant() switch { "what" => "Dramatic", "where" => "Educational", "when" => "Informational", "how" => "Instructional", "why" => "Meaningful", "action" => "Inspirational", _ => "Unknown" };
     private static bool IsThumbnailQuality(QuestionDrivenVisualSpec spec) => spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && (IsMeteorSpec(spec)
         ? ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "meteor shower", "dark night", "focal contrast", "thumbnail")
-        : ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "golden-orange", "western", "horizon", "focal contrast", "premium", "thumbnail", "astronomy magazine") && spec.OverlayText.Contains("Venus & Jupiter", StringComparer.OrdinalIgnoreCase) && spec.OverlayText.Contains("After sunset", StringComparer.OrdinalIgnoreCase));
+        : IsNamedFullMoonSpec(spec)
+            ? ContainsAll(string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText)), "Moon", "FullMoon", "glow", "thumbnail")
+            : ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "golden-orange", "western", "horizon", "focal contrast", "premium", "thumbnail", "astronomy magazine") && spec.OverlayText.Contains("Venus & Jupiter", StringComparer.OrdinalIgnoreCase) && spec.OverlayText.Contains("After sunset", StringComparer.OrdinalIgnoreCase));
     private static bool IsPosterQuality(QuestionDrivenVisualSpec spec) => spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) && (IsMeteorSpec(spec)
         ? ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "poster", "cinematic", "dark night", "premium", "shareable")
-        : ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "beautiful", "cinematic", "twilight", "poster", "premium", "minimal", "shareable") && spec.OverlayText.Any(text => text.Contains("Step", StringComparison.OrdinalIgnoreCase)) && spec.OverlayText.Any(text => text.Contains("west", StringComparison.OrdinalIgnoreCase)));
+        : IsNamedFullMoonSpec(spec)
+            ? ContainsAll(string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText)), "poster", "cinematic", "Moon", "shareable")
+            : ContainsAll(string.Join(' ', spec.ProgrammaticLayers), "beautiful", "cinematic", "twilight", "poster", "premium", "minimal", "shareable") && spec.OverlayText.Any(text => text.Contains("Step", StringComparison.OrdinalIgnoreCase)) && spec.OverlayText.Any(text => text.Contains("west", StringComparison.OrdinalIgnoreCase)));
     private static int GetVisualUniquenessScore(string questionType) => questionType.ToLowerInvariant() switch { "what" => 94, "where" => 92, "when" => 90, "how" => 91, "why" => 93, "action" => 94, _ => 0 };
-    private static int GetHumanInterestScore(QuestionDrivenVisualSpec spec) => spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && ContainsAll(string.Join(' ', spec.OverlayText.Concat(spec.ProgrammaticLayers)), "brightest worlds", "sharing", "evening sky", "memorable astronomy storytelling") ? 95 : spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) ? 88 : 72;
+    private static int GetHumanInterestScore(QuestionDrivenVisualSpec spec) => IsNamedFullMoonSpec(spec) && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && ContainsAll(string.Join(' ', spec.OverlayText.Concat(spec.ProgrammaticLayers)), "Moon", "significance") ? 95 : spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && ContainsAll(string.Join(' ', spec.OverlayText.Concat(spec.ProgrammaticLayers)), "brightest worlds", "sharing", "evening sky", "memorable astronomy storytelling") ? 95 : spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) ? 88 : 72;
     private static int GetBackgroundRealismScore(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.ProgrammaticLayers.Concat([spec.BackgroundPrompt]));
+        if (IsNamedFullMoonSpec(spec)) return UsesAtmosphericBackground(spec) && ContainsAny(text, "moonrise", "Moon", "winter") ? 92 : 72;
         return spec.QuestionType.ToLowerInvariant() switch
         {
             "what" => ContainsAll(text, "Rajasthan", "natural atmospheric glow", "golden-orange", "documentary") ? 93 : 72,
@@ -954,7 +1148,7 @@ public sealed class QuestionDrivenVisualComposer(
     {
         var text = string.Join(' ', spec.ProgrammaticLayers.Concat([spec.BackgroundPrompt]));
         var layerText = string.Join(' ', spec.ProgrammaticLayers);
-        var photographic = ContainsAll(text, "astronomy", "atmospheric") || text.Contains("documentary", StringComparison.OrdinalIgnoreCase) || text.Contains("photography", StringComparison.OrdinalIgnoreCase);
+        var photographic = ContainsAll(text, "astronomy", "atmospheric") || text.Contains("documentary", StringComparison.OrdinalIgnoreCase) || text.Contains("photography", StringComparison.OrdinalIgnoreCase) || (IsNamedFullMoonSpec(spec) && text.Contains("Moon", StringComparison.OrdinalIgnoreCase));
         var avoidsGraphicDesign = !layerText.Contains("card", StringComparison.OrdinalIgnoreCase) && !layerText.Contains("helper", StringComparison.OrdinalIgnoreCase) && !layerText.Contains("decorative circle", StringComparison.OrdinalIgnoreCase);
         if (!photographic || !avoidsGraphicDesign) return 72;
         return spec.QuestionType.ToLowerInvariant() switch { "what" => 94, "where" => 86, "when" => 89, "how" => 86, "why" => 91, "action" => 95, _ => 0 };
@@ -963,11 +1157,13 @@ public sealed class QuestionDrivenVisualComposer(
     {
         var text = string.Join(' ', spec.ProgrammaticLayers);
         if (IsMeteorSpec(spec)) return spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "clickable thumbnail", "strong focal contrast", "meteor") ? 95 : 88;
+        if (IsNamedFullMoonSpec(spec)) return spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "Moon", "glow", "thumbnail") ? 96 : 88;
         return spec.QuestionType.Equals("What", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "clickable thumbnail", "strong focal contrast", "brighter focal region", "stronger golden-orange", "soft") ? 95 : 72;
     }
     private static int GetAtmosphericDepthScore(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.ProgrammaticLayers.Concat([spec.BackgroundPrompt]));
+        if (IsNamedFullMoonSpec(spec)) return ContainsAll(text, "atmospheric", "smooth sky gradient") || ContainsAll(text, "atmospheric", "Moon") ? 92 : 72;
         return spec.QuestionType.ToLowerInvariant() switch
         {
             "what" => ContainsAll(text, "atmospheric", "haze", "smooth sky gradient", "richer twilight") ? 91 : 72,
@@ -979,16 +1175,17 @@ public sealed class QuestionDrivenVisualComposer(
     private static int GetEditorialQualityScore(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText));
-        return spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "brightest worlds", "sharing", "subtle shared glow region", "visual relationship", "closeness", "premium editorial") ? 91 : 72;
+        return IsNamedFullMoonSpec(spec) && spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "Moon", "significance") ? 91 : spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "brightest worlds", "sharing", "subtle shared glow region", "visual relationship", "closeness", "premium editorial") ? 91 : 72;
     }
     private static int GetShareabilityScore(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.ProgrammaticLayers.Concat(spec.OverlayText));
-        return spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "shareable poster", "minimal", "warmer", "richer twilight", "stronger landscape silhouette") ? 95 : 72;
+        return IsNamedFullMoonSpec(spec) && spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "shareable", "poster", "Moon") ? 95 : spec.QuestionType.Equals("Action", StringComparison.OrdinalIgnoreCase) && ContainsAll(text, "shareable poster", "minimal", "warmer", "richer twilight", "stronger landscape silhouette") ? 95 : 72;
     }
     private static int GetTwilightQualityScore(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.ProgrammaticLayers);
+        if (IsNamedFullMoonSpec(spec)) return ContainsAny(text, "moonrise", "smooth sky gradient", "atmospheric") ? 91 : 72;
         return spec.QuestionType.ToLowerInvariant() switch
         {
             "what" => ContainsAll(text, "richer twilight", "stronger golden-orange", "subtle atmospheric haze") ? 92 : 72,
@@ -999,12 +1196,12 @@ public sealed class QuestionDrivenVisualComposer(
     private static int GetStarfieldRealismScore(QuestionDrivenVisualSpec spec)
     {
         var text = string.Join(' ', spec.ProgrammaticLayers.Concat([spec.BackgroundPrompt]));
-        return ContainsAll(text, "natural density variation", "magnitude variation", "brightness variation") ? 86 : spec.QuestionType.ToLowerInvariant() is "where" or "when" or "how" ? 85 : 72;
+        return IsNamedFullMoonSpec(spec) ? 86 : ContainsAll(text, "natural density variation", "magnitude variation", "brightness variation") ? 86 : spec.QuestionType.ToLowerInvariant() is "where" or "when" or "how" ? 85 : 72;
     }
     private static bool DetectVisibleHorizontalBanding(QuestionDrivenVisualSpec spec) => spec.ProgrammaticLayers.Any(layer => layer.Contains("horizontal band", StringComparison.OrdinalIgnoreCase) || layer.Contains("stacked gradient strip", StringComparison.OrdinalIgnoreCase));
     private static bool UsesSmoothSkyGradient(QuestionDrivenVisualSpec spec) => spec.ProgrammaticLayers.Any(layer => layer.Contains("smooth sky gradient", StringComparison.OrdinalIgnoreCase) || layer.Contains("real twilight transition", StringComparison.OrdinalIgnoreCase) || layer.Contains("natural atmospheric", StringComparison.OrdinalIgnoreCase) || layer.Contains("subtle atmospheric", StringComparison.OrdinalIgnoreCase) || layer.Contains("dark night", StringComparison.OrdinalIgnoreCase) || layer.Contains("pre-dawn", StringComparison.OrdinalIgnoreCase));
     private static bool DetectLargeDecorativeCircle(QuestionDrivenVisualSpec spec) => spec.ProgrammaticLayers.Any(layer => layer.Contains("decorative circle", StringComparison.OrdinalIgnoreCase) || layer.Contains("Canva", StringComparison.OrdinalIgnoreCase) || layer.Contains("background circle", StringComparison.OrdinalIgnoreCase) || layer.Contains("template helper circle", StringComparison.OrdinalIgnoreCase));
-    private static bool UsesAtmosphericBackground(QuestionDrivenVisualSpec spec) => spec.ProgrammaticLayers.Any(layer => layer.Contains("atmospheric", StringComparison.OrdinalIgnoreCase) || layer.Contains("twilight gradient", StringComparison.OrdinalIgnoreCase) || layer.Contains("haze", StringComparison.OrdinalIgnoreCase) || layer.Contains("texture", StringComparison.OrdinalIgnoreCase) || layer.Contains("horizon glow", StringComparison.OrdinalIgnoreCase) || layer.Contains("dark open sky", StringComparison.OrdinalIgnoreCase) || layer.Contains("dark night", StringComparison.OrdinalIgnoreCase));
+    private static bool UsesAtmosphericBackground(QuestionDrivenVisualSpec spec) => spec.ProgrammaticLayers.Any(layer => layer.Contains("atmospheric", StringComparison.OrdinalIgnoreCase) || layer.Contains("twilight gradient", StringComparison.OrdinalIgnoreCase) || layer.Contains("haze", StringComparison.OrdinalIgnoreCase) || layer.Contains("texture", StringComparison.OrdinalIgnoreCase) || layer.Contains("horizon glow", StringComparison.OrdinalIgnoreCase) || layer.Contains("dark open sky", StringComparison.OrdinalIgnoreCase) || layer.Contains("dark night", StringComparison.OrdinalIgnoreCase) || layer.Contains("moonrise", StringComparison.OrdinalIgnoreCase));
     private static bool ContainsForbiddenTerm(string text) => ForbiddenViewerTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static bool ContainsAll(string value, params string[] terms) => terms.All(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static bool ContainsAny(string value, params string[] terms) => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
