@@ -103,7 +103,7 @@ public sealed class ProductionPipelineExecutionService(
             || DirectoryHasPng(Path.Combine(executionContext.SceneRoot!, "long"))
             || PreviousPhaseSucceeded(context, 9);
         var success = errors.Count == 0 && (!phaseResults.Any() || phaseResults.All(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped));
-        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) || File.Exists(Path.Combine(outputRoot, "hero", "hero-landscape.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
+        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
     }
 
     private IReadOnlyList<(int No, string Name, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> Action)> PhaseDefinitions() =>
@@ -231,13 +231,97 @@ public sealed class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var response = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, HeroAssetGenerationPhase.Full, context.ExecutionContext), cancellationToken);
-        return response.GeneratedFiles;
+        return await ValidateAndMaterializeHeroContractAsync(context, response, cancellationToken);
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateThumbnailsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = "Images", DryRun = false, OverwriteExisting = context.OverwriteExisting, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
-        return response.GeneratedFiles;
+        var outputs = new List<string>(response.GeneratedFiles);
+        CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-landscape.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "landscape.png"), outputs);
+        CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-square.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "square.png"), outputs);
+        CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "portrait.png"), outputs);
+        if (!ThumbnailsExist(context.OutputRoot))
+            throw new InvalidOperationException("Thumbnail generation failed contract validation: landscape.png, square.png, and portrait.png are required.");
+        return outputs;
+    }
+
+
+
+    private static async Task<IReadOnlyList<string>> ValidateAndMaterializeHeroContractAsync(ProductionPhaseContext context, HeroAssetGenerationResponse response, CancellationToken cancellationToken)
+    {
+        var outputs = new List<string>(response.GeneratedFiles);
+        var heroRoot = context.ExecutionContext.HeroRoot!;
+        var storyPath = Path.Combine(heroRoot, "hero-asset-story.json");
+        var blueprintPath = Path.Combine(heroRoot, "hero-asset-blueprint.json");
+        var layoutValidationPath = Path.Combine(heroRoot, "hero-layout-validation.json");
+        var sceneManifestPath = Path.Combine(heroRoot, "hero-scene-manifest.json");
+        var heroLandscapePath = Path.Combine(heroRoot, "hero-landscape.png");
+        var heroPath = Path.Combine(heroRoot, "hero.png");
+
+        if (!response.IsValid)
+            throw new InvalidOperationException("Hero generation failed contract validation: " + string.Join("; ", response.Warnings.DefaultIfEmpty("hero engine returned IsValid=false")));
+
+        CopyFile(heroLandscapePath, heroPath, outputs);
+
+        var requiredFiles = new[]
+        {
+            storyPath,
+            blueprintPath,
+            layoutValidationPath,
+            sceneManifestPath,
+            heroPath
+        };
+        var missing = requiredFiles.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException("Hero generation failed contract validation: required hero files are missing: " + string.Join(", ", missing));
+
+        var heroInfo = new FileInfo(heroPath);
+        if (heroInfo.Length <= 0)
+            throw new InvalidOperationException($"Hero generation failed contract validation: image file is empty: {NormalizePath(heroPath)}.");
+
+        await ValidateHeroSceneManifestContractAsync(context, sceneManifestPath, cancellationToken);
+        ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, sceneManifestPath]);
+
+        outputs.AddRange(requiredFiles);
+        return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static async Task ValidateHeroSceneManifestContractAsync(ProductionPhaseContext context, string sceneManifestPath, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(sceneManifestPath);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = doc.RootElement;
+        RequireJsonString(root, "eventId", context.EventId, "current astronomy event id");
+        RequireJsonString(root, "planId", context.Request.PlanId.ToString("D"), "current planId");
+        RequireJsonString(root, "eventTitle", context.ProductionEventIntelligence.Title, "current event title");
+        RequireJsonString(root, "eventType", context.ProductionEventIntelligence.EventType, "current event type");
+    }
+
+    private static void RequireJsonString(JsonElement root, string propertyName, string expectedValue, string label)
+    {
+        if (string.IsNullOrWhiteSpace(expectedValue)) return;
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
+            throw new InvalidOperationException($"Hero generation failed contract validation: hero-scene-manifest.json must reference the {label} in '{propertyName}'.");
+        if (!string.Equals(property.GetString(), expectedValue, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Hero generation failed contract validation: hero-scene-manifest.json {propertyName} value '{property.GetString()}' does not match expected {label} '{expectedValue}'.");
+    }
+
+    private static void ValidateHeroForbiddenLeakage(ProductionPhaseContext context, IReadOnlyList<string> paths)
+    {
+        var forbiddenTerms = BuildForbiddenTermsForStrategy(context).ToArray();
+        if (forbiddenTerms.Length == 0) return;
+
+        var hits = new List<string>();
+        foreach (var path in paths.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var text = File.ReadAllText(path);
+            var pathHits = forbiddenTerms.Where(term => ContainsToken(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (pathHits.Length > 0) hits.Add($"{NormalizePath(path)} => {string.Join(", ", pathHits)}");
+        }
+
+        if (hits.Count > 0)
+            throw new InvalidOperationException("Hero generation failed contract validation: hero files contain forbidden terms for the selected event strategy: " + string.Join("; ", hits));
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
@@ -493,8 +577,14 @@ public sealed class ProductionPipelineExecutionService(
             DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles);
         }
 
+        if (context.StartPhaseNo <= 11 && context.EndPhaseNo >= 11)
+            DeleteProductionSubtree(context.ExecutionContext.HeroRoot!, deletedFiles);
+
+        if (context.StartPhaseNo <= 12 && context.EndPhaseNo >= 12)
+            DeleteProductionSubtree(context.ExecutionContext.ThumbnailRoot!, deletedFiles);
+
         var firstValidationToDelete = Math.Max(context.StartPhaseNo, 7);
-        var lastValidationToDelete = Math.Min(context.EndPhaseNo, 10);
+        var lastValidationToDelete = Math.Min(context.EndPhaseNo, 12);
         for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
     }
@@ -598,5 +688,6 @@ public sealed class ProductionPipelineExecutionService(
     private string ResolveWorkingDirectoryRoot() => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string Sanitize(string value) => string.Join("-", (value ?? "unknown").Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
     private static bool DirectoryHasPng(string path) => Directory.Exists(path) && Directory.EnumerateFiles(path, "*.png").Any();
+    private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-scene-manifest.json"));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
 }

@@ -212,8 +212,8 @@ public sealed class HeroAssetStoryGenerator(
             .Select(score => score.Hook)
             .ToArray();
         heroStory = WithSelectedHook(heroStory, selectedHook);
-        var platformVariants = BuildPlatformVariants(selectedHook);
-        var blueprint = BuildHeroBlueprint(platformVariants);
+        var platformVariants = BuildPlatformVariants(selectedHook, heroStory);
+        var blueprint = BuildHeroBlueprint(platformVariants, heroStory);
         var reviewScores = BuildReviewScores();
 
         var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores);
@@ -376,21 +376,21 @@ public sealed class HeroAssetStoryGenerator(
             }
         }
 
-        var planetAssets = ResolveRequiredHeroPlanetTextures(renderingOptions.Value.CelestialAssetsRoot);
+        var planetAssets = ResolveHeroCelestialTextures(renderingOptions.Value.CelestialAssetsRoot, request.ProductionContext?.ProductionEventIntelligence, heroStory);
         var missingPlanetAssets = planetAssets
             .Where(asset => string.IsNullOrWhiteSpace(asset.TexturePath) || !File.Exists(asset.TexturePath))
             .Select(asset => asset.Label)
             .ToArray();
         if (missingPlanetAssets.Length > 0)
-            warnings.Add($"Required real celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
+            warnings.Add($"Required strategy celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
 
-        var layoutValidation = compositionModel is null ? null : BuildHeroLayoutValidation(compositionModel);
+        var layoutValidation = compositionModel is null ? null : BuildHeroLayoutValidation(compositionModel, planetAssets.Select(asset => asset.Label).ToArray());
         if (layoutValidation?.DuplicateBlocksDetected == true)
             warnings.Add("Hero layout validation failed: duplicate composition block rendering was detected.");
         if (layoutValidation?.TextOverlapDetected == true)
             warnings.Add($"Hero layout validation failed: text overlap detected ({string.Join("; ", layoutValidation.OverlapWarnings)}).");
         if (layoutValidation?.ObjectsVisible == false)
-            warnings.Add("Hero layout validation failed: Venus and Jupiter must remain fully visible in every hero variant.");
+            warnings.Add("Hero layout validation failed: required strategy visual objects must remain fully visible in every hero variant.");
 
         var isValid = storyValidationIssues.Count == 0
             && blueprintValidationIssues.Count == 0
@@ -402,8 +402,7 @@ public sealed class HeroAssetStoryGenerator(
             && !layoutValidation.DuplicateBlocksDetected
             && !layoutValidation.TextOverlapDetected
             && layoutValidation.ObjectsVisible
-            && heroSceneSelectorExecuted
-            && missingPlanetAssets.Length == 0;
+            && heroSceneSelectorExecuted;
         if (!isValid)
         {
             if (layoutValidation is null || !layoutValidation.IsValid)
@@ -566,10 +565,10 @@ public sealed class HeroAssetStoryGenerator(
     private static bool IsStoryPhase(string? phase)
         => string.Equals(phase?.Trim(), "Story", StringComparison.OrdinalIgnoreCase);
 
-    private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel)
+    private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
     {
         var variants = HeroImageSpecs
-            .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel))
+            .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
             .ToArray();
         var renderedBlocks = new[] { "Hook", "Visual", "Timing", "Direction", "CTA" };
         var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
@@ -584,7 +583,7 @@ public sealed class HeroAssetStoryGenerator(
             textOverlapDetected,
             overlapWarnings,
             objectsVisible,
-            BuildObjectVisibility(objectsVisible),
+            BuildObjectVisibility(objectNames, objectsVisible),
             variants,
             isValid,
             variants,
@@ -598,7 +597,7 @@ public sealed class HeroAssetStoryGenerator(
             true,
             [],
             false,
-            BuildObjectVisibility(false),
+            BuildObjectVisibility([], false),
             [],
             false,
             [],
@@ -612,11 +611,11 @@ public sealed class HeroAssetStoryGenerator(
         if (textOverlapDetected)
             errors.AddRange(overlapWarnings.Count > 0 ? overlapWarnings : ["Hero text overlap detected."]);
         if (!objectsVisible)
-            errors.Add("Venus and Jupiter must remain fully visible in every hero variant.");
+            errors.Add("Required strategy visual objects must remain fully visible in every hero variant.");
         return errors;
     }
 
-    private static HeroVariantLayoutValidationDto BuildHeroVariantLayoutValidation(HeroImageSpec spec, HeroCompositionModelDto compositionModel)
+    private static HeroVariantLayoutValidationDto BuildHeroVariantLayoutValidation(HeroImageSpec spec, HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
     {
         var (marginX, marginY) = ResolveHeroSafeMargins(spec.Width, spec.Height);
         var renderedBlocks = new[] { "Hook", "Visual", "Timing", "Direction", "CTA" };
@@ -632,7 +631,7 @@ public sealed class HeroAssetStoryGenerator(
             }
         }
 
-        var objectBoxes = BuildHeroObjectBoxes(spec, marginX, marginY);
+        var objectBoxes = BuildHeroObjectBoxes(spec, marginX, marginY, objectNames);
         var visibility = objectBoxes
             .Select(box => new HeroObjectVisibilityDto(box.Name, IsInsideSafeCanvas(box.Bounds, spec.Width, spec.Height, marginX, marginY), !IsInsideSafeCanvas(box.Bounds, spec.Width, spec.Height, marginX, marginY)))
             .ToArray();
@@ -651,8 +650,10 @@ public sealed class HeroAssetStoryGenerator(
             visibility);
     }
 
-    private static IReadOnlyList<HeroObjectVisibilityDto> BuildObjectVisibility(bool visible)
-        => [new HeroObjectVisibilityDto("Venus", visible, !visible), new HeroObjectVisibilityDto("Jupiter", visible, !visible)];
+    private static IReadOnlyList<HeroObjectVisibilityDto> BuildObjectVisibility(IReadOnlyList<string> objectNames, bool visible)
+        => objectNames.Count == 0
+            ? []
+            : objectNames.Distinct(StringComparer.OrdinalIgnoreCase).Select(name => new HeroObjectVisibilityDto(name, visible, !visible)).ToArray();
 
     private static IReadOnlyList<(string Name, RectangleF Bounds)> BuildHeroTextBoxes(HeroImageSpec spec, float marginX, float marginY, HeroCompositionModelDto compositionModel)
     {
@@ -700,15 +701,22 @@ public sealed class HeroAssetStoryGenerator(
             }
         };
 
-    private static IReadOnlyList<(string Name, RectangleF Bounds)> BuildHeroObjectBoxes(HeroImageSpec spec, float marginX, float marginY)
+    private static IReadOnlyList<(string Name, RectangleF Bounds)> BuildHeroObjectBoxes(HeroImageSpec spec, float marginX, float marginY, IReadOnlyList<string> objectNames)
     {
-        var safeWidth = spec.Width - marginX * 2;
-        var safeHeight = spec.Height - marginY * 2;
-        if (spec.Height > spec.Width)
-            return [("Venus", CenteredHeroObject(spec.Width * 0.40f, spec.Height * 0.412f, spec.Width * 0.22f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.592f, spec.Height * 0.482f, spec.Width * 0.16f))];
-        if (spec.Width == spec.Height)
-            return [("Venus", CenteredHeroObject(spec.Width * 0.47f, spec.Height * 0.42f, spec.Width * 0.16f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.65f, spec.Height * 0.49f, spec.Width * 0.12f))];
-        return [("Venus", CenteredHeroObject(spec.Width * 0.648f, spec.Height * 0.458f, spec.Width * 0.115f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.738f, spec.Height * 0.435f, spec.Width * 0.080f))];
+        var names = objectNames.Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToArray();
+        if (names.Length == 0) return [];
+
+        var centers = spec.Height > spec.Width
+            ? new[] { (0.42f, 0.42f, 0.20f), (0.60f, 0.48f, 0.15f), (0.50f, 0.55f, 0.12f) }
+            : spec.Width == spec.Height
+                ? new[] { (0.47f, 0.42f, 0.16f), (0.65f, 0.49f, 0.12f), (0.56f, 0.56f, 0.10f) }
+                : new[] { (0.64f, 0.46f, 0.12f), (0.74f, 0.44f, 0.08f), (0.58f, 0.52f, 0.08f) };
+
+        return names.Select((name, index) =>
+        {
+            var (x, y, size) = centers[index];
+            return (name, CenteredHeroObject(spec.Width * x, spec.Height * y, spec.Width * size));
+        }).ToArray();
     }
 
     private static RectangleF CenteredHeroObject(float centerX, float centerY, float size)
@@ -779,8 +787,28 @@ public sealed class HeroAssetStoryGenerator(
     }
 
 
-    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveRequiredHeroPlanetTextures(string celestialAssetsRoot)
-        => [new AstronomyVisualPlanetAsset("Venus", ResolvePlanetTexture(celestialAssetsRoot, "venus")), new AstronomyVisualPlanetAsset("Jupiter", ResolvePlanetTexture(celestialAssetsRoot, "jupiter"))];
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveHeroCelestialTextures(string celestialAssetsRoot, ProductionEventIntelligence? intelligence, HeroAssetStoryDto heroStory)
+    {
+        var forbidden = new HashSet<string>(intelligence?.ForbiddenObjectNames ?? [], StringComparer.OrdinalIgnoreCase);
+        var names = new[]
+            {
+                intelligence?.RequiredVisualObjects,
+                intelligence?.ResolvedObjectNames,
+                intelligence?.PrimaryObjects,
+                intelligence?.SecondaryObjects
+            }
+            .Where(values => values is not null)
+            .SelectMany(values => values!)
+            .Select(Clean)
+            .Where(name => !string.IsNullOrWhiteSpace(name) && !forbidden.Contains(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
+
+        return names
+            .Select(name => new AstronomyVisualPlanetAsset(name, ResolvePlanetTexture(celestialAssetsRoot, name)))
+            .ToArray();
+    }
 
     private static string? ResolvePlanetTexture(string celestialAssetsRoot, string objectName)
     {
@@ -927,10 +955,14 @@ public sealed class HeroAssetStoryGenerator(
         if (!Directory.Exists(sceneApprovalRoot))
             return [];
 
-        var approvedSceneFiles = Directory.EnumerateFiles(sceneApprovalRoot, "scene-*-final.png")
+        var approvedSceneFiles = Directory.EnumerateFiles(sceneApprovalRoot, "scene-*.png", SearchOption.AllDirectories)
             .Select(path => new { Path = path, SceneId = (Path.GetFileNameWithoutExtension(path) ?? string.Empty).Replace("-final", string.Empty, StringComparison.OrdinalIgnoreCase) })
             .Where(file => !string.IsNullOrWhiteSpace(file.SceneId))
-            .ToDictionary(file => file.SceneId, file => NormalizePath(file.Path), StringComparer.OrdinalIgnoreCase);
+            .GroupBy(file => file.SceneId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => NormalizePath(group.OrderByDescending(file => Path.GetFileNameWithoutExtension(file.Path).EndsWith("-final", StringComparison.OrdinalIgnoreCase)).ThenBy(file => file.Path, StringComparer.OrdinalIgnoreCase).First().Path),
+                StringComparer.OrdinalIgnoreCase);
 
         if (approvedSceneFiles.Count == 0)
             return [];
@@ -1190,8 +1222,11 @@ public sealed class HeroAssetStoryGenerator(
     private static string CleanHook(string value)
         => Clean(value).Trim('.', '!', '?').ToUpperInvariant();
 
-    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants(string selectedHook)
-        =>
+    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants(string selectedHook, HeroAssetStoryDto heroStory)
+    {
+        var visualFocus = Clean(heroStory.HeroVisualFocus);
+        if (string.IsNullOrWhiteSpace(visualFocus)) visualFocus = "Strategy-selected event visual";
+        return
         [
             new(
                 "Landscape",
@@ -1199,7 +1234,7 @@ public sealed class HeroAssetStoryGenerator(
                 "YouTube",
                 new HeroLayoutBlueprintDto(
                     $"Top-left: {selectedHook}",
-                    "Center: Venus + Jupiter",
+                    $"Center: {visualFocus}",
                     "Bottom-right: West marker",
                     "Twilight")),
             new(
@@ -1208,7 +1243,7 @@ public sealed class HeroAssetStoryGenerator(
                 "Facebook/Instagram",
                 new HeroLayoutBlueprintDto(
                     $"Top: {selectedHook}",
-                    "Center: Venus + Jupiter",
+                    $"Center: {visualFocus}",
                     "Bottom: Best viewing time",
                     "Twilight")),
             new(
@@ -1217,17 +1252,18 @@ public sealed class HeroAssetStoryGenerator(
                 "Stories/Reels/Shorts",
                 new HeroLayoutBlueprintDto(
                     $"Top: {selectedHook}",
-                    "Center: Venus + Jupiter",
+                    $"Center: {visualFocus}",
                     "Bottom: Viewing direction",
                     "Twilight"))
         ];
+    }
 
-    private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants)
+    private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants, HeroAssetStoryDto heroStory)
         => new(
             "Wonder",
             "AstronomyPoster",
-            "Venus and Jupiter above the western horizon during twilight.",
-            "Two bright planets together after sunset. Look west to see the pairing.",
+            Clean(heroStory.HeroVisualFocus),
+            Clean(heroStory.HeroMessage),
             platformVariants);
 
     private static HeroAssetReviewScoresDto BuildReviewScores()
