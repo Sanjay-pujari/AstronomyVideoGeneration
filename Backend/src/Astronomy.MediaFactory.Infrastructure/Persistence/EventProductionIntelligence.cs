@@ -289,10 +289,15 @@ public sealed class ProductionPipelineQualityValidator : IProductionPipelineQual
     private static bool ContainsToken(string haystack, string needle)
     {
         if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
+
         var trimmed = needle.Trim();
-        if (trimmed.Any(char.IsWhiteSpace) || trimmed.Any(ch => !char.IsLetterOrDigit(ch)))
-            return haystack.Contains(trimmed, StringComparison.OrdinalIgnoreCase);
-        return Regex.IsMatch(haystack, $"(?<![\\p{{L}}\\p{{N}}]){Regex.Escape(trimmed)}(?![\\p{{L}}\\p{{N}}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var escaped = Regex.Escape(trimmed);
+        escaped = Regex.Replace(escaped, @"\s+", @"\s+");
+
+        var startsWithToken = char.IsLetterOrDigit(trimmed[0]) || trimmed[0] == '_';
+        var endsWithToken = char.IsLetterOrDigit(trimmed[^1]) || trimmed[^1] == '_';
+        var pattern = $"{(startsWithToken ? @"(?<![\p{L}\p{N}_])" : string.Empty)}{escaped}{(endsWithToken ? @"(?![\p{L}\p{N}_])" : string.Empty)}";
+        return Regex.IsMatch(haystack, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken)

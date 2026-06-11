@@ -67,6 +67,23 @@ public sealed class EventProductionIntelligenceTests
         Assert.DoesNotContain("Geminids", string.Join(" ", result.VisualMotifs.Concat(result.SceneStrategy)), StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Theory]
+    [InlineData("open the file", "file", true)]
+    [InlineData("profile", "file", false)]
+    [InlineData("wildlife", "file", false)]
+    [InlineData("filed", "file", false)]
+    [InlineData("lifestyle", "file", false)]
+    public void ProductionQualityContainsToken_UsesStandaloneTokenBoundaries(string text, string token, bool expected)
+    {
+        var method = typeof(ProductionPipelineQualityValidator).GetMethod("ContainsToken", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("ContainsToken helper was not found.");
+
+        var actual = (bool)method.Invoke(null, [text, token])!;
+
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void StrategyResolver_ExposesRequiredProductionStrategies()
     {
