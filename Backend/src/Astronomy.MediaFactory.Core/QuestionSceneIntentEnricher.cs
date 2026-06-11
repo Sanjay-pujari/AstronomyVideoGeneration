@@ -26,7 +26,16 @@ public sealed record EnrichedQuestionScenePlanDto(
     string KnowledgeLevel,
     IReadOnlyList<EnrichedQuestionSceneDto> Scenes,
     bool IsValid,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    QuestionSceneEnrichmentDiagnostics? Diagnostics = null);
+
+public sealed record QuestionSceneEnrichmentDiagnostics(
+    string StrategyId,
+    IReadOnlyList<string> RequiredVisualObjects,
+    IReadOnlyList<string> ForbiddenObjectNames,
+    IReadOnlyList<string> EnrichedFieldsScanned,
+    IReadOnlyList<string> LeakageTermsFound,
+    string EnrichmentSource);
 
 public sealed record EnrichedQuestionSceneDto(
     int SceneNumber,

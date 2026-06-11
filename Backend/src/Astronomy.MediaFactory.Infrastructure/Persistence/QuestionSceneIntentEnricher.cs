@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -8,11 +9,25 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class QuestionSceneIntentEnricher(
     IOptions<RenderingOptions> renderingOptions,
-    ILogger<QuestionSceneIntentEnricher> logger) : IQuestionSceneIntentEnricher
+    ILogger<QuestionSceneIntentEnricher> logger,
+    IMediaEventStrategyResolver? strategyResolver = null) : IQuestionSceneIntentEnricher
 {
     private const string InputFileName = "question-driven-scene-plan.json";
     private const string OutputFileName = "question-driven-scene-plan.enriched.json";
+    private const string EnrichmentSourceStrategy = "Strategy";
+    private const string EnrichmentSourceGenericFallback = "GenericFallback";
+    private const string EnrichmentSourceLegacyFallback = "LegacyFallback";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    private static readonly string[] KnownObjectNames =
+    [
+        "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Moon", "Sun"
+    ];
+
+    private static readonly string[] DefaultLeakageTerms =
+    [
+        "Venus", "Jupiter", "western horizon", "after sunset", "planet positions", "find Venus first", "planet pairing"
+    ];
 
     private static readonly HashSet<string> SupportedViewerPersonas = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -27,52 +42,6 @@ public sealed class QuestionSceneIntentEnricher(
         "Beginner",
         "Intermediate",
         "Advanced"
-    };
-
-    private static readonly IReadOnlyDictionary<string, IntentTemplate> Templates = new Dictionary<string, IntentTemplate>(StringComparer.OrdinalIgnoreCase)
-    {
-        [AstronomyQuestionTypes.What] = new(
-            "Understand what sky event is happening.",
-            "Create curiosity and introduce the event in a warm, simple way.",
-            "Show a hero astronomy scene with Venus and Jupiter clearly emphasized.",
-            "Generate a cinematic western evening sky background suitable for a hero opening.",
-            "Use a short title and one clear viewing cue.",
-            "Even without audio, the viewer should know the event is Venus and Jupiter tonight."),
-        [AstronomyQuestionTypes.Where] = new(
-            "Know where in the sky to look.",
-            "Orient the viewer toward the correct part of the sky.",
-            "Show western horizon, direction marker, and planet positions.",
-            "Generate a clean sky-location infographic background with horizon space.",
-            "Use labels for West, Venus, Jupiter, and horizon.",
-            "Muted viewers should understand the viewing direction."),
-        [AstronomyQuestionTypes.When] = new(
-            "Know the best local viewing time.",
-            "Explain the viewing window using local time.",
-            "Show a sunset-to-viewing-time timeline.",
-            "Generate a calm twilight-to-night timing visual with space for a time marker.",
-            "Show best time in IST and shortly-after-sunset cue.",
-            "Muted viewers should understand when to go outside."),
-        [AstronomyQuestionTypes.How] = new(
-            "Know how to find the planets.",
-            "Give simple step-by-step observing guidance.",
-            "Show arrows or steps: find Venus first, then Jupiter nearby.",
-            "Generate a practical observation-guide background with open space for arrows.",
-            "Use 2–3 short steps, not long sentences.",
-            "Muted viewers should understand the finding steps."),
-        [AstronomyQuestionTypes.Why] = new(
-            "Understand why the event is worth seeing.",
-            "Explain the significance of the close planetary pairing.",
-            "Show closeness, brightness, or pairing significance visually.",
-            "Generate a comparison-style astronomy visual that highlights the close pairing.",
-            "Use one short significance line.",
-            "Muted viewers should understand why this event matters."),
-        [AstronomyQuestionTypes.Action] = new(
-            "Know what to do next.",
-            "Close with a simple, memorable call to action.",
-            "Show a beautiful closing sky with a minimal clear-sky reminder.",
-            "Generate an emotional closing astronomy background with Venus and Jupiter mood.",
-            "Use a short call-to-action only.",
-            "Muted viewers should know to step outside after sunset.")
     };
 
     public async Task<QuestionSceneIntentEnrichmentResponse> EnrichQuestionScenePlanAsync(QuestionSceneIntentEnrichmentRequest request, CancellationToken cancellationToken)
@@ -92,7 +61,7 @@ public sealed class QuestionSceneIntentEnricher(
             var existingJson = await File.ReadAllTextAsync(outputPath, cancellationToken);
             var existingPlan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(existingJson, JsonOptions)
                 ?? throw new InvalidOperationException("Existing enriched question-driven scene plan could not be parsed.");
-            var existingIssues = ValidateEnrichedPlan(existingPlan);
+            var existingIssues = ValidateEnrichedPlan(existingPlan, request.ProductionContext?.ProductionEventIntelligence);
             warnings.Add("Enriched question-driven scene plan already exists; returning the existing file because overwriteExisting is false.");
             warnings.AddRange(existingIssues);
             return BuildResponse(existingPlan, existingIssues.Count == 0, [outputPath.Replace('\\', '/')], warnings);
@@ -103,7 +72,7 @@ public sealed class QuestionSceneIntentEnricher(
             ?? throw new ArgumentException("Question-driven scene plan could not be parsed.", nameof(request));
 
         var enrichedPlan = BuildEnrichedPlan(sourcePlan, request);
-        var validationIssues = ValidateEnrichedPlan(enrichedPlan);
+        var validationIssues = ValidateEnrichedPlan(enrichedPlan, request.ProductionContext?.ProductionEventIntelligence);
         warnings.AddRange(validationIssues);
         if (validationIssues.Count > 0)
         {
@@ -124,14 +93,23 @@ public sealed class QuestionSceneIntentEnricher(
     private static QuestionSceneIntentEnrichmentResponse BuildResponse(EnrichedQuestionScenePlanDto plan, bool isValid, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings)
         => new(plan.EventId, plan.Scenes.Count, isValid, plan, generatedFiles, warnings);
 
-    private static EnrichedQuestionScenePlanDto BuildEnrichedPlan(QuestionDrivenScenePlanDto sourcePlan, QuestionSceneIntentEnrichmentRequest request)
+    private EnrichedQuestionScenePlanDto BuildEnrichedPlan(QuestionDrivenScenePlanDto sourcePlan, QuestionSceneIntentEnrichmentRequest request)
     {
-        var isMeteorShower = sourcePlan.Scenes.Any(scene => ContainsMeteorContext(scene.SourceAnswer) || ContainsMeteorContext(scene.ViewerTakeaway) || ContainsMeteorContext(scene.VisualIntent));
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var resolvedStrategy = request.ProductionContext?.MediaEventStrategy
+            ?? (intelligence is not null ? strategyResolver?.Resolve(intelligence.EventType, intelligence.Title) : null);
+        var strategyDefinition = intelligence is not null && resolvedStrategy is not null
+            ? resolvedStrategy.BuildDefinition(intelligence)
+            : null;
+        var enrichmentSource = intelligence is not null && strategyDefinition is not null ? EnrichmentSourceStrategy : EnrichmentSourceGenericFallback;
+        var requiredVisualObjects = ResolveRequiredVisualObjects(intelligence, strategyDefinition).ToArray();
+        var forbiddenObjectNames = ResolveForbiddenObjectNames(intelligence, strategyDefinition).ToArray();
+
         var scenes = sourcePlan.Scenes.Select(scene =>
         {
-            if (!Templates.TryGetValue(scene.QuestionType, out var defaultTemplate))
-                throw new ArgumentException($"No scene intent enrichment template exists for questionType '{scene.QuestionType}'.");
-            var template = isMeteorShower ? BuildMeteorTemplate(scene) : defaultTemplate;
+            var template = intelligence is not null
+                ? BuildStrategyTemplate(scene, intelligence, resolvedStrategy?.EventType ?? intelligence.StrategyId ?? intelligence.EventType, requiredVisualObjects)
+                : BuildGenericFallbackTemplate(scene);
 
             return new EnrichedQuestionSceneDto(
                 scene.SceneNumber,
@@ -150,7 +128,7 @@ public sealed class QuestionSceneIntentEnricher(
                 scene.IsRequired);
         }).ToArray();
 
-        return new EnrichedQuestionScenePlanDto(
+        var preliminary = new EnrichedQuestionScenePlanDto(
             Clean(sourcePlan.EventId) == string.Empty ? Clean(request.EventId) : Clean(sourcePlan.EventId),
             Clean(sourcePlan.RegionId) == string.Empty ? Clean(request.RegionId) : Clean(sourcePlan.RegionId),
             string.IsNullOrWhiteSpace(sourcePlan.Language) ? request.Language : sourcePlan.Language,
@@ -159,27 +137,150 @@ public sealed class QuestionSceneIntentEnricher(
             scenes,
             true,
             DateTimeOffset.UtcNow);
-    }
 
-    private static IntentTemplate BuildMeteorTemplate(QuestionDrivenSceneDto scene)
-    {
-        var answer = Clean(scene.SourceAnswer);
-        return scene.QuestionType switch
+        return preliminary with
         {
-            AstronomyQuestionTypes.What => new("Understand the meteor shower peak-night alert.", "Create urgency for this meteor shower peak night.", $"Show event-specific meteor streaks and radiant context over a dark local night sky: {answer}", "Generate a cinematic dark night sky with meteor streaks and a subtle radiant hint in a clean astronomy style.", "Use event title and peak-night cue, not generic Rare Event text.", "Muted viewers should know this is a meteor shower peak."),
-            AstronomyQuestionTypes.Where => new("Know where to look for meteors.", "Orient viewers to the event-specific dark open sky viewing direction.", $"Show the correct sky direction with dark open-sky context and radiant hint: {answer}", "Generate a dark open sky with direction cue, meteor streaks, and subtle constellation/radiant guide.", "Use the generated direction and dark sky cues.", "Muted viewers should understand where to look."),
-            AstronomyQuestionTypes.When => new("Know the midnight-to-pre-dawn viewing window.", "Explain the best local night window, not daytime peak time.", $"Show the best local viewing window with dark sky and meteor activity: {answer}", "Generate a night timing visual with meteor streaks and the approved local viewing window.", "Show the generated best viewing window.", "Muted viewers should know when to watch."),
-            AstronomyQuestionTypes.How => new("Know how to observe without equipment.", "Give simple meteor-shower watching steps.", "Show a viewer under dark sky, no telescope, avoiding city lights, eyes adapting.", "Generate an observer-friendly meteor shower scene with dark sky, no telescope, and low light pollution.", "Use no telescope, dark location, eyes 20 minutes.", "Muted viewers should know how to watch."),
-            AstronomyQuestionTypes.Why => new("Understand why this meteor shower is worth seeing.", "Explain shower strength and moon interference from the generated facts.", $"Show abundant meteor streaks with a moon-interference quality cue: {answer}", "Generate a premium editorial meteor shower sky with many streaks, radiant hint, and moon-interference mood.", "Use generated significance and moon-interference facts.", "Muted viewers should know why it matters."),
-            AstronomyQuestionTypes.Action => new("Know the next action.", "Close with reminder and weather/dark-location checklist.", $"Show a save-date reminder mood under a meteor-filled local sky: {answer}", "Generate an inspirational meteor shower CTA image with dark night sky, meteor streaks, and local viewing context.", "Use reminder, weather check, dark location.", "Muted viewers should save the generated viewing night."),
-            _ => new("Understand the meteor shower.", "Support the meteor shower viewing plan.", $"Show meteor shower visuals based on: {answer}", "Generate a dark night meteor shower scene with streaks and constellation context.", "Use concise meteor-specific overlay text.", "Muted viewers should understand the meteor shower scene.")
+            Diagnostics = BuildDiagnostics(preliminary, intelligence, resolvedStrategy?.EventType ?? intelligence?.StrategyId ?? intelligence?.EventType ?? "Generic", requiredVisualObjects, forbiddenObjectNames, enrichmentSource)
         };
     }
 
-    private static bool ContainsMeteorContext(string? value)
-        => !string.IsNullOrWhiteSpace(value) && (value.Contains("meteor", StringComparison.OrdinalIgnoreCase) || value.Contains("radiant", StringComparison.OrdinalIgnoreCase));
+    private static IntentTemplate BuildStrategyTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence, string strategyId, IReadOnlyList<string> requiredVisualObjects)
+        => strategyId switch
+        {
+            "MeteorShower" => BuildMeteorTemplate(scene, intelligence),
+            "PlanetPairing" => BuildPlanetPairingTemplate(scene, intelligence),
+            "Conjunction" => BuildPlanetPairingTemplate(scene, intelligence),
+            "NamedFullMoon" => BuildNamedFullMoonTemplate(scene, intelligence),
+            "NewMoon" => BuildNewMoonTemplate(scene, intelligence),
+            "LunarEclipse" => BuildLunarEclipseTemplate(scene, intelligence),
+            "SolarEclipse" => BuildSolarEclipseTemplate(scene, intelligence),
+            _ => BuildEventSafeTemplate(scene, intelligence, requiredVisualObjects)
+        };
 
-    private static IReadOnlyList<string> ValidateEnrichedPlan(EnrichedQuestionScenePlanDto plan)
+    private static IntentTemplate BuildMeteorTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var answer = Clean(scene.SourceAnswer);
+        var window = ViewingWindow(intelligence);
+        var direction = Direction(intelligence, "dark open sky");
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the meteor shower peak-night alert.", "Create urgency for this meteor shower peak night.", $"Show meteor streaks and a subtle radiant over a dark local night sky: {answer}", "Generate a cinematic dark sky with meteor streaks, a subtle radiant guide, and open landscape context.", "Use event title and peak-night cue.", "Muted viewers should know this is a meteor shower peak."),
+            AstronomyQuestionTypes.Where => new("Know where to look for meteors.", "Orient viewers to the radiant and open dark sky.", $"Show the radiant direction near {direction}, plus meteors crossing a broad dark sky.", "Generate a dark open-sky location guide with radiant hint, direction label, and meteor streaks.", "Use radiant, dark sky, and direction cues.", "Muted viewers should understand where to look."),
+            AstronomyQuestionTypes.When => new("Know the dark-sky viewing window.", "Explain the best local night window.", $"Show a night viewing window timeline for {window} with meteor activity.", "Generate a night timing visual with meteor streaks and a clear local viewing-window marker.", "Show the approved viewing window.", "Muted viewers should know when to watch."),
+            AstronomyQuestionTypes.How => new("Know how to observe without equipment.", "Give simple meteor-shower watching steps.", "Show a viewer under dark sky, no telescope, avoiding city lights, eyes adapting.", "Generate an observer-friendly meteor shower scene with dark sky, no telescope, and low light pollution.", "Use no telescope, dark location, eyes 20 minutes.", "Muted viewers should know how to watch."),
+            AstronomyQuestionTypes.Why => new("Understand why this meteor shower is worth seeing.", "Explain shower strength and moon interference from the generated facts.", $"Show meteor streak activity with a moon-interference quality cue: {answer}", "Generate a premium editorial meteor shower sky with streaks, radiant hint, and viewing-quality mood.", "Use significance and moon-interference facts.", "Muted viewers should know why it matters."),
+            _ => new("Know the next action.", "Close with reminder and weather/dark-location checklist.", $"Show a save-date reminder under a meteor-filled local sky for {window}.", "Generate an inspirational meteor shower CTA image with dark night sky, meteor streaks, and local viewing context.", "Use reminder, weather check, dark location.", "Muted viewers should save the viewing night.")
+        };
+    }
+
+    private static IntentTemplate BuildPlanetPairingTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var objects = Objects(intelligence, "the paired objects");
+        var primary = intelligence.PrimaryObjects.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o)) ?? objects.First();
+        var secondary = intelligence.SecondaryObjects.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o)) ?? objects.Skip(1).FirstOrDefault() ?? "the nearby companion";
+        var objectPhrase = JoinNatural(objects);
+        var direction = Direction(intelligence, "the correct sky direction");
+        var window = ViewingWindow(intelligence);
+        var separation = intelligence.AngularSeparationDegrees.HasValue ? $" about {intelligence.AngularSeparationDegrees.Value:0.##}° apart" : " close together";
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand which objects form the close pairing.", "Introduce the actual paired objects from event intelligence.", $"Show {objectPhrase} as the only emphasized close pairing{separation}.", $"Generate a clean astronomy hero scene featuring {objectPhrase} close together with accurate labels.", $"Use labels for {primary} and {secondary}.", $"Muted viewers should know the event is {objectPhrase}."),
+            AstronomyQuestionTypes.Where => new("Know where in the sky to look.", "Orient the viewer using the event-specific direction.", $"Show {objectPhrase} in {direction} with a horizon/altitude guide.", $"Generate a sky-location infographic for {objectPhrase} with direction marker and altitude cue.", $"Use direction and labels for {primary} and {secondary}.", "Muted viewers should understand the viewing direction."),
+            AstronomyQuestionTypes.When => new("Know the best local viewing time.", "Explain the event-specific viewing window.", $"Show a local viewing-time marker for {window} and the {objectPhrase} pairing.", $"Generate a timing visual with {objectPhrase} and the approved local viewing window.", "Show best time from the source answer.", "Muted viewers should understand when to go outside."),
+            AstronomyQuestionTypes.How => new("Know how to find the pairing.", "Give object-specific observing guidance.", $"Show steps to find {primary} first, then locate {secondary} nearby.", $"Generate a practical finding-guide background with arrows between {primary} and {secondary}.", $"Use 2–3 short steps naming {primary} and {secondary}.", "Muted viewers should understand the finding steps."),
+            AstronomyQuestionTypes.Why => new("Understand why the pairing is worth seeing.", "Explain closeness and angular context.", $"Show the small angular separation of {objectPhrase}{separation}.", $"Generate a comparison-style astronomy visual highlighting the close spacing of {objectPhrase}.", "Use one short significance line.", "Muted viewers should understand why this pairing matters."),
+            _ => new("Know what to do next.", "Close with a simple, memorable call to action.", $"Show a closing sky with only {objectPhrase} emphasized and a clear-sky reminder.", $"Generate an emotional closing astronomy background featuring {objectPhrase} only.", "Use a short call-to-action only.", "Muted viewers should know to step outside at the event time.")
+        };
+    }
+
+    private static IntentTemplate BuildNamedFullMoonTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var title = string.IsNullOrWhiteSpace(intelligence.ShortTitle) ? intelligence.Title : intelligence.ShortTitle;
+        var window = ViewingWindow(intelligence);
+        var direction = Direction(intelligence, "the eastern sky");
+        if (!direction.Contains("east", StringComparison.OrdinalIgnoreCase)) direction = "the moonrise side of the sky";
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the named full moon event.", "Introduce the seasonal full moon name and bright lunar view.", $"Show the Moon as a large full moon glow for {title}, with no planet pairing visuals.", "Generate a cinematic full Moon hero over a warm horizon with clean lunar labels.", "Use the full moon name and moonrise cue.", "Muted viewers should know this is a named full moon."),
+            AstronomyQuestionTypes.Where => new("Know where to watch moonrise.", "Orient the viewer toward moonrise and the eastern sky.", $"Show the Moon rising in the eastern sky near {direction} with an open horizon.", "Generate a moonrise direction infographic with eastern sky cue and full Moon glow.", "Use Moon, moonrise, and eastern sky labels.", "Muted viewers should understand where to look for moonrise."),
+            AstronomyQuestionTypes.When => new("Know the local moonrise or peak viewing time.", "Explain the event-specific full moon timing.", $"Show a local time marker for {window} beside the full Moon.", "Generate a lunar timing visual with full Moon glow and local peak/moonrise time.", "Show localPeakTime or best viewing time.", "Muted viewers should know when to watch."),
+            AstronomyQuestionTypes.How => new("Know how to find the Moon.", "Give simple moonrise observing guidance.", "Show an open eastern sky horizon first, then the bright Moon rising higher.", "Generate a practical moonrise guide with full Moon, horizon, and gentle elevation cue.", "Use open horizon and Moon-rises-higher steps.", "Muted viewers should know how to watch moonrise."),
+            AstronomyQuestionTypes.Why => new("Understand the seasonal full moon meaning.", "Explain seasonal name and bright lunar appeal.", $"Show {title} as a seasonal named full Moon with warm lunar glow.", "Generate a cultural full Moon visual with seasonal name treatment and lunar glow.", "Use one short seasonal-name line.", "Muted viewers should understand why the named full moon matters."),
+            _ => new("Know what to do next.", "Close with a moonrise reminder and weather check.", "Show a calm full Moon closing scene with a clear eastern-view reminder.", "Generate an emotional full Moon CTA image with moonrise glow and clear-sky reminder.", "Use save moonrise time and check clouds.", "Muted viewers should know to prepare a clear Moon-facing view.")
+        };
+    }
+
+    private static IntentTemplate BuildNewMoonTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var window = ViewingWindow(intelligence);
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the dark-sky opportunity.", "Introduce New Moon as moonlight-free stargazing.", "Show a dark star field with no visible full Moon.", "Generate a dark-sky stargazing hero with Milky Way hint, stars, and no full Moon disk.", "Use New Moon and dark sky cue.", "Muted viewers should know this is a dark-sky night."),
+            AstronomyQuestionTypes.Where => new("Know where to stargaze.", "Guide viewers to a dark open sky away from lights.", "Show a dark open landscape away from city lights with broad star field.", "Generate a dark-site location guide with low light pollution and open sky.", "Use dark sky, away from city lights.", "Muted viewers should know where to go."),
+            AstronomyQuestionTypes.When => new("Know the darkest viewing window.", "Explain the local dark-sky window.", $"Show a nighttime stargazing window for {window} with no moonlight.", "Generate a dark-sky timing visual with star field and local viewing-window marker.", "Show best stargazing time.", "Muted viewers should know when to watch."),
+            AstronomyQuestionTypes.How => new("Know how to observe faint stars.", "Give simple stargazing guidance.", "Show eyes adapting, dim red light, star map, and scanning the darkest sky.", "Generate a practical stargazing guide with dark adaptation and constellation cues.", "Use eyes adjust, scan, star map.", "Muted viewers should know how to stargaze."),
+            AstronomyQuestionTypes.Why => new("Understand why New Moon matters.", "Explain moonlight absence and faint-sky targets.", "Show faint stars, clusters, and Milky Way hint under a dark moonless sky.", "Generate a premium dark-sky visual emphasizing faint stars without a full Moon.", "Use dark sky improves faint stars.", "Muted viewers should understand why New Moon helps."),
+            _ => new("Know what to do next.", "Close with a dark-site planning reminder.", "Show a quiet stargazing CTA scene under a moonless star field.", "Generate an inspirational dark-sky CTA image with stars and weather reminder.", "Use save window, check weather, low-light spot.", "Muted viewers should plan a stargazing session.")
+        };
+    }
+
+    private static IntentTemplate BuildLunarEclipseTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var window = ViewingWindow(intelligence);
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the lunar eclipse event.", "Introduce Earth’s shadow crossing the Moon.", "Show the Moon entering eclipse shadow with red/copper lunar color.", "Generate a dramatic lunar eclipse hero with Moon, Earth shadow arc, and copper-red tint.", "Use lunar eclipse and Moon turns red cue.", "Muted viewers should know this is a lunar eclipse."),
+            AstronomyQuestionTypes.Where => new("Know where to look for the eclipsed Moon.", "Orient viewers toward the visible Moon.", $"Show the Moon above {Direction(intelligence, "the horizon")} with eclipse shadow.", "Generate a Moon-facing direction guide with horizon and eclipse-shadow cue.", "Use Moon and clear Moon-facing view.", "Muted viewers should know where to look."),
+            AstronomyQuestionTypes.When => new("Know eclipse timing.", "Explain the event-specific eclipse phases.", $"Show eclipse phase timing for {window}.", "Generate a lunar eclipse timeline with phase markers and copper Moon.", "Show eclipse timing.", "Muted viewers should know when phases happen."),
+            AstronomyQuestionTypes.How => new("Know how to watch the phases.", "Give simple lunar eclipse observing guidance.", "Show finding the Moon and watching each shadow phase; binoculars optional.", "Generate a practical lunar-eclipse viewing guide with Moon phase sequence.", "Use find Moon, watch phases.", "Muted viewers should know how to watch."),
+            AstronomyQuestionTypes.Why => new("Understand why the Moon turns red.", "Explain Earth shadow and copper color.", "Show Earth’s shadow tinting the Moon red/copper.", "Generate an explanatory lunar eclipse visual with Earth shadow arc and copper Moon.", "Use one short Earth-shadow line.", "Muted viewers should understand why it matters."),
+            _ => new("Know what to do next.", "Close with phase-time reminder and weather check.", "Show a lunar eclipse CTA with copper Moon and clear-view reminder.", "Generate an emotional lunar eclipse CTA image with Moon in shadow.", "Use save phase times and check weather.", "Muted viewers should prepare a Moon-facing view.")
+        };
+    }
+
+    private static IntentTemplate BuildSolarEclipseTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var window = ViewingWindow(intelligence);
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the solar eclipse event.", "Introduce Moon covering the Sun with safety-first framing.", "Show Sun and Moon eclipse silhouette with eye-safety cue.", "Generate a safe solar eclipse hero with Sun-Moon silhouette and certified eye-protection label.", "Use solar eclipse and eye safety cue.", "Muted viewers should know this is a solar eclipse."),
+            AstronomyQuestionTypes.Where => new("Know where visibility applies.", "Explain local visibility while keeping safety visible.", "Show local visibility map/sky cue plus filtered Sun icon.", "Generate a solar eclipse visibility guide with safety label and filtered Sun treatment.", "Use visible from and eye protection.", "Muted viewers should know visibility and safety."),
+            AstronomyQuestionTypes.When => new("Know eclipse timing.", "Explain the event-specific timing with protection reminder.", $"Show eclipse timing for {window} with certified eye-protection reminder.", "Generate a solar eclipse timeline with contact-time markers and safety badge.", "Show eclipse timing and safety.", "Muted viewers should know when to watch safely."),
+            AstronomyQuestionTypes.How => new("Know how to watch safely.", "Give certified eye-protection instructions.", "Show certified eclipse glasses or solar filters before any Sun viewing.", "Generate a practical solar-eclipse safety guide with glasses/filter icons and no direct naked-eye viewing.", "Use certified eclipse glasses, solar filters.", "Muted viewers should know safe viewing rules."),
+            AstronomyQuestionTypes.Why => new("Understand why the eclipse is special.", "Explain Sun-Moon alignment from our viewpoint.", "Show the alignment geometry of Moon crossing the Sun safely stylized.", "Generate an explanatory solar eclipse visual with Sun-Moon alignment and safety-first labels.", "Use one short alignment line.", "Muted viewers should understand why it matters."),
+            _ => new("Know what to do next.", "Close with weather, timing, and eye-safety preparation.", "Show a solar eclipse CTA with certified glasses and saved timing.", "Generate an urgent safety-first solar eclipse CTA image with eye-protection reminder.", "Use check weather, save time, prepare glasses.", "Muted viewers should prepare certified eye protection.")
+        };
+    }
+
+    private static IntentTemplate BuildEventSafeTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence, IReadOnlyList<string> requiredVisualObjects)
+    {
+        var objects = requiredVisualObjects.Count > 0 ? JoinNatural(requiredVisualObjects) : JoinNatural(Objects(intelligence, "the event target"));
+        return new IntentTemplate(
+            "Understand the event using the approved source answer.",
+            "Support the question answer without adding unrelated sky objects.",
+            $"Show only event-safe visuals for {objects}: {Clean(scene.SourceAnswer)}",
+            $"Generate a clean astronomy visual for {objects}, using only the source answer and event intelligence.",
+            "Use concise source-backed labels only.",
+            "Muted viewers should understand this scene without unrelated object leakage.");
+    }
+
+    private static IntentTemplate BuildGenericFallbackTemplate(QuestionDrivenSceneDto scene)
+        => new(
+            "Understand this scene from the approved question answer.",
+            "Turn the approved answer into a clear visual beat without adding unrelated sky objects.",
+            $"Show only the objects, direction, timing, and viewing cues already present in the base scene plan: {Clean(scene.VisualIntent)} {Clean(scene.SourceAnswer)}",
+            $"Generate an astronomy visual based only on this base scene plan and answer: {Clean(scene.SourceAnswer)}",
+            "Use concise labels from the approved answer only.",
+            "Muted viewers should understand the approved answer without unrelated fallback content.");
+
+    private static QuestionSceneEnrichmentDiagnostics BuildDiagnostics(EnrichedQuestionScenePlanDto plan, ProductionEventIntelligence? intelligence, string strategyId, IReadOnlyList<string> requiredVisualObjects, IReadOnlyList<string> forbiddenObjectNames, string enrichmentSource)
+    {
+        var scanned = BuildScannedFields(plan).ToArray();
+        var leakageTerms = FindLeakageTerms(scanned, forbiddenObjectNames.Concat(ResolveAbsentObjectNames(intelligence)).Concat(DefaultLeakageTermsForStrategy(strategyId))).ToArray();
+        return new QuestionSceneEnrichmentDiagnostics(strategyId, requiredVisualObjects, forbiddenObjectNames, BuildScannedFieldNames(plan), leakageTerms, enrichmentSource);
+    }
+
+    private static IReadOnlyList<string> ValidateEnrichedPlan(EnrichedQuestionScenePlanDto plan, ProductionEventIntelligence? intelligence = null)
     {
         var issues = new List<string>();
         if (plan.Scenes.Count == 0)
@@ -215,8 +316,155 @@ public sealed class QuestionSceneIntentEnricher(
         foreach (var duplicate in duplicatePurposes)
             issues.Add($"Scene purpose '{duplicate}' must not be duplicated.");
 
+        ValidateStrategyLeakage(plan, intelligence, issues);
         return issues;
     }
+
+    private static void ValidateStrategyLeakage(EnrichedQuestionScenePlanDto plan, ProductionEventIntelligence? intelligence, List<string> issues)
+    {
+        if (plan.Diagnostics?.EnrichmentSource == EnrichmentSourceLegacyFallback)
+            issues.Add("LegacyFallback enrichment must never be used in production.");
+
+        var scanned = BuildScannedFields(plan).ToArray();
+        var required = plan.Diagnostics?.RequiredVisualObjects ?? ResolveRequiredVisualObjects(intelligence, null).ToArray();
+        foreach (var requiredObject in required.Where(v => !string.IsNullOrWhiteSpace(v)))
+        {
+            if (!scanned.Any(field => ContainsTerm(field, requiredObject)))
+                issues.Add($"Enriched scene plan must contain required visual object '{requiredObject}'.");
+        }
+
+        var forbidden = (plan.Diagnostics?.ForbiddenObjectNames ?? ResolveForbiddenObjectNames(intelligence, null).ToArray())
+            .Concat(ResolveAbsentObjectNames(intelligence))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var hit in FindLeakageTerms(scanned, forbidden))
+            issues.Add($"Enriched scene plan contains forbidden or absent object '{hit}'.");
+
+        if (intelligence is not null && string.Equals(intelligence.EventType, "NamedFullMoon", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var hit in FindLeakageTerms(scanned, ["Venus", "Jupiter", "planet pairing", "planet positions", "find Venus first"]))
+                issues.Add($"NamedFullMoon enrichment must not contain '{hit}'.");
+        }
+
+        if (intelligence is not null && string.Equals(intelligence.EventType, "PlanetPairing", StringComparison.OrdinalIgnoreCase))
+        {
+            var objects = Objects(intelligence, "").Where(o => !string.IsNullOrWhiteSpace(o)).ToArray();
+            foreach (var obj in objects)
+            {
+                if (!scanned.Any(field => ContainsTerm(field, obj)))
+                    issues.Add($"PlanetPairing enrichment must use actual object name '{obj}'.");
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveRequiredVisualObjects(ProductionEventIntelligence? intelligence, MediaEventStrategyDefinition? strategyDefinition)
+    {
+        if (intelligence?.RequiredVisualObjects is { Count: > 0 } requiredFromIntelligence)
+            return requiredFromIntelligence;
+        if (strategyDefinition?.RequiredVisualObjects is { Count: > 0 } requiredFromStrategy)
+            return requiredFromStrategy;
+        if (intelligence is null)
+            return [];
+
+        return intelligence.EventType switch
+        {
+            "MeteorShower" => ["meteor streaks", "radiant", "dark sky", "viewing window"],
+            "PlanetPairing" or "Conjunction" => Objects(intelligence, "paired objects").Concat(["close pairing"]),
+            "NamedFullMoon" => ["Moon", "moonrise", "eastern sky", "full moon glow"],
+            "NewMoon" => ["dark sky", "stargazing", "no visible full Moon"],
+            "LunarEclipse" => ["Moon", "eclipse", "copper Moon", "eclipse timing"],
+            "SolarEclipse" => ["Sun", "eclipse", "eye safety", "eclipse timing"],
+            _ => Objects(intelligence, "sky target")
+        };
+    }
+
+    private static IEnumerable<string> ResolveForbiddenObjectNames(ProductionEventIntelligence? intelligence, MediaEventStrategyDefinition? strategyDefinition)
+    {
+        var forbidden = new List<string>();
+        if (intelligence?.ForbiddenObjectNames is { Count: > 0 }) forbidden.AddRange(intelligence.ForbiddenObjectNames);
+        if (intelligence?.ForbiddenTerms is { Count: > 0 }) forbidden.AddRange(intelligence.ForbiddenTerms);
+        if (strategyDefinition?.ForbiddenUnrelatedObjects is { Count: > 0 }) forbidden.AddRange(strategyDefinition.ForbiddenUnrelatedObjects);
+        if (intelligence is not null && string.Equals(intelligence.EventType, "NamedFullMoon", StringComparison.OrdinalIgnoreCase))
+            forbidden.AddRange(["Venus", "Jupiter", "planet pairing", "planet positions", "find Venus first"]);
+        return forbidden.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> ResolveAbsentObjectNames(ProductionEventIntelligence? intelligence)
+    {
+        if (intelligence is null) return [];
+        var allowed = Objects(intelligence, "").Concat(AllowedObjectsForStrategy(intelligence.EventType)).Where(o => !string.IsNullOrWhiteSpace(o)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return KnownObjectNames.Where(name => !allowed.Contains(name));
+    }
+
+    private static IEnumerable<string> AllowedObjectsForStrategy(string eventType) => eventType switch
+    {
+        "NamedFullMoon" or "NewMoon" or "LunarEclipse" => ["Moon"],
+        "SolarEclipse" => ["Sun", "Moon"],
+        _ => []
+    };
+
+    private static IEnumerable<string> DefaultLeakageTermsForStrategy(string strategyId)
+        => string.Equals(strategyId, "NamedFullMoon", StringComparison.OrdinalIgnoreCase)
+            ? DefaultLeakageTerms
+            : [];
+
+    private static IReadOnlyList<string> BuildScannedFieldNames(EnrichedQuestionScenePlanDto plan)
+        => plan.Scenes.SelectMany(scene => new[]
+        {
+            $"scene[{scene.SceneNumber}].viewerTakeaway",
+            $"scene[{scene.SceneNumber}].narrationIntent",
+            $"scene[{scene.SceneNumber}].visualIntent",
+            $"scene[{scene.SceneNumber}].imagePromptIntent",
+            $"scene[{scene.SceneNumber}].overlayIntent",
+            $"scene[{scene.SceneNumber}].accessibilityIntent"
+        }).ToArray();
+
+    private static IEnumerable<string> BuildScannedFields(EnrichedQuestionScenePlanDto plan)
+    {
+        foreach (var scene in plan.Scenes)
+        {
+            yield return scene.ViewerTakeaway;
+            yield return scene.NarrationIntent;
+            yield return scene.VisualIntent;
+            yield return scene.ImagePromptIntent;
+            yield return scene.OverlayIntent;
+            yield return scene.AccessibilityIntent;
+        }
+    }
+
+    private static IEnumerable<string> FindLeakageTerms(IEnumerable<string> fields, IEnumerable<string> terms)
+    {
+        var fieldArray = fields.Where(f => !string.IsNullOrWhiteSpace(f)).ToArray();
+        return terms.Where(term => !string.IsNullOrWhiteSpace(term) && fieldArray.Any(field => ContainsTerm(field, term))).Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsTerm(string field, string term)
+    {
+        if (string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(term)) return false;
+        var escaped = Regex.Escape(term.Trim()).Replace("\\ ", "\\s+");
+        return Regex.IsMatch(field, $"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string[] Objects(ProductionEventIntelligence intelligence, params string[] fallback)
+        => intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(fallback.FirstOrDefault() ?? "sky target").Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static string JoinNatural(IReadOnlyList<string> values) => values.Count switch
+    {
+        0 => "the main sky target",
+        1 => values[0],
+        2 => $"{values[0]} and {values[1]}",
+        _ => $"{string.Join(", ", values.Take(values.Count - 1))}, and {values[^1]}"
+    };
+
+    private static string ViewingWindow(ProductionEventIntelligence intelligence)
+        => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)
+            ? intelligence.BestViewingWindowLocal!
+            : !string.IsNullOrWhiteSpace(intelligence.LocalPeakTime)
+                ? intelligence.LocalPeakTime!
+                : "the event viewing window";
+
+    private static string Direction(ProductionEventIntelligence intelligence, string fallback)
+        => string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint) ? fallback : intelligence.SkyDirectionHint!;
 
     private static void ValidateAudienceContext(string owner, string fieldName, string value, HashSet<string> supportedValues, List<string> issues)
     {
