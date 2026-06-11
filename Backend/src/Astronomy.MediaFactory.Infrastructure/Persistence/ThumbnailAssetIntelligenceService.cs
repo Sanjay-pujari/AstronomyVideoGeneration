@@ -222,7 +222,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validation,
             requestedRenderer: "MeteorShowerPhotoCinematicThumbnailRenderer",
             actualRendererUsed: "MeteorShowerPhotoCinematicThumbnailRenderer",
-            rendererSelectionReason: "MeteorShower event intelligence selected Geminids-specific thumbnail imagery with meteor streaks and no Venus/Jupiter planets.",
+            rendererSelectionReason: "MeteorShower event intelligence selected meteor-shower-specific thumbnail imagery with meteor streaks and no Venus/Jupiter planets.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: true,
             photoCinematicRendererCompleted: true,
@@ -263,7 +263,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ctx.Fill(Color.FromRgba(0, 0, 0, 120), new RectangleF(0, height * 0.76f, width, height * 0.24f));
             var font = ResolveThumbnailFont(width / 16f, FontStyle.Bold);
             var small = ResolveThumbnailFont(width / 30f, FontStyle.Bold);
-            ctx.DrawText("Geminids Meteor Shower Peak", font, Color.White, new PointF(width * 0.06f, height * 0.08f));
+            ctx.DrawText("Meteor Shower Peak", font, Color.White, new PointF(width * 0.06f, height * 0.08f));
             ctx.DrawText("Best Night: Dec 14", small, Color.ParseHex("#F8D36B"), new PointF(width * 0.06f, height * 0.23f));
             ctx.DrawText("Low Moon Interference", small, Color.ParseHex("#BFE6FF"), new PointF(width * 0.06f, height * 0.31f));
         });
@@ -275,7 +275,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var storyPath = Path.Combine(BuildHeroAssetsRoot(request.EventId, request.RegionId), HeroAssetStoryFileName);
         if (!File.Exists(storyPath)) return false;
         var text = File.ReadAllText(storyPath);
-        return text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("Geminids", StringComparison.OrdinalIgnoreCase);
+        return text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("meteor shower", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GeneratePhotoCinematicThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)

@@ -19,131 +19,298 @@ public sealed class ProductionPipelineExecutionService(
     IMediaEventStrategyResolver strategyResolver,
     IProductionPipelineQualityValidator qualityValidator,
     IOptions<RenderingOptions> renderingOptions,
-    ILogger<ProductionPipelineExecutionService> logger) : IProductionPipelineExecutionService
+    ILogger<ProductionPipelineExecutionService> logger) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    public async Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
+    public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
+        => RunAsync(request, cancellationToken);
+
+    public async Task<ProductionPipelineExecutionResult> RunAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Request);
 
         var productionRequest = request.Request;
         var eventId = request.AstronomyEventIntelligenceId.ToString("D");
-        var warnings = new List<string>();
+        var warnings = new List<string>(productionRequest.Warnings);
         var errors = new List<string>();
         var generatedFiles = new List<string>();
         var outputRoot = request.OutputRoot;
         var productionIntelligence = intelligenceAdapter.Normalize(request);
         var strategy = strategyResolver.Resolve(productionIntelligence.EventType, productionIntelligence.Title);
         var executionContext = BuildProductionExecutionContext(request.ExecutionContext, productionRequest, request.AstronomyEventIntelligenceId, outputRoot, productionIntelligence, strategy);
-        var eventWorkingRoot = executionContext.QuestionRoot is { Length: > 0 } ? Directory.GetParent(executionContext.QuestionRoot)?.FullName ?? outputRoot : BuildEventWorkingRoot(productionRequest, eventId);
+        var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 19);
+        var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 19, startPhaseNo, 19);
+        var phaseResults = new List<ProductionPhaseResult>();
 
-        if (request.OverwriteExisting)
-        {
+        if (request.OverwriteExisting && startPhaseNo <= 1)
             ClearProductionOutputRoot(outputRoot);
-            DeleteProductionSubtree(eventWorkingRoot);
-        }
+
+        Directory.CreateDirectory(outputRoot);
+        Directory.CreateDirectory(executionContext.ValidationRoot!);
+        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "short"));
+        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "long"));
+
+        var context = new ProductionPhaseContext(request, productionRequest, request.AstronomyEventIntelligenceId, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly);
 
         if (request.DryRun)
         {
-            return BuildResult(true, true, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors);
+            foreach (var phase in PhaseDefinitions().Where(p => p.No >= startPhaseNo && p.No <= endPhaseNo))
+            {
+                phaseResults.Add(await WritePhaseValidationAsync(context, phase.No, phase.Name, ProductionPhaseStatus.Skipped, [], [], [], [], "Dry run: phase was planned but not executed.", false, cancellationToken));
+            }
+            await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+            return BuildResult(true, true, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, phaseResults);
         }
 
+        foreach (var phase in PhaseDefinitions())
+        {
+            if (phase.No < startPhaseNo || phase.No > endPhaseNo) continue;
+            if (request.RetryFailedOnly && PreviousPhaseSucceeded(context, phase.No))
+            {
+                var skipped = await WritePhaseValidationAsync(context, phase.No, phase.Name, ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
+                phaseResults.Add(skipped);
+                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                continue;
+            }
+            var result = await ExecutePhaseAsync(context, phase.No, phase.Name, phase.Action, cancellationToken);
+            phaseResults.Add(result);
+            generatedFiles.AddRange(result.OutputFiles.Where(File.Exists));
+            warnings.AddRange(result.Warnings);
+            errors.AddRange(result.Errors);
+            await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+            if (result.Status == ProductionPhaseStatus.Failed)
+            {
+                logger.LogWarning("Production phase {PhaseNo} {PhaseName} failed for plan {PlanId}: {Errors}", result.PhaseNo, result.PhaseName, productionRequest.PlanId, string.Join(" | ", result.Errors));
+                break;
+            }
+        }
+
+        var shortVideo = Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4");
+        var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
+        var success = errors.Count == 0 && (!phaseResults.Any() || phaseResults.All(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped));
+        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) || File.Exists(Path.Combine(outputRoot, "hero", "hero-landscape.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
+    }
+
+    private IReadOnlyList<(int No, string Name, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> Action)> PhaseDefinitions() =>
+    [
+        (1, "Load Plan", PhaseLoadPlanAsync),
+        (2, "Build ProductionEventIntelligence", PhaseBuildProductionIntelligenceAsync),
+        (3, "Generate QuestionAnswerSet", PhaseGenerateQuestionsAsync),
+        (4, "Validate Questions", PhaseValidateQuestionsAsync),
+        (5, "Generate Scene Plan", PhaseGenerateScenePlanAsync),
+        (6, "Enrich Scene Plan", PhaseEnrichScenePlanAsync),
+        (7, "Generate Narration Plan", PhaseGenerateNarrationPlanAsync),
+        (8, "Generate Short Scene Images", PhaseGenerateSceneImagesAsync),
+        (9, "Generate Long Scene Images", PhaseValidateLongSceneImagesAsync),
+        (10, "Validate Scene Assets", PhaseValidateSceneAssetsAsync),
+        (11, "Generate Hero", PhaseGenerateHeroAsync),
+        (12, "Generate Thumbnails", PhaseGenerateThumbnailsAsync),
+        (13, "Generate Short Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (14, "Generate Long Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (15, "Generate Short TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (16, "Generate Long TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (17, "Assemble Short Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (18, "Assemble Long Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (19, "Final Validation", PhaseFinalValidationAsync)
+    ];
+
+
+    private static bool PreviousPhaseSucceeded(ProductionPhaseContext context, int phaseNo)
+    {
+        var path = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
+        if (!File.Exists(path)) return false;
         try
         {
-            generatedFiles.Add(await WriteProductionIntelligenceAsync(outputRoot, productionIntelligence, cancellationToken));
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.TryGetProperty("status", out var status)
+                && string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
-            var questionResponse = await questionEngine.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
-                productionRequest.RegionId,
-                PlanIds: [productionRequest.PlanId.ToString("D")],
-                MaxEvents: 1,
-                Language: productionRequest.Language,
-                DryRun: false,
-                OverwriteExisting: request.OverwriteExisting,
-                ProductionContext: executionContext), cancellationToken);
-            generatedFiles.AddRange(questionResponse.GeneratedFiles);
-            warnings.AddRange(questionResponse.Warnings);
-
-            var scenePlanResponse = await scenePlanner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(productionRequest.RegionId, eventId, productionRequest.Language, false, request.OverwriteExisting, executionContext), cancellationToken);
-            generatedFiles.AddRange(scenePlanResponse.GeneratedFiles);
-            warnings.AddRange(scenePlanResponse.Warnings);
-
-            var enrichmentResponse = await sceneIntentEnricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(eventId, productionRequest.RegionId, productionRequest.Language, DryRun: false, OverwriteExisting: request.OverwriteExisting, ProductionContext: executionContext), cancellationToken);
-            generatedFiles.AddRange(enrichmentResponse.GeneratedFiles);
-            warnings.AddRange(enrichmentResponse.Warnings);
-
-            var narrationResponse = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, executionContext), cancellationToken);
-            generatedFiles.AddRange(narrationResponse.GeneratedFiles);
-            warnings.AddRange(narrationResponse.Warnings);
-
-            var sceneResponse = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, executionContext), cancellationToken);
-            generatedFiles.AddRange(sceneResponse.GeneratedFiles);
-            warnings.AddRange(sceneResponse.Warnings);
-
-            var heroResponse = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(eventId, productionRequest.RegionId, productionRequest.Language, false, request.OverwriteExisting, HeroAssetGenerationPhase.Full, executionContext), cancellationToken);
-            generatedFiles.AddRange(heroResponse.GeneratedFiles);
-            warnings.AddRange(heroResponse.Warnings);
-
-            var thumbnailResponse = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
-            {
-                EventId = eventId,
-                RegionId = productionRequest.RegionId,
-                Language = productionRequest.Language,
-                Phase = "Images",
-                DryRun = false,
-                OverwriteExisting = request.OverwriteExisting,
-                ThumbnailStyle = "ScrollStopping",
-                ThumbnailVisualStyle = "PhotoCinematic",
-                ProductionContext = executionContext
-            }, cancellationToken);
-            generatedFiles.AddRange(thumbnailResponse.GeneratedFiles);
-            if (thumbnailResponse.Warnings is not null) warnings.AddRange(thumbnailResponse.Warnings);
-
-            var preAssemblyValidation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(productionIntelligence, eventWorkingRoot, cancellationToken);
-            warnings.AddRange(preAssemblyValidation.Warnings);
-            errors.AddRange(preAssemblyValidation.Errors);
-            if (!preAssemblyValidation.IsValid)
-                logger.LogWarning("Astronomy V1 production pre-assembly validation reported blocking issues for plan {PlanId}: {Issues}", productionRequest.PlanId, string.Join(" | ", preAssemblyValidation.Errors));
-
-            var assemblyResponse = await videoAssemblyEngine.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
-            {
-                EventId = eventId,
-                RegionId = productionRequest.RegionId,
-                Language = productionRequest.Language,
-                Platform = "YouTubeShort",
-                Phase = "FullPipeline",
-                DryRun = false,
-                OverwriteExisting = request.OverwriteExisting,
-                OutputMode = "Production",
-                ShortForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeShort", ScenePresentationProfile = ScenePresentationProfile.ShortForm, TargetDurationSeconds = 60, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 12, DuckMusicUnderNarration = true },
-                LongForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeLong", ScenePresentationProfile = ScenePresentationProfile.LongForm, TargetDurationSeconds = 360, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 10, DuckMusicUnderNarration = true },
-                ProductionContext = executionContext
-            }, cancellationToken);
-            generatedFiles.AddRange(assemblyResponse.GeneratedFiles);
-
-            var copied = await MaterializePlanFolderAsync(productionRequest, eventId, outputRoot, generatedFiles, cancellationToken);
-            generatedFiles.AddRange(copied);
-
-            var finalValidation = await qualityValidator.ValidateFinalOutputAsync(productionIntelligence, outputRoot, cancellationToken);
-            warnings.AddRange(finalValidation.Warnings);
-            errors.AddRange(finalValidation.Errors);
-
-            var shortVideo = Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4");
-            var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
-            var shortOk = File.Exists(shortVideo);
-            var longOk = File.Exists(longVideo);
-            if (!shortOk) errors.Add("Short final video was not generated in the DB-plan production folder.");
-            if (!longOk) errors.Add("Long final video was not generated in the DB-plan production folder.");
-
-            return BuildResult(errors.Count == 0, false, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.wav")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.wav")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors);
+    private async Task<ProductionPhaseResult> ExecutePhaseAsync(ProductionPhaseContext context, int phaseNo, string phaseName, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> action, CancellationToken cancellationToken)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            var outputs = (await action(context, cancellationToken)).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var missing = outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, [], missing, missing.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", missing.Length > 0, cancellationToken, started);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
-            logger.LogWarning(ex, "Astronomy V1 production pipeline execution failed for plan {PlanId}", productionRequest.PlanId);
-            errors.Add(ex.Message);
-            return BuildResult(false, false, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors);
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
         }
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseLoadPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        await WritePlanInputAsync(context.OutputRoot, context.Request, context.ProductionEventIntelligence, cancellationToken);
+        return [Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json"), Path.Combine(context.OutputRoot, "plan-input", "production-event-intelligence.json")];
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseBuildProductionIntelligenceAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+        => [await WriteProductionIntelligenceAsync(context.OutputRoot, context.ProductionEventIntelligence, cancellationToken)];
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateQuestionsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var response = await questionEngine.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(context.Request.RegionId, PlanIds: [context.Request.PlanId.ToString("D")], MaxEvents: 1, Language: context.Request.Language, DryRun: false, OverwriteExisting: context.OverwriteExisting, ProductionContext: context.ExecutionContext), cancellationToken);
+        return response.GeneratedFiles;
+    }
+
+    private Task<IReadOnlyList<string>> PhaseValidateQuestionsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<string>>([RequireFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-answer-set.json"), "QuestionAnswerSet")]);
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateScenePlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var response = await scenePlanner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(context.Request.RegionId, context.EventId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
+        return response.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseEnrichScenePlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var response = await sceneIntentEnricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(context.EventId, context.Request.RegionId, context.Request.Language, DryRun: false, OverwriteExisting: context.OverwriteExisting, ProductionContext: context.ExecutionContext), cancellationToken);
+        return response.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
+        return response.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "short"));
+        Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "long"));
+        var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
+        var shortRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "short");
+        if (!DirectoryHasPng(shortRoot)) throw new InvalidOperationException($"Short scene image validation failed: no .png files were found in '{shortRoot}'.");
+        return response.GeneratedFiles.Concat(Directory.EnumerateFiles(shortRoot, "*.png")).ToArray();
+    }
+
+    private Task<IReadOnlyList<string>> PhaseValidateLongSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var longRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "long");
+        if (!DirectoryHasPng(longRoot)) throw new InvalidOperationException($"Long scene image validation failed: no .png files were found in '{longRoot}'.");
+        return Task.FromResult<IReadOnlyList<string>>(Directory.EnumerateFiles(longRoot, "*.png").ToArray());
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseValidateSceneAssetsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken);
+        if (!validation.IsValid) throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", validation.Errors));
+        return [Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long")];
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var response = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, HeroAssetGenerationPhase.Full, context.ExecutionContext), cancellationToken);
+        return response.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateThumbnailsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = "Images", DryRun = false, OverwriteExisting = context.OverwriteExisting, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
+        return response.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
+    {
+        var outputs = new List<string>();
+        var intelligence = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Intelligence" : "LongFormIntelligence"), cancellationToken);
+        outputs.AddRange(intelligence.GeneratedFiles);
+        var script = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Script" : "LongFormScript"), cancellationToken);
+        outputs.AddRange(script.GeneratedFiles);
+        var scriptPath = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-narration-script.json") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-narration-script.json");
+        var target = Path.Combine(context.ExecutionContext.NarrationRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.txt");
+        CopyFile(scriptPath, target, outputs, jsonNarrationToText: true);
+        return outputs;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseGenerateTtsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
+    {
+        var response = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Tts" : "LongFormTts"), cancellationToken);
+        var outputs = new List<string>(response.GeneratedFiles);
+        var source = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-tts-audio.mp3") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-tts-audio.mp3");
+        var target = Path.Combine(context.ExecutionContext.TtsRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.mp3");
+        CopyFile(source, target, outputs);
+        return outputs;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseAssembleVideoAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
+    {
+        var outputs = new List<string>();
+        foreach (var phase in new[] { profile == ScenePresentationProfile.ShortForm ? "Assembly" : "LongFormAssembly", profile == ScenePresentationProfile.ShortForm ? "Render" : "LongFormRender" })
+        {
+            var response = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, phase), cancellationToken);
+            outputs.AddRange(response.GeneratedFiles);
+        }
+        return outputs;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseFinalValidationAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        await WriteScenesManifestsAsync(context.OutputRoot, cancellationToken);
+        var copied = await MaterializePlanFolderAsync(context.Request, context.EventId, context.OutputRoot, [], cancellationToken);
+        var validation = await qualityValidator.ValidateFinalOutputAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken);
+        if (!validation.IsValid) throw new InvalidOperationException("Final validation failed: " + string.Join("; ", validation.Errors));
+        return copied.Concat([Path.Combine(context.OutputRoot, "phase-manifest.json")]).ToArray();
+    }
+
+    private VideoAssemblyGenerationRequest BuildVideoRequest(ProductionPhaseContext context, ScenePresentationProfile profile, string phase)
+        => new()
+        {
+            EventId = context.EventId,
+            RegionId = context.Request.RegionId,
+            Language = context.Request.Language,
+            Platform = profile == ScenePresentationProfile.ShortForm ? "YouTubeShort" : "YouTubeLong",
+            Phase = phase,
+            DryRun = false,
+            OverwriteExisting = context.OverwriteExisting,
+            OutputMode = profile == ScenePresentationProfile.ShortForm ? "ShortFormOnly" : "LongFormOnly",
+            AllowSyntheticSilentTts = true,
+            ShortForm = new VideoAssemblyFormRequest { Enabled = profile == ScenePresentationProfile.ShortForm, Platform = "YouTubeShort", ScenePresentationProfile = ScenePresentationProfile.ShortForm, TargetDurationSeconds = 60, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 12, DuckMusicUnderNarration = true },
+            LongForm = new VideoAssemblyFormRequest { Enabled = profile == ScenePresentationProfile.LongForm, Platform = "YouTubeLong", ScenePresentationProfile = ScenePresentationProfile.LongForm, TargetDurationSeconds = 360, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 10, DuckMusicUnderNarration = true },
+            ScenePresentationProfile = profile,
+            BackgroundMusic = true,
+            MusicMood = "WonderCuriosity",
+            MusicLevelPercent = profile == ScenePresentationProfile.ShortForm ? 12 : 10,
+            DuckMusicUnderNarration = true,
+            ProductionContext = context.ExecutionContext
+        };
+
+    private static string RequireFile(string path, string name)
+        => File.Exists(path) ? path : throw new InvalidOperationException($"Required {name} file was not found at '{path}'.");
+
+    private static async Task WritePlanInputAsync(string outputRoot, ContentPlanProductionPipelineRequest request, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
+    {
+        var root = Path.Combine(outputRoot, "plan-input");
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(Path.Combine(root, "content-plan-production-request.json"), JsonSerializer.Serialize(request, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "production-event-intelligence.json"), JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
+    }
+
+    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null)
+    {
+        var started = startedUtc ?? DateTimeOffset.UtcNow;
+        var finished = DateTimeOffset.UtcNow;
+        var validationPath = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo, phaseName, status = status.ToString(), startedUtc = started, finishedUtc = finished, durationMs = result.DurationMs, inputFiles, outputFiles, warnings, errors, reason, canRetry }, JsonOptions), cancellationToken);
+        return result;
+    }
+
+    private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
@@ -231,8 +398,8 @@ public sealed class ProductionPipelineExecutionService(
         CopyFile(Path.Combine(eventRoot, "thumbnails", "thumbnail-portrait.png"), Path.Combine(outputRoot, "thumbnails", "portrait.png"), copied);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "video-narration-script.json"), Path.Combine(outputRoot, "narration", "short", "narration.txt"), copied, jsonNarrationToText: true);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "long", "video-long-narration-script.json"), Path.Combine(outputRoot, "narration", "long", "narration.txt"), copied, jsonNarrationToText: true);
-        CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "video-tts-audio.mp3"), Path.Combine(outputRoot, "tts", "short", "narration.wav"), copied);
-        CopyFile(Path.Combine(eventRoot, "video-assembly", "long", "video-long-tts-audio.mp3"), Path.Combine(outputRoot, "tts", "long", "narration.wav"), copied);
+        CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "video-tts-audio.mp3"), Path.Combine(outputRoot, "tts", "short", "narration.mp3"), copied);
+        CopyFile(Path.Combine(eventRoot, "video-assembly", "long", "video-long-tts-audio.mp3"), Path.Combine(outputRoot, "tts", "long", "narration.mp3"), copied);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "final-video-short.mp4"), Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4"), copied);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "long", "final-video-long.mp4"), Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4"), copied);
         CopyFile(Path.Combine(eventRoot, "video-assembly", "short", "video-assembly-plan.json"), Path.Combine(outputRoot, "video-assembly", "short", "assembly-manifest.json"), copied);
@@ -294,8 +461,8 @@ public sealed class ProductionPipelineExecutionService(
         return json;
     }
 
-    private static ProductionPipelineExecutionResult BuildResult(bool success, bool dryRun, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
-        => new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    private static ProductionPipelineExecutionResult BuildResult(bool success, bool dryRun, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult>? phaseResults = null)
+        => new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
 
     private string ResolveWorkingDirectoryRoot() => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string Sanitize(string value) => string.Join("-", (value ?? "unknown").Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
