@@ -44,6 +44,8 @@ public sealed class VideoAssemblyGenerationRequest
     public VideoAssemblyFormRequest? LongForm { get; set; }
 
     public ProductionPipelineExecutionContext? ProductionContext { get; set; }
+
+    public IReadOnlyList<string> SourceNotes { get; set; } = Array.Empty<string>();
 }
 
 public sealed class VideoAssemblyFormRequest

@@ -50,7 +50,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const double ShortFormCrossFadeDurationSeconds = 0.4;
     private const double LongFormCrossFadeDurationSeconds = 0.6;
     private const double HookOptimizationDurationSeconds = 3.218;
-    private const double LongFormNarrationWordsPerMinute = 150.0;
+    private const double DefaultLongFormNarrationWordsPerMinute = 135.0;
     private const string SelectedOpeningHook = "TONIGHT'S SKY EVENT";
     private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
     private const string AzureTtsProviderName = "AzureSpeechTts";
@@ -215,7 +215,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             ScenePresentationProfile = form?.ScenePresentationProfile ?? profile,
             ShortForm = request.ShortForm,
             LongForm = request.LongForm,
-            ProductionContext = request.ProductionContext
+            ProductionContext = request.ProductionContext,
+            SourceNotes = request.SourceNotes ?? Array.Empty<string>()
         };
 
     private static bool ShouldRunShortForm(VideoAssemblyGenerationRequest request)
@@ -1217,6 +1218,20 @@ public sealed partial class VideoAssemblyIntelligenceService(
         return match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
     }
 
+
+    private sealed record LongFormNarrationContext(
+        string Title,
+        string ShortTitle,
+        string EventType,
+        string PrimaryObjectsText,
+        string SkyDirectionText,
+        string LocalPeakTimeText,
+        string BestViewingWindowText,
+        string ScientificContextText,
+        string ViewerInstructionsText,
+        IReadOnlyList<string> SourceNotes,
+        IReadOnlyList<string> ScenePlanNotes);
+
     private sealed record VideoAssemblyPurposeSource(int SceneNumber, string QuestionType, string ScenePurpose, string SourceAnswer, string ViewerTakeaway, string NarrationText, string CaptionText);
 
     private VideoAssemblyIntelligenceDto BuildLongFormVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
@@ -1338,7 +1353,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
     {
-        var sceneScripts = BuildBalancedLongFormSceneScripts(request.ProductionContext?.ProductionEventIntelligence);
+        var sceneScripts = BuildBalancedLongFormSceneScripts(request);
         var fullNarrationText = string.Join(" ", sceneScripts.Select(scene => scene.Narration));
         var totalEstimatedDurationSeconds = EstimateSpokenDurationSeconds(fullNarrationText);
 
@@ -1357,30 +1372,50 @@ public sealed partial class VideoAssemblyIntelligenceService(
             DateTimeOffset.UtcNow);
     }
 
-    private IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts(ProductionEventIntelligence? eventInfo)
+    private IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts(VideoAssemblyGenerationRequest request)
     {
-        var sections = eventInfo?.ValidationRules is not null ? LongFormSectionOrder : LongFormSectionOrder;
-        var scripts = sections.Select(section =>
+        var eventInfo = request.ProductionContext?.ProductionEventIntelligence;
+        var context = BuildLongFormNarrationContext(request);
+        var scripts = LongFormSectionOrder.Select(section =>
         {
-            var narration = BuildLongFormNarration(section, eventInfo);
-            return new VideoNarrationSceneScriptDto(section, EstimateSpokenDurationSeconds(narration), narration, ResolveLongFormOnScreenText(section, eventInfo));
+            var narration = BuildLongFormNarration(section, context);
+            return new VideoNarrationSceneScriptDto(section, EstimateSpokenDurationSeconds(narration, ResolveLongFormNarrationWordsPerMinute()), narration, ResolveLongFormOnScreenText(section, eventInfo));
         }).ToArray();
 
-        var totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
-        if (totalDuration < ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMin)
-            scripts = ExpandLongFormSceneNarration(scripts);
-        else if (totalDuration > ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMax)
-            scripts = ShortenLongFormSceneNarration(scripts);
+        var contract = ResolveDurationProfile(ScenePresentationProfile.LongForm);
+        var targetSeconds = ResolveLongFormTargetDuration(request);
+        var wordsPerMinute = ResolveLongFormNarrationWordsPerMinute();
+        scripts = NormalizeLongFormSceneNarration(scripts, context, contract.TargetDurationSecondsMin, contract.TargetDurationSecondsMax, targetSeconds, wordsPerMinute);
 
-        totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
-        if (totalDuration < ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMin || totalDuration > ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMax)
-            throw new ArgumentException($"Video narration script validation failed: LongForm narration word-count estimate must be {ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMin:0.###}-{ResolveDurationProfile(ScenePresentationProfile.LongForm).TargetDurationSecondsMax:0.###} seconds.");
+        var totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)), wordsPerMinute);
+        if (totalDuration < contract.TargetDurationSecondsMin || totalDuration > contract.TargetDurationSecondsMax)
+            throw new ArgumentException($"Video narration script validation failed: LongForm narration word-count estimate must be {contract.TargetDurationSecondsMin:0.###}-{contract.TargetDurationSecondsMax:0.###} seconds.");
 
-        return scripts.Select(scene => scene with { DurationSeconds = EstimateSpokenDurationSeconds(scene.Narration) }).ToArray();
+        return scripts.Select(scene => scene with { DurationSeconds = EstimateSpokenDurationSeconds(scene.Narration, wordsPerMinute) }).ToArray();
     }
 
-    private static VideoNarrationSceneScriptDto[] ExpandLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts)
-        => scripts.Select(scene => scene with { Narration = $"{scene.Narration} {BuildLongFormExpansionSentence(scene.SceneKey)}" }).ToArray();
+    private VideoNarrationSceneScriptDto[] NormalizeLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts, LongFormNarrationContext context, double minSeconds, double maxSeconds, double targetSeconds, double wordsPerMinute)
+    {
+        var expanded = scripts.ToArray();
+        var targetWords = Math.Max((int)Math.Ceiling(targetSeconds * wordsPerMinute / 60.0), (int)Math.Ceiling(minSeconds * wordsPerMinute / 60.0));
+        for (var round = 0; round < 8; round++)
+        {
+            var narration = string.Join(" ", expanded.Select(scene => scene.Narration));
+            var duration = EstimateSpokenDurationSeconds(narration, wordsPerMinute);
+            var words = CountSpokenWords(narration);
+            if (duration >= minSeconds && duration <= maxSeconds && words >= targetWords * 0.9)
+                return expanded;
+            if (duration > maxSeconds)
+                return ShortenLongFormSceneNarration(expanded).Select(scene => scene with { DurationSeconds = EstimateSpokenDurationSeconds(scene.Narration, wordsPerMinute) }).ToArray();
+
+            expanded = ExpandLongFormSceneNarration(expanded, context, round);
+        }
+
+        return expanded;
+    }
+
+    private static VideoNarrationSceneScriptDto[] ExpandLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts, LongFormNarrationContext context, int round = 0)
+        => scripts.Select(scene => scene with { Narration = $"{scene.Narration} {BuildLongFormExpansionSentence(scene.SceneKey, context, round)}" }).ToArray();
 
     private static VideoNarrationSceneScriptDto[] ShortenLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts)
         => scripts.Select(scene => scene with { Narration = KeepFirstTwoSentences(scene.Narration) }).ToArray();
@@ -1391,25 +1426,38 @@ public sealed partial class VideoAssemblyIntelligenceService(
         return sentences.Length <= 2 ? narration : string.Join(". ", sentences.Take(2)) + ".";
     }
 
-    private static string BuildLongFormExpansionSentence(string section)
-        => section switch
+    private static string BuildLongFormExpansionSentence(string section, LongFormNarrationContext context, int round = 0)
+    {
+        var sceneNote = context.ScenePlanNotes.Count == 0 ? string.Empty : context.ScenePlanNotes[round % context.ScenePlanNotes.Count];
+        var sourceNote = context.SourceNotes.Count == 0 ? string.Empty : context.SourceNotes[round % context.SourceNotes.Count];
+        return section switch
         {
-            "Hook" => "Keep expectations simple and enjoy the view as a calm evening marker.",
-            "WhatIsHappening" => "The event is about line of sight, brightness, timing, and local visibility.",
-            "WhyItMatters" => "This is the event-specific reason viewers should use the approved plan.",
-            "WhereToLook" => "A clearer horizon usually makes the pairing easier to notice.",
-            "WhenToLook" => "Local sunset time and clouds can change the best minute.",
-            "HowToObserve" => "Move slowly and let the sky become darker around you.",
-            "WhatYouWillSee" => "The beauty is in the contrast between the two lights.",
-            "InterestingFact" => "That slow change is one reason observers return on later nights.",
-            "ObservationTips" => "Safety matters too, so choose a comfortable viewing place.",
-            "Recap" => "Those steps keep the observation easy and grounded.",
-            "Action" => "Even a brief look can make the night sky feel closer.",
+            "Hook" => $"For {context.ShortTitle}, keep the promise specific: viewers get the event name, the best time, and a simple way to recognize the sky without needing advanced equipment.",
+            "WhatIsHappening" => $"This is a {context.EventType} story involving {context.PrimaryObjectsText}, so explain the apparent sky geometry, the observing conditions, and what changes as the viewing window unfolds.",
+            "WhenToLook" => $"Use {context.BestViewingWindowText} as the planning anchor, mention {context.LocalPeakTimeText} when available, and remind viewers that clouds and horizon obstructions can shift the practical minute.",
+            "WhereToLook" => $"Point viewers toward {context.SkyDirectionText}, then have them sweep slowly around the approved scene area so the actual event remains the guide instead of a generic sky placeholder.",
+            "WhyItMatters" => $"The reason it matters is tied to this event context: {context.Title} is timely, observable for the selected audience, and connected to the source-backed plan.",
+            "HowToObserve" => $"Practical observing should stay simple: choose a safe open location, lower screen brightness, give your eyes time to adapt, and compare the sky with the generated scene plan.",
+            "WhatYouWillSee" => $"Set realistic expectations from the current event data: describe {context.PrimaryObjectsText} as viewers should actually look for it, not as an unrelated astronomy object.",
+            "InterestingFact" => string.IsNullOrWhiteSpace(sourceNote) ? $"A useful detail is that the same timing and direction checks help observers understand why {context.ShortTitle} is worth watching." : $"One source note to carry into the narration is: {sourceNote}.",
+            "ObservationTips" => string.IsNullOrWhiteSpace(sceneNote) ? "Use the approved scenes as a checklist: timing, direction, visibility, safety, then one final reminder before stepping outside." : $"The generated scene plan reinforces this viewer takeaway: {sceneNote}.",
+            "Recap" => $"Recap the dynamic facts together: {context.ShortTitle}, {context.EventType}, {context.PrimaryObjectsText}, {context.SkyDirectionText}, and {context.BestViewingWindowText}.",
+            "Action" => "Close with a calm call to action: save the viewing window, check the local forecast, share the plan with someone nearby, and step outside only when conditions are safe.",
             _ => "Keep the observation simple, safe, and grounded in the visible sky."
         };
+    }
 
-    private static double EstimateSpokenDurationSeconds(string narration)
-        => Math.Round(CountSpokenWords(narration) / LongFormNarrationWordsPerMinute * 60.0, 3, MidpointRounding.AwayFromZero);
+    private double ResolveLongFormNarrationWordsPerMinute()
+    {
+        var configured = videoAssemblyOptions?.Value.LongNarrationWordsPerMinute ?? DefaultLongFormNarrationWordsPerMinute;
+        return configured > 0 ? configured : DefaultLongFormNarrationWordsPerMinute;
+    }
+
+    private double EstimateSpokenDurationSeconds(string narration)
+        => EstimateSpokenDurationSeconds(narration, ResolveLongFormNarrationWordsPerMinute());
+
+    private static double EstimateSpokenDurationSeconds(string narration, double wordsPerMinute)
+        => Math.Round(CountSpokenWords(narration) / wordsPerMinute * 60.0, 3, MidpointRounding.AwayFromZero);
 
     private static int CountSpokenWords(string narration)
         => string.IsNullOrWhiteSpace(narration) ? 0 : SpokenWordRegex().Matches(narration).Count;
@@ -1434,28 +1482,51 @@ public sealed partial class VideoAssemblyIntelligenceService(
             _ => "Educational section"
         };
 
-    private static string BuildLongFormNarration(string section, ProductionEventIntelligence? eventInfo)
-    {
-        var title = eventInfo?.ShortTitle ?? eventInfo?.Title ?? "this sky event";
-        var objects = string.Join(" and ", (eventInfo?.ResolvedObjectNames ?? eventInfo?.PrimaryObjects ?? []).Take(3));
-        if (string.IsNullOrWhiteSpace(objects)) objects = title;
-        var direction = eventInfo?.SkyDirectionHint ?? "the approved sky direction";
-        var window = eventInfo?.BestViewingWindowLocal ?? eventInfo?.LocalPeakTime ?? "the approved viewing window";
-        return section switch
+    private static string BuildLongFormNarration(string section, LongFormNarrationContext context)
+        => section switch
         {
-            "Hook" => $"{title} gives viewers a clear reason to look up, with the story, timing, and visuals tied to the approved event plan.",
-            "WhatIsHappening" => eventInfo?.ScientificContext ?? $"This guide explains what is happening with {objects} in simple viewer language.",
-            "WhyItMatters" => $"The event matters because it is observable from the selected region and has a clear viewing plan for {objects}.",
-            "WhereToLook" => $"Use the approved direction cue: look toward {direction}, then scan the wider sky around the target area.",
-            "WhenToLook" => $"Best viewing is {window}. Use that window before falling back to any single peak time.",
-            "HowToObserve" => string.Join(" ", eventInfo?.ViewerInstructions ?? ["Choose a safe open location, let your eyes adjust, and avoid bright lights."]),
-            "WhatYouWillSee" => $"Expect visuals specific to {objects}, not unrelated planet-pairing artwork or placeholder imagery.",
-            "InterestingFact" => eventInfo?.ScientificContext ?? $"The geometry behind {title} is what makes this astronomy event worth explaining.",
-            "ObservationTips" => "Check clouds, stay safe, and keep the observation simple so the sky remains the focus.",
-            "Recap" => $"Remember the plan: {objects}, {direction}, and {window}.",
-            "Action" => "Set a reminder, share the viewing window, and step outside only when conditions are safe.",
+            "Hook" => $"{context.ShortTitle} is the sky event to plan around, and this guide uses the current approved details for {context.EventType}, timing, direction, and source-backed viewing advice.",
+            "WhatIsHappening" => $"What is happening: {context.Title} centers on {context.PrimaryObjectsText}. {context.ScientificContextText}",
+            "WhyItMatters" => $"Why it matters: this event is relevant because the selected audience has a practical viewing plan, recognizable sky cues, and a reason to connect the science with tonight’s observation.",
+            "WhereToLook" => $"Where to look: use {context.SkyDirectionText} as the starting direction, then scan the surrounding sky slowly while matching the view to the generated scene plan.",
+            "WhenToLook" => $"When to watch: the best local viewing window is {context.BestViewingWindowText}. If a peak time is available, use {context.LocalPeakTimeText} as the center of the plan.",
+            "HowToObserve" => $"Viewing tips begin with safety and comfort. {context.ViewerInstructionsText}",
+            "WhatYouWillSee" => $"What you will see should be described from the event data: {context.PrimaryObjectsText}, the expected direction, the local timing, and the approved visual sequence.",
+            "InterestingFact" => $"A useful context note is that {context.ShortTitle} becomes easier to understand when the source notes, scene plan, and observing window all tell the same story.",
+            "ObservationTips" => $"Practical tips: check clouds, avoid bright lights, give your eyes time to adapt, and use the scene plan as a simple checklist rather than a script for a different event.",
+            "Recap" => $"Recap: {context.ShortTitle}; event type {context.EventType}; primary objects {context.PrimaryObjectsText}; direction {context.SkyDirectionText}; best window {context.BestViewingWindowText}.",
+            "Action" => "Closing CTA: save the time, share the viewing plan, check local conditions, and step outside when it is safe and comfortable.",
             _ => "This section continues the astronomy viewing guide using only the available event details."
         };
+
+    private LongFormNarrationContext BuildLongFormNarrationContext(VideoAssemblyGenerationRequest request)
+    {
+        var eventInfo = request.ProductionContext?.ProductionEventIntelligence;
+        var title = FirstNonEmpty(eventInfo?.Title, request.EventId, "this sky event");
+        var shortTitle = FirstNonEmpty(eventInfo?.ShortTitle, title);
+        var objects = (eventInfo?.ResolvedObjectNames ?? eventInfo?.PrimaryObjects ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Take(5).ToArray();
+        var primaryObjectsText = objects.Length == 0 ? shortTitle : string.Join(", ", objects);
+        var sourceNotes = (request.SourceNotes ?? Array.Empty<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Take(4).ToArray();
+        var purposeSources = LoadShortFormPurposeSources(request);
+        var scenePlanNotes = purposeSources
+            .Select(source => FirstNonEmpty(source.ViewerTakeaway, source.ScenePurpose, source.NarrationText, source.CaptionText))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(6)
+            .ToArray();
+
+        return new LongFormNarrationContext(
+            title,
+            shortTitle,
+            FirstNonEmpty(eventInfo?.EventType, "AstronomyEvent"),
+            primaryObjectsText,
+            FirstNonEmpty(eventInfo?.SkyDirectionHint, "the approved sky direction"),
+            FirstNonEmpty(eventInfo?.LocalPeakTime, "the approved peak time"),
+            FirstNonEmpty(eventInfo?.BestViewingWindowLocal, eventInfo?.PreferredViewingWindow, eventInfo?.LocalPeakTime, "the approved viewing window"),
+            FirstNonEmpty(eventInfo?.ScientificContext, "Explain the observable geometry and why the timing matters in plain language."),
+            string.Join(" ", eventInfo?.ViewerInstructions ?? ["Choose a safe open location, let your eyes adjust, and avoid bright lights."]),
+            sourceNotes,
+            scenePlanNotes);
     }
 
     private static string ResolveLongFormOnScreenText(string section, ProductionEventIntelligence? eventInfo = null)
