@@ -857,6 +857,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                     errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: GenericFallback cannot be used when required visual objects exist.");
 
                 ValidateRealisticObjectRenderingMetadata(doc.RootElement, Path.GetFileName(path), errors);
+                ValidatePerObjectVisualSourceMetadata(doc.RootElement, Path.GetFileName(path), required, errors);
 
                 foreach (var requiredObject in required)
                     if (!ContainsToken(specText, requiredObject))
@@ -886,7 +887,95 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var allowPrimitivePlaceholder = TryGetVisualMetadataBool(root, "allowPrimitivePlaceholder", out var allowValue) && allowValue;
         if (realisticObjectRequired && primitivePlaceholderUsed && !allowPrimitivePlaceholder)
             errors.Add($"Visual source validation failed for {fileName}: primitivePlaceholderUsed=true cannot pass when realisticObjectRequired=true and AllowPrimitivePlaceholder=false.");
+        if (!TryGetVisualMetadataString(root, "celestialObjectQuality", out var quality) || !quality.Equals("Realistic", StringComparison.OrdinalIgnoreCase))
+            errors.Add($"Visual source validation failed for {fileName}: celestialObjectQuality=Realistic metadata is required for realistic object rendering.");
+        if (!TryGetVisualMetadataString(root, "objectSourcePriority", out var sourcePriority)
+            || !sourcePriority.Contains("LocalAsset", StringComparison.OrdinalIgnoreCase)
+            || !sourcePriority.Contains("ScientificAsset", StringComparison.OrdinalIgnoreCase)
+            || !sourcePriority.Contains("AICinematic", StringComparison.OrdinalIgnoreCase))
+            errors.Add($"Visual source validation failed for {fileName}: objectSourcePriority must include LocalAsset, ScientificAsset, and AICinematic.");
+        if (ContainsPrimitiveOnlyRenderingCue(generatedRealisticPrompt))
+            errors.Add($"Visual source validation failed for {fileName}: generatedRealisticPrompt describes primitive circle/icon/dot placeholder rendering instead of a real celestial object.");
     }
+
+    private static void ValidatePerObjectVisualSourceMetadata(JsonElement root, string fileName, IReadOnlyList<string> requiredObjects, List<string> errors)
+    {
+        var factsText = TryGetVisualMetadataString(root, "objectVisualSource", out var objectVisualSource) ? objectVisualSource : string.Empty;
+        foreach (var requiredObject in requiredObjects.Where(value => !IsConceptualVisualRequirement(value) && IsCelestialVisualRequirement(value)))
+        {
+            var objectMetadata = FindDrawableObjectMetadata(root, requiredObject);
+            var objectSource = objectMetadata?.ObjectVisualSource ?? factsText;
+            var assetKey = objectMetadata?.AssetKey ?? (TryGetVisualMetadataString(root, "assetKey", out var rootAssetKey) ? rootAssetKey : string.Empty);
+            var generatedPrompt = objectMetadata?.GeneratedRealisticPrompt ?? (TryGetVisualMetadataString(root, "generatedRealisticPrompt", out var rootPrompt) ? rootPrompt : string.Empty);
+            var placeholderUsed = objectMetadata?.PrimitivePlaceholderUsed ?? (TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var rootPlaceholderUsed) && rootPlaceholderUsed);
+
+            if (string.IsNullOrWhiteSpace(objectSource) || !ContainsToken(objectSource, requiredObject))
+                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing objectVisualSource metadata.");
+            if (string.IsNullOrWhiteSpace(assetKey))
+                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing assetKey metadata.");
+            if (string.IsNullOrWhiteSpace(generatedPrompt))
+                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing generatedRealisticPrompt metadata.");
+            if (placeholderUsed)
+                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' has primitivePlaceholderUsed=true.");
+            if (ContainsPrimitiveOnlyRenderingCue(objectSource) || ContainsPrimitiveOnlyRenderingCue(assetKey) || ContainsPrimitiveOnlyRenderingCue(generatedPrompt))
+                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is rendered only as a primitive circle/icon/dot.");
+        }
+    }
+
+    private sealed record DrawableObjectMetadata(string ObjectVisualSource, string AssetKey, string GeneratedRealisticPrompt, bool PrimitivePlaceholderUsed);
+
+    private static DrawableObjectMetadata? FindDrawableObjectMetadata(JsonElement root, string requiredObject)
+    {
+        if (root.TryGetProperty("drawableVisualObjects", out var objects) && objects.ValueKind == JsonValueKind.Array)
+        {
+            var metadata = FindObjectMetadataInArray(objects, requiredObject);
+            if (metadata is not null) return metadata;
+        }
+
+        if (root.TryGetProperty("visualSourceResolution", out var resolution)
+            && resolution.TryGetProperty("objectVisualSources", out objects)
+            && objects.ValueKind == JsonValueKind.Array)
+            return FindObjectMetadataInArray(objects, requiredObject);
+
+        return null;
+    }
+
+    private static DrawableObjectMetadata? FindObjectMetadataInArray(JsonElement objects, string requiredObject)
+    {
+        foreach (var obj in objects.EnumerateArray())
+        {
+            var objectType = obj.TryGetProperty("objectType", out var typeProperty) && typeProperty.ValueKind == JsonValueKind.String ? typeProperty.GetString() ?? string.Empty : string.Empty;
+            if (!ContainsToken(objectType, requiredObject) && !ContainsToken(requiredObject, objectType)) continue;
+            var objectVisualSource = obj.TryGetProperty("objectVisualSource", out var sourceProperty) && sourceProperty.ValueKind == JsonValueKind.String ? sourceProperty.GetString() ?? string.Empty : string.Empty;
+            var assetKey = obj.TryGetProperty("assetKey", out var assetProperty) && assetProperty.ValueKind == JsonValueKind.String ? assetProperty.GetString() ?? string.Empty : string.Empty;
+            var prompt = obj.TryGetProperty("generatedRealisticPrompt", out var promptProperty) && promptProperty.ValueKind == JsonValueKind.String ? promptProperty.GetString() ?? string.Empty : string.Empty;
+            var primitive = obj.TryGetProperty("primitivePlaceholderUsed", out var primitiveProperty) && TryReadBool(primitiveProperty, out var primitiveValue) && primitiveValue;
+            return new DrawableObjectMetadata(objectVisualSource, assetKey, prompt, primitive);
+        }
+        return null;
+    }
+
+    private static bool IsCelestialVisualRequirement(string value)
+        => ContainsAny(value, "Moon", "Sun", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Comet", "Asteroid", "Meteor", "Nebula", "Galaxy", "Cluster", "Deep Sky");
+
+    private static bool ContainsAny(string value, params string[] terms)
+        => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsConceptualVisualRequirement(string value)
+        => value.Contains("glow", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("radiant", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("dark sky", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsPrimitiveOnlyRenderingCue(string? value)
+        => !string.IsNullOrWhiteSpace(value)
+            && (value.Contains("primitive circle", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("flat circle", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("generic dot", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("simple colored icon", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("symbolic placeholder", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("debug-only shape", StringComparison.OrdinalIgnoreCase));
 
     private static bool TryGetVisualMetadataString(JsonElement root, string propertyName, out string value)
     {
