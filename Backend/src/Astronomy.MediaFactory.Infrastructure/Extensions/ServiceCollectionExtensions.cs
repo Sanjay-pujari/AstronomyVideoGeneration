@@ -519,6 +519,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVisualSourceResolver, DefaultVisualSourceResolver>();
         services.AddScoped<IMediaEventStrategy, MeteorShowerStrategy>();
         services.AddScoped<IMediaEventStrategy, PlanetPairingStrategy>();
+        services.AddScoped<IMediaEventStrategy, PlanetGroupingStrategy>();
         services.AddScoped<IMediaEventStrategy, ConjunctionStrategy>();
         services.AddScoped<IMediaEventStrategy, NamedFullMoonStrategy>();
         services.AddScoped<IMediaEventStrategy, NewMoonStrategy>();

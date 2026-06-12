@@ -122,7 +122,7 @@ public sealed class QuestionScenePlannerTests
         => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), CreateStrategyResolver(), NullLogger<QuestionScenePlanner>.Instance);
 
     private static MediaEventStrategyResolver CreateStrategyResolver()
-        => new([new MeteorShowerStrategy(), new PlanetPairingStrategy(), new ConjunctionStrategy(), new NamedFullMoonStrategy(), new NewMoonStrategy(), new LunarEclipseStrategy(), new SolarEclipseStrategy(), new GenericAstronomyEventStrategy()]);
+        => new([new MeteorShowerStrategy(), new PlanetPairingStrategy(), new PlanetGroupingStrategy(), new ConjunctionStrategy(), new NamedFullMoonStrategy(), new NewMoonStrategy(), new LunarEclipseStrategy(), new SolarEclipseStrategy(), new GenericAstronomyEventStrategy()]);
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);

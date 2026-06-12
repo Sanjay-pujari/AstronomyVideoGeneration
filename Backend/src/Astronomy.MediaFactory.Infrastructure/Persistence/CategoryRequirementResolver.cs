@@ -22,6 +22,11 @@ public sealed class CategoryRequirementResolver : ICategoryRequirementResolver
                 "Skyfield + AstronomyEventTypeMaster + EventCatalog", "HybridStellariumAndAiVisuals", "AzureSpeech", "EventAlert",
                 ["eventType", "eventTime", "eventVisibilityWindow", "location", "rarityScore", "bestViewingDirection", "affectedObjects", "safetyInstructionsIfRequired"],
                 ["StellariumEventScene", "EventDiagram", "AiEventVisual", "ThumbnailCandidate"]),
+            ["PlanetGrouping"] = Build(
+                "PlanetGrouping", true, true, true, true, false, true, true, true,
+                "Skyfield + AstronomyEventTypeMaster + EventCatalog", "PlanetGroupingSceneStrategy", "AzureSpeech", "PlanetGroupingThumbnailStrategy",
+                ["eventType", "eventVisibilityWindow", "location", "bestViewingDirection", "primaryObjects", "secondaryObjects", "planetGroupingScanPath"],
+                ["PlanetGroupingSceneStrategy", "PlanetGroupingHeroStrategy", "PlanetGroupingThumbnailStrategy", "StellariumEventScene", "ThumbnailCandidate"]),
             ["CosmicStoryShort"] = Build(
                 "CosmicStoryShort", false, false, false, true, true, false, true, true,
                 "CelestialObjectMaster + AI Story Expansion", "AiGeneratedCinematicVisuals", "AzureSpeech", "PlanetCloseupOrCinematic",

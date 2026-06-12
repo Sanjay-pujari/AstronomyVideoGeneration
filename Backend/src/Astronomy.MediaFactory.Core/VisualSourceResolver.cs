@@ -155,24 +155,30 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
                 ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
-        if (IsPlanetPairingOrConjunction(eventType, strategyId, intelligence.Title))
+        if (IsPlanetPairingConjunctionOrGrouping(eventType, strategyId, intelligence.Title))
         {
             var objects = NormalizeList(intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects));
             var required = NormalizeList(requiredVisualObjects.Concat(objects));
-            var objectPhrase = string.Join(" and ", objects);
+            var objectPhrase = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? string.Join(", ", objects) : string.Join(" and ", objects);
             var textureGuidance = string.Join(" ", objects.Select(ResolvePlanetTextureGuidance));
-            var prompt = $"Computed astronomy scene for {objectPhrase}: render only the actual listed objects with labels matching their exact names; use real-looking planet textures, not generic colored circles. {textureGuidance} Show close-pairing/conjunction geometry, timing, and sky direction; do not add unrelated planets.";
+            var groupingGuidance = IsPlanetGrouping(eventType, strategyId, intelligence.Title)
+                ? "Use PlanetGroupingSceneStrategy: show the complete multi-planet arrangement, a guided scan path, timing, and sky direction; do not collapse it into a generic planet scene."
+                : "Show close-pairing/conjunction geometry, timing, and sky direction; do not add unrelated planets.";
+            var prompt = $"Computed astronomy scene for {objectPhrase}: render only the actual listed objects with labels matching their exact names; use real-looking planet textures, not generic colored circles. {textureGuidance} {groupingGuidance}";
             metadata["labelObjects"] = string.Join(", ", objects);
             metadata["visualSourceType"] = (required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene).ToString();
             metadata["assetKey"] = string.Join(", ", objects.Select(o => $"Planet.{o}"));
             metadata["generatedRealisticPrompt"] = prompt;
+            metadata["sceneStrategy"] = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? "PlanetGroupingSceneStrategy" : "PlanetPairingSceneStrategy";
+            metadata["heroStrategy"] = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? "PlanetGroupingHeroStrategy" : "PlanetPairingHeroStrategy";
+            metadata["thumbnailStrategy"] = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? "PlanetGroupingThumbnailStrategy" : "PlanetPairingThumbnailStrategy";
             return new(
                 required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene,
                 required,
                 objects.Select(o => $"Planet.{o}").ToArray(),
                 prompt,
                 GenericFallbackAllowed: false,
-                NormalizeList(required.Concat(objects).Concat(["real-looking planet textures", "close pairing", "labels match actual object names"])),
+                NormalizeList(required.Concat(objects).Concat(IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? ["real-looking planet textures", "planet grouping", "guided scan path", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
                 forbidden,
                 metadata,
                 PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
@@ -321,10 +327,15 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             || ContainsAny(strategyId, "NamedFullMoon", "FullMoon", "Full Moon")
             || ContainsAny(title, "Full Moon", "Blue Moon");
 
-    private static bool IsPlanetPairingOrConjunction(string eventType, string strategyId, string title)
-        => ContainsAny(eventType, "PlanetPairing", "Conjunction", "PlanetParade")
-            || ContainsAny(strategyId, "PlanetPairing", "Conjunction", "PlanetParade")
-            || ContainsAny(title, "close pairing", "pairing", "conjunction");
+    private static bool IsPlanetPairingConjunctionOrGrouping(string eventType, string strategyId, string title)
+        => ContainsAny(eventType, "PlanetPairing", "Conjunction", "PlanetParade", "PlanetGrouping", "PLANET_GROUPING")
+            || ContainsAny(strategyId, "PlanetPairing", "Conjunction", "PlanetParade", "PlanetGrouping")
+            || ContainsAny(title, "close pairing", "pairing", "conjunction", "planet grouping", "planet group");
+
+    private static bool IsPlanetGrouping(string eventType, string strategyId, string title)
+        => ContainsAny(eventType, "PlanetGrouping", "PLANET_GROUPING")
+            || ContainsAny(strategyId, "PlanetGrouping")
+            || ContainsAny(title, "planet grouping", "planet group");
 
     private static bool IsEclipse(string eventType, string strategyId, string title)
         => ContainsAny(eventType, "Eclipse", "SolarEclipse", "LunarEclipse", "Solar Eclipse", "Lunar Eclipse")
