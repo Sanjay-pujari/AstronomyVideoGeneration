@@ -1235,8 +1235,15 @@ app.MapPost("/api/content-planning/generate-plan", async (GenerateContentPlanReq
         return Results.BadRequest(new { message = ex.Message });
     }
 });
-app.MapPost("/api/content-planning/create-plan-from-event", async (CreatePlanFromEventRequest request, IContentPlanningService planning, CancellationToken ct) =>
+app.MapPost("/api/content-planning/create-plan-from-event", async (HttpRequest httpRequest, IContentPlanningService planning, ILogger<Program> logger, CancellationToken ct) =>
 {
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<CreatePlanFromEventRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError)
+    {
+        return requestBody.ErrorResult!;
+    }
+
+    var request = requestBody.Value!;
     try
     {
         return Results.Ok(await planning.CreatePlanFromEventAsync(request, ct));
@@ -1253,7 +1260,8 @@ app.MapPost("/api/content-planning/create-plan-from-event", async (CreatePlanFro
     {
         return Results.NotFound(new { message = ex.Message });
     }
-});
+})
+.Accepts<CreatePlanFromEventRequest>("application/json");
 app.MapPost("/api/content-planning/run-category-preparation", async (ManualCategoryPreparationRequest request, IManualCategoryPreparationOrchestrator orchestrator, CancellationToken ct) =>
 {
     var response = await orchestrator.RunAsync(request, ct);

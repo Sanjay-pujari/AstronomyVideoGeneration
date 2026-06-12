@@ -133,6 +133,68 @@ public sealed class JsonEndpointBodyReaderTests
         await app.StopAsync();
     }
 
+    [Fact]
+    public async Task CreatePlanFromEventEndpoint_ReturnsBadRequestForInvalidGuidBodyValue()
+    {
+        var calls = 0;
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+
+        var app = builder.Build();
+        app.MapPost("/api/content-planning/create-plan-from-event", async (HttpRequest httpRequest, ILogger<JsonEndpointBodyReaderTests> logger, CancellationToken ct) =>
+        {
+            var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<CreatePlanFromEventRequest>(httpRequest, "request", logger, ct);
+            if (requestBody.HasError)
+            {
+                return requestBody.ErrorResult!;
+            }
+
+            calls++;
+            return Results.Ok(requestBody.Value);
+        })
+        .Accepts<CreatePlanFromEventRequest>("application/json");
+
+        await app.StartAsync();
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            "/api/content-planning/create-plan-from-event",
+            new StringContent("""
+                {
+                  "astronomyEventIntelligenceId": "not-a-guid",
+                  "regionId": "IN-RJ-UDAIPUR",
+                  "language": "en",
+                  "manualValidation": true
+                }
+                """, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<Dictionary<string, object?>>();
+        Assert.Equal("Request body must be a single valid JSON object.", payload!["message"]?.ToString());
+        Assert.Equal("request", payload["parameter"]?.ToString());
+        Assert.Contains("astronomyEventIntelligenceId", payload["detail"]?.ToString());
+        Assert.Equal(0, calls);
+
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public void CreatePlanFromEventEndpoint_DeclaresJsonRequestBodyForOpenApi()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+
+        app.MapPost("/api/content-planning/create-plan-from-event", () => Results.Ok())
+            .Accepts<CreatePlanFromEventRequest>("application/json");
+
+        var dataSource = Assert.Single(((IEndpointRouteBuilder)app).DataSources);
+        var endpoint = Assert.Single(dataSource.Endpoints);
+        var acceptsMetadata = endpoint.Metadata.GetMetadata<IAcceptsMetadata>();
+
+        Assert.NotNull(acceptsMetadata);
+        Assert.Equal(typeof(CreatePlanFromEventRequest), acceptsMetadata.RequestType);
+        Assert.Contains("application/json", acceptsMetadata.ContentTypes);
+    }
+
 
     [Fact]
     public void PreviewAssetProductionEndpoint_DeclaresJsonRequestBodyForOpenApi()
