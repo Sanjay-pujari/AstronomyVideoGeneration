@@ -194,7 +194,20 @@ public sealed class EventProductionIntelligenceTests
         await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
         await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "Geminids MeteorShower scene plan with meteor streaks, radiant hint, dark sky, east to overhead direction, and best viewing window 2026-12-14 00:00–05:00 IST.");
         await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.enriched.json"), "Geminids enriched plan: bestViewingWindowLocal 2026-12-14 00:00–05:00 IST, radiant high after midnight, dark sky.");
-        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), "{\"title\":\"Geminids Meteor Shower Peak\",\"visual\":\"meteor streaks across a dark sky with radiant hint\",\"time\":\"2026-12-14 00:00–05:00 IST\"}");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "title":"Geminids Meteor Shower Peak",
+  "visual":"Geminids meteor streaks across a dark sky with radiant hint",
+  "time":"2026-12-14 00:00–05:00 IST",
+  "strategyValidationFacts":{
+    "visualSourceType":"Hybrid",
+    "generatedRealisticPrompt":"realistic meteor streaks from a radiant in a dark sky",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false",
+    "allowPrimitivePlaceholder":"false"
+  }
+}
+""");
         await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), "{\"checks\":[\"meteor streaks visible\",\"radiant hint visible\",\"dark sky readable\",\"no forbidden object leakage\"]}");
         await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Watch the Geminids from midnight to pre-dawn under a dark sky; meteors radiate from Gemini.");
         await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nGeminids meteor streaks are best from 00:00–05:00 IST.\n");
@@ -264,7 +277,13 @@ public sealed class EventProductionIntelligenceTests
   "viewerTakeaway":"Snow Moon Full Moon: what to watch.",
   "captionText":"Snow Moon Full Moon: what to watch.",
   "overlayText":"Snow Moon",
-  "resolver":{
+  "strategyValidationFacts":{
+    "visualSourceType":"Hybrid",
+    "assetKey":"Moon.FullMoon",
+    "generatedRealisticPrompt":"realistic full Moon texture with craters and maria",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false",
+    "allowPrimitivePlaceholder":"false",
     "eventShortTitle":"Snow Moon",
     "eventTitle":"Snow Moon Full Moon"
   },
@@ -322,6 +341,74 @@ public sealed class EventProductionIntelligenceTests
         Assert.True(validation.RootElement.GetProperty("titleFoundInOverlayText").GetBoolean());
         Assert.True(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
         Assert.True(validation.RootElement.GetProperty("titleFoundInReview").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ProductionQualityValidator_FailsPrimitivePlaceholderWhenRealisticObjectRequiredForPhase10()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-placeholder-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "NamedFullMoon scene plan for Snow Moon with Moon and viewing window 2026-02-01 18:00–23:00 UTC.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "viewerTakeaway":"Snow Moon Full Moon: what to watch.",
+  "captionText":"Snow Moon Full Moon: what to watch.",
+  "overlayText":["Snow Moon", "Moon"],
+  "strategyValidationFacts":{
+    "visualSourceType":"Hybrid",
+    "assetKey":"Moon.FullMoon",
+    "generatedRealisticPrompt":"primitive circle Moon placeholder",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"true",
+    "allowPrimitivePlaceholder":"false"
+  },
+  "backgroundPrompt":"Moon placeholder",
+  "accessibilityCues":["Moon is shown"]
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), "Snow Moon Moon visible");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Watch the Snow Moon during the evening viewing window.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nSnow Moon full Moon is visible from 18:00–23:00 UTC.\n");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "NamedFullMoon",
+            "Snow Moon Full Moon",
+            "Snow Moon",
+            DateTimeOffset.Parse("2026-02-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-02-01T18:00:00Z"),
+            "18:00 UTC",
+            "2026-02-01 18:00–23:00 UTC",
+            "eastern sky",
+            "Global",
+            ["Moon"],
+            [],
+            null,
+            "Low",
+            100m,
+            "Snow Moon Full Moon",
+            [],
+            ["Moon", "full moon glow"],
+            ["Use shortTitle metadata"],
+            [],
+            ["Venus", "Jupiter"],
+            RequiredVisualObjects: ["Moon"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new NamedFullMoonSceneValidationStrategy(),
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("primitivePlaceholderUsed=true", StringComparison.OrdinalIgnoreCase));
     }
 
 }

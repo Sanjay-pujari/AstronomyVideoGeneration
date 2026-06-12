@@ -856,6 +856,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 if (TryGetVisualSourceType(doc.RootElement, out var sourceType) && sourceType.Equals("GenericFallback", StringComparison.OrdinalIgnoreCase))
                     errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: GenericFallback cannot be used when required visual objects exist.");
 
+                ValidateRealisticObjectRenderingMetadata(doc.RootElement, Path.GetFileName(path), errors);
+
                 foreach (var requiredObject in required)
                     if (!ContainsToken(specText, requiredObject))
                         errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: required visual object '{requiredObject}' is missing from spec/metadata.");
@@ -865,6 +867,69 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 if (ContainsToken(ExtractSpecGeneratedText(doc.RootElement), forbidden))
                     errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: forbidden object name '{forbidden}' appears in generated spec content.");
         }
+    }
+
+    private static void ValidateRealisticObjectRenderingMetadata(JsonElement root, string fileName, List<string> errors)
+    {
+        if (!TryGetVisualMetadataString(root, "visualSourceType", out _))
+            errors.Add($"Visual source validation failed for {fileName}: visualSourceType metadata is required for realistic object rendering.");
+        var hasAssetKey = TryGetVisualMetadataString(root, "assetKey", out var assetKey);
+        var hasGeneratedPrompt = TryGetVisualMetadataString(root, "generatedRealisticPrompt", out var generatedRealisticPrompt);
+        if (!hasAssetKey && !hasGeneratedPrompt)
+            errors.Add($"Visual source validation failed for {fileName}: assetKey or generatedRealisticPrompt metadata is required for realistic object rendering.");
+        if (string.IsNullOrWhiteSpace(assetKey) && string.IsNullOrWhiteSpace(generatedRealisticPrompt))
+            errors.Add($"Visual source validation failed for {fileName}: assetKey or generatedRealisticPrompt metadata must be populated for realistic object rendering.");
+        if (!TryGetVisualMetadataBool(root, "realisticObjectRequired", out var realisticObjectRequired))
+            errors.Add($"Visual source validation failed for {fileName}: realisticObjectRequired metadata is required.");
+        if (!TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var primitivePlaceholderUsed))
+            errors.Add($"Visual source validation failed for {fileName}: primitivePlaceholderUsed metadata is required.");
+        var allowPrimitivePlaceholder = TryGetVisualMetadataBool(root, "allowPrimitivePlaceholder", out var allowValue) && allowValue;
+        if (realisticObjectRequired && primitivePlaceholderUsed && !allowPrimitivePlaceholder)
+            errors.Add($"Visual source validation failed for {fileName}: primitivePlaceholderUsed=true cannot pass when realisticObjectRequired=true and AllowPrimitivePlaceholder=false.");
+    }
+
+    private static bool TryGetVisualMetadataString(JsonElement root, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (root.TryGetProperty("visualSourceResolution", out var resolution)
+            && resolution.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String)
+        {
+            value = property.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(value);
+        }
+        if (root.TryGetProperty("strategyValidationFacts", out var facts)
+            && facts.TryGetProperty(propertyName, out property)
+            && property.ValueKind == JsonValueKind.String)
+        {
+            value = property.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(value);
+        }
+        return false;
+    }
+
+    private static bool TryGetVisualMetadataBool(JsonElement root, string propertyName, out bool value)
+    {
+        value = false;
+        if (root.TryGetProperty("visualSourceResolution", out var resolution)
+            && resolution.TryGetProperty(propertyName, out var property))
+            return TryReadBool(property, out value);
+        if (root.TryGetProperty("strategyValidationFacts", out var facts)
+            && facts.TryGetProperty(propertyName, out property))
+            return TryReadBool(property, out value);
+        return false;
+    }
+
+    private static bool TryReadBool(JsonElement property, out bool value)
+    {
+        value = false;
+        if (property.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            value = property.GetBoolean();
+            return true;
+        }
+        if (property.ValueKind == JsonValueKind.String && bool.TryParse(property.GetString(), out value)) return true;
+        return false;
     }
 
     private static bool TryGetVisualSourceType(JsonElement root, out string sourceType)
