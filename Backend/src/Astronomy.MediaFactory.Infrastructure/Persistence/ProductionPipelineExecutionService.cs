@@ -86,6 +86,13 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var phase in PhaseDefinitions())
         {
             if (phase.No < startPhaseNo || phase.No > endPhaseNo) continue;
+            if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
+            {
+                var skipped = await WritePhaseValidationAsync(context, phase.No, phase.Name, ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
+                phaseResults.Add(skipped);
+                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                continue;
+            }
             if (request.RetryFailedOnly && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, phase.Name, ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
@@ -114,8 +121,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var longScenesGenerated = DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long"))
             || DirectoryHasPng(Path.Combine(executionContext.SceneRoot!, "long"))
             || PreviousPhaseSucceeded(context, 9);
-        var success = errors.Count == 0 && (!phaseResults.Any() || phaseResults.All(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped));
-        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults);
+        var requestedOutputCompletion = BuildRequestedOutputCompletion(context, phaseResults);
+        var success = CalculatePipelineSuccess(context, phaseResults, errors);
+        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
     }
 
     private IReadOnlyList<(int No, string Name, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> Action)> PhaseDefinitions() =>
@@ -142,6 +150,56 @@ public sealed partial class ProductionPipelineExecutionService(
     ];
 
 
+    private const string OutputTypeNotRequestedReason = "Output type not requested";
+
+    private static bool IsPhaseRequiredForRequestedOutputs(ProductionPhaseContext context, int phaseNo)
+        => phaseNo switch
+        {
+            <= 10 => true,
+            11 => IsRequestedOutput(context, "HeroAsset"),
+            12 => IsRequestedOutput(context, "Thumbnail"),
+            13 or 15 or 17 => IsRequestedOutput(context, "ShortVideo"),
+            14 or 16 or 18 => IsRequestedOutput(context, "LongVideo"),
+            19 => true,
+            _ => true
+        };
+
+    private static bool IsRequestedOutput(ProductionPhaseContext context, string outputType)
+        => context.Request.RequestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
+
+    private static bool CalculatePipelineSuccess(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, IReadOnlyList<string> errors)
+    {
+        if (errors.Count > 0) return false;
+        foreach (var result in phaseResults)
+        {
+            if (result.Status == ProductionPhaseStatus.Failed) return false;
+            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase)) return false;
+            if (result.Status == ProductionPhaseStatus.Skipped && !IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, OutputTypeNotRequestedReason, StringComparison.OrdinalIgnoreCase)) return false;
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<RequestedOutputCompletion> BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
+        => new[]
+        {
+            BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [13, 15, 17]),
+            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [14, 16, 18]),
+            BuildRequestedOutputCompletion(context, phaseResults, "HeroAsset", [11]),
+            BuildRequestedOutputCompletion(context, phaseResults, "Thumbnail", [12])
+        };
+
+    private static RequestedOutputCompletion BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, string outputType, IReadOnlyList<int> requiredPhases)
+    {
+        var requested = IsRequestedOutput(context, outputType);
+        var related = phaseResults.Where(p => requiredPhases.Contains(p.PhaseNo)).ToArray();
+        var succeeded = related.Where(p => p.Status == ProductionPhaseStatus.Succeeded).Select(p => p.PhaseNo).ToArray();
+        var failed = related.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).ToArray();
+        var skipped = related.Where(p => p.Status == ProductionPhaseStatus.Skipped).Select(p => p.PhaseNo).ToArray();
+        var status = !requested ? "Skipped" : failed.Length > 0 ? "Failed" : requiredPhases.All(phaseNo => succeeded.Contains(phaseNo) || PreviousPhaseSucceeded(context, phaseNo)) ? "Succeeded" : "Failed";
+        return new RequestedOutputCompletion(outputType, requested, status, requested ? requiredPhases : Array.Empty<int>(), succeeded, failed, skipped);
+    }
+
     private static bool PreviousPhaseSucceeded(ProductionPhaseContext context, int phaseNo)
     {
         var path = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
@@ -166,11 +224,44 @@ public sealed partial class ProductionPipelineExecutionService(
             _ => true
         };
 
+    private static void ValidatePhaseInputContract(ProductionPhaseContext context, int phaseNo)
+    {
+        var missing = new List<string>();
+        if (context.Request.PlanId == Guid.Empty) missing.Add("planId");
+        if (string.IsNullOrWhiteSpace(context.Request.Title)) missing.Add("title");
+        if (string.IsNullOrWhiteSpace(context.Request.ShortTitle)) missing.Add("shortTitle");
+        if (string.IsNullOrWhiteSpace(context.Request.EventType)) missing.Add("eventType");
+        if (context.Request.PrimaryObjects.Count == 0) missing.Add("primaryObjects");
+        if (context.Request.RequestedOutputs.Count == 0) missing.Add("requestedOutputs");
+        if (string.IsNullOrWhiteSpace(context.Request.RegionId)) missing.Add("regionId");
+        if (string.IsNullOrWhiteSpace(context.Request.Language)) missing.Add("language");
+        if (context.ProductionEventIntelligence is null) missing.Add("productionEventIntelligence");
+        if (context.MediaEventStrategy is null) missing.Add("mediaEventStrategy");
+        if (missing.Count > 0)
+            throw new InvalidOperationException($"Phase {phaseNo} input contract is invalid for current event lock: missing {string.Join(", ", missing)}.");
+    }
+
+    private static object BuildCurrentEventLock(ProductionPhaseContext context)
+        => new
+        {
+            context.Request.PlanId,
+            context.Request.Title,
+            context.Request.ShortTitle,
+            context.Request.EventType,
+            context.Request.PrimaryObjects,
+            context.Request.SecondaryObjects,
+            timing = new { context.Request.StartUtc, context.Request.PeakUtc, context.Request.EndUtc, context.Request.ScheduledUtc, context.Request.LocalPeakTime, context.Request.BestViewingWindowLocal },
+            direction = context.Request.SkyDirectionHint,
+            strategy = context.Request.ContentStrategy ?? context.MediaEventStrategy?.EventType,
+            context.Request.RequestedOutputs
+        };
+
     private async Task<ProductionPhaseResult> ExecutePhaseAsync(ProductionPhaseContext context, int phaseNo, string phaseName, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> action, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow;
         try
         {
+            if (phaseNo <= 14) ValidatePhaseInputContract(context, phaseNo);
             var outputs = (await action(context, cancellationToken)).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var missing = outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
@@ -1143,7 +1234,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         await WriteScenesManifestsAsync(context.OutputRoot, cancellationToken);
         var copied = await MaterializePlanFolderAsync(context.Request, context.EventId, context.OutputRoot, [], cancellationToken);
-        var validation = await qualityValidator.ValidateFinalOutputAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken);
+        var validation = await qualityValidator.ValidateFinalOutputAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken, context.Request.RequestedOutputs);
         if (!validation.IsValid) throw new InvalidOperationException("Final validation failed: " + string.Join("; ", validation.Errors));
         return copied.Concat([Path.Combine(context.OutputRoot, "phase-manifest.json")]).ToArray();
     }
@@ -1364,7 +1455,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var finished = DateTimeOffset.UtcNow;
         var validationPath = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
-        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry);
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry, reason);
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
             : null;
@@ -1403,7 +1494,8 @@ public sealed partial class ProductionPipelineExecutionService(
             wordsPerMinute = phase14NarrationDiagnostics?.WordsPerMinute,
             expansionApplied = phase14NarrationDiagnostics?.ExpansionApplied,
             finalValidationPassed = phase14NarrationDiagnostics?.FinalValidationPassed,
-            currentEventLock = phase12ThumbnailDiagnostics?.CurrentEventLock,
+            currentEventLock = BuildCurrentEventLock(context),
+            thumbnailCurrentEventLock = phase12ThumbnailDiagnostics?.CurrentEventLock,
             thumbnailRequestTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestTitle,
             thumbnailRequestShortTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestShortTitle,
             thumbnailEventType = phase12ThumbnailDiagnostics?.ThumbnailEventType,
@@ -1746,7 +1838,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return json;
     }
 
-    private static ProductionPipelineExecutionResult BuildResult(bool success, bool dryRun, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult>? phaseResults = null)
+    private static ProductionPipelineExecutionResult BuildResult(bool success, bool dryRun, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult>? phaseResults = null, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion = null)
     {
         var lastCompletedPhaseNo = phaseResults?
             .Where(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
@@ -1759,7 +1851,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .Select(p => (int?)p.PhaseNo)
             .FirstOrDefault();
 
-        return new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo);
+        return new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, RequestedOutputCompletion: requestedOutputCompletion);
     }
 
     private static string GetSceneApprovalNormalizedRoot(string outputRoot) => Path.Combine(outputRoot, "scene-approval-v3");

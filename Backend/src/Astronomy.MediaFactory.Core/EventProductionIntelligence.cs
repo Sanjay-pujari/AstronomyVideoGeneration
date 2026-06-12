@@ -149,5 +149,6 @@ public interface IProductionPipelineQualityValidator
     Task<ProductionValidationResult> ValidateFinalOutputAsync(
         ProductionEventIntelligence intelligence,
         string outputRoot,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? requestedOutputs = null);
 }

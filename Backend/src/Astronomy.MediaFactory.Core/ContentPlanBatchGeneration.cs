@@ -80,7 +80,8 @@ public sealed record BatchGenerateFromPlansResponse(
     string? ArchivePath = null,
     IReadOnlyList<string>? DeletedOutputFolders = null,
     int? StartPhaseNo = null,
-    int? EndPhaseNo = null);
+    int? EndPhaseNo = null,
+    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -312,7 +313,8 @@ public sealed record ProductionPhaseResult(
     string? ValidationReportPath,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    bool CanRetry);
+    bool CanRetry,
+    string? Reason = null);
 
 public interface IProductionPhase
 {
@@ -354,7 +356,8 @@ public sealed record ProductionPipelineExecutionResult(
     string? ArchivePath = null,
     IReadOnlyList<string>? DeletedOutputFolders = null,
     int? StartPhaseNo = null,
-    int? EndPhaseNo = null);
+    int? EndPhaseNo = null,
+    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null);
 
 public sealed record ContentPlanProductionExecutionResult(
     bool Success,
@@ -392,7 +395,18 @@ public sealed record ContentPlanProductionExecutionResult(
     string? ArchivePath = null,
     IReadOnlyList<string>? DeletedOutputFolders = null,
     int? StartPhaseNo = null,
-    int? EndPhaseNo = null);
+    int? EndPhaseNo = null,
+    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null);
+
+
+public sealed record RequestedOutputCompletion(
+    string OutputType,
+    bool Requested,
+    string Status,
+    IReadOnlyList<int> RequiredPhases,
+    IReadOnlyList<int> SucceededPhases,
+    IReadOnlyList<int> FailedPhases,
+    IReadOnlyList<int> SkippedPhases);
 
 public interface IContentPlanProductionRequestMapper
 {

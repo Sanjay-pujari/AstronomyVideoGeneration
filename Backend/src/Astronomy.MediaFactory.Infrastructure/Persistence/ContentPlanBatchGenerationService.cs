@@ -131,7 +131,8 @@ public sealed class ContentPlanBatchGenerationService(
                 ArchivePath: execution.ArchivePath,
                 DeletedOutputFolders: execution.DeletedOutputFolders,
                 StartPhaseNo: execution.StartPhaseNo,
-                EndPhaseNo: execution.EndPhaseNo);
+                EndPhaseNo: execution.EndPhaseNo,
+                RequestedOutputCompletion: execution.RequestedOutputCompletion);
         }
 
         logger.LogInformation("Using placeholder planning pipeline");
