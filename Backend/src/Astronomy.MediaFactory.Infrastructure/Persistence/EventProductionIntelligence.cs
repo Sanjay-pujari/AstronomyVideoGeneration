@@ -584,8 +584,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             if (ContainsToken(text, stale)) errors.Add($"Output contains stale Golden Pilot term '{stale}'.");
         if (strategyDefinition is null)
         {
-            foreach (var forbidden in intelligence.ForbiddenTerms.Where(f => !string.IsNullOrWhiteSpace(f)))
-                if (ContainsToken(text, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
+            var outputText = ReadOutputBearingValidationText(root);
+            foreach (var forbidden in intelligence.ForbiddenTerms.Concat(intelligence.ForbiddenObjectNames ?? []).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase))
+                if (ContainsToken(outputText, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
         }
     }
 
@@ -701,7 +702,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         }
 
         foreach (Match match in TokenMatches(text, term))
-            yield return new ForbiddenLeakageHit(term, NormalizePath(file), "text", BuildSnippet(text, match.Index, match.Length));
+            yield return new ForbiddenLeakageHit(term, NormalizePath(file), "text", BuildSnippet(text, match.Index, match.Length), NormalizePath(file), "OutputText");
     }
 
     private static JsonDocument? TryParseJson(string text)
@@ -734,10 +735,11 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 }
                 break;
             case JsonValueKind.String:
-                if (!parentIsGeneratedContent && !IsGeneratedContentField(LastJsonPathSegment(field))) yield break;
+                var role = ClassifyForbiddenTermRole(field, parentIsGeneratedContent);
+                if (role is null) yield break;
                 var value = element.GetString() ?? string.Empty;
                 foreach (Match match in TokenMatches(value, term))
-                    yield return new ForbiddenLeakageHit(term, NormalizePath(file), field, BuildSnippet(value, match.Index, match.Length));
+                    yield return new ForbiddenLeakageHit(term, NormalizePath(file), field, BuildSnippet(value, match.Index, match.Length), NormalizePath(file), role);
                 break;
         }
     }
@@ -753,22 +755,27 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     }
 
     private static bool IsGeneratedContentField(string propertyName)
-        => propertyName.Equals("title", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("subtitle", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("narration", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("narrationText", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("text", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("overlayText", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("prompt", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("purpose", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("description", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("scenePurpose", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("sceneText", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("hook", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("cta", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("script", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("content", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("manifestContent", StringComparison.OrdinalIgnoreCase);
+        => IsOutputTextField(propertyName) || IsDrawableObjectField(propertyName) || IsRenderedReviewField(propertyName) || IsOcrField(propertyName);
+
+    private static bool IsOutputTextField(string propertyName)
+        => propertyName.Equals("captionText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("viewerTakeaway", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("overlayText", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDrawableObjectField(string propertyName)
+        => propertyName.Equals("label", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("labels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("requiredDrawableObjects", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsRenderedReviewField(string propertyName)
+        => propertyName.Equals("renderedLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("detectedLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("sceneLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("reviewLabels", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOcrField(string propertyName)
+        => propertyName.Equals("ocrText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("ocr", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsForbiddenLeakageMetadataField(string propertyName)
         => propertyName.Equals("forbiddenTermsChecked", StringComparison.OrdinalIgnoreCase)
@@ -779,7 +786,24 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             || propertyName.Equals("validationRules", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("checks", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("ruleDescriptions", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("forbiddenLeakageHits", StringComparison.OrdinalIgnoreCase);
+            || propertyName.Equals("forbiddenLeakageHits", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenVisualObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("validationForbiddenTerms", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("titleAliasesRaw", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("titleCandidates", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("resolverConfiguration", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("debug", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
+
+    private static string? ClassifyForbiddenTermRole(string field, bool parentIsGeneratedContent)
+    {
+        var segment = LastJsonPathSegment(field);
+        if (!parentIsGeneratedContent && !IsGeneratedContentField(segment)) return null;
+        if (IsDrawableObjectField(segment) || field.Contains("drawableVisualObjects", StringComparison.OrdinalIgnoreCase) || field.Contains("requiredDrawableObjects", StringComparison.OrdinalIgnoreCase)) return "DrawableObject";
+        if (IsOcrField(segment)) return "OutputText";
+        if (IsRenderedReviewField(segment)) return "DrawableObject";
+        return "OutputText";
+    }
 
     private static MatchCollection TokenMatches(string haystack, string needle)
     {
@@ -802,7 +826,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         return (start > 0 ? "…" : string.Empty) + snippet + (end < text.Length ? "…" : string.Empty);
     }
 
-    private sealed record ForbiddenLeakageHit(string Term, string File, string Field, string Snippet);
+    private sealed record ForbiddenLeakageHit(string Term, string File, string Field, string Snippet, string ForbiddenTermSource, string ForbiddenTermRole);
 
     private static void ValidateScenePlan(ProductionEventIntelligence intelligence, string eventWorkingRoot, List<string> warnings, List<string> errors)
     {
@@ -904,9 +928,13 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 ValidatePerObjectVisualSourceMetadata(doc.RootElement, reviewDoc?.RootElement, fileName, required, errors);
 
                 var specAndReviewText = json + "\n" + (File.Exists(reviewPath) ? File.ReadAllText(reviewPath) : string.Empty);
+                var scenePurpose = ResolveScenePurpose(doc.RootElement, fileName);
                 foreach (var requiredObject in required.Where(value => !IsConceptualVisualRequirement(value)))
-                    if (!ContainsToken(specAndReviewText, requiredObject))
+                {
+                    if (ShouldSkipSceneRequiredObjectValidation(context.Intelligence, scenePurpose, requiredObject)) continue;
+                    if (!TryMatchRequiredObjectAlias(context.Intelligence, specAndReviewText, requiredObject, out _))
                         errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing from current spec/review metadata.");
+                }
             }
 
             foreach (var forbidden in context.Intelligence.ForbiddenObjectNames ?? [])
@@ -943,6 +971,72 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' has realisticObjectRequired=true and primitivePlaceholderUsed=true without assetKey, objectVisualSource, or renderedAssetPath.");
         }
     }
+
+    private static string ResolveScenePurpose(JsonElement root, string fileName)
+    {
+        foreach (var propertyName in new[] { "scenePurpose", "purpose", "questionType", "role" })
+        {
+            foreach (var fragment in CollectJsonPropertyFragments(root, [propertyName]))
+            {
+                var text = JsonTextValue(fragment.Value);
+                if (!string.IsNullOrWhiteSpace(text)) return text;
+            }
+        }
+        var lower = fileName.ToLowerInvariant();
+        if (lower.Contains("what", StringComparison.Ordinal)) return "WHAT";
+        if (lower.Contains("where", StringComparison.Ordinal)) return "WHERE";
+        if (lower.Contains("when", StringComparison.Ordinal)) return "WHEN";
+        if (lower.Contains("how", StringComparison.Ordinal)) return "HOW";
+        if (lower.Contains("why", StringComparison.Ordinal)) return "WHY";
+        if (lower.Contains("action", StringComparison.Ordinal)) return "ACTION";
+        return string.Empty;
+    }
+
+    private static bool ShouldSkipSceneRequiredObjectValidation(ProductionEventIntelligence intelligence, string scenePurpose, string requiredObject)
+    {
+        if (!intelligence.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!IsMeteorRequiredObject(requiredObject)) return false;
+        if (string.IsNullOrWhiteSpace(scenePurpose)) return false;
+        return ContainsToken(scenePurpose, "where")
+            || ContainsToken(scenePurpose, "direction")
+            || ContainsToken(scenePurpose, "radiant")
+            || ContainsToken(scenePurpose, "when")
+            || ContainsToken(scenePurpose, "timing")
+            || ContainsToken(scenePurpose, "how")
+            || ContainsToken(scenePurpose, "tips")
+            || ContainsToken(scenePurpose, "why")
+            || ContainsToken(scenePurpose, "moon")
+            || ContainsToken(scenePurpose, "action")
+            || ContainsToken(scenePurpose, "cta");
+    }
+
+    private static bool TryMatchRequiredObjectAlias(ProductionEventIntelligence intelligence, string text, string requiredObject, out string matchedAlias)
+    {
+        foreach (var alias in RequiredObjectAliases(intelligence, requiredObject))
+        {
+            if (!ContainsToken(text, alias)) continue;
+            matchedAlias = alias;
+            return true;
+        }
+        matchedAlias = string.Empty;
+        return false;
+    }
+
+    private static bool RequiredObjectNameMatches(string value, string requiredObject)
+        => RequiredObjectAliases(null, requiredObject).Any(alias => ContainsToken(value, alias) || ContainsToken(alias, value));
+
+    private static IReadOnlyList<string> RequiredObjectAliases(ProductionEventIntelligence? intelligence, string requiredObject)
+    {
+        if ((intelligence?.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true || IsMeteorRequiredObject(requiredObject))
+            && IsMeteorRequiredObject(requiredObject))
+        {
+            return [requiredObject, "meteor", "meteors", "meteor streaks", "shower", "radiant", "meteor trails"];
+        }
+        return [requiredObject];
+    }
+
+    private static bool IsMeteorRequiredObject(string requiredObject)
+        => ContainsToken(requiredObject, "meteor") || ContainsToken(requiredObject, "meteors");
 
     private static bool IsConceptualVisualRequirement(string value)
         => value.Contains("streak", StringComparison.OrdinalIgnoreCase)
@@ -1005,7 +1099,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             if (obj.ValueKind != JsonValueKind.Object) continue;
             var objectType = ReadStringProperty(obj, "objectType");
             if (string.IsNullOrWhiteSpace(objectType)) objectType = ReadStringProperty(obj, "name");
-            if (!string.IsNullOrWhiteSpace(objectType) && !ContainsToken(objectType, requiredObject) && !ContainsToken(requiredObject, objectType)) continue;
+            if (string.IsNullOrWhiteSpace(objectType)) objectType = ReadStringProperty(obj, "label");
+            if (!string.IsNullOrWhiteSpace(objectType) && !RequiredObjectNameMatches(objectType, requiredObject)) continue;
             var objectVisualSource = ReadStringProperty(obj, "objectVisualSource");
             var assetKey = ReadStringProperty(obj, "assetKey");
             var prompt = ReadStringProperty(obj, "generatedRealisticPrompt");
@@ -1100,10 +1195,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     private static string ExtractSpecGeneratedText(JsonElement root)
     {
         var parts = new List<string>();
-        foreach (var propertyName in new[] { "backgroundPrompt", "overlayText", "programmaticLayers", "accessibilityCues", "drawableVisualObjects" })
-        {
-            if (root.TryGetProperty(propertyName, out var property)) parts.Add(property.ToString());
-        }
+        CollectOutputBearingJsonText(root, string.Empty, parts, false);
         return string.Join(' ', parts);
     }
 
@@ -1717,7 +1809,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 false,
                 File.Exists(longFinalPath),
                 File.Exists(shortFinalPath),
-                string.Empty);
+                string.Empty,
+                string.Empty,
+                []);
         }
 
         var root = doc.RootElement;
@@ -1736,6 +1830,10 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var objectMetadata = requiredObjects.Select(required => FindDrawableObjectMetadata(root, required) ?? BuildRootObjectMetadata(root)).FirstOrDefault(value => value is not null) ?? BuildRootObjectMetadata(root);
+        var scenePurpose = ResolveScenePurpose(root, Path.GetFileName(specFile));
+        var requiredObjectDiagnostics = requiredObjects
+            .Select(required => BuildRequiredObjectDiagnostic(intelligence, root.GetRawText() + "\n" + (reviewDoc is null ? string.Empty : reviewDoc.RootElement.GetRawText()), scenePurpose, required, specFile))
+            .ToArray();
         var objectVisualSource = objectMetadata?.ObjectVisualSource ?? (TryGetVisualMetadataString(root, "objectVisualSource", out var source) ? source : string.Empty);
         var assetKey = objectMetadata?.AssetKey ?? (TryGetVisualMetadataString(root, "assetKey", out var resolvedAssetKey) ? resolvedAssetKey : string.Empty);
         var renderedAssetPath = objectMetadata?.RenderedAssetPath ?? (TryGetVisualMetadataString(root, "renderedAssetPath", out var rendered) ? rendered : string.Empty);
@@ -1756,7 +1854,26 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             visualValidationPassed,
             File.Exists(longFinalPath),
             File.Exists(shortFinalPath),
-            fragment);
+            fragment,
+            scenePurpose,
+            requiredObjectDiagnostics);
+    }
+
+    private static RequiredObjectValidationDiagnostic BuildRequiredObjectDiagnostic(ProductionEventIntelligence intelligence, string text, string scenePurpose, string requiredObject, string specFile)
+    {
+        if (ShouldSkipSceneRequiredObjectValidation(intelligence, scenePurpose, requiredObject))
+        {
+            return new RequiredObjectValidationDiagnostic(
+                requiredObject,
+                null,
+                null,
+                scenePurpose,
+                $"Scene purpose '{scenePurpose}' may emphasize timing, direction, viewing tips, context, or CTA instead of repeating the meteor object.");
+        }
+
+        return TryMatchRequiredObjectAlias(intelligence, text, requiredObject, out var alias)
+            ? new RequiredObjectValidationDiagnostic(requiredObject, alias, NormalizePath(specFile), scenePurpose, null)
+            : new RequiredObjectValidationDiagnostic(requiredObject, null, null, scenePurpose, null);
     }
 
     private static IEnumerable<string> CollectRequiredVisualObjects(JsonElement root)
@@ -1799,6 +1916,44 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         => Directory.Exists(root)
             ? string.Join('\n', EnumerateFinalValidationScanFiles(root).Take(300).Select(File.ReadAllText))
             : string.Empty;
+
+    private static string ReadOutputBearingValidationText(string root)
+    {
+        if (!Directory.Exists(root)) return string.Empty;
+        var values = new List<string>();
+        foreach (var file in EnumerateCurrentRunSceneInfographicSpecFiles(ResolveCurrentRunDirectory(root, "scene-approval-v3")))
+        {
+            if (!File.Exists(file)) continue;
+            using var doc = TryParseJson(File.ReadAllText(file));
+            if (doc is not null) CollectOutputBearingJsonText(doc.RootElement, string.Empty, values, false);
+            var reviewPath = Path.Combine(Path.GetDirectoryName(file)!, Path.GetFileName(file).Replace("-infographic-spec.json", "-review.json", StringComparison.OrdinalIgnoreCase));
+            if (!File.Exists(reviewPath)) continue;
+            using var reviewDoc = TryParseJson(File.ReadAllText(reviewPath));
+            if (reviewDoc is not null) CollectOutputBearingJsonText(reviewDoc.RootElement, string.Empty, values, false);
+        }
+        return string.Join('\n', values);
+    }
+
+    private static void CollectOutputBearingJsonText(JsonElement element, string propertyName, List<string> values, bool parentIsOutputBearing)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (IsForbiddenLeakageMetadataField(property.Name)) continue;
+                    CollectOutputBearingJsonText(property.Value, property.Name, values, parentIsOutputBearing || IsGeneratedContentField(property.Name));
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    CollectOutputBearingJsonText(item, propertyName, values, parentIsOutputBearing || IsGeneratedContentField(propertyName));
+                break;
+            case JsonValueKind.String:
+                if (parentIsOutputBearing || IsGeneratedContentField(propertyName)) values.Add(element.GetString() ?? string.Empty);
+                break;
+        }
+    }
 
     private static string ReadAllText(string root)
     {
@@ -2014,5 +2169,14 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         bool VisualValidationPassed,
         bool LongFinalImageExists,
         bool ShortFinalImageExists,
-        string JsonFragmentLoaded);
+        string JsonFragmentLoaded,
+        string ScenePurpose,
+        IReadOnlyList<RequiredObjectValidationDiagnostic> RequiredObjectDiagnostics);
+
+    private sealed record RequiredObjectValidationDiagnostic(
+        string RequiredObject,
+        string? RequiredObjectMatchedAlias,
+        string? RequiredObjectMatchedSource,
+        string ScenePurpose,
+        string? RequiredObjectValidationSkippedBecause);
 }

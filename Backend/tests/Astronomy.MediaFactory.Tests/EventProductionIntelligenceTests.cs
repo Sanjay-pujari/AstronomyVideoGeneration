@@ -199,6 +199,9 @@ public sealed class EventProductionIntelligenceTests
   "title":"Geminids Meteor Shower Peak",
   "visual":"Geminids meteor streaks across a dark sky with radiant hint",
   "time":"2026-12-14 00:00–05:00 IST",
+  "forbiddenVisualObjects":["Venus","Jupiter"],
+  "validationForbiddenTerms":["conjunction"],
+  "resolverConfiguration":"avoid unrelated planets like Venus and Jupiter",
   "strategyValidationFacts":{
     "visualSourceType":"Hybrid",
     "assetKey":"Meteor.RealisticStreaks",
@@ -661,6 +664,130 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
         Assert.Empty(result.Errors);
+    }
+
+
+    [Fact]
+    public async Task ProductionQualityValidator_FailsGeminidsForbiddenTermInOverlayOutput()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-geminids-forbidden-overlay-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "Geminids MeteorShower scene plan with meteor streaks, radiant hint, dark sky, and best viewing window 2026-12-14 00:00–05:00 IST.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "viewerTakeaway":"Geminids meteor shower peak.",
+  "captionText":"Geminids meteor streaks from the radiant.",
+  "overlayText":["Geminids", "Venus"],
+  "visualSourceResolution":{
+    "requiredDrawableObjects":["meteor streaks"],
+    "assetKey":"Meteor.RealisticStreaks",
+    "objectVisualSource":"meteor streaks:AICinematic realistic meteor streaks",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false"
+  }
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), """
+{ "renderedLabels":["meteor streaks","radiant","dark sky"] }
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Watch the Geminids from midnight to pre-dawn under a dark sky; meteors radiate from Gemini.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nGeminids meteor streaks are best from 00:00–05:00 IST.\n");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy", "MeteorShower", "Geminids Meteor Shower Peak", "Geminids",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"), DateTimeOffset.Parse("2026-12-14T06:00:00Z"),
+            "11:30 +05:30", "2026-12-14 00:00–05:00 IST", "east to overhead", "India",
+            ["Geminids"], [], null, "Low", 10m, "Geminids Meteor Shower Peak", [], ["meteor streaks", "radiant hint", "dark sky"], [], [], ["Venus", "Jupiter"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"], RequiredVisualObjects: ["Meteors"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new MeteorShowerSceneValidationStrategy(),
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("Venus", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ProductionQualityValidator_AcceptsMeteorRequiredObjectAliasesAndPurposeAwareScenes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-geminids-aliases-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        for (var i = 1; i <= 2; i++)
+        {
+            await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", $"scene-{i:000}-final.png"), "fake");
+            await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", $"scene-{i:000}-final.png"), "fake");
+        }
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "Geminids MeteorShower scene plan with meteor streaks, radiant hint, dark sky, and best viewing window 2026-12-14 00:00–05:00 IST.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "scenePurpose":"WHAT",
+  "viewerTakeaway":"Geminids shower peaks tonight.",
+  "captionText":"Meteor streaks radiate from Gemini.",
+  "overlayText":["Geminids", "meteor streaks"],
+  "visualSourceResolution":{
+    "requiredDrawableObjects":["meteor streaks"],
+    "assetKey":"Meteor.RealisticStreaks",
+    "objectVisualSource":"meteor streaks:AICinematic realistic meteor streaks",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false"
+  }
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), """
+{ "renderedLabels":["meteor streaks","radiant","dark sky"] }
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-002-infographic-spec.json"), """
+{
+  "scenePurpose":"WHEN",
+  "viewerTakeaway":"Best viewing window is 2026-12-14 00:00–05:00 IST.",
+  "captionText":"Geminids viewing is best after midnight under a dark sky.",
+  "overlayText":["Geminids", "00:00–05:00 IST"],
+  "visualSourceResolution":{
+    "assetKey":"Sky.Dark",
+    "objectVisualSource":"dark sky:AICinematic",
+    "realisticObjectRequired":"false",
+    "primitivePlaceholderUsed":"false"
+  }
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-002-review.json"), """
+{ "renderedLabels":["dark sky","radiant direction"] }
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Watch the Geminids from midnight to pre-dawn under a dark sky; meteors radiate from Gemini.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nGeminids meteor streaks are best from 00:00–05:00 IST.\n");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy", "MeteorShower", "Geminids Meteor Shower Peak", "Geminids",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"), DateTimeOffset.Parse("2026-12-14T06:00:00Z"),
+            "11:30 +05:30", "2026-12-14 00:00–05:00 IST", "east to overhead", "India",
+            ["Geminids"], [], null, "Low", 10m, "Geminids Meteor Shower Peak", [], ["meteor streaks", "radiant hint", "dark sky"], [], [], ["Venus", "Jupiter"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"], RequiredVisualObjects: ["Meteors"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new MeteorShowerSceneValidationStrategy(),
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        using var validation = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "production-quality-validation-before-assembly.json")));
+        var diagnosticsText = validation.RootElement.GetProperty("phase10VisualSourceInputDiagnostics").GetRawText();
+        Assert.Contains("requiredObjectMatchedAlias", diagnosticsText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("meteor streaks", diagnosticsText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("requiredObjectValidationSkippedBecause", diagnosticsText, StringComparison.OrdinalIgnoreCase);
     }
 
 }
