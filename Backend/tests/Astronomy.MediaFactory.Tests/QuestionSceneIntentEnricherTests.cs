@@ -277,6 +277,47 @@ public sealed class QuestionSceneIntentEnricherTests
         Assert.DoesNotContain("venus", enrichedText.ToLowerInvariant());
     }
 
+    [Fact]
+    public async Task EnrichQuestionScenePlanAsync_InjectsPlanetGroupingLockVisualIntents()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteQuestionDrivenScenePlanAsync(workingDirectory, BuildSourcePlan());
+        var enricher = CreateEnricher(workingDirectory);
+
+        var result = await enricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: false,
+            ProductionContext: BuildProductionContext(BuildPlanetGroupingLockIntelligence())), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        var outputPath = Assert.Single(result.GeneratedFiles);
+        var savedJson = await File.ReadAllTextAsync(outputPath);
+        using var document = JsonDocument.Parse(savedJson);
+        var enrichedText = string.Join(" ", result.EnrichedScenePlan.Scenes.SelectMany(scene => new[]
+        {
+            scene.VisualIntent,
+            scene.ImagePromptIntent,
+            scene.OverlayIntent
+        }));
+
+        Assert.Equal("PLANET_GROUPING", result.EnrichedScenePlan.Diagnostics?.StrategyId);
+        Assert.Contains("planet grouping", enrichedText.ToLowerInvariant());
+        Assert.Contains("guided scan path", enrichedText.ToLowerInvariant());
+        Assert.Contains("one viewing region", enrichedText.ToLowerInvariant());
+        Assert.Contains("grouping arc", enrichedText.ToLowerInvariant());
+        Assert.Contains("western horizon", enrichedText.ToLowerInvariant());
+        Assert.Contains("Saturn", enrichedText);
+        Assert.Contains("Mars", enrichedText);
+        Assert.Contains("Jupiter", enrichedText);
+        Assert.Contains("Venus", enrichedText);
+        Assert.Contains("planet grouping", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("guided scan path", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.True(document.RootElement.GetProperty("isValid").GetBoolean());
+    }
+
     private static QuestionSceneIntentEnricher CreateEnricher(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<QuestionSceneIntentEnricher>.Instance);
 
@@ -417,6 +458,34 @@ public sealed class QuestionSceneIntentEnricherTests
         RequiredVisualObjects: ["Mars", "Jupiter", "close pairing"],
         RequiredNarrationFacts: ["angular separation"],
         AngularSeparationDegrees: 1.63m);
+
+    private static ProductionEventIntelligence BuildPlanetGroupingLockIntelligence() => new(
+        Domain: "Astronomy",
+        EventType: "PLANET_GROUPING",
+        Title: "Saturn Mars Jupiter Venus Planet Grouping",
+        ShortTitle: "Four planet grouping",
+        EventDate: DateTimeOffset.Parse("2026-06-20T14:00:00Z"),
+        PeakUtc: DateTimeOffset.Parse("2026-06-20T14:00:00Z"),
+        LocalPeakTime: "8:00 PM IST",
+        BestViewingWindowLocal: "2026-06-20 20:00–21:30 IST",
+        SkyDirectionHint: "western horizon",
+        VisibilityRegion: RegionId,
+        PrimaryObjects: ["Saturn"],
+        SecondaryObjects: ["Mars", "Jupiter", "Venus"],
+        ViewingQuality: "Good",
+        MoonInterference: null,
+        MoonIlluminationPercent: null,
+        ScientificContext: "Four planets share one viewing region.",
+        ViewerInstructions: ["Begin at the western horizon", "Follow the planetary arc upward"],
+        VisualMotifs: ["planet grouping", "guided scan path"],
+        SceneStrategy: ["PlanetGroupingSceneStrategy"],
+        QualityWarnings: [],
+        ForbiddenTerms: [],
+        StrategyId: null,
+        ResolvedObjectNames: ["Saturn", "Mars", "Jupiter", "Venus"],
+        ForbiddenObjectNames: [],
+        RequiredVisualObjects: ["Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path"],
+        RequiredNarrationFacts: ["bestViewingWindowLocal", "skyDirectionHint"]);
 
     private static QuestionDrivenSceneDto BuildScene(int sceneNumber, string questionType, string scenePurpose, string viewerQuestion, string sourceAnswer)
         => new(

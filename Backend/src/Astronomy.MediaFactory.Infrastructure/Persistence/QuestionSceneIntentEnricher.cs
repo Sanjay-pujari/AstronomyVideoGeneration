@@ -128,6 +128,9 @@ public sealed class QuestionSceneIntentEnricher(
                 scene.IsRequired);
         }).ToArray();
 
+        if (IsPlanetGroupingLock(intelligence))
+            scenes = InjectPlanetGroupingVisualIntents(scenes, intelligence!);
+
         var preliminary = new EnrichedQuestionScenePlanDto(
             Clean(sourcePlan.EventId) == string.Empty ? Clean(request.EventId) : Clean(sourcePlan.EventId),
             Clean(sourcePlan.RegionId) == string.Empty ? Clean(request.RegionId) : Clean(sourcePlan.RegionId),
@@ -149,7 +152,7 @@ public sealed class QuestionSceneIntentEnricher(
         {
             "MeteorShower" => BuildMeteorTemplate(scene, intelligence),
             "PlanetPairing" => BuildPlanetPairingTemplate(scene, intelligence),
-            "PlanetGrouping" => BuildPlanetGroupingTemplate(scene, intelligence),
+            "PlanetGrouping" or "PLANET_GROUPING" => BuildPlanetGroupingTemplate(scene, intelligence),
             "Conjunction" => BuildPlanetPairingTemplate(scene, intelligence),
             "NamedFullMoon" => BuildNamedFullMoonTemplate(scene, intelligence),
             "NewMoon" => BuildNewMoonTemplate(scene, intelligence),
@@ -157,6 +160,71 @@ public sealed class QuestionSceneIntentEnricher(
             "SolarEclipse" => BuildSolarEclipseTemplate(scene, intelligence),
             _ => BuildEventSafeTemplate(scene, intelligence, requiredVisualObjects)
         };
+
+    private static EnrichedQuestionSceneDto[] InjectPlanetGroupingVisualIntents(IReadOnlyList<EnrichedQuestionSceneDto> scenes, ProductionEventIntelligence intelligence)
+    {
+        var objects = Objects(intelligence, "the grouped planets");
+        var objectPhrase = JoinNatural(objects);
+        var direction = Direction(intelligence, "western horizon");
+        var horizonStart = ResolveGroupingHorizonStart(direction);
+        var scanOrder = BuildPlanetGroupingScanOrder(objects);
+        var groupIntent = $"Planet grouping: show {objectPhrase} together in one viewing region with exact labels.";
+        var scanIntent = $"Guided scan path: begin at {horizonStart} and follow the visual scan path along the grouping arc in order: {scanOrder}.";
+
+        return scenes.Select(scene =>
+        {
+            if (string.Equals(scene.QuestionType, AstronomyQuestionTypes.What, StringComparison.OrdinalIgnoreCase))
+                return scene with
+                {
+                    VisualIntent = AppendIntent(scene.VisualIntent, groupIntent),
+                    ImagePromptIntent = AppendIntent(scene.ImagePromptIntent, groupIntent),
+                    OverlayIntent = AppendIntent(scene.OverlayIntent, "Label planet grouping and every listed planet in one viewing region.")
+                };
+
+            if (string.Equals(scene.QuestionType, AstronomyQuestionTypes.Where, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(scene.QuestionType, AstronomyQuestionTypes.How, StringComparison.OrdinalIgnoreCase))
+                return scene with
+                {
+                    VisualIntent = AppendIntent(scene.VisualIntent, scanIntent),
+                    ImagePromptIntent = AppendIntent(scene.ImagePromptIntent, scanIntent),
+                    OverlayIntent = AppendIntent(scene.OverlayIntent, "Show guided scan path, horizon starting point, planet identification order, and grouping arc.")
+                };
+
+            return scene;
+        }).ToArray();
+    }
+
+    private static string ResolveGroupingHorizonStart(string direction)
+    {
+        var cleaned = Clean(direction);
+        return string.IsNullOrWhiteSpace(cleaned)
+            ? "the western horizon"
+            : cleaned.Contains("horizon", StringComparison.OrdinalIgnoreCase)
+                ? cleaned
+                : $"the {cleaned} horizon";
+    }
+
+    private static string BuildPlanetGroupingScanOrder(IReadOnlyList<string> objects)
+    {
+        if (objects.Count == 0)
+            return "from the horizon starting point upward through the planet grouping";
+        if (objects.Count == 1)
+            return $"from the horizon starting point toward {objects[0]}";
+
+        return $"from {objects[^1]} toward {string.Join(", ", objects.Reverse().Skip(1))}";
+    }
+
+    private static string AppendIntent(string existing, string addition)
+    {
+        var cleanedExisting = Clean(existing);
+        var cleanedAddition = Clean(addition);
+        if (string.IsNullOrWhiteSpace(cleanedExisting)) return cleanedAddition;
+        if (string.IsNullOrWhiteSpace(cleanedAddition) || ContainsTerm(cleanedExisting, cleanedAddition)) return cleanedExisting;
+        return $"{cleanedExisting} {cleanedAddition}";
+    }
+
+    private static bool IsPlanetGroupingLock(ProductionEventIntelligence? intelligence)
+        => intelligence is not null && string.Equals(intelligence.EventType, "PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
 
     private static IntentTemplate BuildMeteorTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
     {
