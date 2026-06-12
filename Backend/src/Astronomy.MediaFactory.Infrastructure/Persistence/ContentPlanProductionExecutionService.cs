@@ -45,7 +45,7 @@ public sealed class ContentPlanProductionExecutionService(
 
         var productionRequest = mapper.Map(plan, intelligence);
         var executionMode = request.ExecutionMode;
-        var isCompletedPlanRerun = IsProductionCompleted(plan) && executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild;
+        var isCompletedPlanRerun = IsProductionCompleted(plan) && executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild;
         var requestedStartPhaseNo = ResolveStartPhaseNo(request);
         var requestedEndPhaseNo = request.EndPhaseNo ?? 19;
         var resolvedRange = ResolveExecutionRange(executionMode, requestedStartPhaseNo, requestedEndPhaseNo);
@@ -62,7 +62,7 @@ public sealed class ContentPlanProductionExecutionService(
 
         if (request.DryRun)
         {
-            return BuildResult(true, true, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, [], executionMode, isCompletedPlanRerun, false, null, [], startPhaseNo, endPhaseNo, null, requestedStartPhaseNo, requestedEndPhaseNo, resolvedRange.DependencyExpansionApplied);
+            return BuildResult(true, true, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, [], executionMode, isCompletedPlanRerun, false, null, [], startPhaseNo, endPhaseNo, requestedOutputCompletion: null, requestedStartPhase: requestedStartPhaseNo, requestedEndPhase: requestedEndPhaseNo, dependencyExpansionApplied: resolvedRange.DependencyExpansionApplied);
         }
 
         ContentPipelineExecution? execution = null;
@@ -110,8 +110,10 @@ public sealed class ContentPlanProductionExecutionService(
             var longOk = File.Exists(longVideo);
             var phase19Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 19);
             var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
-            var productionFailed = errors.Count > 0 || !pipelineResult.Success || phaseFailed;
-            var productionCompleted = !productionFailed && phase19Succeeded;
+            var partialPhaseExecution = IsPartialPhaseExecution(request);
+            var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success, startPhaseNo, endPhaseNo);
+            var productionFailed = partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
+            var productionCompleted = !productionFailed && (phase19Succeeded || partialPhaseSuccess);
             execution.Status = productionCompleted ? "Completed" : productionFailed ? "Failed" : "Running";
             execution.FinishedUtc = productionCompleted || productionFailed ? DateTimeOffset.UtcNow : null;
             execution.ErrorMessage = productionFailed ? string.Join("; ", errors.DefaultIfEmpty("Production pipeline failed.")) : null;
@@ -128,7 +130,7 @@ public sealed class ContentPlanProductionExecutionService(
             plan.FailureReason = productionFailed ? execution.ErrorMessage : null;
             await db.SaveChangesAsync(cancellationToken);
 
-            return BuildResult(productionCompleted, false, plan, productionRequest, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors, pipelineResult.PhaseResults ?? [], executionMode, isCompletedPlanRerun, outputPreparation.PreviousOutputArchived, outputPreparation.ArchivePath, outputPreparation.DeletedOutputFolders, startPhaseNo, endPhaseNo, pipelineResult.RequestedOutputCompletion, requestedStartPhaseNo, requestedEndPhaseNo, resolvedRange.DependencyExpansionApplied);
+            return BuildResult(productionCompleted, false, plan, productionRequest, outputRoot, true, DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short")), DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "long")), File.Exists(Path.Combine(outputRoot, "hero", "hero.png")), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")), shortOk, longOk, shortOk ? shortVideo : string.Empty, longOk ? longVideo : string.Empty, generatedFiles, warnings, errors, pipelineResult.PhaseResults ?? [], executionMode, isCompletedPlanRerun, outputPreparation.PreviousOutputArchived, outputPreparation.ArchivePath, outputPreparation.DeletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion: pipelineResult.RequestedOutputCompletion, partialPhaseExecution: partialPhaseExecution, requestedStartPhase: requestedStartPhaseNo, requestedEndPhase: requestedEndPhaseNo, dependencyExpansionApplied: resolvedRange.DependencyExpansionApplied, partialPhaseSuccess: partialPhaseSuccess);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -157,7 +159,7 @@ public sealed class ContentPlanProductionExecutionService(
             plan.CompletedUtc = null;
             plan.FailureReason = ex.Message;
             await db.SaveChangesAsync(CancellationToken.None);
-            return BuildResult(false, false, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, [], executionMode, isCompletedPlanRerun, false, null, [], startPhaseNo, endPhaseNo, null, requestedStartPhaseNo, requestedEndPhaseNo, resolvedRange.DependencyExpansionApplied);
+            return BuildResult(false, false, plan, productionRequest, outputRoot, false, false, false, false, false, false, false, false, false, false, false, string.Empty, string.Empty, generatedFiles, warnings, errors, [], executionMode, isCompletedPlanRerun, false, null, [], startPhaseNo, endPhaseNo, requestedOutputCompletion: null, requestedStartPhase: requestedStartPhaseNo, requestedEndPhase: requestedEndPhaseNo, dependencyExpansionApplied: resolvedRange.DependencyExpansionApplied);
         }
     }
 
@@ -184,6 +186,55 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static bool PhaseSucceeded(IReadOnlyList<ProductionPhaseResult>? phaseResults, int phaseNo)
         => phaseResults?.Any(p => p.PhaseNo == phaseNo && p.Status == ProductionPhaseStatus.Succeeded) == true;
+
+    private static bool IsPartialPhaseExecution(ContentPlanProductionExecutionRequest request)
+        => request.ExecutionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase
+            && request.StartPhaseNo.HasValue
+            && request.EndPhaseNo.HasValue;
+
+    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess, int startPhaseNo, int endPhaseNo)
+    {
+        if (errors.Count > 0) return false;
+        if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess;
+
+        var phaseResultNumbers = phaseResults.Select(result => result.PhaseNo).ToHashSet();
+        for (var phaseNo = startPhaseNo; phaseNo <= endPhaseNo; phaseNo++)
+        {
+            if (!phaseResultNumbers.Contains(phaseNo)) return false;
+        }
+
+        foreach (var result in phaseResults)
+        {
+            if (result.Status == ProductionPhaseStatus.Failed) return false;
+            if (result.Status == ProductionPhaseStatus.Succeeded) continue;
+            if (result.Status == ProductionPhaseStatus.Skipped && IsValidPartialPhaseSkip(productionRequest, result)) continue;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsValidPartialPhaseSkip(ContentPlanProductionPipelineRequest productionRequest, ProductionPhaseResult result)
+    {
+        if (string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase)) return true;
+        return !IsPhaseRequiredForRequestedOutputs(productionRequest, result.PhaseNo)
+            && string.Equals(result.Reason, "Output type not requested", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPhaseRequiredForRequestedOutputs(ContentPlanProductionPipelineRequest productionRequest, int phaseNo)
+        => phaseNo switch
+        {
+            <= 10 => true,
+            11 => IsRequestedOutput(productionRequest, "HeroAsset"),
+            12 => IsRequestedOutput(productionRequest, "Thumbnail"),
+            13 or 15 or 17 => IsRequestedOutput(productionRequest, "ShortVideo"),
+            14 or 16 or 18 => IsRequestedOutput(productionRequest, "LongVideo"),
+            19 => true,
+            _ => true
+        };
+
+    private static bool IsRequestedOutput(ContentPlanProductionPipelineRequest productionRequest, string outputType)
+        => productionRequest.RequestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
 
     private async Task WritePlanInputAsync(string outputRoot, ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, CancellationToken cancellationToken)
     {
@@ -319,7 +370,7 @@ public sealed class ContentPlanProductionExecutionService(
         return json;
     }
 
-    private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults, ContentPlanExecutionMode executionMode, bool completedPlanRerun, bool previousOutputArchived, string? archivePath, IReadOnlyList<string> deletedOutputFolders, int startPhaseNo, int endPhaseNo, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion = null, int? requestedStartPhase = null, int? requestedEndPhase = null, bool dependencyExpansionApplied = false)
+    private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool heroGenerated, bool thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool shortVideoGenerated, bool longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults, ContentPlanExecutionMode executionMode, bool completedPlanRerun, bool previousOutputArchived, string? archivePath, IReadOnlyList<string> deletedOutputFolders, int startPhaseNo, int endPhaseNo, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion = null, bool partialPhaseExecution = false, int? requestedStartPhase = null, int? requestedEndPhase = null, bool dependencyExpansionApplied = false, bool partialPhaseSuccess = false)
     {
         var lastCompletedPhaseNo = phaseResults
             .Where(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
@@ -332,7 +383,7 @@ public sealed class ContentPlanProductionExecutionService(
             .Select(p => (int?)p.PhaseNo)
             .FirstOrDefault();
 
-        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion, requestedStartPhase ?? startPhaseNo, requestedEndPhase ?? endPhaseNo, startPhaseNo, endPhaseNo, dependencyExpansionApplied);
+        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion, partialPhaseExecution, requestedStartPhase ?? startPhaseNo, requestedEndPhase ?? endPhaseNo, startPhaseNo, endPhaseNo, partialPhaseSuccess, dependencyExpansionApplied);
     }
 
 
@@ -343,7 +394,7 @@ public sealed class ContentPlanProductionExecutionService(
     private static int ResolveStartPhaseNo(ContentPlanProductionExecutionRequest request)
     {
         if (request.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs && request.RebuildIntelligence) return 1;
-        return request.StartPhaseNo ?? (request.ExecutionMode == ContentPlanExecutionMode.FullRebuild ? 1 : request.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs ? 3 : 1);
+        return request.StartPhaseNo ?? (request.ExecutionMode == ContentPlanExecutionMode.FullRebuild ? 1 : request.ExecutionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase ? 3 : 1);
     }
 
     private static PhaseRangeResolution ResolveExecutionRange(ContentPlanExecutionMode executionMode, int requestedStartPhaseNo, int requestedEndPhaseNo)
@@ -394,7 +445,7 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static OutputPreparationResult PrepareOutputRoot(string outputRoot, ContentPlanProductionExecutionRequest request, int cleanupStartPhaseNo, int cleanupEndPhaseNo)
     {
-        if (request.ExecutionMode is not (ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild))
+        if (request.ExecutionMode is not (ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild))
             return new(false, null, []);
 
         if (Directory.Exists(outputRoot) && !request.OverwriteExisting)
