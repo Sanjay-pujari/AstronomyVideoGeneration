@@ -104,6 +104,38 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.InRange(estimatedSeconds, 30.0, 40.0);
     }
 
+    [Fact]
+    public void TrimLowestPriorityShortNarrationSentences_SelfCorrectsOneWordAndHalfSecondOverflow()
+    {
+        var context = CreateContext("MeteorShower", ["ShortVideo"], "Perseids Tonight");
+        var trimMethod = typeof(ProductionPipelineExecutionService).GetMethod("TrimLowestPriorityShortNarrationSentences", BindingFlags.NonPublic | BindingFlags.Static);
+        var countMethod = typeof(ProductionPipelineExecutionService).GetMethod("CountSpokenWords", BindingFlags.NonPublic | BindingFlags.Static);
+        var estimateMethod = typeof(ProductionPipelineExecutionService).GetMethod("EstimateShortNarrationSeconds", BindingFlags.NonPublic | BindingFlags.Static);
+        var narration = string.Join(" ", new[]
+        {
+            "Current MeteorShower Event makes Perseids Tonight worth planning for tonight with family nearby.",
+            "Watch near western sky with peak timing around 9 PM and the best viewing window at 9 PM to midnight.",
+            "Use a chair, dim your phone, and let your eyes adapt before scanning slowly.",
+            "This extra context adds atmosphere, expectation, wonder, patience, comfort, curiosity, and perspective for viewers tonight.",
+            "Check clouds, choose a safe open spot, save this viewing window, share it nearby, and step outside safely."
+        });
+
+        var preTrimWordCount = (int)countMethod!.Invoke(null, [narration])!;
+        var preTrimDuration = (double)estimateMethod!.Invoke(null, [narration])!;
+        var trimmed = (string)trimMethod!.Invoke(null, [narration, context])!;
+        var postTrimWordCount = (int)countMethod.Invoke(null, [trimmed])!;
+        var postTrimDuration = (double)estimateMethod.Invoke(null, [trimmed])!;
+
+        Assert.Equal(80, preTrimWordCount);
+        Assert.True(preTrimDuration > 45.0);
+        Assert.True(postTrimWordCount <= 79);
+        Assert.True(postTrimDuration <= 45.0);
+        Assert.DoesNotContain("This extra context adds atmosphere", trimmed);
+        Assert.Contains("Perseids Tonight", trimmed);
+        Assert.Contains("9 PM to midnight", trimmed);
+        Assert.Contains("Check clouds", trimmed);
+    }
+
     private static bool IsPhaseRequired(ProductionPhaseContext context, int phaseNo)
     {
         var method = typeof(ProductionPipelineExecutionService).GetMethod("IsPhaseRequiredForRequestedOutputs", BindingFlags.NonPublic | BindingFlags.Static);

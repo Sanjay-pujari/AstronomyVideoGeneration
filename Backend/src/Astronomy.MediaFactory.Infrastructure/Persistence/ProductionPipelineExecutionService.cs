@@ -661,6 +661,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<string> ValidateNarrationContractAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
     {
         var expansionApplied = false;
+        ShortNarrationTrimDiagnostics? shortTrimDiagnostics = null;
         if (profile == ScenePresentationProfile.ShortForm)
         {
             var initial = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, false, cancellationToken);
@@ -672,6 +673,8 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 expansionApplied = await RewriteShortNarrationToDurationTargetAsync(context, scriptPath, narrationPath, cancellationToken, "adjusted");
             }
+
+            shortTrimDiagnostics = await TrimShortNarrationToValidationLimitsAsync(context, scriptPath, narrationPath, cancellationToken);
         }
         else
         {
@@ -683,7 +686,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 expansionApplied = await ExpandLongNarrationBeforeValidationAsync(context, scriptPath, narrationPath, cancellationToken);
         }
 
-        var report = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, expansionApplied, cancellationToken);
+        var report = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, expansionApplied, cancellationToken, shortTrimDiagnostics);
         Directory.CreateDirectory(Path.GetDirectoryName(report.ValidationPath)!);
         await File.WriteAllTextAsync(report.ValidationPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
         if (!report.IsValid)
@@ -692,7 +695,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return report.ValidationPath;
     }
 
-    private async Task<NarrationValidationReport> BuildNarrationValidationReportAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, bool expansionApplied, CancellationToken cancellationToken)
+    private async Task<NarrationValidationReport> BuildNarrationValidationReportAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, bool expansionApplied, CancellationToken cancellationToken, ShortNarrationTrimDiagnostics? shortTrimDiagnostics = null)
     {
         var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
         var validationPath = Path.Combine(context.ExecutionContext.NarrationRoot!, profileFolder, "narration-validation.json");
@@ -760,7 +763,12 @@ public sealed partial class ProductionPipelineExecutionService(
             TargetSeconds: profile == ScenePresentationProfile.LongForm ? ResolveLongNarrationTargetSeconds() : ShortNarrationTargetMinimumSeconds + ((ShortNarrationTargetMaximumSeconds - ShortNarrationTargetMinimumSeconds) / 2.0),
             WordsPerMinute: wordsPerMinute,
             ExpansionApplied: expansionApplied,
-            FinalValidationPassed: errors.Count == 0);
+            FinalValidationPassed: errors.Count == 0,
+            PreTrimWordCount: shortTrimDiagnostics?.PreTrimWordCount ?? wordCount,
+            PostTrimWordCount: shortTrimDiagnostics?.PostTrimWordCount ?? wordCount,
+            PreTrimDuration: shortTrimDiagnostics?.PreTrimDuration ?? estimatedDurationSeconds,
+            PostTrimDuration: shortTrimDiagnostics?.PostTrimDuration ?? estimatedDurationSeconds,
+            TrimApplied: shortTrimDiagnostics?.TrimApplied ?? false);
     }
 
     private static Task<bool> ExpandShortNarrationBeforeValidationAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken)
@@ -769,17 +777,46 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task<bool> RewriteShortNarrationToDurationTargetAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken, string action)
     {
         var narration = BuildDurationTargetedShortNarration(context);
-        var totalDurationSeconds = EstimateShortNarrationSeconds(narration);
 
         Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
         await File.WriteAllTextAsync(narrationPath, narration, cancellationToken);
-        if (!File.Exists(scriptPath)) return true;
+        await PersistShortNarrationScriptAsync(scriptPath, narration, action, cancellationToken);
+        return true;
+    }
+
+    private static async Task<ShortNarrationTrimDiagnostics> TrimShortNarrationToValidationLimitsAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    {
+        var text = File.Exists(narrationPath) ? (await File.ReadAllTextAsync(narrationPath, cancellationToken)).Trim() : string.Empty;
+        if (string.IsNullOrWhiteSpace(text) && File.Exists(scriptPath))
+            text = ExtractNarrationText(await File.ReadAllTextAsync(scriptPath, cancellationToken)).Trim();
+
+        var preTrimWordCount = CountSpokenWords(text);
+        var preTrimDuration = EstimateShortNarrationSeconds(text);
+        var trimmed = TrimLowestPriorityShortNarrationSentences(text, context);
+        var postTrimWordCount = CountSpokenWords(trimmed);
+        var postTrimDuration = EstimateShortNarrationSeconds(trimmed);
+        var trimApplied = !string.Equals(text, trimmed, StringComparison.Ordinal);
+
+        if (trimApplied)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
+            await File.WriteAllTextAsync(narrationPath, trimmed, cancellationToken);
+            await PersistShortNarrationScriptAsync(scriptPath, trimmed, "trimmed", cancellationToken);
+        }
+
+        return new ShortNarrationTrimDiagnostics(preTrimWordCount, postTrimWordCount, preTrimDuration, postTrimDuration, trimApplied);
+    }
+
+    private static async Task PersistShortNarrationScriptAsync(string scriptPath, string narration, string action, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(scriptPath)) return;
 
         var json = await File.ReadAllTextAsync(scriptPath, cancellationToken);
         try
         {
             var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(json, JsonOptions);
-            if (script is null) return true;
+            if (script is null) return;
+            var totalDurationSeconds = EstimateShortNarrationSeconds(narration);
             var scenes = BuildDurationTargetedShortSceneScripts(narration, totalDurationSeconds);
             var updated = script with
             {
@@ -794,8 +831,57 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             // narration.txt remains the source consumed by TTS; leave unparseable script untouched.
         }
+    }
 
-        return true;
+    private static string TrimLowestPriorityShortNarrationSentences(string text, ProductionPhaseContext context)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var original = text.Trim();
+        var sentences = SplitNarrationSentences(original).ToList();
+        if (sentences.Count == 0) return original;
+
+        while (sentences.Count > 1 && (CountSpokenWords(string.Join(" ", sentences)) > ShortNarrationMaximumWords || EstimateShortNarrationSeconds(string.Join(" ", sentences)) > ShortNarrationMaximumSeconds))
+        {
+            var removeIndex = sentences
+                .Select((sentence, index) => new
+                {
+                    Index = index,
+                    Priority = GetShortNarrationSentencePriority(sentence, context, index, sentences.Count),
+                    RemainingWordCount = CountSpokenWords(string.Join(" ", sentences.Where((_, candidateIndex) => candidateIndex != index)))
+                })
+                .Where(item => item.RemainingWordCount >= ShortNarrationMinimumWords)
+                .OrderBy(item => item.Priority)
+                .ThenByDescending(item => item.Index)
+                .Select(item => (int?)item.Index)
+                .FirstOrDefault();
+
+            if (removeIndex is null)
+                return TrimToSpokenWords(original, ShortNarrationMaximumWords);
+
+            sentences.RemoveAt(removeIndex.Value);
+        }
+
+        var trimmed = string.Join(" ", sentences).Trim();
+        return CountSpokenWords(trimmed) <= ShortNarrationMaximumWords && EstimateShortNarrationSeconds(trimmed) <= ShortNarrationMaximumSeconds
+            ? trimmed
+            : TrimToSpokenWords(trimmed, ShortNarrationMaximumWords);
+    }
+
+    private static IReadOnlyList<string> SplitNarrationSentences(string text)
+        => Regex.Matches(text.Trim(), @"[^.!?]+[.!?]?")
+            .Select(match => match.Value.Trim())
+            .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
+            .ToArray();
+
+    private static int GetShortNarrationSentencePriority(string sentence, ProductionPhaseContext context, int index, int sentenceCount)
+    {
+        var priority = 0;
+        if (HasRequiredTitle(sentence, context.ProductionEventIntelligence)) priority += 100;
+        if (HasRequiredViewingWindow(sentence, context.ProductionEventIntelligence)) priority += 90;
+        if (HasActionCta(sentence, ScenePresentationProfile.ShortForm, string.Empty)) priority += 80;
+        if (index == 0) priority += 40;
+        if (index == sentenceCount - 1) priority += 30;
+        return priority;
     }
 
     private static string BuildDurationTargetedShortNarration(ProductionPhaseContext context)
@@ -993,7 +1079,12 @@ public sealed partial class ProductionPipelineExecutionService(
         double MaxSeconds,
         string TargetRange,
         bool ExpansionApplied,
-        bool FinalValidationPassed);
+        bool FinalValidationPassed,
+        int PreTrimWordCount,
+        int PostTrimWordCount,
+        double PreTrimDuration,
+        double PostTrimDuration,
+        bool TrimApplied);
 
     private Phase13ShortNarrationDiagnostics ReadPhase13ShortNarrationDiagnostics(IReadOnlyList<string> outputFiles, ProductionPhaseContext context)
     {
@@ -1023,7 +1114,12 @@ public sealed partial class ProductionPipelineExecutionService(
             MaxSeconds: report?.MaximumDurationSeconds ?? ShortNarrationMaximumSeconds,
             TargetRange: $"{ShortNarrationTargetMinimumSeconds:0}-{ShortNarrationTargetMaximumSeconds:0}",
             ExpansionApplied: report?.ExpansionApplied ?? false,
-            FinalValidationPassed: report?.FinalValidationPassed ?? false);
+            FinalValidationPassed: report?.FinalValidationPassed ?? false,
+            PreTrimWordCount: report?.PreTrimWordCount ?? wordCount,
+            PostTrimWordCount: report?.PostTrimWordCount ?? wordCount,
+            PreTrimDuration: report?.PreTrimDuration ?? estimatedSeconds,
+            PostTrimDuration: report?.PostTrimDuration ?? estimatedSeconds,
+            TrimApplied: report?.TrimApplied ?? false);
     }
 
     private static double? ReadTtsActualDurationSeconds(ProductionPhaseContext context, string profileFolder)
@@ -1126,7 +1222,19 @@ public sealed partial class ProductionPipelineExecutionService(
         double TargetSeconds = 0,
         double WordsPerMinute = 0,
         bool ExpansionApplied = false,
-        bool FinalValidationPassed = false);
+        bool FinalValidationPassed = false,
+        int PreTrimWordCount = 0,
+        int PostTrimWordCount = 0,
+        double PreTrimDuration = 0,
+        double PostTrimDuration = 0,
+        bool TrimApplied = false);
+
+    private sealed record ShortNarrationTrimDiagnostics(
+        int PreTrimWordCount,
+        int PostTrimWordCount,
+        double PreTrimDuration,
+        double PostTrimDuration,
+        bool TrimApplied);
 
     private static async Task EnsureNarrationValidationPassedBeforeTtsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
@@ -1630,6 +1738,11 @@ public sealed partial class ProductionPipelineExecutionService(
             targetRange = phase13ShortNarrationDiagnostics?.TargetRange,
             expansionApplied = phase13ShortNarrationDiagnostics?.ExpansionApplied ?? phase14NarrationDiagnostics?.ExpansionApplied,
             finalValidationPassed = phase13ShortNarrationDiagnostics?.FinalValidationPassed ?? phase14NarrationDiagnostics?.FinalValidationPassed,
+            preTrimWordCount = phase13ShortNarrationDiagnostics?.PreTrimWordCount,
+            postTrimWordCount = phase13ShortNarrationDiagnostics?.PostTrimWordCount,
+            preTrimDuration = phase13ShortNarrationDiagnostics?.PreTrimDuration,
+            postTrimDuration = phase13ShortNarrationDiagnostics?.PostTrimDuration,
+            trimApplied = phase13ShortNarrationDiagnostics?.TrimApplied,
             wordCount = phase14NarrationDiagnostics?.WordCount,
             estimatedSeconds = phase14NarrationDiagnostics?.EstimatedSeconds,
             longMinSeconds = phase14NarrationDiagnostics?.MinSeconds,
