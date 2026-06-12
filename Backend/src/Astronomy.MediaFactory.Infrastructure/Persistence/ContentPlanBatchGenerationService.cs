@@ -2,6 +2,7 @@ using System.Reflection;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -12,11 +13,12 @@ public sealed class ContentPlanBatchGenerationService(
     IVisualAssetGenerationService visualAssets,
     ISceneRenderer sceneRenderer,
     IContentPlanProductionExecutionService productionExecution,
+    IProductionRunningRecoveryService runningRecovery,
+    IOptions<ProductionPipelineOptions> productionPipelineOptions,
     ILogger<ContentPlanBatchGenerationService> logger) : IContentPlanBatchGenerationService, IContentPlanGenerationReadinessService
 {
     private const int DefaultMaxPlans = 1;
     private const int MaxPlanLimit = 10;
-    private const int DefaultRunningPlanRecoveryStaleAfterMinutes = 120;
     private static readonly string[] RunnableStatuses = ["Draft", "Planned", "Approved"];
     private static readonly string[] RetryRunnableStatuses = ["ProductionFailed"];
     private static readonly string[] RunningRecoveryStatuses = ["ProductionRunning"];
@@ -47,12 +49,16 @@ public sealed class ContentPlanBatchGenerationService(
         var maxPlans = Math.Clamp(request.MaxPlans <= 0 ? DefaultMaxPlans : request.MaxPlans, 1, MaxPlanLimit);
         var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, request.Language, cancellationToken);
 
+        IReadOnlyList<BatchGenerateFromPlansWarning> recoveryWarnings = request.DryRun
+            ? Array.Empty<BatchGenerateFromPlansWarning>()
+            : await RecoverRunningCandidatesAsync(candidates, requestedTitles, request, cancellationToken);
         var executionMode = ResolveExecutionMode(request);
+        if (recoveryWarnings.Count > 0 && request.RetryFailedOnly && request.AllowFailedPlanRetry)
+            executionMode = ContentPlanExecutionMode.RetryFailed;
         var recoveryMode = executionMode == ContentPlanExecutionMode.RecoverRunning;
-        var allowFailedPlanRetry = executionMode == ContentPlanExecutionMode.RetryFailed;
         var selection = SelectPlans(candidates, requestedTitles, request.PlanId, request.OnlyHighPriority, maxPlans, executionMode, recoveryMode, ResolveRunningPlanRecoveryStaleAfter(request), request.AllowCompletedPlanRerun);
         var selectedPlanEntities = selection.SelectedPlans;
-        var warnings = selection.Warnings;
+        var warnings = recoveryWarnings.Concat(selection.Warnings).ToArray();
         var selectedPlans = selectedPlanEntities
             .Select(ToSelectedPlan)
             .ToArray();
@@ -247,7 +253,7 @@ public sealed class ContentPlanBatchGenerationService(
         var yearStart = new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var yearEnd = yearStart.AddYears(1);
 
-        return await db.ContentGenerationPlans.AsNoTracking()
+        return await db.ContentGenerationPlans
             .Include(p => p.AstronomyEventIntelligence)
             .Where(p => p.RegionId == regionId && p.Language == language)
             .Where(p => p.ScheduledUtc.HasValue && p.ScheduledUtc.Value >= yearStart && p.ScheduledUtc.Value < yearEnd)
@@ -334,6 +340,66 @@ public sealed class ContentPlanBatchGenerationService(
         selectedIds.Add(plan.Id);
     }
 
+    private async Task<IReadOnlyList<BatchGenerateFromPlansWarning>> RecoverRunningCandidatesAsync(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.UseProductionPipeline) return [];
+
+        var targets = ResolveRequestedRunningRecoveryCandidates(candidates, requestedTitles, request)
+            .Where(IsProductionRunning)
+            .ToArray();
+        if (targets.Length == 0) return [];
+
+        var warnings = new List<BatchGenerateFromPlansWarning>();
+        var forceRecovery = request.AllowRunningPlanRecovery && IsExplicitRunningRecoveryRequest(request);
+        foreach (var target in targets)
+        {
+            var result = forceRecovery
+                ? await runningRecovery.RecoverRunningExecutionAsync(target.Id, cancellationToken)
+                : await runningRecovery.RecoverStaleRunningExecutionAsync(target.Id, cancellationToken);
+
+            if (!result.Recovered) continue;
+
+            target.Status = "ProductionFailed";
+            target.PlanStatus = "ProductionFailed";
+            target.FailureReason = "Automatically marked failed due to stale running execution.";
+            warnings.Add(new BatchGenerateFromPlansWarning(target.Title ?? target.Id.ToString("D"), true, true, result.Warning ?? $"Recovered stale running execution for plan {target.Id:D}."));
+        }
+
+        return warnings;
+    }
+
+    private static IReadOnlyList<ContentGenerationPlan> ResolveRequestedRunningRecoveryCandidates(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, BatchGenerateFromPlansRequest request)
+    {
+        var selected = new List<ContentGenerationPlan>();
+        var selectedIds = new HashSet<Guid>();
+        if (request.PlanId is { } planId)
+        {
+            var plan = candidates.FirstOrDefault(p => p.Id == planId);
+            if (plan is not null && selectedIds.Add(plan.Id)) selected.Add(plan);
+        }
+
+        foreach (var title in requestedTitles)
+        {
+            foreach (var plan in FindMatches(candidates, title))
+            {
+                if (selectedIds.Add(plan.Id)) selected.Add(plan);
+            }
+        }
+
+        return selected;
+    }
+
+    private static bool IsExplicitRunningRecoveryRequest(BatchGenerateFromPlansRequest request)
+    {
+        var hasPlanTitle = request.PlanTitles is { Count: > 0 } && request.PlanTitles.Count(title => !string.IsNullOrWhiteSpace(title)) == 1;
+        return request.AllowRunningPlanRecovery
+            && request.RetryFailedOnly
+            && request.AllowFailedPlanRetry
+            && request.StartPhaseNo.HasValue
+            && request.EndPhaseNo.HasValue
+            && (request.PlanId.HasValue || hasPlanTitle);
+    }
+
     private static IReadOnlyList<ContentGenerationPlan> FindMatches(IEnumerable<ContentGenerationPlan> candidates, string requestedTitle)
     {
         var exact = FindExactMatches(candidates, requestedTitle);
@@ -383,6 +449,7 @@ public sealed class ContentPlanBatchGenerationService(
 
     private static ContentPlanExecutionMode ResolveExecutionMode(BatchGenerateFromPlansRequest request)
     {
+        if (request.AllowRunningPlanRecovery && IsExplicitRunningRecoveryRequest(request)) return ContentPlanExecutionMode.RetryFailed;
         if (request.ExecutionMode != ContentPlanExecutionMode.Normal) return request.ExecutionMode;
         if (request.AllowRunningPlanRecovery) return ContentPlanExecutionMode.RecoverRunning;
         if (request.RetryFailedOnly || request.AllowFailedPlanRetry || request.StartPhaseNo.HasValue) return ContentPlanExecutionMode.RetryFailed;
@@ -409,12 +476,12 @@ public sealed class ContentPlanBatchGenerationService(
 
     private static int ResolveEndPhaseNo(BatchGenerateFromPlansRequest request) => request.EndPhaseNo ?? 19;
 
-    private static TimeSpan ResolveRunningPlanRecoveryStaleAfter(BatchGenerateFromPlansRequest request)
+    private TimeSpan ResolveRunningPlanRecoveryStaleAfter(BatchGenerateFromPlansRequest request)
     {
         var minutes = request.RunningPlanRecoveryStaleAfterMinutes;
         if (!minutes.HasValue && int.TryParse(Environment.GetEnvironmentVariable("ASTROPULSE_RUNNING_PLAN_RECOVERY_STALE_AFTER_MINUTES"), out var configuredMinutes))
             minutes = configuredMinutes;
-        return TimeSpan.FromMinutes(Math.Max(1, minutes ?? DefaultRunningPlanRecoveryStaleAfterMinutes));
+        return TimeSpan.FromMinutes(Math.Max(1, minutes ?? productionPipelineOptions.Value.StaleRunningThresholdMinutes));
     }
 
     private static bool IsStatusRunnable(ContentGenerationPlan plan)
@@ -598,6 +665,7 @@ public sealed class ContentPlanBatchGenerationService(
         {
             if (!request.UseProductionPipeline) throw new ArgumentException("allowRunningPlanRecovery requires useProductionPipeline=true.");
             if (request.MaxPlans != 1) throw new ArgumentException("allowRunningPlanRecovery is locked to maxPlans=1.");
+            if (!IsExplicitRunningRecoveryRequest(request)) throw new ArgumentException("allowRunningPlanRecovery requires retryFailedOnly=true, allowFailedPlanRetry=true, startPhaseNo, endPhaseNo, and exactly one exact planTitle or planId.");
         }
     }
 
