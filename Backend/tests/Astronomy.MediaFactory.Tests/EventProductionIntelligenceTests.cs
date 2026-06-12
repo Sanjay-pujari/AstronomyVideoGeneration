@@ -352,6 +352,113 @@ public sealed class EventProductionIntelligenceTests
         Assert.True(validation.RootElement.GetProperty("titleFoundInReview").GetBoolean());
     }
 
+
+    [Fact]
+    public async Task ProductionQualityValidator_ReadsTitleFromGeneratedStagingInfographicSpecMetadataForPhase10()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"phase10-output-{Guid.NewGuid():N}");
+        var stagingRoot = Path.Combine(Path.GetTempPath(), $"phase10-staging-{Guid.NewGuid():N}", "question-engine", "scene-approval-v3");
+        Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
+        Directory.CreateDirectory(Path.Combine(outputRoot, "scene-approval-v3", "short"));
+        Directory.CreateDirectory(Path.Combine(outputRoot, "scene-approval-v3", "long"));
+        Directory.CreateDirectory(stagingRoot);
+
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "question-driven-scene-plan.json"), "NamedFullMoon scene plan for Moon with viewing window 2026-02-01 18:00–23:00 UTC.");
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-infographic-spec.json"), """
+{
+  "viewerTakeaway":"Full Moon viewing guide.",
+  "captionText":"Full Moon viewing guide.",
+  "overlayText":["Moon"],
+  "strategyValidationFacts":{
+    "visualSourceType":"Hybrid",
+    "assetKey":"Moon.FullMoon",
+    "generatedRealisticPrompt":"realistic full Moon texture with craters and maria",
+    "objectVisualSource":"Moon:LocalAsset Moon.FullMoon; ScientificAsset Moon.FullMoon; AICinematic realistic Moon",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false",
+    "allowPrimitivePlaceholder":"false",
+    "primitivePlaceholderAllowed":"false",
+    "celestialObjectQuality":"Realistic",
+    "objectSourcePriority":"LocalAsset, ScientificAsset, AICinematic"
+  },
+  "backgroundPrompt":"large visible Moon above an eastern horizon",
+  "accessibilityCues":["Moon is the dominant object"]
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "validation", "phase-08-validation.json"), JsonSerializer.Serialize(new { sceneApprovalStagingRoot = stagingRoot }, JsonOptions));
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-review.json"), "Moon visible with full moon glow");
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-narration.txt"), "Watch the full Moon during the evening viewing window.");
+        await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nFull Moon is visible from 18:00–23:00 UTC.\n");
+        await File.WriteAllTextAsync(Path.Combine(stagingRoot, "scene-001-infographic-spec.json"), """
+{
+  "viewerTakeaway":"Full Moon viewing guide.",
+  "captionText":"Full Moon viewing guide.",
+  "overlayText":["Moon"],
+  "visualSourceResolution":{
+    "metadata":{
+      "eventShortTitle":"Snow Moon",
+      "eventTitle":"Snow Moon Full Moon"
+    },
+    "sourceType":"Hybrid",
+    "realisticObjectRequired":true,
+    "primitivePlaceholderUsed":false
+  },
+  "strategyValidationFacts":{
+    "visualSourceType":"Hybrid",
+    "assetKey":"Moon.FullMoon",
+    "generatedRealisticPrompt":"realistic full Moon texture with craters and maria",
+    "objectVisualSource":"Moon:LocalAsset Moon.FullMoon; ScientificAsset Moon.FullMoon; AICinematic realistic Moon",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false",
+    "allowPrimitivePlaceholder":"false",
+    "primitivePlaceholderAllowed":"false",
+    "celestialObjectQuality":"Realistic",
+    "objectSourcePriority":"LocalAsset, ScientificAsset, AICinematic"
+  },
+  "backgroundPrompt":"large visible Moon above an eastern horizon",
+  "accessibilityCues":["Moon is the dominant object"]
+}
+""");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "NamedFullMoon",
+            "Snow Moon Full Moon",
+            "Snow Moon",
+            DateTimeOffset.Parse("2026-02-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-02-01T18:00:00Z"),
+            "18:00 UTC",
+            "2026-02-01 18:00–23:00 UTC",
+            "eastern sky",
+            "Global",
+            ["Moon"],
+            [],
+            null,
+            "Low",
+            100m,
+            "Full Moon viewing guide",
+            [],
+            ["Moon", "full moon glow"],
+            [],
+            [],
+            ["Venus", "Jupiter"],
+            RequiredVisualObjects: ["Moon"],
+            ForbiddenObjectNames: ["Venus", "Jupiter"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new NamedFullMoonSceneValidationStrategy(),
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, outputRoot, CancellationToken.None);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        using var validation = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputRoot, "production-quality-validation-before-assembly.json")));
+        Assert.True(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
+    }
+
     [Fact]
     public async Task ProductionQualityValidator_FailsPrimitivePlaceholderWhenRealisticObjectRequiredForPhase10()
     {

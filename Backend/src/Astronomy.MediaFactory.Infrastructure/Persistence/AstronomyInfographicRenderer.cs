@@ -16,8 +16,11 @@ public sealed class AstronomyInfographicRenderer(
     CelestialObjectLayerRenderer celestialObjectLayer,
     SkyGuidanceLayerRenderer skyGuidanceLayer,
     EducationalLayerRenderer educationalLayer,
-    AnnotationLayerRenderer annotationLayer) : IAstronomyInfographicRenderer
+    AnnotationLayerRenderer annotationLayer,
+    IRuntimeAssetPathResolver? assetPathResolver = null) : IAstronomyInfographicRenderer
 {
+    private readonly IRuntimeAssetPathResolver _assetPathResolver = assetPathResolver ?? new RuntimeAssetPathResolver();
+    private readonly bool _useRepositoryAssetDiscovery = assetPathResolver is null;
     public static ShortFormCompositionDecision NativeShortFormCompositionDecision { get; } = new(
         NativeComposerUsed: true,
         UsesLongFormImage: false,
@@ -58,22 +61,62 @@ public sealed class AstronomyInfographicRenderer(
         => spec.DrawableVisualObjects?.FirstOrDefault(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))?.Label
             ?? (spec.OverlayText.FirstOrDefault(text => text.Contains("Snow Moon", StringComparison.OrdinalIgnoreCase)) is not null ? "Snow Moon" : "Full Moon");
 
-    private static void DrawNamedFullMoonVisual(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, int width, int height)
+    private void DrawNamedFullMoonVisual(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, int width, int height)
     {
         if (!IsNamedFullMoonVisual(spec)) return;
 
         var shortForm = width < 1400;
         var center = ResolveMoonCenter(spec.SceneNumber, width, height, shortForm);
         var radius = ResolveMoonRadius(spec.SceneNumber, width, shortForm);
+        var assetKey = ResolveMoonAssetKey(spec);
+        var moonAssetPath = ResolveLocalMoonAssetPath(assetKey);
+
+        if (string.IsNullOrWhiteSpace(moonAssetPath))
+        {
+            if (!IsDebugFallbackEnabled(spec))
+                throw new InvalidOperationException($"Visual asset resolution failed for {assetKey}: no local Moon asset/texture was found in the celestial asset library. Production rendering may not silently draw a primitive circle; restore assets/celestial/moon/hero-transparent.png (or hero.png) or enable AI realistic object generation before Phase 8/9. Primitive circle fallback is allowed only when DebugFallbackEnabled=true.");
+
+            DrawPrimitiveDebugFullMoon(ctx, center, radius);
+        }
+        else
+        {
+            DrawMoonTextureDisc(ctx, moonAssetPath, center, radius);
+        }
+
+        DrawMoonLabelAndGuide(ctx, spec, width, height, shortForm, center, radius);
+    }
+
+    private static void DrawMoonGlow(IImageProcessingContext ctx, PointF center, float radius)
+    {
         var glow = Color.ParseHex("#DCEBFF");
         ctx.Fill(glow.WithAlpha(.10f), new EllipsePolygon(center.X, center.Y, radius * 2.65f));
         ctx.Fill(glow.WithAlpha(.18f), new EllipsePolygon(center.X, center.Y, radius * 1.85f));
         ctx.Fill(glow.WithAlpha(.28f), new EllipsePolygon(center.X, center.Y, radius * 1.32f));
+    }
+
+    private static void DrawMoonTextureDisc(IImageProcessingContext ctx, string assetPath, PointF center, float radius)
+    {
+        DrawMoonGlow(ctx, center, radius);
+        var diameter = Math.Max(2, (int)MathF.Round(radius * 2f));
+        using var asset = Image.Load<Rgba32>(assetPath);
+        asset.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(diameter, diameter), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }).GaussianBlur(.08f));
+        var origin = new Point((int)MathF.Round(center.X - diameter / 2f), (int)MathF.Round(center.Y - diameter / 2f));
+        var disc = new EllipsePolygon(center.X, center.Y, radius);
+        ctx.Clip(disc, clipped => clipped.DrawImage(asset, origin, 1f));
+        ctx.Draw(Color.ParseHex("#FFF6D7").WithAlpha(.46f), Math.Max(2f, radius * .018f), disc);
+    }
+
+    private static void DrawPrimitiveDebugFullMoon(IImageProcessingContext ctx, PointF center, float radius)
+    {
+        DrawMoonGlow(ctx, center, radius);
         ctx.Fill(Color.ParseHex("#FFF6D7"), new EllipsePolygon(center.X, center.Y, radius));
         ctx.Fill(Color.ParseHex("#D8C79D").WithAlpha(.18f), new EllipsePolygon(center.X - radius * .28f, center.Y - radius * .18f, radius * .20f));
         ctx.Fill(Color.ParseHex("#C9B88F").WithAlpha(.13f), new EllipsePolygon(center.X + radius * .25f, center.Y + radius * .08f, radius * .16f));
         ctx.Fill(Color.ParseHex("#EEE0B8").WithAlpha(.18f), new EllipsePolygon(center.X - radius * .02f, center.Y + radius * .28f, radius * .12f));
+    }
 
+    private static void DrawMoonLabelAndGuide(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, int width, int height, bool shortForm, PointF center, float radius)
+    {
         var fonts = shortForm ? EditorialFonts.CreateScaled(.86f) : EditorialFonts.Create();
         var label = ResolveMoonLabel(spec);
         var labelX = Math.Clamp(center.X - radius * 1.22f, 48f, width - 420f);
@@ -85,6 +128,73 @@ public sealed class AstronomyInfographicRenderer(
             ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(Math.Max(42, center.X - radius * 2.15f), center.Y + radius * 1.12f), WrappingLength = 260 }, "E horizon", Color.ParseHex("#F6C177"));
         }
     }
+
+    private static string ResolveMoonAssetKey(QuestionDrivenVisualSpec spec)
+        => FirstNonEmpty(
+            spec.DrawableVisualObjects?.FirstOrDefault(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))?.AssetKey,
+            TryGetVisualMetadata(spec, "assetKey", out var metadataAssetKey) ? metadataAssetKey : null,
+            "Moon.FullMoon");
+
+    private string? ResolveLocalMoonAssetPath(string assetKey)
+    {
+        if (!assetKey.Equals("Moon.FullMoon", StringComparison.OrdinalIgnoreCase)) return null;
+
+        foreach (var candidate in EnumerateMoonAssetCandidates())
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private IEnumerable<string> EnumerateMoonAssetCandidates()
+    {
+        foreach (var fileName in new[] { "hero-transparent.png", "hero.png", "full-moon-transparent.png", "full-moon.png" })
+            yield return _assetPathResolver.ResolveCelestialAssetPath("moon", fileName);
+
+        if (!_useRepositoryAssetDiscovery) yield break;
+
+        var current = Directory.GetCurrentDirectory();
+        for (var directory = new DirectoryInfo(current); directory is not null; directory = directory.Parent)
+        {
+            foreach (var fileName in new[] { "hero-transparent.png", "hero.png", "full-moon-transparent.png", "full-moon.png" })
+            {
+                yield return Path.Combine(directory.FullName, "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "celestial", "moon", fileName);
+                yield return Path.Combine(directory.FullName, "assets", "celestial", "moon", fileName);
+            }
+        }
+    }
+
+    private static bool IsDebugFallbackEnabled(QuestionDrivenVisualSpec spec)
+        => TryGetVisualMetadataBool(spec, "DebugFallbackEnabled", out var enabled) && enabled;
+
+    private static bool TryGetVisualMetadata(QuestionDrivenVisualSpec spec, string key, out string value)
+    {
+        value = string.Empty;
+        if (spec.StrategyValidationFacts is not null && TryGetDictionaryValue(spec.StrategyValidationFacts, key, out value)) return true;
+        if (spec.VisualSourceResolution?.Metadata is not null && TryGetDictionaryValue(spec.VisualSourceResolution.Metadata, key, out value)) return true;
+        return false;
+    }
+
+    private static bool TryGetVisualMetadataBool(QuestionDrivenVisualSpec spec, string key, out bool value)
+    {
+        value = false;
+        return TryGetVisualMetadata(spec, key, out var text) && bool.TryParse(text, out value);
+    }
+
+    private static bool TryGetDictionaryValue(IReadOnlyDictionary<string, string> dictionary, string key, out string value)
+    {
+        foreach (var pair in dictionary)
+        {
+            if (!pair.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+            value = pair.Value;
+            return !string.IsNullOrWhiteSpace(value);
+        }
+        value = string.Empty;
+        return false;
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
 
     private static PointF ResolveMoonCenter(int sceneNumber, int width, int height, bool shortForm)
     {
@@ -130,7 +240,7 @@ public sealed class AstronomyInfographicRenderer(
         return image;
     }
 
-    private static async Task<Image<Rgba32>> RenderNativeShortFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
+    private async Task<Image<Rgba32>> RenderNativeShortFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
     {
         var variant = AstronomyInfographicRenderVariant.ShortForm;
         var image = await AstronomyVisualCompositionEngine.ComposeAsync(new AstronomyVisualCompositionRequest(
