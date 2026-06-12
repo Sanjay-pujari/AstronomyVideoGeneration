@@ -1901,7 +1901,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
@@ -1974,33 +1974,40 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
     {
         var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
-        if (context.StartPhaseNo <= 6 && context.EndPhaseNo >= 6)
+        var deleteStartPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
+            ? context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo
+            : context.StartPhaseNo;
+        var deleteEndPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
+            ? context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo
+            : context.EndPhaseNo;
+
+        if (deleteStartPhaseNo <= 6 && deleteEndPhaseNo >= 6)
         {
             DeleteFileIfExists(BuildEnrichedScenePlanPath(context), deletedFiles);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-06-validation.json"), deletedFiles);
         }
 
-        if (context.StartPhaseNo <= 7 && context.EndPhaseNo >= 7)
+        if (deleteStartPhaseNo <= 7 && deleteEndPhaseNo >= 7)
         {
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), deletedFiles);
         }
 
-        if (context.StartPhaseNo <= 10 && context.EndPhaseNo >= 7)
+        if (deleteStartPhaseNo <= 9 && deleteEndPhaseNo >= 8)
         {
             DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles);
             DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles);
             DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles);
         }
 
-        if (context.StartPhaseNo <= 11 && context.EndPhaseNo >= 11)
+        if (deleteStartPhaseNo <= 11 && deleteEndPhaseNo >= 11)
             DeleteProductionSubtree(context.ExecutionContext.HeroRoot!, deletedFiles);
 
-        if (context.StartPhaseNo <= 12 && context.EndPhaseNo >= 12)
+        if (deleteStartPhaseNo <= 12 && deleteEndPhaseNo >= 12)
             DeleteProductionSubtree(context.ExecutionContext.ThumbnailRoot!, deletedFiles);
 
-        var firstValidationToDelete = Math.Max(context.StartPhaseNo, 7);
-        var lastValidationToDelete = Math.Min(context.EndPhaseNo, 12);
+        var firstValidationToDelete = Math.Max(deleteStartPhaseNo, 7);
+        var lastValidationToDelete = Math.Min(deleteEndPhaseNo, 12);
         for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
     }
