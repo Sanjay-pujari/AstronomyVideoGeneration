@@ -354,7 +354,7 @@ public sealed class EventProductionIntelligenceTests
 
 
     [Fact]
-    public async Task ProductionQualityValidator_ReadsTitleFromGeneratedStagingInfographicSpecMetadataForPhase10()
+    public async Task ProductionQualityValidator_UsesCurrentSceneInfographicSpecsInsteadOfStaleStagingMetadataForPhase10()
     {
         var outputRoot = Path.Combine(Path.GetTempPath(), $"phase10-output-{Guid.NewGuid():N}");
         var stagingRoot = Path.Combine(Path.GetTempPath(), $"phase10-staging-{Guid.NewGuid():N}", "question-engine", "scene-approval-v3");
@@ -368,8 +368,8 @@ public sealed class EventProductionIntelligenceTests
         await File.WriteAllTextAsync(Path.Combine(outputRoot, "question-driven-scene-plan.json"), "NamedFullMoon scene plan for Moon with viewing window 2026-02-01 18:00–23:00 UTC.");
         await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-infographic-spec.json"), """
 {
-  "viewerTakeaway":"Full Moon viewing guide.",
-  "captionText":"Full Moon viewing guide.",
+  "viewerTakeaway":"Snow Moon viewing guide.",
+  "captionText":"Snow Moon viewing guide.",
   "overlayText":["Moon"],
   "strategyValidationFacts":{
     "visualSourceType":"Hybrid",
@@ -398,8 +398,8 @@ public sealed class EventProductionIntelligenceTests
   "overlayText":["Moon"],
   "visualSourceResolution":{
     "metadata":{
-      "eventShortTitle":"Snow Moon",
-      "eventTitle":"Snow Moon Full Moon"
+      "eventShortTitle":"Stale Moon",
+      "eventTitle":"Stale Moon Full Moon"
     },
     "sourceType":"Hybrid",
     "realisticObjectRequired":true,
@@ -456,7 +456,20 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
         using var validation = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputRoot, "production-quality-validation-before-assembly.json")));
-        Assert.True(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
+        Assert.True(validation.RootElement.GetProperty("titleFoundInCaptionText").GetBoolean());
+        Assert.False(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
+
+        var titleSources = validation.RootElement.GetProperty("titleValidationSourceDiagnostics").EnumerateArray().ToArray();
+        var metadataSources = titleSources.Single(source => source.GetProperty("field").GetString() == "titleFoundInMetadata");
+        var metadataSourcePaths = metadataSources.GetProperty("sourceFilePaths").EnumerateArray().Select(source => source.GetString()).ToArray();
+        Assert.Contains(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-infographic-spec.json").Replace('\\', '/'), metadataSourcePaths);
+        Assert.DoesNotContain(metadataSourcePaths, sourcePath => sourcePath!.Contains(stagingRoot, StringComparison.OrdinalIgnoreCase));
+
+        var visualDiagnostics = validation.RootElement.GetProperty("phase10VisualSourceInputDiagnostics");
+        var scene = visualDiagnostics.GetProperty("scenes").EnumerateArray().Single();
+        Assert.Equal(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-infographic-spec.json").Replace('\\', '/'), scene.GetProperty("specFilePath").GetString());
+        Assert.Equal("Moon.FullMoon", scene.GetProperty("assetKey").GetString());
+        Assert.False(scene.GetProperty("primitivePlaceholderUsed").GetBoolean());
     }
 
     [Fact]
