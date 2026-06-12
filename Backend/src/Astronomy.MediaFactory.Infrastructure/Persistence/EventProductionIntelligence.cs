@@ -507,7 +507,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         return new(errors.Count == 0, warnings, errors);
     }
 
-    public async Task<ProductionValidationResult> ValidateFinalOutputAsync(ProductionEventIntelligence intelligence, string outputRoot, CancellationToken cancellationToken)
+    public async Task<ProductionValidationResult> ValidateFinalOutputAsync(ProductionEventIntelligence intelligence, string outputRoot, CancellationToken cancellationToken, IReadOnlyList<string>? requestedOutputs = null)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -526,18 +526,35 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         {
             var profileSceneRoot = Path.Combine(sceneRoot, profile);
             if (!Directory.Exists(profileSceneRoot) || !Directory.EnumerateFiles(profileSceneRoot, "scene-*-final.png").Any()) errors.Add($"{profile} scenes were not materialized in the current scene approval folder.");
-            var video = Path.Combine(outputRoot, "video-assembly", profile, profile == "short" ? "final-video-short.mp4" : "final-video-long.mp4");
-            if (!File.Exists(video)) errors.Add($"{profile} final video is missing from the production plan folder.");
         }
-        if (!File.Exists(Path.Combine(outputRoot, "hero", "hero.png"))) errors.Add("Hero image is missing from the production plan folder.");
-        foreach (var file in new[] { "landscape.png", "square.png", "portrait.png" })
-            if (!File.Exists(Path.Combine(outputRoot, "thumbnails", file))) errors.Add($"Thumbnail {file} is missing from the production plan folder.");
+
+        if (IsRequested(requestedOutputs, "ShortVideo"))
+        {
+            var video = Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4");
+            if (!File.Exists(video)) errors.Add("short final video is missing from the production plan folder.");
+        }
+
+        if (IsRequested(requestedOutputs, "LongVideo"))
+        {
+            var video = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
+            if (!File.Exists(video)) errors.Add("long final video is missing from the production plan folder.");
+        }
+
+        if (IsRequested(requestedOutputs, "HeroAsset") && !File.Exists(Path.Combine(outputRoot, "hero", "hero.png"))) errors.Add("Hero image is missing from the production plan folder.");
+        if (IsRequested(requestedOutputs, "Thumbnail"))
+        {
+            foreach (var file in new[] { "landscape.png", "square.png", "portrait.png" })
+                if (!File.Exists(Path.Combine(outputRoot, "thumbnails", file))) errors.Add($"Thumbnail {file} is missing from the production plan folder.");
+        }
         var currentSceneSpecFiles = EnumerateCurrentRunSceneInfographicSpecFiles(sceneRoot).ToArray();
         var titleValidationDiagnostics = BuildTitleValidationDiagnostics(currentRunIntelligence, currentSceneSpecFiles, outputRoot, ReadFinalValidationText(outputRoot));
         var visualSourceInputDiagnostics = BuildVisualSourceInputDiagnostics(sceneRoot, currentSceneSpecFiles, currentRunIntelligence);
         await WriteValidationAsync(Path.Combine(outputRoot, "production-quality-validation-final.json"), currentRunIntelligence, warnings, errors, cancellationToken, strategy.EventType, leakageHits, titleValidationDiagnostics, visualSourceInputDiagnostics);
         return new(errors.Count == 0, warnings, errors);
     }
+
+    private static bool IsRequested(IReadOnlyList<string>? requestedOutputs, string outputType)
+        => requestedOutputs is null || requestedOutputs.Count == 0 || requestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
 
     private static IMediaEventStrategyResolver CreateDefaultMediaEventStrategyResolver()
         => new MediaEventStrategyResolver([
