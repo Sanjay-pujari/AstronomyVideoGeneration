@@ -471,6 +471,47 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
+    public async Task ExecuteContentPlanWithProductionPipelineAsync_StartAndEndPhaseRequest_IsPartialSuccessRegardlessOfExecutionMode()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-partial-range-success-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var service = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new PartialRebuildProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance);
+
+            var response = await service.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
+                GeminidsPlanId,
+                DryRun: false,
+                OverwriteExisting: true,
+                StartPhaseNo: 10,
+                EndPhaseNo: 12,
+                ExecutionMode: ContentPlanExecutionMode.Normal,
+                AllowCompletedPlanRerun: true), CancellationToken.None);
+
+            Assert.True(response.Success);
+            Assert.True(response.PartialPhaseExecution);
+            Assert.True(response.PartialPhaseSuccess);
+            Assert.Equal(10, response.RequestedStartPhase);
+            Assert.Equal(12, response.RequestedEndPhase);
+            Assert.Equal(10, response.ExpandedStartPhase);
+            Assert.Equal(12, response.ExpandedEndPhase);
+            Assert.Equal(Enumerable.Range(10, 3), response.PhaseResults!.Select(p => p.PhaseNo));
+            Assert.All(response.PhaseResults!, phase => Assert.Equal(ProductionPhaseStatus.Succeeded, phase.Status));
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
+
+    [Fact]
     public async Task ExecuteContentPlanWithProductionPipelineAsync_RebuildOutputs_DoesNotDeleteQuestionEngineWhenPhase3IsNotRegenerated()
     {
         await using var db = CreateDb();
