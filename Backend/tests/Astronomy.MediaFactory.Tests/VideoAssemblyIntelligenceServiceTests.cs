@@ -236,10 +236,10 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
         var totalWords = CountTestWords(saved.FullNarrationText);
         Assert.InRange(totalWords, 330, 430);
-        Assert.Equal(Math.Round(totalWords / 150.0 * 60.0, 3, MidpointRounding.AwayFromZero), saved.TotalEstimatedDurationSeconds);
+        Assert.Equal(Math.Round(totalWords / 135.0 * 60.0, 3, MidpointRounding.AwayFromZero), saved.TotalEstimatedDurationSeconds);
         Assert.All(saved.SceneScripts, scene =>
         {
-            Assert.InRange(CountTestWords(scene.Narration), 25, 35);
+            Assert.InRange(CountTestWords(scene.Narration), 25, 60);
             Assert.True(scene.Narration.Count(c => c == '.') >= 2);
         });
         Assert.Equal("video-long-tts-audio.mp3", saved.TtsPlan.OutputFileName);

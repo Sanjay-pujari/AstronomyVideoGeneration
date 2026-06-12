@@ -22,17 +22,16 @@ public sealed partial class ProductionPipelineExecutionService(
     IMediaEventStrategyResolver strategyResolver,
     IProductionPipelineQualityValidator qualityValidator,
     IOptions<RenderingOptions> renderingOptions,
-    ILogger<ProductionPipelineExecutionService> logger) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    ILogger<ProductionPipelineExecutionService> logger,
+    IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
-    private const double LongNarrationSecondsPerWord = 60.0 / 150.0;
+    private const double DefaultLongNarrationWordsPerMinute = 135.0;
     private const int ShortNarrationMinimumWords = 26;
     private const int ShortNarrationMaximumWords = 44;
     private const double ShortNarrationMinimumSeconds = 15.0;
     private const double ShortNarrationMaximumSeconds = 25.0;
-    private const int LongNarrationMinimumWords = 300;
-    private const int LongNarrationMaximumWords = 450;
     private const double LongNarrationMinimumSeconds = 120.0;
     private const double LongNarrationMaximumSeconds = 180.0;
 
@@ -528,16 +527,23 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<string> ValidateNarrationContractAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
     {
+        var expansionApplied = false;
         if (profile == ScenePresentationProfile.ShortForm)
         {
-            var initial = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, cancellationToken);
+            var initial = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, false, cancellationToken);
             if (!initial.IsValid && initial.WordCount > ShortNarrationMaximumWords)
             {
                 await CondenseShortNarrationAsync(context, scriptPath, narrationPath, cancellationToken);
             }
         }
+        else
+        {
+            var initial = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, false, cancellationToken);
+            if (initial.EstimatedDurationSeconds < LongNarrationMinimumSeconds || initial.WordCount < ResolveLongNarrationMinimumWords())
+                expansionApplied = await ExpandLongNarrationBeforeValidationAsync(context, scriptPath, narrationPath, cancellationToken);
+        }
 
-        var report = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, cancellationToken);
+        var report = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, expansionApplied, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(report.ValidationPath)!);
         await File.WriteAllTextAsync(report.ValidationPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
         if (!report.IsValid)
@@ -546,7 +552,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return report.ValidationPath;
     }
 
-    private async Task<NarrationValidationReport> BuildNarrationValidationReportAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    private async Task<NarrationValidationReport> BuildNarrationValidationReportAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, bool expansionApplied, CancellationToken cancellationToken)
     {
         var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
         var validationPath = Path.Combine(context.ExecutionContext.NarrationRoot!, profileFolder, "narration-validation.json");
@@ -555,7 +561,10 @@ public sealed partial class ProductionPipelineExecutionService(
             text = ExtractNarrationText(await File.ReadAllTextAsync(scriptPath, cancellationToken)).Trim();
 
         var wordCount = CountSpokenWords(text);
-        var estimatedDurationSeconds = Math.Round(wordCount * (profile == ScenePresentationProfile.ShortForm ? CalibratedShortNarrationSecondsPerWord : LongNarrationSecondsPerWord), 3, MidpointRounding.AwayFromZero);
+        var wordsPerMinute = profile == ScenePresentationProfile.LongForm ? ResolveLongNarrationWordsPerMinute() : Math.Round(60.0 / CalibratedShortNarrationSecondsPerWord, 3, MidpointRounding.AwayFromZero);
+        var estimatedDurationSeconds = profile == ScenePresentationProfile.ShortForm
+            ? Math.Round(wordCount * CalibratedShortNarrationSecondsPerWord, 3, MidpointRounding.AwayFromZero)
+            : EstimateLongNarrationSeconds(wordCount);
         var errors = new List<string>();
         var warnings = new List<string>();
         var forbiddenHits = BuildForbiddenTermsForStrategy(context).Where(term => ContainsToken(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -577,8 +586,8 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         else
         {
-            if (wordCount < LongNarrationMinimumWords || wordCount > LongNarrationMaximumWords)
-                errors.Add($"Long narration word count must be {LongNarrationMinimumWords}-{LongNarrationMaximumWords} words; actualWordCount={wordCount}.");
+            if (wordCount < ResolveLongNarrationMinimumWords() || wordCount > ResolveLongNarrationMaximumWords())
+                errors.Add($"Long narration word count must be {ResolveLongNarrationMinimumWords()}-{ResolveLongNarrationMaximumWords()} words; actualWordCount={wordCount}.");
             if (estimatedDurationSeconds < LongNarrationMinimumSeconds || estimatedDurationSeconds > LongNarrationMaximumSeconds)
                 errors.Add($"Long narration estimated duration must be {LongNarrationMinimumSeconds:0}-{LongNarrationMaximumSeconds:0} seconds before TTS; estimatedDurationSeconds={estimatedDurationSeconds:0.###}.");
             if (!completeEventStoryPresent) errors.Add("Long narration must include the complete event story section sequence.");
@@ -594,12 +603,12 @@ public sealed partial class ProductionPipelineExecutionService(
             ScriptPath: NormalizePath(scriptPath),
             IsValid: errors.Count == 0,
             WordCount: wordCount,
-            MinimumWords: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMinimumWords : LongNarrationMinimumWords,
-            MaximumWords: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMaximumWords : LongNarrationMaximumWords,
+            MinimumWords: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMinimumWords : ResolveLongNarrationMinimumWords(),
+            MaximumWords: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMaximumWords : ResolveLongNarrationMaximumWords(),
             EstimatedDurationSeconds: estimatedDurationSeconds,
             MinimumDurationSeconds: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMinimumSeconds : LongNarrationMinimumSeconds,
             MaximumDurationSeconds: profile == ScenePresentationProfile.ShortForm ? ShortNarrationMaximumSeconds : LongNarrationMaximumSeconds,
-            SecondsPerWord: profile == ScenePresentationProfile.ShortForm ? CalibratedShortNarrationSecondsPerWord : LongNarrationSecondsPerWord,
+            SecondsPerWord: profile == ScenePresentationProfile.ShortForm ? CalibratedShortNarrationSecondsPerWord : 60.0 / wordsPerMinute,
             TitlePresent: titlePresent,
             ViewingWindowPresent: viewingWindowPresent,
             ActionCtaPresent: actionCtaPresent,
@@ -607,7 +616,11 @@ public sealed partial class ProductionPipelineExecutionService(
             ForbiddenTermsChecked: BuildForbiddenTermsForStrategy(context).ToArray(),
             ForbiddenTermHits: forbiddenHits,
             Warnings: warnings,
-            Errors: errors);
+            Errors: errors,
+            TargetSeconds: profile == ScenePresentationProfile.LongForm ? ResolveLongNarrationTargetSeconds() : 0,
+            WordsPerMinute: wordsPerMinute,
+            ExpansionApplied: expansionApplied,
+            FinalValidationPassed: errors.Count == 0);
     }
 
     private static async Task CondenseShortNarrationAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken)
@@ -722,6 +735,96 @@ public sealed partial class ProductionPipelineExecutionService(
     [GeneratedRegex(@"[\p{L}\p{N}]+(?:['’\u2010-\u2015-][\p{L}\p{N}]+)?")]
     private static partial Regex SpokenWordRegex();
 
+
+    private double ResolveLongNarrationWordsPerMinute()
+    {
+        var configured = videoAssemblyOptions?.Value.LongNarrationWordsPerMinute ?? DefaultLongNarrationWordsPerMinute;
+        return configured > 0 ? configured : DefaultLongNarrationWordsPerMinute;
+    }
+
+    private double ResolveLongNarrationTargetSeconds()
+        => Math.Round((LongNarrationMinimumSeconds + LongNarrationMaximumSeconds) / 2.0, 3, MidpointRounding.AwayFromZero);
+
+    private int ResolveLongNarrationMinimumWords()
+        => (int)Math.Ceiling(LongNarrationMinimumSeconds * ResolveLongNarrationWordsPerMinute() / 60.0);
+
+    private int ResolveLongNarrationMaximumWords()
+        => (int)Math.Floor(LongNarrationMaximumSeconds * ResolveLongNarrationWordsPerMinute() / 60.0);
+
+    private double EstimateLongNarrationSeconds(int wordCount)
+        => Math.Round(wordCount / ResolveLongNarrationWordsPerMinute() * 60.0, 3, MidpointRounding.AwayFromZero);
+
+    private async Task<bool> ExpandLongNarrationBeforeValidationAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(scriptPath)) return false;
+        var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions);
+        if (script is null || script.SceneScripts.Count == 0) return false;
+
+        var targetWords = (int)Math.Ceiling(ResolveLongNarrationTargetSeconds() * ResolveLongNarrationWordsPerMinute() / 60.0);
+        var scenes = script.SceneScripts.ToArray();
+        for (var round = 0; round < 10 && CountSpokenWords(string.Join(" ", scenes.Select(s => s.Narration))) < targetWords; round++)
+        {
+            scenes = scenes.Select(scene => scene with { Narration = $"{scene.Narration} {BuildPipelineLongNarrationExpansion(scene.SceneKey, context, round)}" }).ToArray();
+            if (EstimateLongNarrationSeconds(CountSpokenWords(string.Join(" ", scenes.Select(s => s.Narration)))) >= LongNarrationMinimumSeconds)
+                break;
+        }
+
+        var fullText = string.Join(" ", scenes.Select(s => s.Narration));
+        var totalSeconds = EstimateLongNarrationSeconds(CountSpokenWords(fullText));
+        var updatedScenes = scenes.Select(scene => scene with { DurationSeconds = EstimateLongNarrationSeconds(CountSpokenWords(scene.Narration)) }).ToArray();
+        var updatedScript = script with { SceneScripts = updatedScenes, FullNarrationText = fullText, TotalEstimatedDurationSeconds = totalSeconds, DurationValidation = null };
+        await File.WriteAllTextAsync(scriptPath, JsonSerializer.Serialize(updatedScript, JsonOptions), cancellationToken);
+        Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
+        await File.WriteAllTextAsync(narrationPath, fullText, cancellationToken);
+        return true;
+    }
+
+    private static string BuildPipelineLongNarrationExpansion(string section, ProductionPhaseContext context, int round)
+    {
+        var eventInfo = context.ProductionEventIntelligence;
+        var title = FirstNonEmpty(eventInfo.ShortTitle, eventInfo.Title, context.Request.ShortTitle, context.Request.Title, "this sky event");
+        var objects = (eventInfo.ResolvedObjectNames ?? eventInfo.PrimaryObjects ?? context.Request.PrimaryObjects).Where(v => !string.IsNullOrWhiteSpace(v)).Take(5).ToArray();
+        var objectText = objects.Length == 0 ? title : string.Join(", ", objects);
+        var direction = FirstNonEmpty(eventInfo.SkyDirectionHint, context.Request.SkyDirectionHint, "the approved sky direction");
+        var window = FirstNonEmpty(eventInfo.BestViewingWindowLocal, context.Request.BestViewingWindowLocal, eventInfo.LocalPeakTime, context.Request.LocalPeakTime, "the approved viewing window");
+        var sourceNotes = context.Request.SourceNotes ?? Array.Empty<string>();
+        var sourceNote = sourceNotes.Count == 0 ? string.Empty : sourceNotes[round % sourceNotes.Count];
+        return section switch
+        {
+            "Hook" => $"Keep the opening tied to {title}, so viewers immediately know this is the current event, not a generic astronomy segment.",
+            "WhatIsHappening" => $"Explain the event type, {eventInfo.EventType}, through {objectText}, the local timing, and the visible sky geometry in plain language.",
+            "WhenToLook" => $"Repeat the practical timing clearly: use {window}, with local weather and horizon conditions deciding the best exact moment.",
+            "WhereToLook" => $"Use {direction} as the viewing anchor, then invite a slow scan around the approved scene direction.",
+            "WhyItMatters" => string.IsNullOrWhiteSpace(sourceNote) ? $"This matters because {title} has an approved viewing plan and source-backed context." : $"One source note supporting this event is: {sourceNote}.",
+            "HowToObserve" or "ObservationTips" => "Add practical guidance: choose a safe open spot, dim screens, avoid bright lights, let eyes adapt, and stop if conditions are unsafe.",
+            "Action" => "End with a direct call to action: save the time, check clouds, share the plan, and step outside safely.",
+            _ => $"Keep this section grounded in {title}, {objectText}, {direction}, and {window}."
+        };
+    }
+
+    private sealed record Phase14NarrationDiagnostics(
+        int WordCount,
+        double EstimatedSeconds,
+        double MinSeconds,
+        double MaxSeconds,
+        double TargetSeconds,
+        double WordsPerMinute,
+        bool ExpansionApplied,
+        bool FinalValidationPassed);
+
+    private Phase14NarrationDiagnostics? ReadPhase14NarrationDiagnostics(IReadOnlyList<string> outputFiles, ProductionPhaseContext context)
+    {
+        var path = outputFiles.FirstOrDefault(p => string.Equals(Path.GetFileName(p), "narration-validation.json", StringComparison.OrdinalIgnoreCase))
+            ?? Path.Combine(context.ExecutionContext.NarrationRoot!, "long", "narration-validation.json");
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var report = JsonSerializer.Deserialize<NarrationValidationReport>(File.ReadAllText(path), JsonOptions);
+            return report is null ? null : new Phase14NarrationDiagnostics(report.WordCount, report.EstimatedDurationSeconds, report.MinimumDurationSeconds, report.MaximumDurationSeconds, report.TargetSeconds, report.WordsPerMinute, report.ExpansionApplied, report.FinalValidationPassed);
+        }
+        catch (JsonException) { return null; }
+    }
+
     private sealed record NarrationValidationReport(
         string ValidationPath,
         string Profile,
@@ -742,7 +845,11 @@ public sealed partial class ProductionPipelineExecutionService(
         IReadOnlyList<string> ForbiddenTermsChecked,
         IReadOnlyList<string> ForbiddenTermHits,
         IReadOnlyList<string> Warnings,
-        IReadOnlyList<string> Errors);
+        IReadOnlyList<string> Errors,
+        double TargetSeconds = 0,
+        double WordsPerMinute = 0,
+        bool ExpansionApplied = false,
+        bool FinalValidationPassed = false);
 
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
@@ -981,7 +1088,8 @@ public sealed partial class ProductionPipelineExecutionService(
             MusicMood = "WonderCuriosity",
             MusicLevelPercent = profile == ScenePresentationProfile.ShortForm ? 12 : 10,
             DuckMusicUnderNarration = true,
-            ProductionContext = context.ExecutionContext
+            ProductionContext = context.ExecutionContext,
+            SourceNotes = context.Request.SourceNotes ?? Array.Empty<string>()
         };
 
 
@@ -1184,6 +1292,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase12ThumbnailDiagnostics = phaseNo == 12
             ? BuildPhase12ThumbnailDiagnostics(context)
             : null;
+        var phase14NarrationDiagnostics = phaseNo == 14
+            ? ReadPhase14NarrationDiagnostics(outputFiles, context)
+            : null;
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             phaseNo,
@@ -1204,6 +1315,15 @@ public sealed partial class ProductionPipelineExecutionService(
             canRetry,
             phase7NarrationDiagnostics,
             phase12ThumbnailDiagnostics,
+            phase14NarrationDiagnostics,
+            wordCount = phase14NarrationDiagnostics?.WordCount,
+            estimatedSeconds = phase14NarrationDiagnostics?.EstimatedSeconds,
+            minSeconds = phase14NarrationDiagnostics?.MinSeconds,
+            maxSeconds = phase14NarrationDiagnostics?.MaxSeconds,
+            targetSeconds = phase14NarrationDiagnostics?.TargetSeconds,
+            wordsPerMinute = phase14NarrationDiagnostics?.WordsPerMinute,
+            expansionApplied = phase14NarrationDiagnostics?.ExpansionApplied,
+            finalValidationPassed = phase14NarrationDiagnostics?.FinalValidationPassed,
             currentEventLock = phase12ThumbnailDiagnostics?.CurrentEventLock,
             thumbnailRequestTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestTitle,
             thumbnailRequestShortTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestShortTitle,
