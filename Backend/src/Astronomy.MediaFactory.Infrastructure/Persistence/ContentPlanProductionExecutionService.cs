@@ -68,7 +68,7 @@ public sealed class ContentPlanProductionExecutionService(
         ContentPipelineExecution? execution = null;
         try
         {
-            var outputPreparation = PrepareOutputRoot(outputRoot, request, requestedStartPhaseNo, requestedEndPhaseNo);
+            var outputPreparation = PrepareOutputRoot(outputRoot, request, startPhaseNo, endPhaseNo);
             Directory.CreateDirectory(outputRoot);
             await WritePlanInputAsync(outputRoot, plan, intelligence, productionRequest, cancellationToken);
 
@@ -361,14 +361,38 @@ public sealed class ContentPlanProductionExecutionService(
     }
 
     private static int ResolveEarliestPrerequisitePhase(int phaseNo)
+    {
+        var visited = new HashSet<int>();
+        return ResolveEarliestPrerequisitePhase(phaseNo, visited);
+    }
+
+    private static int ResolveEarliestPrerequisitePhase(int phaseNo, HashSet<int> visited)
+    {
+        if (!visited.Add(phaseNo)) return phaseNo;
+
+        var earliest = phaseNo;
+        foreach (var dependencyPhaseNo in ResolvePrerequisitePhases(phaseNo))
+            earliest = Math.Min(earliest, ResolveEarliestPrerequisitePhase(dependencyPhaseNo, visited));
+
+        return earliest;
+    }
+
+    private static IReadOnlyList<int> ResolvePrerequisitePhases(int phaseNo)
         => phaseNo switch
         {
-            <= 4 => phaseNo,
-            >= 10 => 5,
-            _ => phaseNo
+            5 => [3],
+            6 => [5],
+            7 => [6, 3],
+            8 => [3, 6, 7],
+            9 => [8],
+            10 => [3, 5, 6, 7, 8, 9],
+            11 => [10],
+            12 => [10, 11],
+            >= 13 => [12],
+            _ => []
         };
 
-    private static OutputPreparationResult PrepareOutputRoot(string outputRoot, ContentPlanProductionExecutionRequest request, int requestedStartPhaseNo, int requestedEndPhaseNo)
+    private static OutputPreparationResult PrepareOutputRoot(string outputRoot, ContentPlanProductionExecutionRequest request, int cleanupStartPhaseNo, int cleanupEndPhaseNo)
     {
         if (request.ExecutionMode is not (ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild))
             return new(false, null, []);
@@ -381,13 +405,13 @@ public sealed class ContentPlanProductionExecutionService(
 
         if (request.ArchivePreviousRun)
         {
-            var archivePath = ArchivePreviousRun(outputRoot, request.ExecutionMode, request.RebuildIntelligence, requestedStartPhaseNo, requestedEndPhaseNo);
+            var archivePath = ArchivePreviousRun(outputRoot, request.ExecutionMode, request.RebuildIntelligence, cleanupStartPhaseNo, cleanupEndPhaseNo);
             return new(true, archivePath, []);
         }
 
-        var deleted = request.ExecutionMode == ContentPlanExecutionMode.FullRebuild && requestedStartPhaseNo <= 1
+        var deleted = request.ExecutionMode == ContentPlanExecutionMode.FullRebuild && cleanupStartPhaseNo <= 1
             ? DeleteFullPlanOutput(outputRoot)
-            : DeleteRebuildOutputs(outputRoot, request.RebuildIntelligence, requestedStartPhaseNo, requestedEndPhaseNo);
+            : DeleteRebuildOutputs(outputRoot, request.RebuildIntelligence, cleanupStartPhaseNo, cleanupEndPhaseNo);
         return new(false, null, deleted);
     }
 
@@ -500,7 +524,7 @@ public sealed class ContentPlanProductionExecutionService(
             entries.Add("validation");
         if (requestedStartPhaseNo <= 19 && requestedEndPhaseNo >= 1)
             entries.Add("phase-manifest.json");
-        if (requestedStartPhaseNo <= 7 && requestedEndPhaseNo >= 3)
+        if (requestedStartPhaseNo <= 3 && requestedEndPhaseNo >= 3)
             entries.Add("question-engine");
         return entries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
