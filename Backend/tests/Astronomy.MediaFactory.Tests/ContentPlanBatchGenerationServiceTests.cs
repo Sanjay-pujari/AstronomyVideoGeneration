@@ -456,7 +456,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Assert.Equal(12, response.RequestedEndPhase);
             Assert.Equal(3, response.ExpandedStartPhase);
             Assert.Equal(12, response.ExpandedEndPhase);
-            Assert.Equal(Enumerable.Range(3, 10), response.PhaseResults!.Select(p => p.PhaseNo));
+            Assert.Equal(Enumerable.Range(10, 3), response.PhaseResults!.Select(p => p.PhaseNo));
             Assert.All(response.PhaseResults!, phase => Assert.Equal(ProductionPhaseStatus.Succeeded, phase.Status));
             var shortVideoCompletion = response.RequestedOutputCompletion!.Single(output => output.OutputType == "ShortVideo");
             Assert.Equal("Failed", shortVideoCompletion.Status);
@@ -909,7 +909,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
         public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
         {
             var now = DateTimeOffset.UtcNow;
-            var phaseResults = Enumerable.Range(request.StartPhaseNo!.Value, request.EndPhaseNo!.Value - request.StartPhaseNo!.Value + 1)
+            var phaseResults = Enumerable.Range(request.RequestedStartPhaseNo!.Value, request.RequestedEndPhaseNo!.Value - request.RequestedStartPhaseNo!.Value + 1)
                 .Select(phaseNo => new ProductionPhaseResult(
                     phaseNo,
                     $"Phase {phaseNo}",

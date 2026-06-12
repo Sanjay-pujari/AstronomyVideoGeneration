@@ -111,7 +111,7 @@ public sealed class ContentPlanProductionExecutionService(
             var phase19Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 19);
             var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
             var partialPhaseExecution = IsPartialPhaseExecution(request);
-            var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success, startPhaseNo, endPhaseNo);
+            var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success, requestedStartPhaseNo, requestedEndPhaseNo);
             var productionFailed = partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
             var productionCompleted = !productionFailed && (phase19Succeeded || partialPhaseSuccess);
             execution.Status = productionCompleted ? "Completed" : productionFailed ? "Failed" : "Running";
@@ -192,18 +192,21 @@ public sealed class ContentPlanProductionExecutionService(
             && request.StartPhaseNo.HasValue
             && request.EndPhaseNo.HasValue;
 
-    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess, int startPhaseNo, int endPhaseNo)
+    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess, int requestedStartPhaseNo, int requestedEndPhaseNo)
     {
         if (errors.Count > 0) return false;
         if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess;
 
-        var phaseResultNumbers = phaseResults.Select(result => result.PhaseNo).ToHashSet();
-        for (var phaseNo = startPhaseNo; phaseNo <= endPhaseNo; phaseNo++)
+        var requestedPhaseResults = phaseResults
+            .Where(result => result.PhaseNo >= requestedStartPhaseNo && result.PhaseNo <= requestedEndPhaseNo)
+            .ToArray();
+        var requestedPhaseResultNumbers = requestedPhaseResults.Select(result => result.PhaseNo).ToHashSet();
+        for (var phaseNo = requestedStartPhaseNo; phaseNo <= requestedEndPhaseNo; phaseNo++)
         {
-            if (!phaseResultNumbers.Contains(phaseNo)) return false;
+            if (!requestedPhaseResultNumbers.Contains(phaseNo)) return false;
         }
 
-        foreach (var result in phaseResults)
+        foreach (var result in requestedPhaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
             if (result.Status == ProductionPhaseStatus.Succeeded) continue;
