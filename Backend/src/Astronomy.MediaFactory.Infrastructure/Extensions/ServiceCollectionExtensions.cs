@@ -29,6 +29,11 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddMediaFactory(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddOptions<ProductionPipelineOptions>()
+            .Bind(configuration.GetSection(ProductionPipelineOptions.SectionName))
+            .Validate(options => options.StaleRunningThresholdMinutes > 0, "ProductionPipeline:StaleRunningThresholdMinutes must be greater than zero.")
+            .ValidateOnStart();
+
         services.AddOptions<RenderingOptions>()
             .Bind(configuration.GetSection(RenderingOptions.SectionName))
             .Configure(options => configuration.GetSection(RenderingOptions.VideoRenderSectionName).Bind(options))
@@ -490,6 +495,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IProductionPipelineExecutionService>(sp => sp.GetRequiredService<ProductionPipelineExecutionService>());
         services.AddScoped<IProductionPhaseRunner>(sp => sp.GetRequiredService<ProductionPipelineExecutionService>());
         services.AddScoped<IContentPlanProductionExecutionService, ContentPlanProductionExecutionService>();
+        services.AddScoped<IProductionRunningRecoveryService, ProductionRunningRecoveryService>();
         services.AddScoped<ContentPlanBatchGenerationService>();
         services.AddScoped<IContentPlanBatchGenerationService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
         services.AddScoped<IContentPlanGenerationReadinessService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());

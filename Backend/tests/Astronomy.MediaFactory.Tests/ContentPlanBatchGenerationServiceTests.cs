@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -64,6 +65,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -106,6 +109,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -137,6 +142,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -172,6 +179,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -207,6 +216,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     {
         await using var db = CreateDb();
         SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var runningExecution = SeedPipelineExecution(db, DateTimeOffset.UtcNow.AddMinutes(-5), "Running");
         var legacy = new ThrowingLegacyPipeline();
         var production = new CapturingProductionExecutionService();
         var service = new ContentPlanBatchGenerationService(
@@ -216,6 +226,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -245,6 +257,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     {
         await using var db = CreateDb();
         SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var runningExecution = SeedPipelineExecution(db, DateTimeOffset.UtcNow.AddMinutes(-5), "Running");
         var legacy = new ThrowingLegacyPipeline();
         var production = new CapturingProductionExecutionService();
         var service = new ContentPlanBatchGenerationService(
@@ -254,6 +267,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -280,6 +295,10 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.Equal(17, production.CapturedStartPhaseNo);
         Assert.Equal(19, production.CapturedEndPhaseNo);
         Assert.True(production.CapturedRetryFailedOnly);
+        var execution = await db.ContentPipelineExecutions.SingleAsync(e => e.Id == runningExecution.Id);
+        Assert.Equal("Failed", execution.Status);
+        Assert.Equal("Automatically marked failed due to stale running execution.", execution.ErrorMessage);
+        Assert.Contains(response.Warnings, warning => warning.Reason.Contains($"Previous execution {runningExecution.Id:D} marked Failed", StringComparison.OrdinalIgnoreCase));
         Assert.False(legacy.WasCalled);
     }
 
@@ -297,6 +316,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -330,6 +351,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -374,6 +397,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             legacy,
             legacy,
             production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
@@ -390,6 +415,179 @@ public sealed class ContentPlanBatchGenerationServiceTests
 
         Assert.Contains("allowCompletedPlanRerun=true", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(Guid.Empty, production.CapturedPlanId);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_StaleProductionRunningExecution_IsRecoveredAndRetryProceeds()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var staleExecution = SeedPipelineExecution(db, DateTimeOffset.UtcNow.AddMinutes(-45), "Running");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            StartPhaseNo: 17,
+            EndPhaseNo: 19,
+            RetryFailedOnly: true,
+            AllowFailedPlanRetry: true), CancellationToken.None);
+
+        var plan = await db.ContentGenerationPlans.SingleAsync(p => p.Id == GeminidsPlanId);
+        var execution = await db.ContentPipelineExecutions.SingleAsync(e => e.Id == staleExecution.Id);
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(GeminidsPlanId, production.CapturedPlanId);
+        Assert.Equal("ProductionFailed", plan.Status);
+        Assert.Equal("ProductionFailed", plan.PlanStatus);
+        Assert.Equal("Failed", execution.Status);
+        Assert.NotNull(execution.FinishedUtc);
+        Assert.Equal("Automatically marked failed due to stale running execution.", execution.ErrorMessage);
+        Assert.Contains(response.Warnings, warning => warning.Reason.Contains($"Previous execution {staleExecution.Id:D} marked Failed", StringComparison.OrdinalIgnoreCase));
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_RecentProductionRunningExecution_BlocksWithoutRecoveryFlag()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionRunning", planStatus: "ProductionRunning");
+        var recentExecution = SeedPipelineExecution(db, DateTimeOffset.UtcNow.AddMinutes(-5), "Running");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            StartPhaseNo: 17,
+            EndPhaseNo: 19,
+            RetryFailedOnly: true,
+            AllowFailedPlanRetry: true), CancellationToken.None);
+
+        var execution = await db.ContentPipelineExecutions.SingleAsync(e => e.Id == recentExecution.Id);
+        Assert.True(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Equal("Running", execution.Status);
+        Assert.Null(execution.FinishedUtc);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+        Assert.Contains(response.Warnings, warning => warning.Reason.Contains("ProductionRunning", StringComparison.OrdinalIgnoreCase));
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_CompletedAndFailedPlans_AreNotRecovered()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionFailed", planStatus: "ProductionFailed");
+        var runningExecution = SeedPipelineExecution(db, DateTimeOffset.UtcNow.AddMinutes(-45), "Running");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            StartPhaseNo: 17,
+            EndPhaseNo: 19,
+            RetryFailedOnly: true,
+            AllowFailedPlanRetry: true), CancellationToken.None);
+
+        var execution = await db.ContentPipelineExecutions.SingleAsync(e => e.Id == runningExecution.Id);
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal("Running", execution.Status);
+        Assert.Null(execution.FinishedUtc);
+        Assert.DoesNotContain(response.Warnings, warning => warning.Reason.Contains("Recovered stale running execution", StringComparison.OrdinalIgnoreCase));
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_CompletedPlans_AreNotRecovered()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var runningExecution = SeedPipelineExecution(db, DateTimeOffset.UtcNow.AddMinutes(-45), "Running");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = new ContentPlanBatchGenerationService(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: false,
+            PlanTitles: ["Geminids Meteor Shower Peak"],
+            UseProductionPipeline: true,
+            OverwriteExisting: true,
+            ExecutionMode: ContentPlanExecutionMode.RebuildOutputs,
+            AllowCompletedPlanRerun: true), CancellationToken.None);
+
+        var execution = await db.ContentPipelineExecutions.SingleAsync(e => e.Id == runningExecution.Id);
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal("Running", execution.Status);
+        Assert.Null(execution.FinishedUtc);
+        Assert.DoesNotContain(response.Warnings, warning => warning.Reason.Contains("Recovered stale running execution", StringComparison.OrdinalIgnoreCase));
+        Assert.False(legacy.WasCalled);
     }
 
     private static MediaFactoryDbContext CreateDb()
@@ -438,6 +636,22 @@ public sealed class ContentPlanBatchGenerationServiceTests
         plan.AssignId(GeminidsPlanId);
         db.ContentGenerationPlans.Add(plan);
         db.SaveChanges();
+    }
+
+    private static ContentPipelineExecution SeedPipelineExecution(MediaFactoryDbContext db, DateTimeOffset startedUtc, string status, DateTimeOffset? finishedUtc = null)
+    {
+        var execution = new ContentPipelineExecution
+        {
+            ContentGenerationPlanId = GeminidsPlanId,
+            ContentCategoryCode = "RareEventAlert",
+            StartedUtc = startedUtc,
+            FinishedUtc = finishedUtc,
+            Status = status,
+            OutputFolder = @"D:\AstronomyWorkspace\Astronomy\media-output\plans\IN-RJ-UDAIPUR\2026\2af19a66-3777-47c7-8672-6e9d6245ac1c"
+        };
+        db.ContentPipelineExecutions.Add(execution);
+        db.SaveChanges();
+        return execution;
     }
 
     private sealed class CapturingProductionExecutionService : IContentPlanProductionExecutionService
