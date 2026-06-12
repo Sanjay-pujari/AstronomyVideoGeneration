@@ -927,6 +927,18 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         }
     }
 
+    private static bool IsConceptualVisualRequirement(string value)
+        => value.Contains("streak", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("dark sky", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("radiant", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("glow", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("moonrise", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("eastern horizon", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("sky direction", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("label", StringComparison.OrdinalIgnoreCase);
+
     private sealed record DrawableObjectMetadata(
         string ObjectVisualSource,
         string AssetKey,
