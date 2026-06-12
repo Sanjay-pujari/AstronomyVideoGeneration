@@ -350,6 +350,21 @@ public sealed class EventProductionIntelligenceTests
         Assert.True(validation.RootElement.GetProperty("titleFoundInOverlayText").GetBoolean());
         Assert.True(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
         Assert.True(validation.RootElement.GetProperty("titleFoundInReview").GetBoolean());
+
+        var sceneDiagnostics = validation.RootElement.GetProperty("titleValidationDiagnostics").GetProperty("scenes").EnumerateArray().Single();
+        Assert.Equal(1, sceneDiagnostics.GetProperty("sceneNumber").GetInt32());
+        Assert.Equal(Path.Combine(sceneRoot, "scene-001-infographic-spec.json").Replace('\\', '/'), sceneDiagnostics.GetProperty("specPathUsed").GetString());
+        Assert.Equal(Path.Combine(sceneRoot, "scene-001-review.json").Replace('\\', '/'), sceneDiagnostics.GetProperty("reviewPathUsed").GetString());
+        Assert.Equal(Path.Combine(sceneRoot, "scene-001-narration.txt").Replace('\\', '/'), sceneDiagnostics.GetProperty("narrationPathUsed").GetString());
+        Assert.Equal(Path.Combine(sceneRoot, "scene-001.srt").Replace('\\', '/'), sceneDiagnostics.GetProperty("srtPathUsed").GetString());
+        Assert.Equal("Snow Moon Full Moon: what to watch.", sceneDiagnostics.GetProperty("captionTextLoaded").GetString());
+        Assert.Equal("Snow Moon Full Moon: what to watch.", sceneDiagnostics.GetProperty("viewerTakeawayLoaded").GetString());
+        Assert.Equal("Snow Moon", sceneDiagnostics.GetProperty("overlayTextLoaded").GetString());
+        Assert.Equal("Snow Moon Full Moon", sceneDiagnostics.GetProperty("eventTitleLoaded").GetString());
+        Assert.Equal("Snow Moon", sceneDiagnostics.GetProperty("eventShortTitleLoaded").GetString());
+        Assert.True(sceneDiagnostics.GetProperty("titleValidationPassed").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("titleMatchedValue").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("titleMatchedSource").GetString()));
     }
 
 

@@ -1099,26 +1099,58 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static string ResolveCurrentRunDirectory(string root, string directoryName)
     {
-        var manifestRoot = ResolveSceneApprovalStagingRootFromRunMetadata(root);
-        if (!string.IsNullOrWhiteSpace(manifestRoot) && Directory.Exists(manifestRoot)) return manifestRoot;
+        var candidates = ResolveCurrentRunDirectoryCandidates(root, directoryName);
+        var staging = candidates.FirstOrDefault(candidate => candidate.IsStaging && Directory.Exists(candidate.Path) && EnumerateCurrentRunSceneInfographicSpecFiles(candidate.Path).Any());
+        if (staging is not null) return staging.Path;
 
-        var staging = Path.Combine(root, "question-engine", directoryName);
-        if (Directory.Exists(staging)) return staging;
+        var existingStaging = candidates.FirstOrDefault(candidate => candidate.IsStaging && Directory.Exists(candidate.Path));
+        if (existingStaging is not null) return existingStaging.Path;
 
-        return Path.Combine(root, directoryName);
+        var normalized = candidates.FirstOrDefault(candidate => !candidate.IsStaging && Directory.Exists(candidate.Path) && EnumerateCurrentRunSceneInfographicSpecFiles(candidate.Path).Any());
+        if (normalized is not null) return normalized.Path;
+
+        return candidates.FirstOrDefault().Path;
     }
 
-    private static string? ResolveSceneApprovalStagingRootFromRunMetadata(string root)
+    private static IReadOnlyList<SceneDirectoryCandidate> ResolveCurrentRunDirectoryCandidates(string root, string directoryName)
+    {
+        var parent = Directory.GetParent(root)?.FullName ?? root;
+        var candidates = new List<SceneDirectoryCandidate>();
+        void Add(string path, bool isStaging)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            if (candidates.Any(candidate => string.Equals(candidate.Path, path, StringComparison.OrdinalIgnoreCase))) return;
+            candidates.Add(new(path, isStaging));
+        }
+
+        var manifestStagingRoot = ResolveSceneApprovalRootFromRunMetadata(root, "sceneApprovalStagingRoot");
+        if (!string.IsNullOrWhiteSpace(manifestStagingRoot)) Add(manifestStagingRoot, true);
+
+        Add(Path.Combine(root, "question-engine", directoryName), true);
+        if (string.Equals(Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), "question-engine", StringComparison.OrdinalIgnoreCase))
+            Add(Path.Combine(root, directoryName), true);
+
+        var manifestNormalizedRoot = ResolveSceneApprovalRootFromRunMetadata(root, "sceneApprovalNormalizedRoot");
+        if (!string.IsNullOrWhiteSpace(manifestNormalizedRoot)) Add(manifestNormalizedRoot, false);
+
+        Add(Path.Combine(parent, directoryName), false);
+        Add(Path.Combine(root, directoryName), false);
+        return candidates;
+    }
+
+    private sealed record SceneDirectoryCandidate(string Path, bool IsStaging);
+
+    private static string? ResolveSceneApprovalRootFromRunMetadata(string root, string propertyName)
     {
         foreach (var path in EnumerateRunMetadataFiles(root))
         {
             using var doc = TryParseJson(File.ReadAllText(path));
             if (doc is null) continue;
-            if (doc.RootElement.TryGetProperty("sceneApprovalStagingRoot", out var stagingRoot)
-                && stagingRoot.ValueKind == JsonValueKind.String)
+            if (doc.RootElement.TryGetProperty(propertyName, out var sceneRoot)
+                && sceneRoot.ValueKind == JsonValueKind.String)
             {
-                var value = stagingRoot.GetString();
-                if (!string.IsNullOrWhiteSpace(value) && Directory.Exists(value)) return value;
+                var value = sceneRoot.GetString();
+                if (!string.IsNullOrWhiteSpace(value)) return value;
             }
         }
 
@@ -1239,9 +1271,6 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static TitleValidationDiagnostics BuildTitleValidationDiagnostics(ProductionEventIntelligence intelligence, IEnumerable<string> currentSceneSpecFiles, string root, string fallbackText)
     {
-        var aliases = BuildEventTitleAliases(intelligence, root);
-        if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true, [], [], null, null);
-
         var infographicFiles = currentSceneSpecFiles
             .Where(File.Exists)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1254,6 +1283,11 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        var sceneFiles = BuildSceneTitleValidationFileSets(infographicFiles);
+        var aliases = BuildEventTitleAliases(intelligence, root, infographicFiles.Concat(reviewFiles).Concat(sceneFiles.SelectMany(scene => new[] { scene.NarrationPath, scene.SrtPath }).Where(File.Exists)));
+        if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true, [], [], null, null, []);
+
+        var sceneDiagnostics = sceneFiles.Select(scene => BuildSceneTitleValidationDiagnostic(scene, aliases)).ToArray();
         var captionSource = ReadJsonPropertyTextWithSources(infographicFiles, ["captionText"], aliases) with { Field = "titleFoundInCaptionText" };
         var viewerTakeawaySource = ReadJsonPropertyTextWithSources(infographicFiles, ["viewerTakeaway"], aliases) with { Field = "titleFoundInViewerTakeaway" };
         var overlaySource = ReadJsonPropertyTextWithSources(infographicFiles, ["overlayText"], aliases) with { Field = "titleFoundInOverlayText" };
@@ -1263,7 +1297,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var sources = new[] { captionSource, viewerTakeawaySource, overlaySource, metadataSource, reviewSource };
         var matchedSource = sources.FirstOrDefault(source => source.Found);
         var matchedFile = matchedSource?.SourceFiles.FirstOrDefault(source => !string.IsNullOrWhiteSpace(source.MatchedAlias));
-        var titleFound = sources.Any(source => source.Found);
+        var matchedScene = sceneDiagnostics.FirstOrDefault(scene => scene.TitleValidationPassed);
+        var titleFound = sources.Any(source => source.Found) || sceneDiagnostics.Any(scene => scene.TitleValidationPassed);
 
         return new(
             captionSource.Found,
@@ -1276,11 +1311,90 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             false,
             sources,
             aliases.Select(alias => alias.Value).ToArray(),
-            matchedFile?.MatchedAlias,
-            matchedSource?.Field);
+            matchedFile?.MatchedAlias ?? matchedScene?.TitleMatchedValue,
+            matchedSource?.Field ?? matchedScene?.TitleMatchedSource,
+            sceneDiagnostics);
     }
 
-    private static IReadOnlyList<TitleCandidate> BuildEventTitleAliases(ProductionEventIntelligence intelligence, string root)
+    private static IReadOnlyList<SceneTitleValidationFiles> BuildSceneTitleValidationFileSets(IReadOnlyList<string> infographicFiles)
+        => infographicFiles.Select(specFile =>
+        {
+            var sceneKey = Regex.Match(Path.GetFileName(specFile), @"^(scene-\d+)-infographic-spec\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Groups[1].Value;
+            var sceneRoot = Path.GetDirectoryName(specFile)!;
+            return new SceneTitleValidationFiles(
+                sceneKey,
+                specFile,
+                Path.Combine(sceneRoot, $"{sceneKey}-review.json"),
+                ResolveSceneSidecarPath(sceneRoot, sceneKey, "*-narration.txt"),
+                ResolveSceneSidecarPath(sceneRoot, sceneKey, "*.srt"));
+        }).ToArray();
+
+    private static string ResolveSceneSidecarPath(string sceneRoot, string sceneKey, string pattern)
+        => Directory.Exists(sceneRoot)
+            ? Directory.EnumerateFiles(sceneRoot, $"{sceneKey}{pattern[1..]}", SearchOption.AllDirectories)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault() ?? string.Empty
+            : string.Empty;
+
+    private static SceneTitleValidationDiagnostic BuildSceneTitleValidationDiagnostic(SceneTitleValidationFiles files, IReadOnlyList<TitleCandidate> aliases)
+    {
+        using var specDoc = File.Exists(files.SpecPath) ? TryParseJson(File.ReadAllText(files.SpecPath)) : null;
+        using var reviewDoc = File.Exists(files.ReviewPath) ? TryParseJson(File.ReadAllText(files.ReviewPath)) : null;
+        var captionText = specDoc is null ? string.Empty : ReadFirstJsonPropertyText(specDoc.RootElement, "captionText");
+        var viewerTakeaway = specDoc is null ? string.Empty : ReadFirstJsonPropertyText(specDoc.RootElement, "viewerTakeaway");
+        var overlayText = specDoc is null ? string.Empty : ReadFirstJsonPropertyText(specDoc.RootElement, "overlayText");
+        var eventTitle = specDoc is null ? string.Empty : ReadFirstJsonPropertyText(specDoc.RootElement, "eventTitle");
+        var eventShortTitle = specDoc is null ? string.Empty : ReadFirstJsonPropertyText(specDoc.RootElement, "eventShortTitle");
+
+        var searchFragments = new List<SceneTitleSearchFragment>();
+        if (specDoc is not null)
+        {
+            AddSceneTitleFragments(searchFragments, files.SpecPath, specDoc.RootElement, ["captionText", "viewerTakeaway", "overlayText", "narrationText", "strategyValidationFacts", "visualSourceResolution", "drawableVisualObjects", "eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle", "metadata"]);
+        }
+        if (reviewDoc is not null)
+        {
+            AddSceneTitleFragments(searchFragments, files.ReviewPath, reviewDoc.RootElement, ["captionText", "viewerTakeaway", "overlayText", "narrationText", "metadata", "checks", "eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle"]);
+        }
+        if (File.Exists(files.NarrationPath)) searchFragments.Add(new(NormalizePath(files.NarrationPath), "narrationText", File.ReadAllText(files.NarrationPath)));
+        if (File.Exists(files.SrtPath)) searchFragments.Add(new(NormalizePath(files.SrtPath), "srtText", File.ReadAllText(files.SrtPath)));
+
+        var match = searchFragments
+            .Select(fragment => new { Fragment = fragment, Alias = aliases.FirstOrDefault(alias => ContainsToken(fragment.Text, alias.Value)) })
+            .FirstOrDefault(item => item.Alias is not null);
+
+        return new(
+            ExtractSceneNumber(files.SceneKey),
+            NormalizePath(files.SpecPath),
+            File.Exists(files.ReviewPath) ? NormalizePath(files.ReviewPath) : string.Empty,
+            File.Exists(files.NarrationPath) ? NormalizePath(files.NarrationPath) : string.Empty,
+            File.Exists(files.SrtPath) ? NormalizePath(files.SrtPath) : string.Empty,
+            captionText,
+            viewerTakeaway,
+            overlayText,
+            eventTitle,
+            eventShortTitle,
+            aliases.Select(alias => $"{alias.Source}: {alias.Value}").ToArray(),
+            match?.Alias?.Value,
+            match is null ? null : $"{match.Fragment.FilePath}#{match.Fragment.JsonPath} ({match.Alias!.Source})",
+            match is not null);
+    }
+
+    private static int ExtractSceneNumber(string sceneKey)
+    {
+        var match = Regex.Match(sceneKey, @"scene-(\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : 0;
+    }
+
+    private static string ReadFirstJsonPropertyText(JsonElement root, string propertyName)
+        => CollectJsonPropertyFragments(root, [propertyName]).Select(fragment => JsonTextValue(fragment.Value)).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static void AddSceneTitleFragments(List<SceneTitleSearchFragment> fragments, string file, JsonElement root, IReadOnlyCollection<string> propertyNames)
+    {
+        foreach (var fragment in CollectJsonPropertyFragments(root, propertyNames))
+            fragments.Add(new(NormalizePath(file), fragment.Path, JsonTextValue(fragment.Value)));
+    }
+
+    private static IReadOnlyList<TitleCandidate> BuildEventTitleAliases(ProductionEventIntelligence intelligence, string root, IEnumerable<string> currentSceneFiles)
     {
         var candidates = new List<TitleCandidate>
         {
@@ -1296,12 +1410,35 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             candidates.Add(new("productionPipelineRequest.shortTitle", request.ShortTitle));
         }
 
+        foreach (var candidate in ReadCurrentSceneTitleCandidates(currentSceneFiles)) candidates.Add(candidate);
+
         return candidates
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Value))
             .Select(candidate => candidate with { Value = candidate.Value.Trim() })
             .DistinctBy(candidate => NormalizeLooseMatchText(candidate.Value).ToUpperInvariant())
             .OrderBy(candidate => candidate.Value.Length)
             .ToArray();
+    }
+
+
+    private static IEnumerable<TitleCandidate> ReadCurrentSceneTitleCandidates(IEnumerable<string> files)
+    {
+        foreach (var file in files.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (Path.GetExtension(file).Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                using var doc = TryParseJson(File.ReadAllText(file));
+                if (doc is null) continue;
+                foreach (var fragment in CollectJsonPropertyFragments(doc.RootElement, ["productionPipelineRequest", "astronomyEventTitle", "astronomyEventShortTitle", "eventTitle", "eventShortTitle"]))
+                {
+                    foreach (var value in JsonTextValue(fragment.Value).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var source = fragment.Path.Contains("short", StringComparison.OrdinalIgnoreCase) ? "currentSceneMetadata.shortTitle" : "currentSceneMetadata.title";
+                        yield return new(source, value);
+                    }
+                }
+            }
+        }
     }
 
     private static IEnumerable<ContentPlanProductionPipelineRequest> ReadCurrentRunProductionRequestCandidates(string root)
@@ -1645,9 +1782,30 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         IReadOnlyList<TitleDiagnosticSource> Sources,
         IReadOnlyList<string> TitleCandidates,
         string? TitleMatchedValue,
-        string? TitleMatchedSource);
+        string? TitleMatchedSource,
+        IReadOnlyList<SceneTitleValidationDiagnostic> Scenes);
 
     private sealed record TitleCandidate(string Source, string Value);
+
+    private sealed record SceneTitleValidationFiles(string SceneKey, string SpecPath, string ReviewPath, string NarrationPath, string SrtPath);
+
+    private sealed record SceneTitleSearchFragment(string FilePath, string JsonPath, string Text);
+
+    private sealed record SceneTitleValidationDiagnostic(
+        int SceneNumber,
+        string SpecPathUsed,
+        string ReviewPathUsed,
+        string NarrationPathUsed,
+        string SrtPathUsed,
+        string CaptionTextLoaded,
+        string ViewerTakeawayLoaded,
+        string OverlayTextLoaded,
+        string EventTitleLoaded,
+        string EventShortTitleLoaded,
+        IReadOnlyList<string> TitleCandidates,
+        string? TitleMatchedValue,
+        string? TitleMatchedSource,
+        bool TitleValidationPassed);
 
     private sealed record TitleDiagnosticSource(
         string Field,
