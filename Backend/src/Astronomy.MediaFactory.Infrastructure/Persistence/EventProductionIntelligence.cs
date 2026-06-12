@@ -348,6 +348,60 @@ public sealed class PlanetPairingStrategy : MediaEventStrategyBase
     private static string DescribeViewingTime(DateTimeOffset localPeak) => IsEvening(localPeak) ? "shortly after sunset" : "near the peak of the event";
 }
 
+public sealed class PlanetGroupingStrategy : MediaEventStrategyBase
+{
+    public override string EventType => "PlanetGrouping";
+    public override QuestionQualityContract QuestionQualityContract => new(
+        WhatRequiredIntents: [Intent("grouping overview", "planet grouping", "multiple", "planets", "same sky", "arrangement")],
+        WhereRequiredIntents: [Intent("grouping direction and horizon", "north", "south", "east", "west", "horizon", "above", "arc")],
+        WhenRequiredIntents: [Intent("viewer-friendly grouping time", "best viewing", "AM", "PM", "IST", "window", "shortly after sunset", "pre-dawn")],
+        HowRequiredIntents: [Intent("multi-object finding instruction", "find", "start", "scan", "follow", "anchor", "horizon", "labels")],
+        WhyRequiredIntents: [Intent("grouping significance", "multiple planets", "grouping", "alignment", "bright", "same viewing window", "arrangement")],
+        ActionRequiredIntents: [Intent("grouping CTA", "save", "check", "clear", "step outside", "watch", "plan")]);
+
+    public override bool CanHandle(string eventType, string title)
+        => eventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || eventType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("planet grouping", StringComparison.OrdinalIgnoreCase);
+
+    public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(
+        EventType,
+        StandardQuestions,
+        ["PlanetGroupingSceneStrategy — hook with complete planet group", "PlanetGroupingSceneStrategy — objects involved", "PlanetGroupingSceneStrategy — timing window", "PlanetGroupingSceneStrategy — direction and scan path", "PlanetGroupingSceneStrategy — why the grouping matters", "PlanetGroupingSceneStrategy — CTA"],
+        ["PlanetGroupingSceneStrategy — intro", "PlanetGroupingSceneStrategy — multi-object geometry", "PlanetGroupingSceneStrategy — local timing", "PlanetGroupingSceneStrategy — sky direction", "PlanetGroupingSceneStrategy — guided scan path", "PlanetGroupingSceneStrategy — viewing tips", "PlanetGroupingHeroStrategy — hero copy beat", "PlanetGroupingThumbnailStrategy — thumbnail hook"],
+        ["multi-planet grouping", "realistic planet textures", "guided scan path", "horizon compass", "clean exact-object labels"],
+        [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint)],
+        "calm, guided, multi-object, orientation-first",
+        ["Planet Grouping", "Look for the Lineup", "Multiple Planets"],
+        ["meteor shower", "radiant", "eclipse shadow", "full moon only"],
+        ["Use PlanetGroupingSceneStrategy for scene visuals.", "Use PlanetGroupingHeroStrategy for hero framing.", "Use PlanetGroupingThumbnailStrategy for thumbnails.", "Render every listed planet with exact names and no generic sky-only fallback."],
+        RequiredVisualObjects: Objects(intelligence, "planet group").Concat(["planet grouping", "guided scan path"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+        RequiredNarrationFacts: [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint), nameof(ProductionEventIntelligence.PrimaryObjects)],
+        HeroCopyCandidates: ["PlanetGroupingHeroStrategy", "Multiple planets in one sky", "Follow the grouping"]);
+
+    public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+    {
+        var objects = Objects(intelligence, "the visible planets");
+        var objectPhrase = JoinNatural(objects);
+        var anchor = objects.FirstOrDefault() ?? "the brightest planet";
+        var direction = FormattedDirection(intelligence);
+        var window = ViewingTime(intelligence, context);
+        var why = intelligence.AngularSeparationDegrees.HasValue
+            ? $"The grouping spans about {intelligence.AngularSeparationDegrees.Value:0.##}° at its tightest, making several planets share one guided viewing window."
+            : $"Several bright planets share the same viewing window, making the arrangement easier to compare than a single planet sighting.";
+
+        return CreateSet(intelligence, context,
+        [
+            Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objectPhrase} form a planet grouping in {context.LocationName}’s sky.", 1),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {direction}, then follow the group across the same part of the sky.", 2),
+            Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {window}, when the planet group is above the horizon.", 3),
+            Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", $"Start with {anchor}, then scan along the nearby bright points; labels should match the actual planets only.", 4),
+            Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", why, 5),
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", "Save the viewing window, check for a clear horizon, and watch the full planet grouping.", 6)
+        ]);
+    }
+}
+
 public sealed class ConjunctionStrategy : MediaEventStrategyBase
 {
     public override string EventType => "Conjunction";
@@ -560,6 +614,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         => new MediaEventStrategyResolver([
             new MeteorShowerStrategy(),
             new PlanetPairingStrategy(),
+            new PlanetGroupingStrategy(),
             new ConjunctionStrategy(),
             new NamedFullMoonStrategy(),
             new NewMoonStrategy(),

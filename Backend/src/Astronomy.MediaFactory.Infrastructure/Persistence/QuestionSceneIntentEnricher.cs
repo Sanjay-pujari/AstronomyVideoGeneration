@@ -149,6 +149,7 @@ public sealed class QuestionSceneIntentEnricher(
         {
             "MeteorShower" => BuildMeteorTemplate(scene, intelligence),
             "PlanetPairing" => BuildPlanetPairingTemplate(scene, intelligence),
+            "PlanetGrouping" => BuildPlanetGroupingTemplate(scene, intelligence),
             "Conjunction" => BuildPlanetPairingTemplate(scene, intelligence),
             "NamedFullMoon" => BuildNamedFullMoonTemplate(scene, intelligence),
             "NewMoon" => BuildNewMoonTemplate(scene, intelligence),
@@ -170,6 +171,24 @@ public sealed class QuestionSceneIntentEnricher(
             AstronomyQuestionTypes.How => new("Know how to observe without equipment.", "Give simple meteor-shower watching steps.", "Show a viewer under dark sky, no telescope, avoiding city lights, eyes adapting.", "Generate an observer-friendly meteor shower scene with dark sky, no telescope, and low light pollution.", "Use no telescope, dark location, eyes 20 minutes.", "Muted viewers should know how to watch."),
             AstronomyQuestionTypes.Why => new("Understand why this meteor shower is worth seeing.", "Explain shower strength and moon interference from the generated facts.", $"Show meteor streak activity with a moon-interference quality cue: {answer}", "Generate a premium editorial meteor shower sky with streaks, radiant hint, and viewing-quality mood.", "Use significance and moon-interference facts.", "Muted viewers should know why it matters."),
             _ => new("Know the next action.", "Close with reminder and weather/dark-location checklist.", $"Show a save-date reminder under a meteor-filled local sky for {window}.", "Generate an inspirational meteor shower CTA image with dark night sky, meteor streaks, and local viewing context.", "Use reminder, weather check, dark location.", "Muted viewers should save the viewing night.")
+        };
+    }
+
+    private static IntentTemplate BuildPlanetGroupingTemplate(QuestionDrivenSceneDto scene, ProductionEventIntelligence intelligence)
+    {
+        var objects = Objects(intelligence, "the grouped planets");
+        var objectPhrase = JoinNatural(objects);
+        var anchor = intelligence.PrimaryObjects.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o)) ?? objects.First();
+        var direction = Direction(intelligence, "the correct sky direction");
+        var window = ViewingWindow(intelligence);
+        return scene.QuestionType switch
+        {
+            AstronomyQuestionTypes.What => new("Understand the planet grouping.", "Introduce the full multi-planet arrangement.", $"Use PlanetGroupingSceneStrategy to show {objectPhrase} together with exact labels.", "Generate a realistic multi-planet grouping scene with all listed planets, no generic sky-only fallback.", "Use planet grouping and exact object names.", "Muted viewers should know multiple planets are grouped."),
+            AstronomyQuestionTypes.Where => new("Know where to scan for the grouping.", "Orient viewers to the grouping direction and scan path.", $"Show {objectPhrase} toward {direction}, connected by a subtle guided scan path.", "Generate a horizon direction guide for the complete planet grouping with exact labels.", "Use direction and guided scan path.", "Muted viewers should know where the group sits."),
+            AstronomyQuestionTypes.When => new("Know the viewing window.", "Explain when the whole grouping is visible.", $"Show a timing card for {window} beside the grouped planets.", "Generate a planet-grouping timing visual with the full group above the horizon.", "Use the approved viewing window.", "Muted viewers should know when to watch."),
+            AstronomyQuestionTypes.How => new("Know how to find each planet.", "Give anchor-first scan instructions.", $"Start at {anchor}, then scan through {objectPhrase} using exact labels only.", "Generate an anchor-and-scan planet grouping guide with real-looking planet textures.", "Use anchor planet and scan path.", "Muted viewers should know the order to scan."),
+            AstronomyQuestionTypes.Why => new("Understand why the grouping is notable.", "Explain the value of multiple planets in one observing window.", $"Show {objectPhrase} sharing one viewing window, emphasizing the grouping rather than a single planet.", "Generate an explanatory planet grouping visual with realistic textures and arrangement context.", "Use multi-planet grouping significance.", "Muted viewers should know why this is special."),
+            _ => new("Know the next action.", "Close with reminder and horizon/weather check.", $"Show a clear-horizon CTA for the full planet grouping during {window}.", "Generate a PlanetGroupingThumbnailStrategy-friendly CTA image with all listed planets visible.", "Use save window, check horizon, watch grouping.", "Muted viewers should prepare for the full grouping.")
         };
     }
 
@@ -379,6 +398,7 @@ public sealed class QuestionSceneIntentEnricher(
         {
             "MeteorShower" => ["meteor streaks", "radiant", "dark sky", "viewing window"],
             "PlanetPairing" or "Conjunction" => Objects(intelligence, "paired objects").Concat(["close pairing"]),
+            "PlanetGrouping" or "PLANET_GROUPING" => Objects(intelligence, "grouped planets").Concat(["planet grouping", "guided scan path"]),
             "NamedFullMoon" => ["Moon", "moonrise", "eastern sky", "full moon glow"],
             "NewMoon" => ["dark sky", "stargazing", "no visible full Moon"],
             "LunarEclipse" => ["Moon", "eclipse", "copper Moon", "eclipse timing"],

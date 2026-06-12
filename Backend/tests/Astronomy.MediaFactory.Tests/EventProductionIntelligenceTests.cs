@@ -11,6 +11,7 @@ public sealed class EventProductionIntelligenceTests
         var adapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([
             new MeteorShowerStrategy(),
             new PlanetPairingStrategy(),
+            new PlanetGroupingStrategy(),
             new ConjunctionStrategy(),
             new NamedFullMoonStrategy(),
             new NewMoonStrategy(),
@@ -91,6 +92,7 @@ public sealed class EventProductionIntelligenceTests
         [
             new MeteorShowerStrategy(),
             new PlanetPairingStrategy(),
+            new PlanetGroupingStrategy(),
             new ConjunctionStrategy(),
             new NamedFullMoonStrategy(),
             new NewMoonStrategy(),
@@ -101,12 +103,75 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.Contains(strategies, s => s is MeteorShowerStrategy);
         Assert.Contains(strategies, s => s is PlanetPairingStrategy);
+        Assert.Contains(strategies, s => s is PlanetGroupingStrategy);
         Assert.Contains(strategies, s => s is ConjunctionStrategy);
         Assert.Contains(strategies, s => s is NamedFullMoonStrategy);
         Assert.Contains(strategies, s => s is NewMoonStrategy);
         Assert.Contains(strategies, s => s is LunarEclipseStrategy);
         Assert.Contains(strategies, s => s is SolarEclipseStrategy);
     }
+    [Fact]
+    public void AstronomyAdapter_RoutesPlanetGroupingToDedicatedStrategy()
+    {
+        var adapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([
+            new MeteorShowerStrategy(),
+            new PlanetPairingStrategy(),
+            new PlanetGroupingStrategy(),
+            new ConjunctionStrategy(),
+            new NamedFullMoonStrategy(),
+            new NewMoonStrategy(),
+            new LunarEclipseStrategy(),
+            new SolarEclipseStrategy(),
+            new GenericAstronomyEventStrategy()
+        ]));
+
+        var planRequest = new ContentPlanProductionPipelineRequest(
+            Guid.NewGuid(),
+            "PlanetGrouping",
+            "Planet grouping over Udaipur",
+            "Planet grouping",
+            "PLANET_GROUPING",
+            "IN-RJ-UDAIPUR",
+            "en",
+            ["Venus"],
+            ["Jupiter", "Mars"],
+            DateTimeOffset.Parse("2026-06-20T13:00:00Z"),
+            DateTimeOffset.Parse("2026-06-20T14:30:00Z"),
+            DateTimeOffset.Parse("2026-06-20T16:00:00Z"),
+            DateTimeOffset.Parse("2026-06-19T12:00:00Z"),
+            "planet-grouping-2026",
+            "ShortAndLong",
+            ["ShortVideo", "HeroAsset", "Thumbnail"],
+            8m,
+            7m,
+            8m,
+            8m,
+            "Verified",
+            "source",
+            "PlanetGrouping",
+            "2026-06-20 08:00 PM IST",
+            "western horizon",
+            "India",
+            null,
+            "2026-06-20 20:00–21:30 IST",
+            null,
+            null,
+            "publish same evening",
+            ["ShortVideo"],
+            [],
+            []);
+
+        var result = adapter.Normalize(new ProductionPipelineRequest(planRequest, Guid.NewGuid(), "/tmp/out", false, true));
+
+        Assert.Equal("PLANET_GROUPING", result.EventType);
+        Assert.Equal("PlanetGrouping", result.StrategyId);
+        Assert.Contains("planet grouping", result.RequiredVisualObjects!);
+        Assert.Contains("PlanetGroupingSceneStrategy", string.Join(" ", result.SceneStrategy));
+        Assert.Contains("PlanetGroupingHeroStrategy", result.HeroCopyCandidates!);
+        Assert.Contains("PlanetGrouping", result.ThumbnailCopyCandidates!);
+        Assert.DoesNotContain("cinematic night sky", result.VisualMotifs, StringComparer.OrdinalIgnoreCase);
+    }
+
 
     [Theory]
     [InlineData("Timing card: 2026-12-14 00:00–05:00 IST.", true)]

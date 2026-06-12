@@ -48,7 +48,8 @@ public sealed class AstronomyEventDetectionServiceTests
 
         Assert.Contains(result.Events, e => e.EventType == "MOON_SPECIAL");
         Assert.Contains(result.Events, e => e.EventType == "BRIGHT_PLANET_VISIBILITY");
-        Assert.Contains(result.Events, e => e.EventType == "PLANET_GROUPING");
+        var grouping = Assert.Single(result.Events, e => e.EventType == "PLANET_GROUPING");
+        Assert.Equal("PlanetGrouping", grouping.RecommendedCategory);
         Assert.Contains(result.Events, e => e.EventType == "PLANET_CONJUNCTION");
         Assert.True(result.DryRun);
         Assert.Equal(0, result.SavedCount);

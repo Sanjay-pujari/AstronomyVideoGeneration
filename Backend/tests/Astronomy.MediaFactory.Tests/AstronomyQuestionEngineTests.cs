@@ -373,7 +373,7 @@ public sealed class AstronomyQuestionEngineTests
         => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), CreateStrategyResolver(), NullLogger<AstronomyQuestionEngine>.Instance);
 
     private static IMediaEventStrategyResolver CreateStrategyResolver()
-        => new MediaEventStrategyResolver([new MeteorShowerStrategy(), new PlanetPairingStrategy(), new ConjunctionStrategy(), new NamedFullMoonStrategy(), new NewMoonStrategy(), new LunarEclipseStrategy(), new SolarEclipseStrategy(), new GenericAstronomyEventStrategy()]);
+        => new MediaEventStrategyResolver([new MeteorShowerStrategy(), new PlanetPairingStrategy(), new PlanetGroupingStrategy(), new ConjunctionStrategy(), new NamedFullMoonStrategy(), new NewMoonStrategy(), new LunarEclipseStrategy(), new SolarEclipseStrategy(), new GenericAstronomyEventStrategy()]);
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);

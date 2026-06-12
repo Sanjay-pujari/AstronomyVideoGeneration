@@ -230,7 +230,15 @@ public sealed class AstronomyEventVerifiedImportService(
         => source.VerificationStatus.Equals("NeedsManualReview", StringComparison.OrdinalIgnoreCase);
 
     private static string ResolveContentCategoryCode(ImportedVerifiedEvent source)
-        => source.PublishPriority.Equals("High", StringComparison.OrdinalIgnoreCase) ? "RareEventAlert" : "CosmicStoryShort";
+    {
+        if (source.EventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || source.EventType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase))
+        {
+            return "PlanetGrouping";
+        }
+
+        return source.PublishPriority.Equals("High", StringComparison.OrdinalIgnoreCase) ? "RareEventAlert" : "CosmicStoryShort";
+    }
 
     private static int ResolvePriority(string publishPriority)
         => publishPriority.Equals("High", StringComparison.OrdinalIgnoreCase) ? 10 : publishPriority.Equals("Medium", StringComparison.OrdinalIgnoreCase) ? 50 : 100;

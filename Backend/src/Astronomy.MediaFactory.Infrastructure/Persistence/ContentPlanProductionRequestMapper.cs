@@ -25,7 +25,7 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
 
         return new ContentPlanProductionPipelineRequest(
             plan.Id,
-            FirstNonBlank(plan.ContentCategoryCode, intelligence.RecommendedCategory, "RareEventAlert"),
+            ResolveContentCategoryCode(plan, intelligence),
             FirstNonBlank(plan.Title, intelligence.Title, "Astronomy event"),
             ReadString(metadata, raw, "shortTitle") ?? intelligence.Summary ?? ShortenTitle(FirstNonBlank(plan.Title, intelligence.Title, "Astronomy event")),
             FirstNonBlank(intelligence.EventType, plan.PrimaryAstronomyEventTypeCode, "AstronomyEvent"),
@@ -58,6 +58,17 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
             ReadStringArray(metadata, raw, "recommendedContentTypes"),
             warnings,
             sourceNotes);
+    }
+
+    private static string ResolveContentCategoryCode(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence)
+    {
+        if (string.Equals(intelligence.EventType, "PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(intelligence.EventType, "PlanetGrouping", StringComparison.OrdinalIgnoreCase))
+        {
+            return "PlanetGrouping";
+        }
+
+        return FirstNonBlank(plan.ContentCategoryCode, intelligence.RecommendedCategory, "RareEventAlert");
     }
 
     private static string FirstNonBlank(params string?[] values)

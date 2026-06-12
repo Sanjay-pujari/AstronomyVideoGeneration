@@ -395,7 +395,7 @@ public sealed class AstronomyEventDetectionService(
     {
         var names = string.Join(", ", planets.Select(p => p.ObjectName));
         var scores = Score(visibility: 7.5m + planets.Count * 0.5m, rarity: angularSeparationDegrees.HasValue ? 7.0m : 6.0m, story: 7.5m, viral: 7.0m, confidence: angularSeparationDegrees.HasValue ? 7.0m : 6.0m);
-        return BuildEvent(request, visibility, "PLANET_GROUPING", "Planet", $"Planet grouping over {request.LocationName}", $"Visible planet grouping candidate: {names}.",
+        return BuildEvent(request, visibility, "PLANET_GROUPING", "PlanetGrouping", $"Planet grouping over {request.LocationName}", $"Visible planet grouping candidate: {names}.",
             "Multiple naked-eye bright planets are visible in the same observation window.", scores,
             planets.Select((p, i) => ToObjectDto(p, i == 0 ? "Primary" : "Companion")).ToArray(), new { rule = "bright_visible_planets >= 2", minimumVisibleAltitudeDegrees = MinimumVisibleAltitudeDegrees, groupingMaxSeparationDegrees = GroupingMaxSeparationDegrees, angularSeparationDegrees, candidateReason });
     }
