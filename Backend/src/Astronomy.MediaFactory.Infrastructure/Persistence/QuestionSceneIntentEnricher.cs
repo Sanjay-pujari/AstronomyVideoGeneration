@@ -101,7 +101,7 @@ public sealed class QuestionSceneIntentEnricher(
         var strategyDefinition = intelligence is not null && resolvedStrategy is not null
             ? resolvedStrategy.BuildDefinition(intelligence)
             : null;
-        var enrichmentSource = intelligence is not null && strategyDefinition is not null ? EnrichmentSourceStrategy : EnrichmentSourceGenericFallback;
+        var enrichmentSource = intelligence is not null ? EnrichmentSourceStrategy : EnrichmentSourceGenericFallback;
         var requiredVisualObjects = ResolveRequiredVisualObjects(intelligence, strategyDefinition).ToArray();
         var forbiddenObjectNames = ResolveForbiddenObjectNames(intelligence, strategyDefinition).ToArray();
 
@@ -275,9 +275,23 @@ public sealed class QuestionSceneIntentEnricher(
 
     private static QuestionSceneEnrichmentDiagnostics BuildDiagnostics(EnrichedQuestionScenePlanDto plan, ProductionEventIntelligence? intelligence, string strategyId, IReadOnlyList<string> requiredVisualObjects, IReadOnlyList<string> forbiddenObjectNames, string enrichmentSource)
     {
-        var scanned = BuildScannedFields(plan).ToArray();
-        var leakageTerms = FindLeakageTerms(scanned, forbiddenObjectNames.Concat(ResolveAbsentObjectNames(intelligence)).Concat(DefaultLeakageTermsForStrategy(strategyId))).ToArray();
-        return new QuestionSceneEnrichmentDiagnostics(strategyId, requiredVisualObjects, forbiddenObjectNames, BuildScannedFieldNames(plan), leakageTerms, enrichmentSource);
+        var objectDiagnostics = BuildObjectValidationDiagnostics(plan, intelligence, requiredVisualObjects, forbiddenObjectNames).ToArray();
+        var leakageTerms = objectDiagnostics
+            .Where(d => d.ValidationResult.Equals("Fail", StringComparison.OrdinalIgnoreCase))
+            .Select(d => d.ObjectName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new QuestionSceneEnrichmentDiagnostics(
+            strategyId,
+            requiredVisualObjects,
+            forbiddenObjectNames,
+            BuildScannedFieldNames(plan),
+            leakageTerms,
+            enrichmentSource,
+            ResolveAllowedContextTerms(intelligence).ToArray(),
+            intelligence?.PrimaryObjects ?? Array.Empty<string>(),
+            intelligence?.SecondaryObjects ?? Array.Empty<string>(),
+            objectDiagnostics);
     }
 
     private static IReadOnlyList<string> ValidateEnrichedPlan(EnrichedQuestionScenePlanDto plan, ProductionEventIntelligence? intelligence = null)
@@ -333,18 +347,13 @@ public sealed class QuestionSceneIntentEnricher(
                 issues.Add($"Enriched scene plan must contain required visual object '{requiredObject}'.");
         }
 
-        var forbidden = (plan.Diagnostics?.ForbiddenObjectNames ?? ResolveForbiddenObjectNames(intelligence, null).ToArray())
-            .Concat(ResolveAbsentObjectNames(intelligence))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        foreach (var hit in FindLeakageTerms(scanned, forbidden))
-            issues.Add($"Enriched scene plan contains forbidden or absent object '{hit}'.");
-
-        if (intelligence is not null && string.Equals(intelligence.EventType, "NamedFullMoon", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var hit in FindLeakageTerms(scanned, ["Venus", "Jupiter", "planet pairing", "planet positions", "find Venus first"]))
-                issues.Add($"NamedFullMoon enrichment must not contain '{hit}'.");
-        }
+        var diagnostics = plan.Diagnostics?.ObjectValidationDiagnostics ?? BuildObjectValidationDiagnostics(
+            plan,
+            intelligence,
+            required,
+            plan.Diagnostics?.ForbiddenObjectNames ?? ResolveForbiddenObjectNames(intelligence, null).ToArray()).ToArray();
+        foreach (var failure in diagnostics.Where(d => d.ValidationResult.Equals("Fail", StringComparison.OrdinalIgnoreCase)))
+            issues.Add($"Enriched scene plan contains forbidden or absent object '{failure.ObjectName}' as {failure.OccurrenceRole} in {failure.OccurrenceSource}.");
 
         if (intelligence is not null && string.Equals(intelligence.EventType, "PlanetPairing", StringComparison.OrdinalIgnoreCase))
         {
@@ -392,9 +401,107 @@ public sealed class QuestionSceneIntentEnricher(
     private static IEnumerable<string> ResolveAbsentObjectNames(ProductionEventIntelligence? intelligence)
     {
         if (intelligence is null) return [];
-        var allowed = Objects(intelligence, "").Concat(AllowedObjectsForStrategy(intelligence.EventType)).Where(o => !string.IsNullOrWhiteSpace(o)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allowed = Objects(intelligence, "")
+            .Concat(AllowedObjectsForStrategy(intelligence.EventType))
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return KnownObjectNames.Where(name => !allowed.Contains(name));
     }
+
+    private static IEnumerable<ObjectValidationDiagnostic> BuildObjectValidationDiagnostics(
+        EnrichedQuestionScenePlanDto plan,
+        ProductionEventIntelligence? intelligence,
+        IEnumerable<string> requiredVisualObjects,
+        IEnumerable<string> forbiddenObjectNames)
+    {
+        var allowedVisualObjects = (intelligence is null ? Array.Empty<string>() : Objects(intelligence, ""))
+            .Concat(AllowedObjectsForStrategy(intelligence?.EventType ?? string.Empty))
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requiredSet = requiredVisualObjects.Where(o => !string.IsNullOrWhiteSpace(o)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var forbiddenSet = forbiddenObjectNames.Concat(ResolveAbsentObjectNames(intelligence)).Concat(DefaultLeakageTermsForStrategy(intelligence?.EventType ?? string.Empty))
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allowedContextTerms = ResolveAllowedContextTerms(intelligence).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidateObjects = KnownObjectNames
+            .Concat(requiredSet)
+            .Concat(forbiddenSet)
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var occurrence in BuildScannedFieldOccurrences(plan))
+        {
+            foreach (var objectName in candidateObjects.Where(term => ContainsTerm(occurrence.Value, term)))
+            {
+                var role = ResolveOccurrenceRole(occurrence.Source, occurrence.Value, objectName, allowedContextTerms);
+                var isAllowedVisualObject = allowedVisualObjects.Contains(objectName);
+                var isAllowedContext = role == ObjectOccurrenceRole.ContextTerm && allowedContextTerms.Contains(objectName);
+                var isForbiddenVisualObject = role != ObjectOccurrenceRole.ContextTerm
+                    && (forbiddenSet.Contains(objectName) || KnownObjectNames.Contains(objectName, StringComparer.OrdinalIgnoreCase))
+                    && !isAllowedVisualObject;
+                var result = isForbiddenVisualObject ? "Fail" : "Pass";
+                var allowedBecause = result == "Fail"
+                    ? "object is not in currentEventLock primary/secondary visual objects"
+                    : isAllowedVisualObject
+                        ? "object is in currentEventLock primary/secondary visual objects"
+                        : isAllowedContext
+                            ? "context term is present in event intelligence"
+                            : "object occurrence is not a forbidden visual role";
+
+                yield return new ObjectValidationDiagnostic(objectName, occurrence.Source, role.ToString(), allowedBecause, result);
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveAllowedContextTerms(ProductionEventIntelligence? intelligence)
+    {
+        if (intelligence is null) return [];
+
+        var terms = new List<string>();
+        AddContextObjectTerms(terms, intelligence.MoonInterference);
+        if (intelligence.MoonIlluminationPercent.HasValue)
+            terms.AddRange(["Moon", "moonlight", "moon illumination", "moon interference"]);
+        AddContextObjectTerms(terms, intelligence.ScientificContext);
+        foreach (var value in intelligence.QualityWarnings.Concat(intelligence.ViewerInstructions).Concat(intelligence.VisualMotifs))
+            AddContextObjectTerms(terms, value);
+
+        if (string.Equals(intelligence.EventType, "MeteorShower", StringComparison.OrdinalIgnoreCase)
+            && (!string.IsNullOrWhiteSpace(intelligence.MoonInterference) || intelligence.MoonIlluminationPercent.HasValue))
+            terms.AddRange(["Moon", "moonlight", "moon illumination", "moon interference"]);
+
+        return terms.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void AddContextObjectTerms(List<string> terms, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        foreach (var knownObject in KnownObjectNames.Where(name => ContainsTerm(value, name)))
+            terms.Add(knownObject);
+        if (ContainsTerm(value, "moonlight")) terms.AddRange(["Moon", "moonlight"]);
+        if (ContainsTerm(value, "moon illumination")) terms.AddRange(["Moon", "moon illumination"]);
+        if (ContainsTerm(value, "moon interference")) terms.AddRange(["Moon", "moon interference"]);
+    }
+
+    private static ObjectOccurrenceRole ResolveOccurrenceRole(string source, string value, string objectName, HashSet<string> allowedContextTerms)
+    {
+        if (source.EndsWith(".imagePromptIntent", StringComparison.OrdinalIgnoreCase))
+            return IsContextPhrase(value, objectName, allowedContextTerms) ? ObjectOccurrenceRole.ContextTerm : ObjectOccurrenceRole.DrawableObject;
+        if (source.EndsWith(".visualIntent", StringComparison.OrdinalIgnoreCase))
+            return IsContextPhrase(value, objectName, allowedContextTerms) ? ObjectOccurrenceRole.ContextTerm : ObjectOccurrenceRole.DrawableObject;
+        if (source.EndsWith(".overlayIntent", StringComparison.OrdinalIgnoreCase))
+            return IsContextPhrase(value, objectName, allowedContextTerms) ? ObjectOccurrenceRole.ContextTerm : ObjectOccurrenceRole.Label;
+        return ObjectOccurrenceRole.ContextTerm;
+    }
+
+    private static bool IsContextPhrase(string value, string objectName, HashSet<string> allowedContextTerms)
+    {
+        if (!allowedContextTerms.Contains(objectName)) return false;
+        return ContainsAnyTerm(value, "moonlight", "moon illumination", "moon interference", "Moon interference", "moon-interference", "viewing condition", "quality cue");
+    }
+
+    private static bool ContainsAnyTerm(string field, params string[] terms)
+        => terms.Any(term => ContainsTerm(field, term));
 
     private static IEnumerable<string> AllowedObjectsForStrategy(string eventType) => eventType switch
     {
@@ -420,15 +527,18 @@ public sealed class QuestionSceneIntentEnricher(
         }).ToArray();
 
     private static IEnumerable<string> BuildScannedFields(EnrichedQuestionScenePlanDto plan)
+        => BuildScannedFieldOccurrences(plan).Select(field => field.Value);
+
+    private static IEnumerable<ScannedFieldOccurrence> BuildScannedFieldOccurrences(EnrichedQuestionScenePlanDto plan)
     {
         foreach (var scene in plan.Scenes)
         {
-            yield return scene.ViewerTakeaway;
-            yield return scene.NarrationIntent;
-            yield return scene.VisualIntent;
-            yield return scene.ImagePromptIntent;
-            yield return scene.OverlayIntent;
-            yield return scene.AccessibilityIntent;
+            yield return new($"scene[{scene.SceneNumber}].viewerTakeaway", scene.ViewerTakeaway);
+            yield return new($"scene[{scene.SceneNumber}].narrationIntent", scene.NarrationIntent);
+            yield return new($"scene[{scene.SceneNumber}].visualIntent", scene.VisualIntent);
+            yield return new($"scene[{scene.SceneNumber}].imagePromptIntent", scene.ImagePromptIntent);
+            yield return new($"scene[{scene.SceneNumber}].overlayIntent", scene.OverlayIntent);
+            yield return new($"scene[{scene.SceneNumber}].accessibilityIntent", scene.AccessibilityIntent);
         }
     }
 
@@ -533,4 +643,15 @@ public sealed class QuestionSceneIntentEnricher(
         string ImagePromptIntent,
         string OverlayIntent,
         string AccessibilityIntent);
+
+    private sealed record ScannedFieldOccurrence(string Source, string Value);
+
+    private enum ObjectOccurrenceRole
+    {
+        ContextTerm,
+        RequiredVisualObject,
+        DrawableObject,
+        Label,
+        ForbiddenObject
+    }
 }
