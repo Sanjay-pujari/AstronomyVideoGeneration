@@ -282,6 +282,15 @@ public sealed class EventProductionIntelligenceTests
   "viewerTakeaway":"Snow Moon Full Moon: what to watch.",
   "captionText":"Snow Moon Full Moon: what to watch.",
   "overlayText":"Snow Moon",
+  "visualSourceResolution":{
+    "metadata":{
+      "eventShortTitle":"Snow Moon",
+      "eventTitle":"Snow Moon Full Moon"
+    },
+    "sourceType":"Hybrid",
+    "realisticObjectRequired":true,
+    "primitivePlaceholderUsed":false
+  },
   "strategyValidationFacts":{
     "visualSourceType":"Hybrid",
     "assetKey":"Moon.FullMoon",
@@ -365,6 +374,24 @@ public sealed class EventProductionIntelligenceTests
         Assert.True(sceneDiagnostics.GetProperty("titleValidationPassed").GetBoolean());
         Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("titleMatchedValue").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("titleMatchedSource").GetString()));
+        Assert.Contains("Snow Moon Full Moon", sceneDiagnostics.GetProperty("titleAliasesRaw").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("Snow Moon", sceneDiagnostics.GetProperty("titleAliasesRaw").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("snow moon full moon", sceneDiagnostics.GetProperty("titleAliasesNormalized").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("Snow Moon Full Moon: what to watch.", sceneDiagnostics.GetProperty("candidateTextRaw").EnumerateArray().Select(candidate => candidate.GetString()));
+        Assert.Contains("snow moon full moon what to watch", sceneDiagnostics.GetProperty("candidateTextNormalized").EnumerateArray().Select(candidate => candidate.GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("matchedAlias").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("matchedCandidate").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("matchedSource").GetString()));
+
+        var titleDiagnostics = validation.RootElement.GetProperty("titleValidationDiagnostics");
+        Assert.Contains("Snow Moon Full Moon", titleDiagnostics.GetProperty("titleAliasesRaw").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("snow moon full moon", titleDiagnostics.GetProperty("titleAliasesNormalized").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("Snow Moon Full Moon: what to watch.", titleDiagnostics.GetProperty("candidateTextRaw").EnumerateArray().Select(candidate => candidate.GetString()));
+        Assert.Contains("snow moon full moon what to watch", titleDiagnostics.GetProperty("candidateTextNormalized").EnumerateArray().Select(candidate => candidate.GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(titleDiagnostics.GetProperty("titleMatchedCandidate").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(titleDiagnostics.GetProperty("matchedAlias").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(titleDiagnostics.GetProperty("matchedCandidate").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(titleDiagnostics.GetProperty("matchedSource").GetString()));
     }
 
 

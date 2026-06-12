@@ -1285,7 +1285,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
         var sceneFiles = BuildSceneTitleValidationFileSets(infographicFiles);
         var aliases = BuildEventTitleAliases(intelligence, root, infographicFiles.Concat(reviewFiles).Concat(sceneFiles.SelectMany(scene => new[] { scene.NarrationPath, scene.SrtPath }).Where(File.Exists)));
-        if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true, [], [], null, null, []);
+        if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true, [], [], [], [], [], [], null, null, null, null, null, null, []);
 
         var sceneDiagnostics = sceneFiles.Select(scene => BuildSceneTitleValidationDiagnostic(scene, aliases)).ToArray();
         var captionSource = ReadJsonPropertyTextWithSources(infographicFiles, ["captionText"], aliases) with { Field = "titleFoundInCaptionText" };
@@ -1300,6 +1300,14 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var matchedScene = sceneDiagnostics.FirstOrDefault(scene => scene.TitleValidationPassed);
         var titleFound = sources.Any(source => source.Found) || sceneDiagnostics.Any(scene => scene.TitleValidationPassed);
 
+        var candidateTextRaw = sources
+            .SelectMany(source => source.SourceFiles.Select(file => file.CandidateTextRaw))
+            .Concat(sceneDiagnostics.SelectMany(scene => scene.CandidateTextRaw))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var matchedCandidate = matchedFile?.MatchedCandidate ?? matchedScene?.MatchedCandidate;
+
         return new(
             captionSource.Found,
             viewerTakeawaySource.Found,
@@ -1311,8 +1319,16 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             false,
             sources,
             aliases.Select(alias => alias.Value).ToArray(),
-            matchedFile?.MatchedAlias ?? matchedScene?.TitleMatchedValue,
-            matchedSource?.Field ?? matchedScene?.TitleMatchedSource,
+            aliases.Select(alias => alias.Value).ToArray(),
+            aliases.Select(alias => NormalizeTitleMatchText(alias.Value)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            candidateTextRaw,
+            candidateTextRaw.Select(NormalizeTitleMatchText).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            matchedFile?.MatchedAlias ?? matchedScene?.MatchedAlias ?? matchedScene?.TitleMatchedValue,
+            matchedCandidate,
+            matchedSource?.Field ?? matchedScene?.MatchedSource ?? matchedScene?.TitleMatchedSource,
+            matchedFile?.MatchedAlias ?? matchedScene?.MatchedAlias ?? matchedScene?.TitleMatchedValue,
+            matchedCandidate,
+            matchedSource?.Field ?? matchedScene?.MatchedSource ?? matchedScene?.TitleMatchedSource,
             sceneDiagnostics);
     }
 
@@ -1359,8 +1375,13 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         if (File.Exists(files.SrtPath)) searchFragments.Add(new(NormalizePath(files.SrtPath), "srtText", File.ReadAllText(files.SrtPath)));
 
         var match = searchFragments
-            .Select(fragment => new { Fragment = fragment, Alias = aliases.FirstOrDefault(alias => ContainsToken(fragment.Text, alias.Value)) })
+            .Select(fragment => new { Fragment = fragment, Alias = FindMatchingTitleAlias(fragment.Text, aliases) })
             .FirstOrDefault(item => item.Alias is not null);
+        var candidateTextRaw = searchFragments
+            .Select(fragment => fragment.Text)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         return new(
             ExtractSceneNumber(files.SceneKey),
@@ -1374,6 +1395,13 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             eventTitle,
             eventShortTitle,
             aliases.Select(alias => $"{alias.Source}: {alias.Value}").ToArray(),
+            aliases.Select(alias => alias.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            aliases.Select(alias => NormalizeTitleMatchText(alias.Value)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            candidateTextRaw,
+            candidateTextRaw.Select(NormalizeTitleMatchText).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            match?.Alias?.Value,
+            match?.Fragment.Text,
+            match is null ? null : $"{match.Fragment.FilePath}#{match.Fragment.JsonPath} ({match.Alias!.Source})",
             match?.Alias?.Value,
             match is null ? null : $"{match.Fragment.FilePath}#{match.Fragment.JsonPath} ({match.Alias!.Source})",
             match is not null);
@@ -1398,25 +1426,27 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     {
         var candidates = new List<TitleCandidate>
         {
-            new("productionPipelineRequest.title", intelligence.Title),
-            new("productionPipelineRequest.shortTitle", intelligence.ShortTitle),
-            new("astronomyEventTitle", intelligence.Title),
-            new("astronomyEventShortTitle", intelligence.ShortTitle)
+            new("productionEventIntelligence.title", intelligence.Title),
+            new("productionEventIntelligence.shortTitle", intelligence.ShortTitle)
         };
 
         foreach (var request in ReadCurrentRunProductionRequestCandidates(root))
         {
-            candidates.Add(new("productionPipelineRequest.title", request.Title));
-            candidates.Add(new("productionPipelineRequest.shortTitle", request.ShortTitle));
+            candidates.Add(new("request.title", request.Title));
+            candidates.Add(new("request.shortTitle", request.ShortTitle));
         }
 
+        foreach (var candidate in ReadCurrentRunSelectedPlanTitleCandidates(root)) candidates.Add(candidate);
+        foreach (var candidate in ReadCurrentRunProductionIntelligenceTitleCandidates(root)) candidates.Add(candidate);
         foreach (var candidate in ReadCurrentSceneTitleCandidates(currentSceneFiles)) candidates.Add(candidate);
 
         return candidates
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Value))
             .Select(candidate => candidate with { Value = candidate.Value.Trim() })
-            .DistinctBy(candidate => NormalizeLooseMatchText(candidate.Value).ToUpperInvariant())
-            .OrderBy(candidate => candidate.Value.Length)
+            .Where(candidate => !string.IsNullOrWhiteSpace(NormalizeTitleMatchText(candidate.Value)))
+            .DistinctBy(candidate => NormalizeTitleMatchText(candidate.Value).ToUpperInvariant())
+            .OrderByDescending(candidate => NormalizeTitleMatchText(candidate.Value).Length)
+            .ThenBy(candidate => candidate.Value.Length)
             .ToArray();
     }
 
@@ -1429,15 +1459,71 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             {
                 using var doc = TryParseJson(File.ReadAllText(file));
                 if (doc is null) continue;
-                foreach (var fragment in CollectJsonPropertyFragments(doc.RootElement, ["productionPipelineRequest", "astronomyEventTitle", "astronomyEventShortTitle", "eventTitle", "eventShortTitle"]))
+                foreach (var fragment in CollectJsonPropertyFragments(doc.RootElement, ["productionPipelineRequest", "visualSourceResolution", "astronomyEventTitle", "astronomyEventShortTitle", "eventTitle", "eventShortTitle", "title", "shortTitle"]))
                 {
                     foreach (var value in JsonTextValue(fragment.Value).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                     {
-                        var source = fragment.Path.Contains("short", StringComparison.OrdinalIgnoreCase) ? "currentSceneMetadata.shortTitle" : "currentSceneMetadata.title";
+                        var source = fragment.Path.Contains("visualSourceResolution", StringComparison.OrdinalIgnoreCase)
+                            ? $"visualSourceResolution.{fragment.Path}"
+                            : fragment.Path.Contains("short", StringComparison.OrdinalIgnoreCase) ? "currentSceneMetadata.shortTitle" : "currentSceneMetadata.title";
                         yield return new(source, value);
                     }
                 }
             }
+        }
+    }
+
+    private static IEnumerable<TitleCandidate> ReadCurrentRunSelectedPlanTitleCandidates(string root)
+    {
+        foreach (var path in new[]
+        {
+            Path.Combine(root, "plan-input", "content-generation-plan.json"),
+            Path.Combine(root, "plan-input", "selected-plan.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "content-generation-plan.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "selected-plan.json")
+        }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path)) continue;
+            using var doc = TryParseJson(File.ReadAllText(path));
+            if (doc is null) continue;
+            foreach (var candidate in ReadTitleCandidatesFromJson(doc.RootElement, "selectedPlan")) yield return candidate;
+        }
+    }
+
+    private static IEnumerable<TitleCandidate> ReadCurrentRunProductionIntelligenceTitleCandidates(string root)
+    {
+        foreach (var path in new[]
+        {
+            Path.Combine(root, "plan-input", "production-event-intelligence.json"),
+            Path.Combine(root, "plan-input", "astronomy-event-intelligence.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "production-event-intelligence.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "astronomy-event-intelligence.json")
+        }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path)) continue;
+            using var doc = TryParseJson(File.ReadAllText(path));
+            if (doc is null) continue;
+            foreach (var candidate in ReadTitleCandidatesFromJson(doc.RootElement, "productionEventIntelligence")) yield return candidate;
+        }
+    }
+
+    private static IEnumerable<TitleCandidate> ReadTitleCandidatesFromJson(JsonElement root, string sourcePrefix)
+    {
+        foreach (var fragment in CollectJsonPropertyFragments(root, ["title", "shortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "eventTitle", "eventShortTitle"]))
+        {
+            var source = fragment.Path.Contains("astronomyEventTitle", StringComparison.OrdinalIgnoreCase)
+                ? $"{sourcePrefix}.astronomyEventTitle"
+                : fragment.Path.Contains("astronomyEventShortTitle", StringComparison.OrdinalIgnoreCase)
+                    ? $"{sourcePrefix}.astronomyEventShortTitle"
+                    : fragment.Path.Contains("eventTitle", StringComparison.OrdinalIgnoreCase)
+                        ? $"{sourcePrefix}.eventTitle"
+                        : fragment.Path.Contains("eventShortTitle", StringComparison.OrdinalIgnoreCase)
+                            ? $"{sourcePrefix}.eventShortTitle"
+                            : fragment.Path.Contains("short", StringComparison.OrdinalIgnoreCase)
+                                ? $"{sourcePrefix}.shortTitle"
+                                : $"{sourcePrefix}.title";
+            foreach (var value in JsonTextValue(fragment.Value).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                yield return new(source, value);
         }
     }
 
@@ -1446,7 +1532,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         foreach (var path in new[]
         {
             Path.Combine(root, "plan-input", "content-plan-production-request.json"),
-            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "content-plan-production-request.json")
+            Path.Combine(root, "plan-input", "production-pipeline-request.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "content-plan-production-request.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "production-pipeline-request.json")
         }.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!File.Exists(path)) continue;
@@ -1470,9 +1558,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             foreach (var fragment in CollectJsonPropertyFragments(doc.RootElement, propertyNames))
             {
                 var text = JsonTextValue(fragment.Value);
-                var matchedAlias = aliases.FirstOrDefault(alias => ContainsToken(text, alias.Value))?.Value;
-                if (!string.IsNullOrWhiteSpace(matchedAlias)) found = true;
-                sources.Add(new(NormalizePath(file), fragment.Path, fragment.Value.GetRawText(), matchedAlias));
+                var matched = FindMatchingTitleAlias(text, aliases);
+                if (matched is not null) found = true;
+                sources.Add(new(NormalizePath(file), fragment.Path, fragment.Value.GetRawText(), text, NormalizeTitleMatchText(text), matched?.Value, matched is null ? null : text));
             }
         }
         return new(string.Empty, found, inspectedFiles.Select(NormalizePath).ToArray(), sources);
@@ -1509,9 +1597,9 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         foreach (var fragment in CollectJsonPropertyFragments(element, ["eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle", "productionPipelineRequest"]))
         {
             var text = JsonTextValue(fragment.Value);
-            var matchedAlias = aliases.FirstOrDefault(alias => ContainsToken(text, alias.Value))?.Value;
-            if (!string.IsNullOrWhiteSpace(matchedAlias)) found = true;
-            sources.Add(new(NormalizePath(file), $"{prefix}.{fragment.Path}", fragment.Value.GetRawText(), matchedAlias));
+            var matched = FindMatchingTitleAlias(text, aliases);
+            if (matched is not null) found = true;
+            sources.Add(new(NormalizePath(file), $"{prefix}.{fragment.Path}", fragment.Value.GetRawText(), text, NormalizeTitleMatchText(text), matched?.Value, matched is null ? null : text));
         }
     }
 
@@ -1566,7 +1654,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     }
 
     private static bool ContainsAnyAlias(string haystack, IReadOnlyList<string> aliases)
-        => !string.IsNullOrWhiteSpace(haystack) && aliases.Any(alias => ContainsToken(haystack, alias));
+        => !string.IsNullOrWhiteSpace(haystack) && aliases.Any(alias => ContainsNormalizedTitleAlias(haystack, alias));
 
     private static IEnumerable<string> EnumerateSceneInfographicSpecFiles(string root)
         => Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories)
@@ -1745,6 +1833,56 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     private static string NormalizeLooseMatchText(string value)
         => Regex.Replace(Regex.Replace(value ?? string.Empty, @"[^\p{L}\p{N}_]+", " "), @"\s+", " ").Trim();
 
+    private static TitleCandidate? FindMatchingTitleAlias(string candidateText, IReadOnlyList<TitleCandidate> aliases)
+    {
+        var normalizedCandidate = NormalizeTitleMatchText(candidateText);
+        if (string.IsNullOrWhiteSpace(normalizedCandidate)) return null;
+        return aliases.FirstOrDefault(alias => ContainsNormalizedTitleAlias(normalizedCandidate, alias.Value, candidateAlreadyNormalized: true));
+    }
+
+    private static bool ContainsNormalizedTitleAlias(string candidateText, string alias, bool candidateAlreadyNormalized = false)
+    {
+        var normalizedCandidate = candidateAlreadyNormalized ? candidateText : NormalizeTitleMatchText(candidateText);
+        var normalizedAlias = NormalizeTitleMatchText(alias);
+        return !string.IsNullOrWhiteSpace(normalizedCandidate)
+            && !string.IsNullOrWhiteSpace(normalizedAlias)
+            && normalizedCandidate.Contains(normalizedAlias, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeTitleMatchText(string value)
+    {
+        var decoded = DecodeJsonEscapedText(value ?? string.Empty).ToLowerInvariant().Trim();
+        var withoutPunctuation = Regex.Replace(decoded, @"[^\p{L}\p{N}\s]+", " ");
+        return Regex.Replace(withoutPunctuation, @"\s+", " ").Trim();
+    }
+
+    private static string DecodeJsonEscapedText(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        string unescaped;
+        try
+        {
+            unescaped = Regex.Unescape(value);
+        }
+        catch (ArgumentException)
+        {
+            unescaped = value;
+        }
+
+        if (unescaped.Length >= 2 && unescaped[0] == '"' && unescaped[^1] == '"')
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<string>(unescaped, JsonOptions) ?? unescaped.Trim('"');
+            }
+            catch (JsonException)
+            {
+                return unescaped.Trim('"');
+            }
+        }
+        return unescaped;
+    }
+
     private static async Task WriteValidationAsync(string path, ProductionEventIntelligence intelligence, List<string> warnings, List<string> errors, CancellationToken cancellationToken, string? strategyId = null, IReadOnlyList<ForbiddenLeakageHit>? forbiddenLeakageHits = null, TitleValidationDiagnostics? titleValidationDiagnostics = null, VisualSourceInputDiagnostics? visualSourceInputDiagnostics = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -1781,8 +1919,16 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         bool TitleValidationSkipped,
         IReadOnlyList<TitleDiagnosticSource> Sources,
         IReadOnlyList<string> TitleCandidates,
+        IReadOnlyList<string> TitleAliasesRaw,
+        IReadOnlyList<string> TitleAliasesNormalized,
+        IReadOnlyList<string> CandidateTextRaw,
+        IReadOnlyList<string> CandidateTextNormalized,
         string? TitleMatchedValue,
+        string? TitleMatchedCandidate,
         string? TitleMatchedSource,
+        string? MatchedAlias,
+        string? MatchedCandidate,
+        string? MatchedSource,
         IReadOnlyList<SceneTitleValidationDiagnostic> Scenes);
 
     private sealed record TitleCandidate(string Source, string Value);
@@ -1803,6 +1949,13 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         string EventTitleLoaded,
         string EventShortTitleLoaded,
         IReadOnlyList<string> TitleCandidates,
+        IReadOnlyList<string> TitleAliasesRaw,
+        IReadOnlyList<string> TitleAliasesNormalized,
+        IReadOnlyList<string> CandidateTextRaw,
+        IReadOnlyList<string> CandidateTextNormalized,
+        string? MatchedAlias,
+        string? MatchedCandidate,
+        string? MatchedSource,
         string? TitleMatchedValue,
         string? TitleMatchedSource,
         bool TitleValidationPassed);
@@ -1817,7 +1970,10 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         string SourceFilePath,
         string JsonPath,
         string JsonFragmentLoaded,
-        string? MatchedAlias);
+        string CandidateTextRaw,
+        string CandidateTextNormalized,
+        string? MatchedAlias,
+        string? MatchedCandidate);
 
     private sealed record JsonPropertyFragment(string Path, JsonElement Value);
 
