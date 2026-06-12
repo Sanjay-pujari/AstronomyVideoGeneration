@@ -82,33 +82,32 @@ public abstract class EventSceneValidationStrategyBase : IEventSceneValidationSt
     }
 
     private static bool IsGeneratedContentField(string propertyName)
-        => propertyName.Equals("title", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("subtitle", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("viewerTakeaway", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("narrationText", StringComparison.OrdinalIgnoreCase)
+        => propertyName.Equals("viewerTakeaway", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("captionText", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("backgroundPrompt", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("overlayText", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("programmaticLayers", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("accessibilityCues", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("label", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("labels", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("arrows", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("localAssetObjects", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("directionMarkers", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("timingMarkers", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("steps", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("scenePurpose", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("viewerQuestion", StringComparison.OrdinalIgnoreCase);
+            || propertyName.Equals("requiredDrawableObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("renderedLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("detectedLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("sceneLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("reviewLabels", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("ocrText", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("ocr", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsValidationMetadataField(string propertyName)
         => propertyName.Equals("strategyValidationFacts", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("requiredVisualObjects", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("forbiddenTerms", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("forbiddenObjectNames", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("forbiddenVisualObjects", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("validationForbiddenTerms", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("validationRules", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("checks", StringComparison.OrdinalIgnoreCase)
             || propertyName.Equals("issues", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("recommendations", StringComparison.OrdinalIgnoreCase);
+            || propertyName.Equals("recommendations", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("debug", StringComparison.OrdinalIgnoreCase)
+            || propertyName.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
 
 
     protected static bool ContainsToken(string haystack, string? needle)
