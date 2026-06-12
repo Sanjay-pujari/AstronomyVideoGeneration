@@ -411,12 +411,55 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Assert.True(response.Success);
             Assert.Equal(10, response.RequestedStartPhase);
             Assert.Equal(12, response.RequestedEndPhase);
-            Assert.Equal(5, response.ExpandedStartPhase);
+            Assert.Equal(3, response.ExpandedStartPhase);
             Assert.Equal(12, response.ExpandedEndPhase);
             Assert.True(response.DependencyExpansionApplied);
-            Assert.Equal(5, response.StartPhaseNo);
+            Assert.Equal(3, response.StartPhaseNo);
             Assert.Equal(12, response.EndPhaseNo);
-            Assert.Contains("Expanded rebuild range from 10-12 to 5-12 due to prerequisite dependencies.", response.Warnings);
+            Assert.Contains("Expanded rebuild range from 10-12 to 3-12 due to prerequisite dependencies.", response.Warnings);
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteContentPlanWithProductionPipelineAsync_RebuildOutputs_DoesNotDeleteQuestionEngineWhenPhase3IsNotRegenerated()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-rebuild-preserve-question-engine-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var outputRoot = BuildGeminidsOutputRoot(workingDirectory);
+            var questionEngineRoot = Path.Combine(outputRoot, "question-engine");
+            Directory.CreateDirectory(questionEngineRoot);
+            var questionAnswerSetPath = Path.Combine(questionEngineRoot, "question-answer-set.json");
+            await File.WriteAllTextAsync(questionAnswerSetPath, "{}", CancellationToken.None);
+
+            var service = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new SuccessfulProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance);
+
+            var response = await service.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
+                GeminidsPlanId,
+                DryRun: false,
+                OverwriteExisting: true,
+                StartPhaseNo: 4,
+                EndPhaseNo: 4,
+                ExecutionMode: ContentPlanExecutionMode.RebuildOutputs,
+                AllowCompletedPlanRerun: true), CancellationToken.None);
+
+            Assert.True(response.Success);
+            Assert.Equal(4, response.StartPhaseNo);
+            Assert.Equal(4, response.EndPhaseNo);
+            Assert.False(response.DependencyExpansionApplied);
+            Assert.True(File.Exists(questionAnswerSetPath));
+            Assert.DoesNotContain(response.DeletedOutputFolders!, path => path.EndsWith("question-engine", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -679,6 +722,9 @@ public sealed class ContentPlanBatchGenerationServiceTests
         db.SaveChanges();
     }
 
+    private static string BuildGeminidsOutputRoot(string workingDirectory)
+        => Path.Combine(workingDirectory, "plans", "IN-RJ-UDAIPUR", "2026", GeminidsPlanId.ToString("D"));
+
     private static ContentPipelineExecution SeedPipelineExecution(MediaFactoryDbContext db, DateTimeOffset startedUtc, string status, DateTimeOffset? finishedUtc = null)
     {
         var execution = new ContentPipelineExecution
@@ -810,6 +856,32 @@ public sealed class ContentPlanBatchGenerationServiceTests
             CapturedArchivePreviousRun = request.ArchivePreviousRun;
             return ExecuteContentPlanAsync(request.ContentGenerationPlanId, request.DryRun, request.OverwriteExisting, cancellationToken);
         }
+    }
+
+    private sealed class SuccessfulProductionPipelineExecutionService : IProductionPipelineExecutionService
+    {
+        public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new ProductionPipelineExecutionResult(
+                Success: true,
+                DryRun: false,
+                QuestionEngineCompleted: File.Exists(Path.Combine(request.OutputRoot, "question-engine", "question-answer-set.json")),
+                ShortScenesGenerated: false,
+                LongScenesGenerated: false,
+                HeroGenerated: false,
+                ThumbnailsGenerated: false,
+                ShortNarrationGenerated: false,
+                LongNarrationGenerated: false,
+                ShortTtsGenerated: false,
+                LongTtsGenerated: false,
+                ShortVideoGenerated: false,
+                LongVideoGenerated: false,
+                FinalShortVideoPath: string.Empty,
+                FinalLongVideoPath: string.Empty,
+                GeneratedFiles: [],
+                Warnings: [],
+                Errors: [],
+                StartPhaseNo: request.StartPhaseNo,
+                EndPhaseNo: request.EndPhaseNo));
     }
 
     private sealed class ThrowingProductionPipelineExecutionService : IProductionPipelineExecutionService
