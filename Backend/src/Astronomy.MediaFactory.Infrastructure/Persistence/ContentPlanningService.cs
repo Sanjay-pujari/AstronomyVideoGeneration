@@ -76,7 +76,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             PlanStatus = "Draft",
             Status = "Draft",
             GeneratedByAi = false,
-            PlanningReason = request.Reason,
+            PlanningReason = BuildManualValidationPlanningReason(request.Reason),
             PlannedObjectNamesJson = JsonSerializer.Serialize(objectNames, JsonOptions),
             SourceEventObjectIdsJson = JsonSerializer.Serialize(objectIds, JsonOptions),
             PrimaryCelestialObjectCode = objectNames.FirstOrDefault()
@@ -189,6 +189,15 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         db.ContentGenerationPlans.Add(plan);
         await db.SaveChangesAsync(cancellationToken);
         return new GenerateContentPlanResponse(plan.Id, "Planned", plan.Title, plan.PlanningReason);
+    }
+
+    private static string BuildManualValidationPlanningReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return "manual validation";
+        var trimmed = reason.Trim();
+        return trimmed.Contains("manual validation", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : $"manual validation: {trimmed}";
     }
 
     public async Task<ContentGenerationPlan> GenerateDailyPlanAsync(

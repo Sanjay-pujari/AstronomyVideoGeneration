@@ -94,6 +94,126 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.False(legacy.WasCalled);
     }
 
+    [Fact]
+    public async Task GenerateFromPlansAsync_ExactManualValidationTitle_BypassesAutoGenerateAllowedWithWarning()
+    {
+        await using var db = CreateDb();
+        var intelligence = SeedManualValidationPlan(db);
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            DryRun: true,
+            PlanTitles: ["Planet grouping window over Udaipur, Rajasthan, India"],
+            UseProductionPipeline: true), CancellationToken.None);
+
+        var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(GeminidsPlanId, response.PlanId);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Planet grouping window over Udaipur, Rajasthan, India"
+            && warning.Selected
+            && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal(GeminidsPlanId, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ManualValidationPlanId_BypassesAutoGenerateAllowedWithWarning()
+    {
+        await using var db = CreateDb();
+        var intelligence = SeedManualValidationPlan(db);
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            DryRun: true,
+            UseProductionPipeline: true,
+            PlanId: GeminidsPlanId), CancellationToken.None);
+
+        var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(GeminidsPlanId, response.PlanId);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == GeminidsPlanId.ToString("D")
+            && warning.Selected
+            && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal(GeminidsPlanId, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_PartialManualValidationTitle_DoesNotBypassAutoGenerateAllowed()
+    {
+        await using var db = CreateDb();
+        var intelligence = SeedManualValidationPlan(db);
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            DryRun: true,
+            PlanTitles: ["Planet grouping"],
+            UseProductionPipeline: true), CancellationToken.None);
+
+        var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
+        Assert.True(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Planet grouping"
+            && warning.Matched
+            && !warning.Selected
+            && warning.Reason == "Excluded because linked astronomy event AutoGenerateAllowed was false");
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_AiGeneratedManualValidationTitle_DoesNotBypassAutoGenerateAllowed()
+    {
+        await using var db = CreateDb();
+        var intelligence = SeedManualValidationPlan(db, generatedByAi: true);
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            DryRun: true,
+            PlanTitles: ["Planet grouping window over Udaipur, Rajasthan, India"],
+            UseProductionPipeline: true), CancellationToken.None);
+
+        var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
+        Assert.True(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Planet grouping window over Udaipur, Rajasthan, India"
+            && warning.Matched
+            && !warning.Selected
+            && warning.Reason == "Excluded because linked astronomy event AutoGenerateAllowed was false");
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
 
     [Fact]
     public async Task GenerateFromPlansAsync_ForwardsOverwriteExistingToProductionPipeline()
@@ -763,6 +883,66 @@ public sealed class ContentPlanBatchGenerationServiceTests
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
+
+    private static ContentPlanBatchGenerationService CreateService(MediaFactoryDbContext db, ThrowingLegacyPipeline legacy, CapturingProductionExecutionService production)
+        => new(
+            db,
+            legacy,
+            legacy,
+            legacy,
+            legacy,
+            production,
+            new ProductionRunningRecoveryService(db, Options.Create(new ProductionPipelineOptions()), NullLogger<ProductionRunningRecoveryService>.Instance),
+            Options.Create(new ProductionPipelineOptions()),
+            NullLogger<ContentPlanBatchGenerationService>.Instance);
+
+    private static AstronomyEventIntelligence SeedManualValidationPlan(MediaFactoryDbContext db, bool generatedByAi = false)
+    {
+        var intelligence = new AstronomyEventIntelligence
+        {
+            EventCode = "PLANET-GROUPING-UDAIPUR-2026",
+            ExternalEventId = "planet-grouping-udaipur-2026",
+            Year = 2026,
+            Language = "en",
+            VerificationStatus = "Verified",
+            AutoGenerateAllowed = false,
+            ContentStrategy = "ManualValidationCandidate",
+            EventType = "PLANET_GROUPING",
+            Title = "Planet grouping window over Udaipur, Rajasthan, India",
+            Summary = "Manual validation planet grouping",
+            StartUtc = new DateTimeOffset(2026, 6, 20, 0, 0, 0, TimeSpan.Zero),
+            PeakUtc = new DateTimeOffset(2026, 6, 21, 0, 0, 0, TimeSpan.Zero),
+            RegionId = "IN-RJ-UDAIPUR",
+            RarityScore = 8,
+            VisibilityScore = 8,
+            AudienceInterestScore = 8,
+            ContentOpportunityScore = 8
+        };
+        db.AstronomyEventIntelligences.Add(intelligence);
+
+        var plan = new ContentGenerationPlan
+        {
+            Title = "Planet grouping window over Udaipur, Rajasthan, India",
+            ContentCategoryCode = "CosmicStoryShort",
+            RegionId = "IN-RJ-UDAIPUR",
+            Language = "en",
+            ScheduledUtc = new DateTimeOffset(2026, 6, 21, 0, 0, 0, TimeSpan.Zero),
+            Status = "Draft",
+            PlanStatus = "Draft",
+            Priority = 40,
+            PriorityScore = 8,
+            GeneratedByAi = generatedByAi,
+            PlanningReason = "Astronomy V1.2 manual validation",
+            AstronomyEventIntelligenceId = intelligence.Id,
+            AstronomyEventIntelligence = intelligence,
+            SourceExternalEventId = "planet-grouping-udaipur-2026",
+            RequestedOutputTypesJson = "[\"ShortVideo\",\"LongVideo\"]"
+        };
+        plan.AssignId(GeminidsPlanId);
+        db.ContentGenerationPlans.Add(plan);
+        db.SaveChanges();
+        return intelligence;
+    }
 
     private static void SeedGeminidsPlan(MediaFactoryDbContext db, string status = "Planned", string planStatus = "Planned")
     {

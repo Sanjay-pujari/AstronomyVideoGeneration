@@ -40,7 +40,7 @@ public sealed class ManualContentPlanCreationTests
         Assert.Equal(40, plan.Priority);
         Assert.Equal(evt.ContentOpportunityScore, plan.PriorityScore);
         Assert.False(plan.GeneratedByAi);
-        Assert.Equal("Astronomy V1.2 Planet Grouping validation", plan.PlanningReason);
+        Assert.Equal("manual validation: Astronomy V1.2 Planet Grouping validation", plan.PlanningReason);
         Assert.Equal(["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"], ReadStringArray(plan.RequestedOutputTypesJson));
         Assert.Equal(["Saturn", "Mars", "Jupiter", "Venus"], ReadStringArray(plan.PlannedObjectNamesJson));
         Assert.Equal(["Saturn"], pipelineRequest.PrimaryObjects);
