@@ -354,7 +354,7 @@ public sealed class EventProductionIntelligenceTests
 
 
     [Fact]
-    public async Task ProductionQualityValidator_UsesCurrentSceneInfographicSpecsInsteadOfStaleStagingMetadataForPhase10()
+    public async Task ProductionQualityValidator_PrefersSceneApprovalStagingRootForPhase10()
     {
         var outputRoot = Path.Combine(Path.GetTempPath(), $"phase10-output-{Guid.NewGuid():N}");
         var stagingRoot = Path.Combine(Path.GetTempPath(), $"phase10-staging-{Guid.NewGuid():N}", "question-engine", "scene-approval-v3");
@@ -391,15 +391,19 @@ public sealed class EventProductionIntelligenceTests
         await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-review.json"), "Moon visible with full moon glow");
         await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-narration.txt"), "Watch the full Moon during the evening viewing window.");
         await File.WriteAllTextAsync(Path.Combine(outputRoot, "scene-approval-v3", "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nFull Moon is visible from 18:00–23:00 UTC.\n");
+        Directory.CreateDirectory(Path.Combine(stagingRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(stagingRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(stagingRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(stagingRoot, "long", "scene-001-final.png"), "fake");
         await File.WriteAllTextAsync(Path.Combine(stagingRoot, "scene-001-infographic-spec.json"), """
 {
-  "viewerTakeaway":"Full Moon viewing guide.",
-  "captionText":"Full Moon viewing guide.",
+  "viewerTakeaway":"Snow Moon viewing guide.",
+  "captionText":"Snow Moon viewing guide.",
   "overlayText":["Moon"],
   "visualSourceResolution":{
     "metadata":{
-      "eventShortTitle":"Stale Moon",
-      "eventTitle":"Stale Moon Full Moon"
+      "eventShortTitle":"Snow Moon",
+      "eventTitle":"Snow Moon Full Moon"
     },
     "sourceType":"Hybrid",
     "realisticObjectRequired":true,
@@ -452,24 +456,28 @@ public sealed class EventProductionIntelligenceTests
             new GenericEventSceneValidationStrategy()
         ]));
 
+        await File.WriteAllTextAsync(Path.Combine(stagingRoot, "scene-001-review.json"), "{\"checks\":[\"Snow Moon visible with Moon asset\"]}");
+
         var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, outputRoot, CancellationToken.None);
 
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
         using var validation = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputRoot, "production-quality-validation-before-assembly.json")));
         Assert.True(validation.RootElement.GetProperty("titleFoundInCaptionText").GetBoolean());
-        Assert.False(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
+        Assert.True(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
 
         var titleSources = validation.RootElement.GetProperty("titleValidationSourceDiagnostics").EnumerateArray().ToArray();
         var metadataSources = titleSources.Single(source => source.GetProperty("field").GetString() == "titleFoundInMetadata");
         var metadataSourcePaths = metadataSources.GetProperty("sourceFilePaths").EnumerateArray().Select(source => source.GetString()).ToArray();
-        Assert.Contains(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-infographic-spec.json").Replace('\\', '/'), metadataSourcePaths);
-        Assert.DoesNotContain(metadataSourcePaths, sourcePath => sourcePath!.Contains(stagingRoot, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(Path.Combine(stagingRoot, "scene-001-infographic-spec.json").Replace('\\', '/'), metadataSourcePaths);
+        Assert.DoesNotContain(metadataSourcePaths, sourcePath => sourcePath!.Contains(Path.Combine(outputRoot, "scene-approval-v3"), StringComparison.OrdinalIgnoreCase));
 
         var visualDiagnostics = validation.RootElement.GetProperty("phase10VisualSourceInputDiagnostics");
         var scene = visualDiagnostics.GetProperty("scenes").EnumerateArray().Single();
-        Assert.Equal(Path.Combine(outputRoot, "scene-approval-v3", "scene-001-infographic-spec.json").Replace('\\', '/'), scene.GetProperty("specFilePath").GetString());
+        Assert.Equal(Path.Combine(stagingRoot, "scene-001-infographic-spec.json").Replace('\\', '/'), scene.GetProperty("specPathUsed").GetString());
+        Assert.Equal(Path.Combine(stagingRoot, "scene-001-review.json").Replace('\\', '/'), scene.GetProperty("reviewPathUsed").GetString());
         Assert.Equal("Moon.FullMoon", scene.GetProperty("assetKey").GetString());
         Assert.False(scene.GetProperty("primitivePlaceholderUsed").GetBoolean());
+        Assert.True(scene.GetProperty("visualValidationPassed").GetBoolean());
     }
 
     [Fact]
@@ -490,9 +498,9 @@ public sealed class EventProductionIntelligenceTests
   "overlayText":["Snow Moon", "Moon"],
   "strategyValidationFacts":{
     "visualSourceType":"Hybrid",
-    "assetKey":"Moon.FullMoon",
+    "assetKey":"",
     "generatedRealisticPrompt":"primitive circle Moon placeholder",
-    "objectVisualSource":"Moon:primitive circle placeholder",
+    "objectVisualSource":"",
     "realisticObjectRequired":"true",
     "primitivePlaceholderUsed":"true",
     "allowPrimitivePlaceholder":"false",
@@ -546,7 +554,7 @@ public sealed class EventProductionIntelligenceTests
 
 
     [Fact]
-    public async Task ProductionQualityValidator_FailsMissingObjectVisualSourceForRequiredCelestialObject()
+    public async Task ProductionQualityValidator_AcceptsAssetKeyWithoutObjectVisualSourceForRequiredCelestialObject()
     {
         var root = Path.Combine(Path.GetTempPath(), $"phase10-missing-object-source-{Guid.NewGuid():N}");
         var sceneRoot = Path.Combine(root, "scene-approval-v3");
@@ -609,8 +617,8 @@ public sealed class EventProductionIntelligenceTests
 
         var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, error => error.Contains("objectVisualSource", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Empty(result.Errors);
     }
 
 }

@@ -502,7 +502,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var sceneRoot = ResolveCurrentRunDirectory(eventWorkingRoot, "scene-approval-v3");
         var currentSceneSpecFiles = EnumerateCurrentRunSceneInfographicSpecFiles(sceneRoot).ToArray();
         var titleValidationDiagnostics = BuildTitleValidationDiagnostics(intelligence, currentSceneSpecFiles, eventWorkingRoot, ReadAllText(eventWorkingRoot));
-        var visualSourceInputDiagnostics = BuildVisualSourceInputDiagnostics(sceneRoot, currentSceneSpecFiles);
+        var visualSourceInputDiagnostics = BuildVisualSourceInputDiagnostics(sceneRoot, currentSceneSpecFiles, intelligence);
         await WriteValidationAsync(Path.Combine(eventWorkingRoot, "production-quality-validation-before-assembly.json"), intelligence, warnings, errors, cancellationToken, titleValidationDiagnostics: titleValidationDiagnostics, visualSourceInputDiagnostics: visualSourceInputDiagnostics);
         return new(errors.Count == 0, warnings, errors);
     }
@@ -521,20 +521,20 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         foreach (var hit in leakageHits)
             errors.Add("Forbidden leakage detected: " + JsonSerializer.Serialize(hit, JsonOptions));
 
+        var sceneRoot = ResolveCurrentRunDirectory(outputRoot, "scene-approval-v3");
         foreach (var profile in new[] { "short", "long" })
         {
-            var profileSceneRoot = Path.Combine(outputRoot, "scene-approval-v3", profile);
-            if (!Directory.Exists(profileSceneRoot) || !Directory.EnumerateFiles(profileSceneRoot, "scene-*.png").Any()) errors.Add($"{profile} scenes were not materialized in the production plan folder.");
+            var profileSceneRoot = Path.Combine(sceneRoot, profile);
+            if (!Directory.Exists(profileSceneRoot) || !Directory.EnumerateFiles(profileSceneRoot, "scene-*-final.png").Any()) errors.Add($"{profile} scenes were not materialized in the current scene approval folder.");
             var video = Path.Combine(outputRoot, "video-assembly", profile, profile == "short" ? "final-video-short.mp4" : "final-video-long.mp4");
             if (!File.Exists(video)) errors.Add($"{profile} final video is missing from the production plan folder.");
         }
         if (!File.Exists(Path.Combine(outputRoot, "hero", "hero.png"))) errors.Add("Hero image is missing from the production plan folder.");
         foreach (var file in new[] { "landscape.png", "square.png", "portrait.png" })
             if (!File.Exists(Path.Combine(outputRoot, "thumbnails", file))) errors.Add($"Thumbnail {file} is missing from the production plan folder.");
-        var sceneRoot = ResolveCurrentRunDirectory(outputRoot, "scene-approval-v3");
         var currentSceneSpecFiles = EnumerateCurrentRunSceneInfographicSpecFiles(sceneRoot).ToArray();
         var titleValidationDiagnostics = BuildTitleValidationDiagnostics(currentRunIntelligence, currentSceneSpecFiles, outputRoot, ReadFinalValidationText(outputRoot));
-        var visualSourceInputDiagnostics = BuildVisualSourceInputDiagnostics(sceneRoot, currentSceneSpecFiles);
+        var visualSourceInputDiagnostics = BuildVisualSourceInputDiagnostics(sceneRoot, currentSceneSpecFiles, currentRunIntelligence);
         await WriteValidationAsync(Path.Combine(outputRoot, "production-quality-validation-final.json"), currentRunIntelligence, warnings, errors, cancellationToken, strategy.EventType, leakageHits, titleValidationDiagnostics, visualSourceInputDiagnostics);
         return new(errors.Count == 0, warnings, errors);
     }
@@ -826,6 +826,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var context = ReadCurrentRunSceneValidationContext(intelligence, currentRunRoot, sceneRoot);
         if (context.InfographicSpecs.Count == 0) errors.Add("Current-run scene infographic specs are missing.");
         if (context.ReviewJson.Count == 0) errors.Add("Current-run scene reviews are missing.");
+        ValidateCurrentSceneArtifacts(sceneRoot, context, errors);
 
         var strategy = sceneValidationStrategyResolver.Resolve(intelligence.EventType);
         var requirements = strategy.GetRequirements(intelligence);
@@ -845,6 +846,24 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     }
 
 
+    private static void ValidateCurrentSceneArtifacts(string sceneRoot, SceneValidationContext context, List<string> errors)
+    {
+        foreach (var specPath in context.InfographicSpecs.Keys.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            var sceneKey = Regex.Match(Path.GetFileName(specPath), @"^(scene-\d+)-infographic-spec\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Groups[1].Value;
+            if (string.IsNullOrWhiteSpace(sceneKey)) continue;
+
+            var reviewPath = Path.Combine(sceneRoot, $"{sceneKey}-review.json");
+            var longFinalPath = Path.Combine(sceneRoot, "long", $"{sceneKey}-final.png");
+            var shortFinalPath = Path.Combine(sceneRoot, "short", $"{sceneKey}-final.png");
+
+            if (!File.Exists(reviewPath)) errors.Add($"Current-run scene artifact validation failed for {sceneKey}: {sceneKey}-review.json is missing.");
+            if (!File.Exists(longFinalPath)) errors.Add($"Current-run scene artifact validation failed for {sceneKey}: long/{sceneKey}-final.png is missing.");
+            if (!File.Exists(shortFinalPath)) errors.Add($"Current-run scene artifact validation failed for {sceneKey}: short/{sceneKey}-final.png is missing.");
+        }
+    }
+
+
     private static void ValidateVisualSourceResolverMetadata(SceneValidationContext context, List<string> errors)
     {
         var required = (context.Intelligence.RequiredVisualObjects ?? [])
@@ -857,79 +876,77 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         foreach (var (path, json) in context.InfographicSpecs)
         {
             using var doc = JsonDocument.Parse(json);
-            var specText = json;
+            var fileName = Path.GetFileName(path);
             if (required.Length > 0)
             {
                 if (TryGetVisualSourceType(doc.RootElement, out var sourceType) && sourceType.Equals("GenericFallback", StringComparison.OrdinalIgnoreCase))
-                    errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: GenericFallback cannot be used when required visual objects exist.");
+                    errors.Add($"Visual source validation failed for {fileName}: GenericFallback cannot be used when required visual objects exist.");
 
-                ValidateRealisticObjectRenderingMetadata(doc.RootElement, Path.GetFileName(path), errors);
-                ValidatePerObjectVisualSourceMetadata(doc.RootElement, Path.GetFileName(path), required, errors);
+                var reviewPath = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(path).Replace("-infographic-spec.json", "-review.json", StringComparison.OrdinalIgnoreCase));
+                using var reviewDoc = File.Exists(reviewPath) ? TryParseJson(File.ReadAllText(reviewPath)) : null;
+                ValidatePerObjectVisualSourceMetadata(doc.RootElement, reviewDoc?.RootElement, fileName, required, errors);
 
-                foreach (var requiredObject in required)
-                    if (!ContainsToken(specText, requiredObject))
-                        errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: required visual object '{requiredObject}' is missing from spec/metadata.");
+                var specAndReviewText = json + "\n" + (File.Exists(reviewPath) ? File.ReadAllText(reviewPath) : string.Empty);
+                foreach (var requiredObject in required.Where(value => !IsConceptualVisualRequirement(value)))
+                    if (!ContainsToken(specAndReviewText, requiredObject))
+                        errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing from current spec/review metadata.");
             }
 
             foreach (var forbidden in context.Intelligence.ForbiddenObjectNames ?? [])
                 if (ContainsToken(ExtractSpecGeneratedText(doc.RootElement), forbidden))
-                    errors.Add($"Visual source validation failed for {Path.GetFileName(path)}: forbidden object name '{forbidden}' appears in generated spec content.");
+                    errors.Add($"Visual source validation failed for {fileName}: forbidden object name '{forbidden}' appears in generated spec content.");
         }
     }
 
-    private static void ValidateRealisticObjectRenderingMetadata(JsonElement root, string fileName, List<string> errors)
+    private static void ValidatePerObjectVisualSourceMetadata(JsonElement root, JsonElement? reviewRoot, string fileName, IReadOnlyList<string> requiredObjects, List<string> errors)
     {
-        if (!TryGetVisualMetadataString(root, "visualSourceType", out _))
-            errors.Add($"Visual source validation failed for {fileName}: visualSourceType metadata is required for realistic object rendering.");
-        var hasAssetKey = TryGetVisualMetadataString(root, "assetKey", out var assetKey);
-        var hasGeneratedPrompt = TryGetVisualMetadataString(root, "generatedRealisticPrompt", out var generatedRealisticPrompt);
-        if (!hasAssetKey && !hasGeneratedPrompt)
-            errors.Add($"Visual source validation failed for {fileName}: assetKey or generatedRealisticPrompt metadata is required for realistic object rendering.");
-        if (string.IsNullOrWhiteSpace(assetKey) && string.IsNullOrWhiteSpace(generatedRealisticPrompt))
-            errors.Add($"Visual source validation failed for {fileName}: assetKey or generatedRealisticPrompt metadata must be populated for realistic object rendering.");
-        if (!TryGetVisualMetadataBool(root, "realisticObjectRequired", out var realisticObjectRequired))
-            errors.Add($"Visual source validation failed for {fileName}: realisticObjectRequired metadata is required.");
-        if (!TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var primitivePlaceholderUsed))
-            errors.Add($"Visual source validation failed for {fileName}: primitivePlaceholderUsed metadata is required.");
-        var allowPrimitivePlaceholder = TryGetVisualMetadataBool(root, "allowPrimitivePlaceholder", out var allowValue) && allowValue;
-        if (realisticObjectRequired && primitivePlaceholderUsed && !allowPrimitivePlaceholder)
-            errors.Add($"Visual source validation failed for {fileName}: primitivePlaceholderUsed=true cannot pass when realisticObjectRequired=true and AllowPrimitivePlaceholder=false.");
-        if (!TryGetVisualMetadataString(root, "celestialObjectQuality", out var quality) || !quality.Equals("Realistic", StringComparison.OrdinalIgnoreCase))
-            errors.Add($"Visual source validation failed for {fileName}: celestialObjectQuality=Realistic metadata is required for realistic object rendering.");
-        if (!TryGetVisualMetadataString(root, "objectSourcePriority", out var sourcePriority)
-            || !sourcePriority.Contains("LocalAsset", StringComparison.OrdinalIgnoreCase)
-            || !sourcePriority.Contains("ScientificAsset", StringComparison.OrdinalIgnoreCase)
-            || !sourcePriority.Contains("AICinematic", StringComparison.OrdinalIgnoreCase))
-            errors.Add($"Visual source validation failed for {fileName}: objectSourcePriority must include LocalAsset, ScientificAsset, and AICinematic.");
-        if (ContainsPrimitiveOnlyRenderingCue(generatedRealisticPrompt))
-            errors.Add($"Visual source validation failed for {fileName}: generatedRealisticPrompt describes primitive circle/icon/dot placeholder rendering instead of a real celestial object.");
-    }
-
-    private static void ValidatePerObjectVisualSourceMetadata(JsonElement root, string fileName, IReadOnlyList<string> requiredObjects, List<string> errors)
-    {
-        var factsText = TryGetVisualMetadataString(root, "objectVisualSource", out var objectVisualSource) ? objectVisualSource : string.Empty;
-        foreach (var requiredObject in requiredObjects.Where(value => !IsConceptualVisualRequirement(value) && IsCelestialVisualRequirement(value)))
+        foreach (var requiredObject in requiredObjects.Where(value => !IsConceptualVisualRequirement(value)))
         {
-            var objectMetadata = FindDrawableObjectMetadata(root, requiredObject);
-            var objectSource = objectMetadata?.ObjectVisualSource ?? factsText;
-            var assetKey = objectMetadata?.AssetKey ?? (TryGetVisualMetadataString(root, "assetKey", out var rootAssetKey) ? rootAssetKey : string.Empty);
-            var generatedPrompt = objectMetadata?.GeneratedRealisticPrompt ?? (TryGetVisualMetadataString(root, "generatedRealisticPrompt", out var rootPrompt) ? rootPrompt : string.Empty);
-            var placeholderUsed = objectMetadata?.PrimitivePlaceholderUsed ?? (TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var rootPlaceholderUsed) && rootPlaceholderUsed);
+            var objectMetadata = FindDrawableObjectMetadata(root, requiredObject)
+                ?? (reviewRoot.HasValue ? FindDrawableObjectMetadata(reviewRoot.Value, requiredObject) : null)
+                ?? BuildRootObjectMetadata(root)
+                ?? (reviewRoot.HasValue ? BuildRootObjectMetadata(reviewRoot.Value) : null);
 
-            if (string.IsNullOrWhiteSpace(objectSource) || !ContainsToken(objectSource, requiredObject))
-                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing objectVisualSource metadata.");
-            if (string.IsNullOrWhiteSpace(assetKey))
-                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing assetKey metadata.");
-            if (string.IsNullOrWhiteSpace(generatedPrompt))
-                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing generatedRealisticPrompt metadata.");
-            if (placeholderUsed)
-                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' has primitivePlaceholderUsed=true.");
-            if (ContainsPrimitiveOnlyRenderingCue(objectSource) || ContainsPrimitiveOnlyRenderingCue(assetKey) || ContainsPrimitiveOnlyRenderingCue(generatedPrompt))
-                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is rendered only as a primitive circle/icon/dot.");
+            var realisticObjectRequired = objectMetadata?.RealisticObjectRequired
+                ?? ((TryGetVisualMetadataBool(root, "realisticObjectRequired", out var rootRealistic) && rootRealistic)
+                    || (reviewRoot.HasValue && TryGetVisualMetadataBool(reviewRoot.Value, "realisticObjectRequired", out var reviewRealistic) && reviewRealistic));
+            var primitivePlaceholderUsed = objectMetadata?.PrimitivePlaceholderUsed
+                ?? ((TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var rootPrimitive) && rootPrimitive)
+                    || (reviewRoot.HasValue && TryGetVisualMetadataBool(reviewRoot.Value, "primitivePlaceholderUsed", out var reviewPrimitive) && reviewPrimitive));
+
+            var objectSource = objectMetadata?.ObjectVisualSource ?? string.Empty;
+            var assetKey = objectMetadata?.AssetKey ?? string.Empty;
+            var renderedAssetPath = objectMetadata?.RenderedAssetPath ?? string.Empty;
+
+            var visualValidationPassed = !string.IsNullOrWhiteSpace(assetKey)
+                || !string.IsNullOrWhiteSpace(objectSource)
+                || !string.IsNullOrWhiteSpace(renderedAssetPath);
+
+            if (realisticObjectRequired && primitivePlaceholderUsed && !visualValidationPassed)
+                errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' has realisticObjectRequired=true and primitivePlaceholderUsed=true without assetKey, objectVisualSource, or renderedAssetPath.");
         }
     }
 
-    private sealed record DrawableObjectMetadata(string ObjectVisualSource, string AssetKey, string GeneratedRealisticPrompt, bool PrimitivePlaceholderUsed);
+    private sealed record DrawableObjectMetadata(
+        string ObjectVisualSource,
+        string AssetKey,
+        string GeneratedRealisticPrompt,
+        bool PrimitivePlaceholderUsed,
+        bool? RealisticObjectRequired,
+        string RenderedAssetPath);
+
+    private static DrawableObjectMetadata? BuildRootObjectMetadata(JsonElement root)
+    {
+        var objectVisualSource = TryGetVisualMetadataString(root, "objectVisualSource", out var source) ? source : string.Empty;
+        var assetKey = TryGetVisualMetadataString(root, "assetKey", out var asset) ? asset : string.Empty;
+        var prompt = TryGetVisualMetadataString(root, "generatedRealisticPrompt", out var generatedPrompt) ? generatedPrompt : string.Empty;
+        var primitive = TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var primitiveValue) && primitiveValue;
+        var realistic = TryGetVisualMetadataBool(root, "realisticObjectRequired", out var realisticValue) ? realisticValue : (bool?)null;
+        var renderedAssetPath = TryGetVisualMetadataString(root, "renderedAssetPath", out var rendered) ? rendered : string.Empty;
+        return string.IsNullOrWhiteSpace(objectVisualSource) && string.IsNullOrWhiteSpace(assetKey) && string.IsNullOrWhiteSpace(renderedAssetPath) && string.IsNullOrWhiteSpace(prompt) && realistic is null
+            ? null
+            : new DrawableObjectMetadata(objectVisualSource, assetKey, prompt, primitive, realistic, renderedAssetPath);
+    }
 
     private static DrawableObjectMetadata? FindDrawableObjectMetadata(JsonElement root, string requiredObject)
     {
@@ -944,6 +961,11 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             && objects.ValueKind == JsonValueKind.Array)
             return FindObjectMetadataInArray(objects, requiredObject);
 
+        if (root.TryGetProperty("strategyValidationFacts", out var facts)
+            && facts.TryGetProperty("objectVisualSources", out objects)
+            && objects.ValueKind == JsonValueKind.Array)
+            return FindObjectMetadataInArray(objects, requiredObject);
+
         return null;
     }
 
@@ -951,38 +973,23 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     {
         foreach (var obj in objects.EnumerateArray())
         {
-            var objectType = obj.TryGetProperty("objectType", out var typeProperty) && typeProperty.ValueKind == JsonValueKind.String ? typeProperty.GetString() ?? string.Empty : string.Empty;
-            if (!ContainsToken(objectType, requiredObject) && !ContainsToken(requiredObject, objectType)) continue;
-            var objectVisualSource = obj.TryGetProperty("objectVisualSource", out var sourceProperty) && sourceProperty.ValueKind == JsonValueKind.String ? sourceProperty.GetString() ?? string.Empty : string.Empty;
-            var assetKey = obj.TryGetProperty("assetKey", out var assetProperty) && assetProperty.ValueKind == JsonValueKind.String ? assetProperty.GetString() ?? string.Empty : string.Empty;
-            var prompt = obj.TryGetProperty("generatedRealisticPrompt", out var promptProperty) && promptProperty.ValueKind == JsonValueKind.String ? promptProperty.GetString() ?? string.Empty : string.Empty;
+            if (obj.ValueKind != JsonValueKind.Object) continue;
+            var objectType = ReadStringProperty(obj, "objectType");
+            if (string.IsNullOrWhiteSpace(objectType)) objectType = ReadStringProperty(obj, "name");
+            if (!string.IsNullOrWhiteSpace(objectType) && !ContainsToken(objectType, requiredObject) && !ContainsToken(requiredObject, objectType)) continue;
+            var objectVisualSource = ReadStringProperty(obj, "objectVisualSource");
+            var assetKey = ReadStringProperty(obj, "assetKey");
+            var prompt = ReadStringProperty(obj, "generatedRealisticPrompt");
             var primitive = obj.TryGetProperty("primitivePlaceholderUsed", out var primitiveProperty) && TryReadBool(primitiveProperty, out var primitiveValue) && primitiveValue;
-            return new DrawableObjectMetadata(objectVisualSource, assetKey, prompt, primitive);
+            var realistic = obj.TryGetProperty("realisticObjectRequired", out var realisticProperty) && TryReadBool(realisticProperty, out var realisticValue) ? realisticValue : (bool?)null;
+            var renderedAssetPath = ReadStringProperty(obj, "renderedAssetPath");
+            return new DrawableObjectMetadata(objectVisualSource, assetKey, prompt, primitive, realistic, renderedAssetPath);
         }
         return null;
     }
 
-    private static bool IsCelestialVisualRequirement(string value)
-        => ContainsAny(value, "Moon", "Sun", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Comet", "Asteroid", "Meteor", "Nebula", "Galaxy", "Cluster", "Deep Sky");
-
-    private static bool ContainsAny(string value, params string[] terms)
-        => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
-
-    private static bool IsConceptualVisualRequirement(string value)
-        => value.Contains("glow", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("radiant", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("dark sky", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase);
-
-    private static bool ContainsPrimitiveOnlyRenderingCue(string? value)
-        => !string.IsNullOrWhiteSpace(value)
-            && (value.Contains("primitive circle", StringComparison.OrdinalIgnoreCase)
-                || value.Contains("flat circle", StringComparison.OrdinalIgnoreCase)
-                || value.Contains("generic dot", StringComparison.OrdinalIgnoreCase)
-                || value.Contains("simple colored icon", StringComparison.OrdinalIgnoreCase)
-                || value.Contains("symbolic placeholder", StringComparison.OrdinalIgnoreCase)
-                || value.Contains("debug-only shape", StringComparison.OrdinalIgnoreCase));
+    private static string ReadStringProperty(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() ?? string.Empty : string.Empty;
 
     private static bool TryGetVisualMetadataString(JsonElement root, string propertyName, out string value)
     {
@@ -1001,6 +1008,15 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             value = property.GetString() ?? string.Empty;
             return !string.IsNullOrWhiteSpace(value);
         }
+        foreach (var fragment in CollectJsonPropertyFragments(root, [propertyName]))
+        {
+            var text = JsonTextValue(fragment.Value);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                value = text;
+                return true;
+            }
+        }
         return false;
     }
 
@@ -1013,6 +1029,10 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         if (root.TryGetProperty("strategyValidationFacts", out var facts)
             && facts.TryGetProperty(propertyName, out property))
             return TryReadBool(property, out value);
+        foreach (var fragment in CollectJsonPropertyFragments(root, [propertyName]))
+        {
+            if (TryReadBool(fragment.Value, out value)) return true;
+        }
         return false;
     }
 
@@ -1060,16 +1080,51 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static string ResolveCurrentRunFile(string root, string fileName)
     {
-        var direct = Path.Combine(root, fileName);
-        if (File.Exists(direct)) return direct;
-        return Path.Combine(root, "question-engine", fileName);
+        var staging = Path.Combine(root, "question-engine", fileName);
+        if (File.Exists(staging)) return staging;
+        return Path.Combine(root, fileName);
     }
 
     private static string ResolveCurrentRunDirectory(string root, string directoryName)
     {
-        var direct = Path.Combine(root, directoryName);
-        if (Directory.Exists(direct)) return direct;
-        return Path.Combine(root, "question-engine", directoryName);
+        var manifestRoot = ResolveSceneApprovalStagingRootFromRunMetadata(root);
+        if (!string.IsNullOrWhiteSpace(manifestRoot) && Directory.Exists(manifestRoot)) return manifestRoot;
+
+        var staging = Path.Combine(root, "question-engine", directoryName);
+        if (Directory.Exists(staging)) return staging;
+
+        return Path.Combine(root, directoryName);
+    }
+
+    private static string? ResolveSceneApprovalStagingRootFromRunMetadata(string root)
+    {
+        foreach (var path in EnumerateRunMetadataFiles(root))
+        {
+            using var doc = TryParseJson(File.ReadAllText(path));
+            if (doc is null) continue;
+            if (doc.RootElement.TryGetProperty("sceneApprovalStagingRoot", out var stagingRoot)
+                && stagingRoot.ValueKind == JsonValueKind.String)
+            {
+                var value = stagingRoot.GetString();
+                if (!string.IsNullOrWhiteSpace(value) && Directory.Exists(value)) return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateRunMetadataFiles(string root)
+    {
+        var validationRoot = Path.Combine(root, "validation");
+        if (Directory.Exists(validationRoot))
+        {
+            foreach (var file in Directory.EnumerateFiles(validationRoot, "phase-*-validation.json", SearchOption.TopDirectoryOnly)
+                         .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
+                yield return file;
+        }
+
+        var manifest = Path.Combine(root, "phase-manifest.json");
+        if (File.Exists(manifest)) yield return manifest;
     }
 
     private static SceneValidationContext ReadCurrentRunSceneValidationContext(ProductionEventIntelligence intelligence, string currentRunRoot, string sceneRoot)
@@ -1172,48 +1227,88 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static TitleValidationDiagnostics BuildTitleValidationDiagnostics(ProductionEventIntelligence intelligence, IEnumerable<string> currentSceneSpecFiles, string root, string fallbackText)
     {
-        var aliases = BuildEventTitleAliases(intelligence);
-        if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true, []);
+        var aliases = BuildEventTitleAliases(intelligence, root);
+        if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true, [], [], null, null);
 
         var infographicFiles = currentSceneSpecFiles
             .Where(File.Exists)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var reviewFiles = Directory.Exists(root) ? EnumerateSceneReviewMetadataFiles(root).ToArray() : Array.Empty<string>();
+        var reviewFiles = infographicFiles
+            .Select(file => Path.Combine(Path.GetDirectoryName(file)!, Path.GetFileName(file).Replace("-infographic-spec.json", "-review.json", StringComparison.OrdinalIgnoreCase)))
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         var captionSource = ReadJsonPropertyTextWithSources(infographicFiles, ["captionText"], aliases) with { Field = "titleFoundInCaptionText" };
         var viewerTakeawaySource = ReadJsonPropertyTextWithSources(infographicFiles, ["viewerTakeaway"], aliases) with { Field = "titleFoundInViewerTakeaway" };
         var overlaySource = ReadJsonPropertyTextWithSources(infographicFiles, ["overlayText"], aliases) with { Field = "titleFoundInOverlayText" };
         var metadataSource = ReadVisualSourceResolutionMetadataTitleTextWithSources(infographicFiles, aliases) with { Field = "titleFoundInMetadata" };
-        var titleFoundInReview = ContainsAnyAlias(string.Join('\n', reviewFiles.Select(File.ReadAllText)), aliases);
-        var titleFoundInOcr = ContainsAnyAlias(fallbackText, aliases);
-        var titleFound = captionSource.Found
-            || viewerTakeawaySource.Found
-            || overlaySource.Found
-            || metadataSource.Found;
+        var reviewSource = ReadJsonPropertyTextWithSources(reviewFiles, ["captionText", "viewerTakeaway", "overlayText", "eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle", "metadata", "checks"], aliases) with { Field = "titleFoundInReview" };
+        var titleFoundInOcr = ContainsAnyAlias(fallbackText, aliases.Select(alias => alias.Value).ToArray());
+        var sources = new[] { captionSource, viewerTakeawaySource, overlaySource, metadataSource, reviewSource };
+        var matchedSource = sources.FirstOrDefault(source => source.Found);
+        var matchedFile = matchedSource?.SourceFiles.FirstOrDefault(source => !string.IsNullOrWhiteSpace(source.MatchedAlias));
+        var titleFound = sources.Any(source => source.Found);
 
         return new(
             captionSource.Found,
             viewerTakeawaySource.Found,
             overlaySource.Found,
             metadataSource.Found,
-            titleFoundInReview,
+            reviewSource.Found,
             titleFoundInOcr,
             titleFound,
             false,
-            [captionSource, viewerTakeawaySource, overlaySource, metadataSource]);
+            sources,
+            aliases.Select(alias => alias.Value).ToArray(),
+            matchedFile?.MatchedAlias,
+            matchedSource?.Field);
     }
 
-    private static IReadOnlyList<string> BuildEventTitleAliases(ProductionEventIntelligence intelligence)
-        => new[] { intelligence.Title, intelligence.ShortTitle }
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value.Length)
-            .ToArray();
+    private static IReadOnlyList<TitleCandidate> BuildEventTitleAliases(ProductionEventIntelligence intelligence, string root)
+    {
+        var candidates = new List<TitleCandidate>
+        {
+            new("productionPipelineRequest.title", intelligence.Title),
+            new("productionPipelineRequest.shortTitle", intelligence.ShortTitle),
+            new("astronomyEventTitle", intelligence.Title),
+            new("astronomyEventShortTitle", intelligence.ShortTitle)
+        };
 
-    private static TitleDiagnosticSource ReadJsonPropertyTextWithSources(IEnumerable<string> files, IReadOnlyCollection<string> propertyNames, IReadOnlyList<string> aliases)
+        foreach (var request in ReadCurrentRunProductionRequestCandidates(root))
+        {
+            candidates.Add(new("productionPipelineRequest.title", request.Title));
+            candidates.Add(new("productionPipelineRequest.shortTitle", request.ShortTitle));
+        }
+
+        return candidates
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Value))
+            .Select(candidate => candidate with { Value = candidate.Value.Trim() })
+            .DistinctBy(candidate => NormalizeLooseMatchText(candidate.Value).ToUpperInvariant())
+            .OrderBy(candidate => candidate.Value.Length)
+            .ToArray();
+    }
+
+    private static IEnumerable<ContentPlanProductionPipelineRequest> ReadCurrentRunProductionRequestCandidates(string root)
+    {
+        foreach (var path in new[]
+        {
+            Path.Combine(root, "plan-input", "content-plan-production-request.json"),
+            Path.Combine(Directory.GetParent(root)?.FullName ?? root, "plan-input", "content-plan-production-request.json")
+        }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path)) continue;
+            using var doc = TryParseJson(File.ReadAllText(path));
+            if (doc is null) continue;
+            var request = doc.RootElement.Deserialize<ContentPlanProductionPipelineRequest>(JsonOptions);
+            if (request is not null) yield return request;
+        }
+    }
+
+    private static TitleDiagnosticSource ReadJsonPropertyTextWithSources(IEnumerable<string> files, IReadOnlyCollection<string> propertyNames, IReadOnlyList<TitleCandidate> aliases)
     {
         var inspectedFiles = files.ToArray();
         var sources = new List<TitleDiagnosticFileSource>();
@@ -1226,7 +1321,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             foreach (var fragment in CollectJsonPropertyFragments(doc.RootElement, propertyNames))
             {
                 var text = JsonTextValue(fragment.Value);
-                var matchedAlias = aliases.FirstOrDefault(alias => ContainsToken(text, alias));
+                var matchedAlias = aliases.FirstOrDefault(alias => ContainsToken(text, alias.Value))?.Value;
                 if (!string.IsNullOrWhiteSpace(matchedAlias)) found = true;
                 sources.Add(new(NormalizePath(file), fragment.Path, fragment.Value.GetRawText(), matchedAlias));
             }
@@ -1234,7 +1329,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         return new(string.Empty, found, inspectedFiles.Select(NormalizePath).ToArray(), sources);
     }
 
-    private static TitleDiagnosticSource ReadVisualSourceResolutionMetadataTitleTextWithSources(IEnumerable<string> files, IReadOnlyList<string> aliases)
+    private static TitleDiagnosticSource ReadVisualSourceResolutionMetadataTitleTextWithSources(IEnumerable<string> files, IReadOnlyList<TitleCandidate> aliases)
     {
         var inspectedFiles = files.ToArray();
         var sources = new List<TitleDiagnosticFileSource>();
@@ -1244,11 +1339,11 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             using var doc = TryParseJson(File.ReadAllText(file));
             if (doc is null) continue;
 
-            if (doc.RootElement.TryGetProperty("visualSourceResolution", out var resolution)
-                && resolution.TryGetProperty("metadata", out var metadata)
-                && metadata.ValueKind == JsonValueKind.Object)
+            if (doc.RootElement.TryGetProperty("visualSourceResolution", out var resolution))
             {
-                AddTitleMetadataFragments(file, "visualSourceResolution.metadata", metadata, aliases, sources, ref found);
+                AddTitleMetadataFragments(file, "visualSourceResolution", resolution, aliases, sources, ref found);
+                if (resolution.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object)
+                    AddTitleMetadataFragments(file, "visualSourceResolution.metadata", metadata, aliases, sources, ref found);
             }
 
             if (doc.RootElement.TryGetProperty("strategyValidationFacts", out var facts)
@@ -1260,12 +1355,12 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         return new(string.Empty, found, inspectedFiles.Select(NormalizePath).ToArray(), sources);
     }
 
-    private static void AddTitleMetadataFragments(string file, string prefix, JsonElement element, IReadOnlyList<string> aliases, List<TitleDiagnosticFileSource> sources, ref bool found)
+    private static void AddTitleMetadataFragments(string file, string prefix, JsonElement element, IReadOnlyList<TitleCandidate> aliases, List<TitleDiagnosticFileSource> sources, ref bool found)
     {
-        foreach (var fragment in CollectJsonPropertyFragments(element, ["eventTitle", "eventShortTitle"]))
+        foreach (var fragment in CollectJsonPropertyFragments(element, ["eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle", "productionPipelineRequest"]))
         {
             var text = JsonTextValue(fragment.Value);
-            var matchedAlias = aliases.FirstOrDefault(alias => ContainsToken(text, alias));
+            var matchedAlias = aliases.FirstOrDefault(alias => ContainsToken(text, alias.Value))?.Value;
             if (!string.IsNullOrWhiteSpace(matchedAlias)) found = true;
             sources.Add(new(NormalizePath(file), $"{prefix}.{fragment.Path}", fragment.Value.GetRawText(), matchedAlias));
         }
@@ -1337,23 +1432,86 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 .ToArray()
             : [];
 
-    private static VisualSourceInputDiagnostics BuildVisualSourceInputDiagnostics(string sceneRoot, IReadOnlyList<string> currentSceneSpecFiles)
+    private static VisualSourceInputDiagnostics BuildVisualSourceInputDiagnostics(string sceneRoot, IReadOnlyList<string> currentSceneSpecFiles, ProductionEventIntelligence intelligence)
         => new(
             NormalizePath(sceneRoot),
             currentSceneSpecFiles.Select(NormalizePath).ToArray(),
-            currentSceneSpecFiles.Select(BuildSceneVisualSourceDiagnostic).ToArray());
+            currentSceneSpecFiles.Select(spec => BuildSceneVisualSourceDiagnostic(sceneRoot, spec, intelligence)).ToArray());
 
-    private static SceneVisualSourceDiagnostic BuildSceneVisualSourceDiagnostic(string specFile)
+    private static SceneVisualSourceDiagnostic BuildSceneVisualSourceDiagnostic(string sceneRoot, string specFile, ProductionEventIntelligence intelligence)
     {
+        var sceneKey = Regex.Match(Path.GetFileName(specFile), @"^(scene-\d+)-infographic-spec\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Groups[1].Value;
+        var reviewPath = Path.Combine(sceneRoot, $"{sceneKey}-review.json");
+        var longFinalPath = Path.Combine(sceneRoot, "long", $"{sceneKey}-final.png");
+        var shortFinalPath = Path.Combine(sceneRoot, "short", $"{sceneKey}-final.png");
         using var doc = TryParseJson(File.ReadAllText(specFile));
-        if (doc is null) return new(ExtractSceneLabel(specFile), NormalizePath(specFile), string.Empty, string.Empty, null, string.Empty);
+        using var reviewDoc = File.Exists(reviewPath) ? TryParseJson(File.ReadAllText(reviewPath)) : null;
+        if (doc is null)
+        {
+            return new(
+                ExtractSceneLabel(specFile),
+                NormalizePath(specFile),
+                File.Exists(reviewPath) ? NormalizePath(reviewPath) : string.Empty,
+                [],
+                string.Empty,
+                string.Empty,
+                [],
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                false,
+                File.Exists(longFinalPath),
+                File.Exists(shortFinalPath),
+                string.Empty);
+        }
 
         var root = doc.RootElement;
         var fragment = ResolveVisualSourceFragment(root);
-        var resolvedVisualSource = ReadVisualSourceValue(root);
-        var assetKey = TryGetVisualMetadataString(root, "assetKey", out var resolvedAssetKey) ? resolvedAssetKey : string.Empty;
-        var primitivePlaceholderUsed = TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var primitive) ? primitive : (bool?)null;
-        return new(ExtractSceneLabel(specFile), NormalizePath(specFile), resolvedVisualSource, assetKey, primitivePlaceholderUsed, fragment);
+        var titleCandidates = CollectJsonPropertyFragments(root, ["captionText", "viewerTakeaway", "overlayText", "eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle", "metadata"])
+            .Select(fragment => JsonTextValue(fragment.Value))
+            .Concat(reviewDoc is null ? Array.Empty<string>() : CollectJsonPropertyFragments(reviewDoc.RootElement, ["captionText", "viewerTakeaway", "overlayText", "eventTitle", "eventShortTitle", "astronomyEventTitle", "astronomyEventShortTitle", "title", "shortTitle", "metadata", "checks"]).Select(fragment => JsonTextValue(fragment.Value)))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var requiredObjects = CollectRequiredVisualObjects(root)
+            .Concat(intelligence.RequiredVisualObjects ?? [])
+            .Concat(intelligence.PrimaryObjects)
+            .Concat(intelligence.SecondaryObjects)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var objectMetadata = requiredObjects.Select(required => FindDrawableObjectMetadata(root, required) ?? BuildRootObjectMetadata(root)).FirstOrDefault(value => value is not null) ?? BuildRootObjectMetadata(root);
+        var objectVisualSource = objectMetadata?.ObjectVisualSource ?? (TryGetVisualMetadataString(root, "objectVisualSource", out var source) ? source : string.Empty);
+        var assetKey = objectMetadata?.AssetKey ?? (TryGetVisualMetadataString(root, "assetKey", out var resolvedAssetKey) ? resolvedAssetKey : string.Empty);
+        var renderedAssetPath = objectMetadata?.RenderedAssetPath ?? (TryGetVisualMetadataString(root, "renderedAssetPath", out var rendered) ? rendered : string.Empty);
+        var primitivePlaceholderUsed = objectMetadata?.PrimitivePlaceholderUsed ?? (TryGetVisualMetadataBool(root, "primitivePlaceholderUsed", out var primitive) ? primitive : (bool?)null);
+        var visualValidationPassed = !string.IsNullOrWhiteSpace(assetKey) || !string.IsNullOrWhiteSpace(objectVisualSource) || !string.IsNullOrWhiteSpace(renderedAssetPath);
+        return new(
+            ExtractSceneLabel(specFile),
+            NormalizePath(specFile),
+            File.Exists(reviewPath) ? NormalizePath(reviewPath) : string.Empty,
+            titleCandidates,
+            titleCandidates.FirstOrDefault() ?? string.Empty,
+            titleCandidates.Length > 0 ? "currentSceneMetadata" : string.Empty,
+            requiredObjects,
+            objectVisualSource,
+            assetKey,
+            renderedAssetPath,
+            primitivePlaceholderUsed,
+            visualValidationPassed,
+            File.Exists(longFinalPath),
+            File.Exists(shortFinalPath),
+            fragment);
+    }
+
+    private static IEnumerable<string> CollectRequiredVisualObjects(JsonElement root)
+    {
+        foreach (var fragment in CollectJsonPropertyFragments(root, ["requiredVisualObjects", "primaryObjects", "secondaryObjects"]))
+        {
+            foreach (var value in JsonTextValue(fragment.Value).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                yield return value;
+        }
     }
 
     private static string ResolveVisualSourceFragment(JsonElement root)
@@ -1472,7 +1630,12 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         bool TitleFoundInOcr,
         bool TitleFound,
         bool TitleValidationSkipped,
-        IReadOnlyList<TitleDiagnosticSource> Sources);
+        IReadOnlyList<TitleDiagnosticSource> Sources,
+        IReadOnlyList<string> TitleCandidates,
+        string? TitleMatchedValue,
+        string? TitleMatchedSource);
+
+    private sealed record TitleCandidate(string Source, string Value);
 
     private sealed record TitleDiagnosticSource(
         string Field,
@@ -1495,9 +1658,18 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private sealed record SceneVisualSourceDiagnostic(
         string Scene,
-        string SpecFilePath,
-        string ResolvedVisualSource,
+        string SpecPathUsed,
+        string ReviewPathUsed,
+        IReadOnlyList<string> TitleCandidates,
+        string TitleMatchedValue,
+        string TitleMatchedSource,
+        IReadOnlyList<string> RequiredVisualObjects,
+        string ObjectVisualSource,
         string AssetKey,
+        string RenderedAssetPath,
         bool? PrimitivePlaceholderUsed,
+        bool VisualValidationPassed,
+        bool LongFinalImageExists,
+        bool ShortFinalImageExists,
         string JsonFragmentLoaded);
 }
