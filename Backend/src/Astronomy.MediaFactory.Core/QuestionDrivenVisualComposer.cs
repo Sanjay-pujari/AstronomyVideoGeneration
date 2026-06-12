@@ -120,7 +120,12 @@ public sealed record SceneDrawableVisualObject(
     string? Size = null,
     bool Glow = false,
     string? Label = null,
-    string? Placement = null);
+    string? Placement = null,
+    string? ObjectVisualSource = null,
+    string? AssetKey = null,
+    string? GeneratedRealisticPrompt = null,
+    bool PrimitivePlaceholderUsed = false,
+    CelestialObjectQuality CelestialObjectQuality = CelestialObjectQuality.Realistic);
 
 
 public sealed record AstronomyInfographicDesignRequest(

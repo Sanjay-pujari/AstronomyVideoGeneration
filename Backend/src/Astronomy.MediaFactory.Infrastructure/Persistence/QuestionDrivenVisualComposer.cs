@@ -425,7 +425,11 @@ public sealed class QuestionDrivenVisualComposer(
         strategyValidationFacts["realisticObjectRequired"] = sourceResolution.RealisticObjectRequired.ToString(System.Globalization.CultureInfo.InvariantCulture);
         strategyValidationFacts["primitivePlaceholderUsed"] = sourceResolution.PrimitivePlaceholderUsed.ToString(System.Globalization.CultureInfo.InvariantCulture);
         strategyValidationFacts["allowPrimitivePlaceholder"] = sourceResolution.AllowPrimitivePlaceholder.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        strategyValidationFacts["primitivePlaceholderAllowed"] = sourceResolution.PrimitivePlaceholderAllowed.ToString(System.Globalization.CultureInfo.InvariantCulture);
         strategyValidationFacts["minimumVisualQuality"] = sourceResolution.MinimumVisualQuality.ToString();
+        strategyValidationFacts["celestialObjectQuality"] = sourceResolution.CelestialObjectQuality.ToString();
+        strategyValidationFacts["objectSourcePriority"] = string.Join(", ", sourceResolution.ObjectSourcePriority ?? []);
+        strategyValidationFacts["objectVisualSource"] = string.Join(" | ", sourceResolution.ObjectVisualSources?.Select(source => $"{source.ObjectType}:{source.ObjectVisualSource}") ?? []);
         strategyValidationFacts["preferredAssetKind"] = string.Join(", ", sourceResolution.PreferredAssetKind ?? []);
         strategyValidationFacts["genericFallbackAllowed"] = sourceResolution.GenericFallbackAllowed.ToString(System.Globalization.CultureInfo.InvariantCulture);
         strategyValidationFacts["scientificAssetKeys"] = string.Join(", ", sourceResolution.ScientificAssetKeys);
@@ -539,19 +543,30 @@ public sealed class QuestionDrivenVisualComposer(
     private static IReadOnlyList<SceneDrawableVisualObject> BuildDrawableObjects(VisualSourceResolutionResult sourceResolution, bool isNamedFullMoon, string fullMoonLabel)
     {
         if (isNamedFullMoon)
-            return [new SceneDrawableVisualObject("Moon", "FullMoon", "large/hero-visible", Glow: true, Label: fullMoonLabel, Placement: "eastern horizon moonrise")];
+        {
+            var moonSource = ResolveObjectVisualSource(sourceResolution, "Moon");
+            return [new SceneDrawableVisualObject("Moon", "FullMoon", "large/hero-visible", Glow: true, Label: fullMoonLabel, Placement: "eastern horizon moonrise", ObjectVisualSource: moonSource?.ObjectVisualSource, AssetKey: moonSource?.AssetKey, GeneratedRealisticPrompt: moonSource?.GeneratedRealisticPrompt, PrimitivePlaceholderUsed: moonSource?.PrimitivePlaceholderUsed ?? false, CelestialObjectQuality: moonSource?.CelestialObjectQuality ?? CelestialObjectQuality.Realistic)];
+        }
 
-        if (sourceResolution.SourceType is VisualSourceType.ComputedAstronomyScene or VisualSourceType.Hybrid)
+        if (sourceResolution.SourceType is VisualSourceType.ComputedAstronomyScene or VisualSourceType.Hybrid or VisualSourceType.AICinematicScene or VisualSourceType.ScientificAsset)
         {
             var drawable = sourceResolution.RequiredDrawableObjects
                 .Where(value => !IsConceptualDrawableRequirement(value))
-                .Select(value => new SceneDrawableVisualObject(value, Label: value, Placement: "computed sky position"))
+                .Select(value =>
+                {
+                    var objectSource = ResolveObjectVisualSource(sourceResolution, value);
+                    return new SceneDrawableVisualObject(value, Label: value, Placement: "resolved realistic celestial object", ObjectVisualSource: objectSource?.ObjectVisualSource, AssetKey: objectSource?.AssetKey, GeneratedRealisticPrompt: objectSource?.GeneratedRealisticPrompt, PrimitivePlaceholderUsed: objectSource?.PrimitivePlaceholderUsed ?? false, CelestialObjectQuality: objectSource?.CelestialObjectQuality ?? CelestialObjectQuality.Realistic);
+                })
                 .ToArray();
             if (drawable.Length > 0) return drawable;
         }
 
         return [];
     }
+
+    private static ResolvedCelestialObjectVisualSource? ResolveObjectVisualSource(VisualSourceResolutionResult sourceResolution, string objectType)
+        => sourceResolution.ObjectVisualSources?.FirstOrDefault(source => source.ObjectType.Equals(objectType, StringComparison.OrdinalIgnoreCase))
+            ?? sourceResolution.ObjectVisualSources?.FirstOrDefault(source => objectType.Contains(source.ObjectType, StringComparison.OrdinalIgnoreCase) || source.ObjectType.Contains(objectType, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsConceptualDrawableRequirement(string value)
         => value.Contains("streak", StringComparison.OrdinalIgnoreCase)
@@ -560,6 +575,9 @@ public sealed class QuestionDrivenVisualComposer(
             || value.Contains("glow", StringComparison.OrdinalIgnoreCase)
             || value.Contains("moonrise", StringComparison.OrdinalIgnoreCase)
             || value.Contains("eastern horizon", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("sky direction", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
             || value.Contains("label", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateVisualSourceResolutionContract(QuestionDrivenVisualSpec spec, VisualSourceResolutionResult sourceResolution)
@@ -573,7 +591,19 @@ public sealed class QuestionDrivenVisualComposer(
         if (sourceResolution.RealisticObjectRequired && sourceResolution.MinimumVisualQuality != VisualMinimumQuality.Realistic)
             throw new InvalidOperationException($"Pre-render visual source validation failed for scene {spec.SceneNumber:000}: minimum visual quality must be Realistic.");
 
+        if (sourceResolution.RealisticObjectRequired && sourceResolution.CelestialObjectQuality != CelestialObjectQuality.Realistic)
+            throw new InvalidOperationException($"Pre-render visual source validation failed for scene {spec.SceneNumber:000}: celestial object quality must be Realistic.");
+
         if (sourceResolution.RequiredDrawableObjects.Count == 0) return;
+
+        foreach (var required in sourceResolution.RequiredDrawableObjects.Where(value => !IsConceptualDrawableRequirement(value)))
+        {
+            var source = ResolveObjectVisualSource(sourceResolution, required);
+            if (source is null || string.IsNullOrWhiteSpace(source.ObjectVisualSource) || string.IsNullOrWhiteSpace(source.AssetKey) || string.IsNullOrWhiteSpace(source.GeneratedRealisticPrompt))
+                throw new InvalidOperationException($"Pre-render visual source validation failed for scene {spec.SceneNumber:000}: resolver-required drawable object '{required}' is missing objectVisualSource, assetKey, or generatedRealisticPrompt metadata.");
+            if (source.PrimitivePlaceholderUsed)
+                throw new InvalidOperationException($"Pre-render visual source validation failed for scene {spec.SceneNumber:000}: resolver-required drawable object '{required}' used a primitive placeholder.");
+        }
 
         var specText = string.Join(' ', spec.ProgrammaticLayers
             .Concat(spec.OverlayText)

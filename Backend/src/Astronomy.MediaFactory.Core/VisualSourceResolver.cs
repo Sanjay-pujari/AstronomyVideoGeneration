@@ -26,6 +26,29 @@ public enum VisualPreferredAssetKind
     AICinematicRealistic
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum CelestialObjectQuality
+{
+    Realistic
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum VisualObjectSourcePriority
+{
+    LocalAsset,
+    ScientificAsset,
+    AICinematic
+}
+
+public sealed record ResolvedCelestialObjectVisualSource(
+    string ObjectType,
+    string ObjectVisualSource,
+    string AssetKey,
+    string GeneratedRealisticPrompt,
+    bool PrimitivePlaceholderUsed = false,
+    CelestialObjectQuality CelestialObjectQuality = CelestialObjectQuality.Realistic,
+    IReadOnlyList<VisualObjectSourcePriority>? ObjectSourcePriority = null);
+
 public sealed record VisualSourceResolutionRequest(
     ProductionEventIntelligence Intelligence,
     string StrategyId,
@@ -46,7 +69,11 @@ public sealed record VisualSourceResolutionResult(
     bool AllowPrimitivePlaceholder = false,
     VisualMinimumQuality MinimumVisualQuality = VisualMinimumQuality.Realistic,
     IReadOnlyList<VisualPreferredAssetKind>? PreferredAssetKind = null,
-    bool PrimitivePlaceholderUsed = false);
+    bool PrimitivePlaceholderUsed = false,
+    bool PrimitivePlaceholderAllowed = false,
+    CelestialObjectQuality CelestialObjectQuality = CelestialObjectQuality.Realistic,
+    IReadOnlyList<VisualObjectSourcePriority>? ObjectSourcePriority = null,
+    IReadOnlyList<ResolvedCelestialObjectVisualSource>? ObjectVisualSources = null);
 
 public interface IVisualSourceResolver
 {
@@ -77,7 +104,10 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             ["eventTitle"] = intelligence.Title,
             ["realisticObjectRequired"] = "true",
             ["allowPrimitivePlaceholder"] = "false",
+            ["primitivePlaceholderAllowed"] = "false",
             ["minimumVisualQuality"] = VisualMinimumQuality.Realistic.ToString(),
+            ["celestialObjectQuality"] = CelestialObjectQuality.Realistic.ToString(),
+            ["objectSourcePriority"] = FormatObjectSourcePriority(DefaultObjectSourcePriority),
             ["primitivePlaceholderUsed"] = "false"
         };
 
@@ -96,7 +126,9 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
                 NormalizeList(required.Concat(["meteor streaks", "dark sky"])),
                 forbidden,
                 metadata,
-                PreferredAssetKind: [VisualPreferredAssetKind.AICinematicRealistic]);
+                PreferredAssetKind: [VisualPreferredAssetKind.AICinematicRealistic],
+                ObjectSourcePriority: DefaultObjectSourcePriority,
+                ObjectVisualSources: BuildObjectVisualSources(required, prompt, _ => "Meteor.AICinematic", _ => "AICinematic:realistic meteor streaks with radiant and dark-sky context"));
         }
 
         if (IsNamedFullMoon(eventType, strategyId, intelligence.Title))
@@ -118,7 +150,9 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
                 NormalizeList(required.Concat(["large visible full moon", "moon texture", "craters", "maria", "moon glow", "moonrise", "eastern horizon", shortTitle])),
                 forbidden,
                 metadata,
-                PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic]);
+                PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
+                ObjectSourcePriority: DefaultObjectSourcePriority,
+                ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
         if (IsPlanetPairingOrConjunction(eventType, strategyId, intelligence.Title))
@@ -141,7 +175,9 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
                 NormalizeList(required.Concat(objects).Concat(["real-looking planet textures", "close pairing", "labels match actual object names"])),
                 forbidden,
                 metadata,
-                PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic]);
+                PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
+                ObjectSourcePriority: DefaultObjectSourcePriority,
+                ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
         if (IsComet(eventType, strategyId, intelligence.Title, requiredVisualObjects))
@@ -150,7 +186,8 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             var prompt = "AI cinematic realistic comet scene: visible comet nucleus, coma, and tail from a realistic comet image style; do not render a plain ellipse or a simple streak except as a separate motion-path annotation.";
             metadata["visualSourceType"] = VisualSourceType.AICinematicScene.ToString();
             metadata["generatedRealisticPrompt"] = prompt;
-            return new(VisualSourceType.AICinematicScene, required, [], prompt, false, NormalizeList(required.Concat(["nucleus", "coma", "tail"])), forbidden, metadata, PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic]);
+            metadata["assetKey"] = string.Join(", ", required.Select(ResolveAssetKey));
+            return new(VisualSourceType.AICinematicScene, required, required.Select(ResolveAssetKey).ToArray(), prompt, false, NormalizeList(required.Concat(["nucleus", "coma", "tail"])), forbidden, metadata, PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic], ObjectSourcePriority: DefaultObjectSourcePriority, ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
         if (IsDeepSkyObject(eventType, strategyId, intelligence.Title, requiredVisualObjects))
@@ -159,7 +196,8 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             var prompt = "Scientific or AI realistic deep-sky object scene: use a real-looking nebula, galaxy, or star-cluster visual source with astrophotography detail; do not render a generic glow circle or dot.";
             metadata["visualSourceType"] = VisualSourceType.AICinematicScene.ToString();
             metadata["generatedRealisticPrompt"] = prompt;
-            return new(VisualSourceType.AICinematicScene, required, [], prompt, false, NormalizeList(required.Concat(["astrophotography detail", "nebula", "galaxy", "star cluster"])), forbidden, metadata, PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic]);
+            metadata["assetKey"] = string.Join(", ", required.Select(ResolveAssetKey));
+            return new(VisualSourceType.AICinematicScene, required, required.Select(ResolveAssetKey).ToArray(), prompt, false, NormalizeList(required.Concat(["astrophotography detail", "nebula", "galaxy", "star cluster"])), forbidden, metadata, PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic], ObjectSourcePriority: DefaultObjectSourcePriority, ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
         var allowsFallback = requiredVisualObjects.Count == 0;
@@ -179,8 +217,76 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             metadata,
             RealisticObjectRequired: !allowsFallback,
             AllowPrimitivePlaceholder: false,
-            PreferredAssetKind: allowsFallback ? [] : [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic]);
+            PreferredAssetKind: allowsFallback ? [] : [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
+            ObjectSourcePriority: allowsFallback ? [] : DefaultObjectSourcePriority,
+            ObjectVisualSources: allowsFallback ? [] : BuildObjectVisualSources(requiredVisualObjects, metadata.TryGetValue("generatedRealisticPrompt", out var fallbackPrompt) ? fallbackPrompt : string.Empty, ResolveAssetKey, ResolveObjectVisualSource));
     }
+
+    private static readonly IReadOnlyList<VisualObjectSourcePriority> DefaultObjectSourcePriority =
+        [VisualObjectSourcePriority.LocalAsset, VisualObjectSourcePriority.ScientificAsset, VisualObjectSourcePriority.AICinematic];
+
+    private static IReadOnlyList<ResolvedCelestialObjectVisualSource> BuildObjectVisualSources(
+        IEnumerable<string> objectTypes,
+        string generatedRealisticPrompt,
+        Func<string, string> resolveAssetKey,
+        Func<string, string> resolveObjectVisualSource)
+        => NormalizeList(objectTypes)
+            .Select(objectType => new ResolvedCelestialObjectVisualSource(
+                objectType,
+                resolveObjectVisualSource(objectType),
+                resolveAssetKey(objectType),
+                BuildObjectPrompt(objectType, generatedRealisticPrompt),
+                PrimitivePlaceholderUsed: false,
+                ObjectSourcePriority: DefaultObjectSourcePriority))
+            .ToArray();
+
+    private static string ResolveAssetKey(string objectType)
+    {
+        var normalized = NormalizeObjectName(objectType);
+        if (normalized.Equals("Moon", StringComparison.OrdinalIgnoreCase) || normalized.Contains("FullMoon", StringComparison.OrdinalIgnoreCase)) return "Moon.FullMoon";
+        if (normalized.Equals("Sun", StringComparison.OrdinalIgnoreCase)) return "Sun.RealisticPhotosphere";
+        if (IsPlanetName(normalized)) return $"Planet.{normalized}";
+        if (ContainsAny(normalized, "Comet")) return "Comet.Realistic";
+        if (ContainsAny(normalized, "Meteor")) return "Meteor.RealisticStreaks";
+        if (ContainsAny(normalized, "Asteroid")) return "Asteroid.RealisticRockyBody";
+        if (ContainsAny(normalized, "Nebula")) return $"DeepSky.Nebula.{SanitizeAssetName(normalized)}";
+        if (ContainsAny(normalized, "Galaxy")) return $"DeepSky.Galaxy.{SanitizeAssetName(normalized)}";
+        if (ContainsAny(normalized, "Cluster")) return $"DeepSky.Cluster.{SanitizeAssetName(normalized)}";
+        if (ContainsAny(normalized, "Deep Sky")) return $"DeepSky.Object.{SanitizeAssetName(normalized)}";
+        return $"Celestial.Realistic.{SanitizeAssetName(normalized)}";
+    }
+
+    private static string ResolveObjectVisualSource(string objectType)
+        => $"LocalAsset:{ResolveAssetKey(objectType)}; ScientificAsset:{ResolveAssetKey(objectType)}; AICinematic:realistic {objectType}";
+
+    private static string BuildObjectPrompt(string objectType, string scenePrompt)
+        => $"Render {objectType} as a real-looking celestial object using local/scientific texture or cinematic-realistic generation; never use a primitive circle, icon, dot, or symbolic placeholder. {scenePrompt}".Trim();
+
+    private static bool IsPlanetName(string value)
+        => value.Equals("Mercury", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Venus", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Mars", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Saturn", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Uranus", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Neptune", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeObjectName(string value)
+        => value.Trim() switch
+        {
+            var v when v.Equals("full moon", StringComparison.OrdinalIgnoreCase) => "Moon",
+            var v when v.Equals("lunar disc", StringComparison.OrdinalIgnoreCase) => "Moon",
+            var v when v.Contains("meteor", StringComparison.OrdinalIgnoreCase) => "Meteor",
+            var v when v.Contains("comet", StringComparison.OrdinalIgnoreCase) => "Comet",
+            var v when v.Contains("asteroid", StringComparison.OrdinalIgnoreCase) => "Asteroid",
+            var v => v
+        };
+
+    private static string SanitizeAssetName(string value)
+        => string.Concat(value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Select(part => new string(part.Where(char.IsLetterOrDigit).ToArray())));
+
+    private static string FormatObjectSourcePriority(IEnumerable<VisualObjectSourcePriority> priorities)
+        => string.Join(", ", priorities);
 
     private static bool IsMeteorShower(string eventType, string strategyId, string title)
         => ContainsAny(eventType, "MeteorShower", "meteor shower") || ContainsAny(strategyId, "MeteorShower", "meteor shower") || ContainsAny(title, "meteor shower");

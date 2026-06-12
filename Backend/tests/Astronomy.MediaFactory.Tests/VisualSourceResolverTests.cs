@@ -20,6 +20,10 @@ public sealed class VisualSourceResolverTests
         Assert.False(result.AllowPrimitivePlaceholder);
         Assert.Equal(VisualMinimumQuality.Realistic, result.MinimumVisualQuality);
         Assert.Contains(VisualPreferredAssetKind.ScientificRealImage, result.PreferredAssetKind ?? []);
+        Assert.False(result.PrimitivePlaceholderAllowed);
+        Assert.Equal(CelestialObjectQuality.Realistic, result.CelestialObjectQuality);
+        Assert.Contains(VisualObjectSourcePriority.LocalAsset, result.ObjectSourcePriority ?? []);
+        Assert.Contains(result.ObjectVisualSources ?? [], source => source.ObjectType == "Moon" && source.AssetKey == "Moon.FullMoon" && !source.PrimitivePlaceholderUsed);
     }
 
     [Fact]
@@ -38,6 +42,8 @@ public sealed class VisualSourceResolverTests
         Assert.Contains("Mars must look like Mars", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Jupiter must show banded cloud texture", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.False(result.AllowPrimitivePlaceholder);
+        Assert.Contains(result.ObjectVisualSources ?? [], source => source.ObjectType == "Mars" && source.AssetKey == "Planet.Mars" && source.ObjectVisualSource.Contains("LocalAsset", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.ObjectVisualSources ?? [], source => source.ObjectType == "Jupiter" && source.AssetKey == "Planet.Jupiter" && source.ObjectVisualSource.Contains("ScientificAsset", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -56,6 +62,7 @@ public sealed class VisualSourceResolverTests
         Assert.Contains("nucleus", required.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("coma", required.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("tail", required.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(required.ObjectVisualSources ?? [], source => source.ObjectType == "Comet" && source.AssetKey == "Comet.Realistic" && source.GeneratedRealisticPrompt.Contains("never use a primitive circle", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -68,6 +75,7 @@ public sealed class VisualSourceResolverTests
         Assert.False(result.AllowPrimitivePlaceholder);
         Assert.Contains("astrophotography detail", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("do not render a generic glow circle", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.ObjectVisualSources ?? [], source => source.ObjectType == "Orion Nebula" && source.AssetKey == "DeepSky.Nebula.OrionNebula");
     }
 
     private static VisualSourceResolutionRequest BuildRequest(

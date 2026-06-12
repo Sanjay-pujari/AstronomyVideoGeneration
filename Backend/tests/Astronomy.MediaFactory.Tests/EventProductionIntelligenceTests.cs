@@ -201,10 +201,15 @@ public sealed class EventProductionIntelligenceTests
   "time":"2026-12-14 00:00–05:00 IST",
   "strategyValidationFacts":{
     "visualSourceType":"Hybrid",
+    "assetKey":"Meteor.RealisticStreaks",
     "generatedRealisticPrompt":"realistic meteor streaks from a radiant in a dark sky",
+    "objectVisualSource":"meteor streaks:AICinematic realistic meteor streaks",
     "realisticObjectRequired":"true",
     "primitivePlaceholderUsed":"false",
-    "allowPrimitivePlaceholder":"false"
+    "allowPrimitivePlaceholder":"false",
+    "primitivePlaceholderAllowed":"false",
+    "celestialObjectQuality":"Realistic",
+    "objectSourcePriority":"LocalAsset, ScientificAsset, AICinematic"
   }
 }
 """);
@@ -281,9 +286,13 @@ public sealed class EventProductionIntelligenceTests
     "visualSourceType":"Hybrid",
     "assetKey":"Moon.FullMoon",
     "generatedRealisticPrompt":"realistic full Moon texture with craters and maria",
+    "objectVisualSource":"Moon:LocalAsset Moon.FullMoon; ScientificAsset Moon.FullMoon; AICinematic realistic Moon",
     "realisticObjectRequired":"true",
     "primitivePlaceholderUsed":"false",
     "allowPrimitivePlaceholder":"false",
+    "primitivePlaceholderAllowed":"false",
+    "celestialObjectQuality":"Realistic",
+    "objectSourcePriority":"LocalAsset, ScientificAsset, AICinematic",
     "eventShortTitle":"Snow Moon",
     "eventTitle":"Snow Moon Full Moon"
   },
@@ -363,9 +372,13 @@ public sealed class EventProductionIntelligenceTests
     "visualSourceType":"Hybrid",
     "assetKey":"Moon.FullMoon",
     "generatedRealisticPrompt":"primitive circle Moon placeholder",
+    "objectVisualSource":"Moon:primitive circle placeholder",
     "realisticObjectRequired":"true",
     "primitivePlaceholderUsed":"true",
-    "allowPrimitivePlaceholder":"false"
+    "allowPrimitivePlaceholder":"false",
+    "primitivePlaceholderAllowed":"false",
+    "celestialObjectQuality":"Realistic",
+    "objectSourcePriority":"LocalAsset, ScientificAsset, AICinematic"
   },
   "backgroundPrompt":"Moon placeholder",
   "accessibilityCues":["Moon is shown"]
@@ -409,6 +422,75 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, error => error.Contains("primitivePlaceholderUsed=true", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    [Fact]
+    public async Task ProductionQualityValidator_FailsMissingObjectVisualSourceForRequiredCelestialObject()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-missing-object-source-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "Mars and Jupiter close pairing scene plan with Mars and Jupiter.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "viewerTakeaway":"Mars and Jupiter close pairing.",
+  "captionText":"Mars and Jupiter close pairing.",
+  "overlayText":["Mars", "Jupiter"],
+  "strategyValidationFacts":{
+    "visualSourceType":"ComputedAstronomyScene",
+    "assetKey":"Planet.Mars, Planet.Jupiter",
+    "generatedRealisticPrompt":"real-looking planet textures for Mars and Jupiter",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false",
+    "allowPrimitivePlaceholder":"false",
+    "primitivePlaceholderAllowed":"false",
+    "celestialObjectQuality":"Realistic",
+    "objectSourcePriority":"LocalAsset, ScientificAsset, AICinematic"
+  },
+  "accessibilityCues":["Mars and Jupiter are shown"]
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), "Mars Jupiter visible");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Mars and Jupiter are close together.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), "1\n00:00:00,000 --> 00:00:05,000\nMars and Jupiter are close together.\n");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "PlanetPairing",
+            "Mars and Jupiter Close Pairing",
+            "Mars and Jupiter",
+            DateTimeOffset.Parse("2026-02-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-02-01T18:00:00Z"),
+            "18:00 UTC",
+            "2026-02-01 18:00–23:00 UTC",
+            "eastern sky",
+            "Global",
+            ["Mars"],
+            ["Jupiter"],
+            null,
+            "Low",
+            10m,
+            "Mars and Jupiter close pairing",
+            [],
+            ["Mars", "Jupiter"],
+            [],
+            [],
+            [],
+            RequiredVisualObjects: ["Mars", "Jupiter"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("objectVisualSource", StringComparison.OrdinalIgnoreCase));
     }
 
 }
