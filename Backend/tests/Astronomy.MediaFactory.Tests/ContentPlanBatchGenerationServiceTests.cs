@@ -424,6 +424,51 @@ public sealed class ContentPlanBatchGenerationServiceTests
         }
     }
 
+
+    [Fact]
+    public async Task ExecuteContentPlanWithProductionPipelineAsync_RebuildOutputs_PartialRangeSuccessIgnoresDownstreamCompletion()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-partial-rebuild-success-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var service = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new PartialRebuildProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance);
+
+            var response = await service.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
+                GeminidsPlanId,
+                DryRun: false,
+                OverwriteExisting: true,
+                StartPhaseNo: 10,
+                EndPhaseNo: 12,
+                ExecutionMode: ContentPlanExecutionMode.RebuildOutputs,
+                AllowCompletedPlanRerun: true), CancellationToken.None);
+
+            Assert.True(response.Success);
+            Assert.True(response.PartialPhaseExecution);
+            Assert.True(response.PartialPhaseSuccess);
+            Assert.Equal(10, response.RequestedStartPhase);
+            Assert.Equal(12, response.RequestedEndPhase);
+            Assert.Equal(3, response.ExpandedStartPhase);
+            Assert.Equal(12, response.ExpandedEndPhase);
+            Assert.Equal(Enumerable.Range(3, 10), response.PhaseResults!.Select(p => p.PhaseNo));
+            Assert.All(response.PhaseResults!, phase => Assert.Equal(ProductionPhaseStatus.Succeeded, phase.Status));
+            var shortVideoCompletion = response.RequestedOutputCompletion!.Single(output => output.OutputType == "ShortVideo");
+            Assert.Equal("Failed", shortVideoCompletion.Status);
+            Assert.Empty(shortVideoCompletion.SucceededPhases);
+            Assert.Equal([13, 15, 17], shortVideoCompletion.RequiredPhases);
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task ExecuteContentPlanWithProductionPipelineAsync_RebuildOutputs_DoesNotDeleteQuestionEngineWhenPhase3IsNotRegenerated()
     {
@@ -855,6 +900,58 @@ public sealed class ContentPlanBatchGenerationServiceTests
             CapturedAllowCompletedPlanRerun = request.AllowCompletedPlanRerun;
             CapturedArchivePreviousRun = request.ArchivePreviousRun;
             return ExecuteContentPlanAsync(request.ContentGenerationPlanId, request.DryRun, request.OverwriteExisting, cancellationToken);
+        }
+    }
+
+
+    private sealed class PartialRebuildProductionPipelineExecutionService : IProductionPipelineExecutionService
+    {
+        public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var phaseResults = Enumerable.Range(request.StartPhaseNo!.Value, request.EndPhaseNo!.Value - request.StartPhaseNo!.Value + 1)
+                .Select(phaseNo => new ProductionPhaseResult(
+                    phaseNo,
+                    $"Phase {phaseNo}",
+                    ProductionPhaseStatus.Succeeded,
+                    now,
+                    now,
+                    0,
+                    [],
+                    [],
+                    null,
+                    [],
+                    [],
+                    false))
+                .ToArray();
+
+            return Task.FromResult(new ProductionPipelineExecutionResult(
+                Success: false,
+                DryRun: false,
+                QuestionEngineCompleted: true,
+                ShortScenesGenerated: true,
+                LongScenesGenerated: true,
+                HeroGenerated: true,
+                ThumbnailsGenerated: true,
+                ShortNarrationGenerated: false,
+                LongNarrationGenerated: false,
+                ShortTtsGenerated: false,
+                LongTtsGenerated: false,
+                ShortVideoGenerated: false,
+                LongVideoGenerated: false,
+                FinalShortVideoPath: string.Empty,
+                FinalLongVideoPath: string.Empty,
+                GeneratedFiles: [],
+                Warnings: [],
+                Errors: [],
+                PhaseResults: phaseResults,
+                RequestedOutputCompletion:
+                [
+                    new RequestedOutputCompletion("ShortVideo", true, "Failed", [13, 15, 17], [], [], []),
+                    new RequestedOutputCompletion("LongVideo", true, "Failed", [14, 16, 18], [], [], []),
+                    new RequestedOutputCompletion("HeroAsset", true, "Succeeded", [11], [11], [], []),
+                    new RequestedOutputCompletion("Thumbnail", true, "Succeeded", [12], [12], [], [])
+                ]));
         }
     }
 

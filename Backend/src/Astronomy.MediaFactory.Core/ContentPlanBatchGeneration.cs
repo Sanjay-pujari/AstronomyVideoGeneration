@@ -9,7 +9,8 @@ public enum ContentPlanExecutionMode
     RetryFailed,
     RecoverRunning,
     RebuildOutputs,
-    FullRebuild
+    FullRebuild,
+    RerunPhase
 }
 
 public sealed record BatchGenerateFromPlansRequest(
@@ -82,10 +83,12 @@ public sealed record BatchGenerateFromPlansResponse(
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
     IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null,
+    bool PartialPhaseExecution = false,
     int? RequestedStartPhase = null,
     int? RequestedEndPhase = null,
     int? ExpandedStartPhase = null,
     int? ExpandedEndPhase = null,
+    bool PartialPhaseSuccess = false,
     bool DependencyExpansionApplied = false);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
@@ -406,10 +409,12 @@ public sealed record ContentPlanProductionExecutionResult(
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
     IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null,
+    bool PartialPhaseExecution = false,
     int? RequestedStartPhase = null,
     int? RequestedEndPhase = null,
     int? ExpandedStartPhase = null,
     int? ExpandedEndPhase = null,
+    bool PartialPhaseSuccess = false,
     bool DependencyExpansionApplied = false);
 
 

@@ -142,10 +142,12 @@ public sealed class ContentPlanBatchGenerationService(
                 StartPhaseNo: execution.StartPhaseNo,
                 EndPhaseNo: execution.EndPhaseNo,
                 RequestedOutputCompletion: execution.RequestedOutputCompletion,
+                PartialPhaseExecution: execution.PartialPhaseExecution,
                 RequestedStartPhase: execution.RequestedStartPhase ?? requestedStartPhaseNo,
                 RequestedEndPhase: execution.RequestedEndPhase ?? requestedEndPhaseNo,
                 ExpandedStartPhase: execution.ExpandedStartPhase ?? execution.StartPhaseNo ?? requestedStartPhaseNo,
                 ExpandedEndPhase: execution.ExpandedEndPhase ?? execution.EndPhaseNo ?? requestedEndPhaseNo,
+                PartialPhaseSuccess: execution.PartialPhaseSuccess,
                 DependencyExpansionApplied: execution.DependencyExpansionApplied);
         }
 
@@ -469,17 +471,17 @@ public sealed class ContentPlanBatchGenerationService(
         {
             ContentPlanExecutionMode.RetryFailed => RetryRunnableStatuses,
             ContentPlanExecutionMode.RecoverRunning => RunningRecoveryStatuses,
-            ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild => RebuildRunnableStatuses,
+            ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild => RebuildRunnableStatuses,
             _ => RunnableStatuses
         };
 
     private static bool IsCompletedRerunMode(ContentPlanExecutionMode executionMode)
-        => executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.FullRebuild;
+        => executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild;
 
     private static int ResolveStartPhaseNo(BatchGenerateFromPlansRequest request, ContentPlanExecutionMode executionMode)
     {
         if (request.RebuildIntelligence && executionMode == ContentPlanExecutionMode.RebuildOutputs) return 1;
-        return request.StartPhaseNo ?? (executionMode == ContentPlanExecutionMode.FullRebuild ? 1 : executionMode == ContentPlanExecutionMode.RebuildOutputs ? 3 : 1);
+        return request.StartPhaseNo ?? (executionMode == ContentPlanExecutionMode.FullRebuild ? 1 : executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase ? 3 : 1);
     }
 
     private static int ResolveEndPhaseNo(BatchGenerateFromPlansRequest request) => request.EndPhaseNo ?? 19;
@@ -543,7 +545,7 @@ public sealed class ContentPlanBatchGenerationService(
         if (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter ?? TimeSpan.Zero))
             return "Excluded because ProductionRunning plans require explicit recovery mode with allowRunningPlanRecovery=true, retryFailedOnly=true, allowFailedPlanRetry=true, startPhaseNo, endPhaseNo, and an exact planTitle or planId";
         if (IsProductionCompleted(plan) && (!completedRerunMode || !allowCompletedPlanRerun))
-            return "Excluded because ProductionCompleted plans require executionMode RebuildOutputs or FullRebuild with allowCompletedPlanRerun=true and an exact planTitle or planId";
+            return "Excluded because ProductionCompleted plans require executionMode RebuildOutputs, RerunPhase, or FullRebuild with allowCompletedPlanRerun=true and an exact planTitle or planId";
         if (!IsStatusRunnable(plan, allowedStatuses))
             return $"Excluded because status was {plan.Status} and planStatus was {plan.PlanStatus}; allowed status or planStatus values are {string.Join(", ", allowedStatuses)}";
         if (plan.AstronomyEventIntelligence is null)
