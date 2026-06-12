@@ -1708,6 +1708,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase14NarrationDiagnostics = phaseNo == 14
             ? ReadPhase14NarrationDiagnostics(outputFiles, context)
             : null;
+        var phase6SceneEnrichmentDiagnostics = phaseNo == 6
+            ? BuildPhase6SceneEnrichmentDiagnostics(context)
+            : null;
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             phaseNo,
@@ -1726,6 +1729,13 @@ public sealed partial class ProductionPipelineExecutionService(
             errors,
             reason,
             canRetry,
+            phase6SceneEnrichmentDiagnostics,
+            planetGroupingStrategyActivated = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated,
+            planetGroupingIntentInjected = phase6SceneEnrichmentDiagnostics?.PlanetGroupingIntentInjected,
+            guidedScanPathInjected = phase6SceneEnrichmentDiagnostics?.GuidedScanPathInjected,
+            sceneIntents = phase6SceneEnrichmentDiagnostics?.SceneIntents,
+            visualIntents = phase6SceneEnrichmentDiagnostics?.VisualIntents,
+            sceneEnrichmentMetadata = phase6SceneEnrichmentDiagnostics?.SceneEnrichmentMetadata,
             phase7NarrationDiagnostics,
             phase12ThumbnailDiagnostics,
             phase13ShortNarrationDiagnostics,
@@ -1777,6 +1787,107 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
         return result;
     }
+
+
+
+    private static Phase6SceneEnrichmentDiagnostics BuildPhase6SceneEnrichmentDiagnostics(ProductionPhaseContext context)
+    {
+        var enrichedPath = BuildEnrichedScenePlanPath(context);
+        var plan = TryReadEnrichedScenePlan(enrichedPath);
+        var generatedText = plan is null
+            ? Array.Empty<string>()
+            : ExtractEnrichedSceneGeneratedText(plan).Where(text => !string.IsNullOrWhiteSpace(text)).ToArray();
+
+        return new Phase6SceneEnrichmentDiagnostics(
+            EnrichedScenePlanPath: NormalizePath(enrichedPath),
+            EnrichedScenePlanExists: File.Exists(enrichedPath),
+            PlanetGroupingStrategyActivated: IsPlanetGroupingStrategyActivated(context),
+            PlanetGroupingIntentInjected: generatedText.Any(text => text.Contains("Planet grouping:", StringComparison.OrdinalIgnoreCase)),
+            GuidedScanPathInjected: generatedText.Any(text => text.Contains("Guided scan path:", StringComparison.OrdinalIgnoreCase)),
+            SceneIntents: plan?.Scenes.Select(scene => new Phase6SceneIntentDiagnostics(
+                scene.SceneNumber,
+                scene.QuestionType,
+                scene.ScenePurpose,
+                scene.ViewerTakeaway,
+                scene.NarrationIntent,
+                scene.VisualIntent,
+                scene.ImagePromptIntent,
+                scene.OverlayIntent,
+                scene.AccessibilityIntent)).ToArray() ?? Array.Empty<Phase6SceneIntentDiagnostics>(),
+            VisualIntents: plan?.Scenes.Select(scene => new Phase6VisualIntentDiagnostics(
+                scene.SceneNumber,
+                scene.QuestionType,
+                scene.VisualIntent,
+                scene.ImagePromptIntent,
+                scene.OverlayIntent)).ToArray() ?? Array.Empty<Phase6VisualIntentDiagnostics>(),
+            SceneEnrichmentMetadata: plan?.Diagnostics,
+            StrategyId: plan?.Diagnostics?.StrategyId ?? context.ProductionEventIntelligence.StrategyId,
+            EventType: context.ProductionEventIntelligence.EventType,
+            RequiredVisualObjects: plan?.Diagnostics?.RequiredVisualObjects ?? context.ProductionEventIntelligence.RequiredVisualObjects ?? Array.Empty<string>(),
+            PrimaryObjects: plan?.Diagnostics?.PrimaryObjects ?? context.ProductionEventIntelligence.PrimaryObjects,
+            SecondaryObjects: plan?.Diagnostics?.SecondaryObjects ?? context.ProductionEventIntelligence.SecondaryObjects);
+    }
+
+    private static EnrichedQuestionScenePlanDto? TryReadEnrichedScenePlan(string enrichedPath)
+    {
+        if (!File.Exists(enrichedPath))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(File.ReadAllText(enrichedPath), JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsPlanetGroupingStrategyActivated(ProductionPhaseContext context)
+    {
+        var intelligence = context.ProductionEventIntelligence;
+        return string.Equals(intelligence.EventType, "PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(intelligence.EventType, "PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(intelligence.StrategyId, "PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(context.MediaEventStrategy?.EventType, "PlanetGrouping", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record Phase6SceneEnrichmentDiagnostics(
+        string EnrichedScenePlanPath,
+        bool EnrichedScenePlanExists,
+        bool PlanetGroupingStrategyActivated,
+        bool PlanetGroupingIntentInjected,
+        bool GuidedScanPathInjected,
+        IReadOnlyList<Phase6SceneIntentDiagnostics> SceneIntents,
+        IReadOnlyList<Phase6VisualIntentDiagnostics> VisualIntents,
+        QuestionSceneEnrichmentDiagnostics? SceneEnrichmentMetadata,
+        string? StrategyId,
+        string? EventType,
+        IReadOnlyList<string> RequiredVisualObjects,
+        IReadOnlyList<string> PrimaryObjects,
+        IReadOnlyList<string> SecondaryObjects);
+
+    private sealed record Phase6SceneIntentDiagnostics(
+        int SceneNumber,
+        string QuestionType,
+        string ScenePurpose,
+        string ViewerTakeaway,
+        string NarrationIntent,
+        string VisualIntent,
+        string ImagePromptIntent,
+        string OverlayIntent,
+        string AccessibilityIntent);
+
+    private sealed record Phase6VisualIntentDiagnostics(
+        int SceneNumber,
+        string QuestionType,
+        string VisualIntent,
+        string ImagePromptIntent,
+        string OverlayIntent);
 
 
 
