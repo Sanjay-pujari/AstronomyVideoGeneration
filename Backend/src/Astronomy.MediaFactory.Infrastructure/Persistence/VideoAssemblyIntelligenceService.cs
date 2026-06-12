@@ -1092,6 +1092,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         AddNarrationPurposeSources(Path.Combine(questionRoot, "question-driven-narration.json"), sources);
         AddEnrichedPlanPurposeSources(Path.Combine(questionRoot, "question-driven-scene-plan.enriched.json"), sources);
         AddSceneApprovalPurposeSources(Path.Combine(questionRoot, SceneApprovalDirectoryName, "short"), sources);
+        AddSceneApprovalPurposeSources(Path.Combine(questionRoot, SceneApprovalDirectoryName, "long"), sources);
         return sources
             .GroupBy(source => source.SceneNumber)
             .OrderBy(group => group.Key)
@@ -1398,7 +1399,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     {
         var expanded = scripts.ToArray();
         var targetWords = Math.Max((int)Math.Ceiling(targetSeconds * wordsPerMinute / 60.0), (int)Math.Ceiling(minSeconds * wordsPerMinute / 60.0));
-        for (var round = 0; round < 8; round++)
+        for (var round = 0; round < 12; round++)
         {
             var narration = string.Join(" ", expanded.Select(scene => scene.Narration));
             var duration = EstimateSpokenDurationSeconds(narration, wordsPerMinute);
@@ -1406,7 +1407,11 @@ public sealed partial class VideoAssemblyIntelligenceService(
             if (duration >= minSeconds && duration <= maxSeconds && words >= targetWords * 0.9)
                 return expanded;
             if (duration > maxSeconds)
-                return ShortenLongFormSceneNarration(expanded).Select(scene => scene with { DurationSeconds = EstimateSpokenDurationSeconds(scene.Narration, wordsPerMinute) }).ToArray();
+            {
+                var maxWords = Math.Max(targetWords, (int)Math.Floor(maxSeconds * wordsPerMinute / 60.0));
+                expanded = TrimLongFormSceneNarrationToWordBudget(expanded, maxWords);
+                continue;
+            }
 
             expanded = ExpandLongFormSceneNarration(expanded, context, round);
         }
@@ -1419,6 +1424,30 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private static VideoNarrationSceneScriptDto[] ShortenLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts)
         => scripts.Select(scene => scene with { Narration = KeepFirstTwoSentences(scene.Narration) }).ToArray();
+
+    private static VideoNarrationSceneScriptDto[] TrimLongFormSceneNarrationToWordBudget(IReadOnlyList<VideoNarrationSceneScriptDto> scripts, int wordBudget)
+    {
+        if (scripts.Count == 0 || wordBudget <= 0)
+            return scripts.ToArray();
+
+        var baseBudget = Math.Max(20, wordBudget / scripts.Count);
+        var remainder = Math.Max(0, wordBudget - (baseBudget * scripts.Count));
+        return scripts.Select((scene, index) => scene with
+        {
+            Narration = KeepFirstWords(scene.Narration, baseBudget + (index < remainder ? 1 : 0))
+        }).ToArray();
+    }
+
+    private static string KeepFirstWords(string narration, int maxWords)
+    {
+        var matches = SpokenWordRegex().Matches(narration);
+        if (matches.Count <= maxWords) return narration;
+        var endIndex = matches[Math.Max(0, maxWords - 1)].Index + matches[Math.Max(0, maxWords - 1)].Length;
+        var trimmed = narration[..endIndex].Trim().TrimEnd(',', ';', ':', '-');
+        return trimmed.EndsWith(".", StringComparison.Ordinal) || trimmed.EndsWith("!", StringComparison.Ordinal) || trimmed.EndsWith("?", StringComparison.Ordinal)
+            ? trimmed
+            : trimmed + ".";
+    }
 
     private static string KeepFirstTwoSentences(string narration)
     {
