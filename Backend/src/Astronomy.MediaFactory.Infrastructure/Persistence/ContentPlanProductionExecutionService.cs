@@ -113,7 +113,18 @@ public sealed class ContentPlanProductionExecutionService(
             var partialPhaseExecution = IsPartialPhaseExecution(request);
             var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success);
             var productionFailed = partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
-            var productionCompleted = !productionFailed && (phase19Succeeded || partialPhaseSuccess);
+            var productionCompleted = partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase19Succeeded;
+            if (partialPhaseExecution)
+            {
+                logger.LogDebug(
+                    "Partial rebuild detected.\nRequested range: {RequestedStartPhase}-{RequestedEndPhase}\nExecuted range: {ExpandedStartPhase}-{ExpandedEndPhase}\nPartialPhaseSuccess={PartialPhaseSuccess}\nFinalSuccess={FinalSuccess}",
+                    requestedStartPhaseNo,
+                    requestedEndPhaseNo,
+                    startPhaseNo,
+                    endPhaseNo,
+                    partialPhaseSuccess,
+                    productionCompleted);
+            }
             execution.Status = productionCompleted ? "Completed" : productionFailed ? "Failed" : "Running";
             execution.FinishedUtc = productionCompleted || productionFailed ? DateTimeOffset.UtcNow : null;
             execution.ErrorMessage = productionFailed ? string.Join("; ", errors.DefaultIfEmpty("Production pipeline failed.")) : null;
@@ -188,9 +199,7 @@ public sealed class ContentPlanProductionExecutionService(
         => phaseResults?.Any(p => p.PhaseNo == phaseNo && p.Status == ProductionPhaseStatus.Succeeded) == true;
 
     private static bool IsPartialPhaseExecution(ContentPlanProductionExecutionRequest request)
-        => request.ExecutionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase
-            && request.StartPhaseNo.HasValue
-            && request.EndPhaseNo.HasValue;
+        => request.StartPhaseNo.HasValue && request.EndPhaseNo.HasValue;
 
     private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
     {
