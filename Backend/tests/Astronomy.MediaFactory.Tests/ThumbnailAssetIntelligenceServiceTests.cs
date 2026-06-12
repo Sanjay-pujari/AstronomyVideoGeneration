@@ -278,10 +278,26 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     }
 
     [Fact]
-    public async Task GenerateThumbnailAssetsAsync_ImagesScrollStoppingUsesPhotoCinematicRenderer()
+    public async Task GenerateThumbnailAssetsAsync_ImagesScrollStoppingUsesCurrentEventInsteadOfGoldenPilotPlanets()
     {
         var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteThumbnailCompositionInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
         var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(workingDirectory, "Snow Moon Full Moon", "Snow Moon", "NamedFullMoon", ["Moon"], []);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "SceneSelection",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
 
         var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
         {
@@ -291,7 +307,8 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             Phase = "Images",
             ThumbnailStyle = "ScrollStopping",
             DryRun = false,
-            OverwriteExisting = true
+            OverwriteExisting = true,
+            ProductionContext = productionContext
         }, CancellationToken.None);
 
         var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
@@ -303,18 +320,18 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Equal("Images", result.PhaseRequested);
         Assert.Equal("ImageGeneration", result.PhaseExecuted);
         Assert.Equal("PhotoCinematicThumbnail", result.ThumbnailVisualSourceMode);
-        Assert.Equal("none", result.SourceSceneUsed);
-        Assert.False(result.ApprovedSceneFoundationUsed);
-        Assert.True(result.IndependentPlanetRedrawUsed);
+        Assert.Equal("scene-001", result.SourceSceneUsed);
+        Assert.True(result.ApprovedSceneFoundationUsed);
+        Assert.False(result.IndependentPlanetRedrawUsed);
         Assert.True(result.PhotoCinematicRendererUsed);
         Assert.True(result.OldThumbnailRendererBypassed);
         Assert.True(result.SceneTextLabelsRemoved);
         Assert.True(result.TextBoxesRemoved);
-        Assert.True(result.VenusRenderedAsStarPoint);
-        Assert.True(result.JupiterRenderedAsPlanet);
+        Assert.False(result.VenusRenderedAsStarPoint);
+        Assert.False(result.JupiterRenderedAsPlanet);
         Assert.Equal("PhotoCinematicThumbnailRenderer", result.RequestedRenderer);
         Assert.Equal("PhotoCinematicThumbnailRenderer", result.ActualRendererUsed);
-        Assert.Contains("legacy scene crop", result.RendererSelectionReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("current production event", result.RendererSelectionReason, StringComparison.OrdinalIgnoreCase);
         Assert.True(result.OldRendererBypassed);
         Assert.True(result.PhotoCinematicRendererEntered);
         Assert.True(result.PhotoCinematicRendererCompleted);
@@ -347,9 +364,18 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(validation.OldThumbnailRendererBypassed);
         Assert.True(validation.SceneTextLabelsRemoved);
         Assert.True(validation.TextBoxesRemoved);
-        Assert.True(validation.VenusRenderedAsStarPoint);
-        Assert.True(validation.JupiterRenderedAsPlanet);
+        Assert.False(validation.VenusRenderedAsStarPoint);
+        Assert.False(validation.JupiterRenderedAsPlanet);
         Assert.False(validation.CinematicCropApplied);
+
+        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")), JsonOptions);
+        Assert.NotNull(manifest);
+        Assert.Equal("Snow Moon Full Moon", manifest!.ValidationFacts["thumbnailRequestTitle"]);
+        Assert.Equal("Snow Moon", manifest.ValidationFacts["thumbnailRequestShortTitle"]);
+        Assert.Equal("Moon", manifest.ValidationFacts["thumbnailPrimaryObjects"]);
+        Assert.Contains("Moon", manifest.ValidationFacts["visualObjectsUsed"]);
+        Assert.Contains("Snow Moon", manifest.ValidationFacts["labelsUsed"]);
+        Assert.Equal(string.Empty, manifest.ValidationFacts["forbiddenObjectsDetected"]);
     }
 
     [Fact]
@@ -374,6 +400,50 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
 
     private static ThumbnailAssetIntelligenceService CreateService(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
+
+    private static ProductionPipelineExecutionContext BuildProductionContext(string workingDirectory, string title, string shortTitle, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
+    {
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            eventType,
+            title,
+            shortTitle,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            "10:00 PM",
+            "Evening",
+            "East",
+            "Global",
+            primaryObjects,
+            secondaryObjects,
+            "Good",
+            null,
+            null,
+            "Current event",
+            ["Look up after dusk"],
+            [shortTitle],
+            ["Current event thumbnail"],
+            [],
+            [],
+            StrategyId: eventType);
+
+        var eventRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId);
+        return new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: Guid.NewGuid(),
+            AstronomyEventIntelligenceId: Guid.Parse(EventId),
+            SourceExternalEventId: null,
+            IsDbApprovedPlanExecution: true,
+            RegionId: RegionId,
+            Language: "en",
+            EventType: eventType,
+            PlanRoot: eventRoot,
+            QuestionRoot: Path.Combine(eventRoot, "question-engine"),
+            SceneRoot: Path.Combine(eventRoot, "scenes"),
+            HeroRoot: Path.Combine(eventRoot, "hero-assets"),
+            ThumbnailRoot: Path.Combine(eventRoot, "thumbnail-assets"),
+            ProductionEventIntelligence: intelligence);
+    }
 
     private static async Task WriteHeroInputFilesAsync(string workingDirectory)
     {

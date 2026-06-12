@@ -11,9 +11,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 internal static class PhotoCinematicThumbnailRenderer
 {
-    private const string HookText = "SKY EVENT\nTONIGHT";
-    private const string SecondaryText = "Event Focus";
-    private const string MicroText = "Best Viewing Time";
+    private const string DefaultHookText = "SKY EVENT\nTONIGHT";
+    private const string DefaultSecondaryText = "Event Focus";
+    private const string DefaultMicroText = "Best Viewing Time";
 
     private static readonly IReadOnlyList<PhotoCinematicThumbnailSpec> Specs =
     [
@@ -25,21 +25,30 @@ internal static class PhotoCinematicThumbnailRenderer
     public static IReadOnlyList<string> PlannedOutputFiles(string thumbnailRoot)
         => Specs.Select(spec => NormalizePath(Path.Combine(thumbnailRoot, spec.FileName))).ToArray();
 
-    public static async Task<PhotoCinematicThumbnailRenderResult> RenderAsync(string thumbnailRoot, CancellationToken cancellationToken)
+    public static Task<PhotoCinematicThumbnailRenderResult> RenderAsync(string thumbnailRoot, CancellationToken cancellationToken)
+        => RenderAsync(thumbnailRoot, PhotoCinematicThumbnailRenderRequest.Default, cancellationToken);
+
+    public static async Task<PhotoCinematicThumbnailRenderResult> RenderAsync(string thumbnailRoot, PhotoCinematicThumbnailRenderRequest request, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(thumbnailRoot);
         var writtenFiles = new List<string>();
+        var visualObjects = NormalizeObjects(request.VisualObjects).DefaultIfEmpty("Sky Event").ToArray();
+        var labels = NormalizeObjects(request.Labels).DefaultIfEmpty(CleanText(request.ShortTitle, request.Title, "Sky Event", 26)).ToArray();
         foreach (var spec in Specs)
         {
             using var image = new Image<Rgba32>(spec.Width, spec.Height, Color.ParseHex("#040617"));
             image.Mutate(ctx =>
             {
-                DrawTwilightSky(ctx, spec);
-                DrawStars(ctx, spec);
-                DrawHorizonGlow(ctx, spec);
-                DrawMountains(ctx, spec);
-                DrawPlanetsAndLabels(ctx, spec);
-                DrawTypography(ctx, spec);
+                if (!TryDrawSourceImage(ctx, spec, request.SourceImagePath))
+                {
+                    DrawTwilightSky(ctx, spec);
+                    DrawStars(ctx, spec);
+                    DrawHorizonGlow(ctx, spec);
+                    DrawMountains(ctx, spec);
+                }
+
+                DrawEventObjectsAndLabels(ctx, spec, visualObjects, labels);
+                DrawTypography(ctx, spec, request);
                 DrawCinematicFinish(ctx, spec);
             });
 
@@ -50,7 +59,22 @@ internal static class PhotoCinematicThumbnailRenderer
             writtenFiles.Add(NormalizePath(outputPath));
         }
 
-        return new PhotoCinematicThumbnailRenderResult(true, true, writtenFiles);
+        return new PhotoCinematicThumbnailRenderResult(true, true, writtenFiles, visualObjects, labels);
+    }
+
+    private static bool TryDrawSourceImage(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, string? sourceImagePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourceImagePath) || !File.Exists(sourceImagePath)) return false;
+        using var source = Image.Load<Rgba32>(sourceImagePath);
+        var scale = Math.Max(spec.Width / (float)source.Width, spec.Height / (float)source.Height);
+        var width = (int)MathF.Ceiling(source.Width * scale);
+        var height = (int)MathF.Ceiling(source.Height * scale);
+        source.Mutate(x => x.Resize(width, height));
+        var x = (spec.Width - width) / 2;
+        var y = (spec.Height - height) / 2;
+        ctx.DrawImage(source, new Point(x, y), 1f);
+        ctx.Fill(Color.Black.WithAlpha(0.18f), new RectangleF(0, 0, spec.Width, spec.Height));
+        return true;
     }
 
     private static void DrawTwilightSky(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
@@ -111,17 +135,85 @@ internal static class PhotoCinematicThumbnailRenderer
         ctx.Fill(color, new Polygon(new LinearLineSegment(points.ToArray())));
     }
 
-    private static void DrawPlanetsAndLabels(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
+    private static void DrawEventObjectsAndLabels(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, IReadOnlyList<string> visualObjects, IReadOnlyList<string> labels)
     {
-        var venus = spec.VenusCenter;
-        var jupiter = spec.JupiterCenter;
-
-        DrawVenusStarPoint(ctx, venus, spec.PlanetScale);
-        DrawJupiterPlanet(ctx, jupiter, spec.PlanetScale);
-
         var labelFont = ResolveFont(spec.LabelFontSize, FontStyle.Bold);
-        DrawCleanLabel(ctx, "Venus", labelFont, spec.VenusLabelOrigin, venus, Color.ParseHex("#FFF1A8"));
-        DrawCleanLabel(ctx, "Jupiter", labelFont, spec.JupiterLabelOrigin, jupiter, Color.ParseHex("#D8EBFF"));
+        var primary = visualObjects.FirstOrDefault() ?? "Sky Event";
+        var label = labels.FirstOrDefault() ?? primary;
+        if (ContainsObject(visualObjects, "meteor"))
+        {
+            DrawMeteorStreaks(ctx, spec);
+            DrawCleanLabel(ctx, label, labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#BFE6FF"));
+            return;
+        }
+        if (ContainsObject(visualObjects, "moon") || ContainsObject(visualObjects, "full moon") || label.Contains("moon", StringComparison.OrdinalIgnoreCase))
+        {
+            DrawMoon(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.35f);
+            DrawCleanLabel(ctx, label, labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#F4F0DC"));
+            return;
+        }
+        if (ContainsObject(visualObjects, "venus") && ContainsObject(visualObjects, "jupiter"))
+        {
+            var venus = spec.VenusCenter;
+            var jupiter = spec.JupiterCenter;
+            DrawVenusStarPoint(ctx, venus, spec.PlanetScale);
+            DrawJupiterPlanet(ctx, jupiter, spec.PlanetScale);
+            DrawCleanLabel(ctx, "Venus", labelFont, spec.VenusLabelOrigin, venus, Color.ParseHex("#FFF1A8"));
+            DrawCleanLabel(ctx, "Jupiter", labelFont, spec.JupiterLabelOrigin, jupiter, Color.ParseHex("#D8EBFF"));
+            return;
+        }
+        if (ContainsObject(visualObjects, "venus"))
+        {
+            DrawVenusStarPoint(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.2f);
+            DrawCleanLabel(ctx, "Venus", labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#FFF1A8"));
+            return;
+        }
+        if (ContainsObject(visualObjects, "jupiter"))
+        {
+            DrawJupiterPlanet(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.2f);
+            DrawCleanLabel(ctx, "Jupiter", labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#D8EBFF"));
+            return;
+        }
+        if (ContainsObject(visualObjects, "mars"))
+        {
+            DrawMars(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.2f);
+            DrawCleanLabel(ctx, "Mars", labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#FFB28A"));
+            return;
+        }
+
+        DrawGlow(ctx, spec.PrimaryObjectCenter, 34f * spec.PlanetScale, 34f * spec.PlanetScale, Color.ParseHex("#BFE6FF"), 0.14f, 10);
+        ctx.Fill(Color.White.WithAlpha(0.94f), new EllipsePolygon(spec.PrimaryObjectCenter.X, spec.PrimaryObjectCenter.Y, 7f * spec.PlanetScale));
+        DrawCleanLabel(ctx, label, labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#D8EBFF"));
+    }
+
+    private static void DrawMoon(IImageProcessingContext ctx, PointF center, float scale)
+    {
+        var radius = 38f * scale;
+        DrawGlow(ctx, center, radius * 1.8f, radius * 1.8f, Color.ParseHex("#DDE8FF"), 0.12f, 14);
+        ctx.Fill(Color.ParseHex("#ECE7D5"), new EllipsePolygon(center.X, center.Y, radius, radius));
+        ctx.Fill(Color.ParseHex("#BFB9AA").WithAlpha(0.22f), new EllipsePolygon(center.X - radius * 0.30f, center.Y - radius * 0.18f, radius * 0.16f));
+        ctx.Fill(Color.ParseHex("#AFA895").WithAlpha(0.18f), new EllipsePolygon(center.X + radius * 0.22f, center.Y + radius * 0.24f, radius * 0.22f));
+        ctx.Fill(Color.White.WithAlpha(0.20f), new EllipsePolygon(center.X - radius * 0.20f, center.Y - radius * 0.35f, radius * 0.35f, radius * 0.18f));
+    }
+
+    private static void DrawMars(IImageProcessingContext ctx, PointF center, float scale)
+    {
+        var radius = 25f * scale;
+        DrawGlow(ctx, center, radius * 1.7f, radius * 1.7f, Color.ParseHex("#E06A3D"), 0.11f, 10);
+        ctx.Fill(Color.ParseHex("#D66A3D"), new EllipsePolygon(center.X, center.Y, radius, radius * 0.96f));
+        ctx.Fill(Color.ParseHex("#7E392C").WithAlpha(0.24f), new EllipsePolygon(center.X + radius * 0.18f, center.Y + radius * 0.10f, radius * 0.44f, radius * 0.16f));
+    }
+
+    private static void DrawMeteorStreaks(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
+    {
+        var random = new Random(4109 + spec.Width + spec.Height);
+        for (var i = 0; i < 9; i++)
+        {
+            var start = new PointF(spec.Width * (0.38f + random.NextSingle() * 0.42f), spec.Height * (0.18f + random.NextSingle() * 0.22f));
+            var end = new PointF(start.X - spec.Width * (0.12f + random.NextSingle() * 0.12f), start.Y + spec.Height * (0.08f + random.NextSingle() * 0.08f));
+            ctx.DrawLine(Pens.Solid(Color.FromRgba(190, 225, 255, 210), Math.Max(2, spec.Width / 420)), start, end);
+            ctx.DrawLine(Pens.Solid(Color.White.WithAlpha(0.86f), Math.Max(1, spec.Width / 900)), start, end);
+        }
     }
 
     private static void DrawVenusStarPoint(IImageProcessingContext ctx, PointF center, float scale)
@@ -139,14 +231,12 @@ internal static class PhotoCinematicThumbnailRenderer
         var radiusY = radius * 0.84f;
         DrawGlow(ctx, center, radius * 1.72f, radius * 1.30f, Color.ParseHex("#D9B077"), 0.09f, 10);
         ctx.Fill(Color.ParseHex("#D7B07A"), new EllipsePolygon(center.X, center.Y, radius, radiusY));
-
         DrawJupiterBand(ctx, center, radius, radiusY, -0.48f, 0.62f, Color.ParseHex("#F2D6A8"), 0.30f);
         DrawJupiterBand(ctx, center, radius, radiusY, -0.30f, 0.80f, Color.ParseHex("#9E6844"), 0.30f);
         DrawJupiterBand(ctx, center, radius, radiusY, -0.13f, 0.93f, Color.ParseHex("#E9C492"), 0.34f);
         DrawJupiterBand(ctx, center, radius, radiusY, 0.02f, 0.97f, Color.ParseHex("#A46B45"), 0.24f);
         DrawJupiterBand(ctx, center, radius, radiusY, 0.22f, 0.85f, Color.ParseHex("#F0D2A2"), 0.30f);
         DrawJupiterBand(ctx, center, radius, radiusY, 0.40f, 0.68f, Color.ParseHex("#8E5B3E"), 0.22f);
-
         ctx.Fill(Color.ParseHex("#B65F42").WithAlpha(0.46f), new EllipsePolygon(center.X + radius * 0.35f, center.Y + radiusY * 0.18f, radius * 0.15f, radiusY * 0.075f));
         ctx.Fill(Color.White.WithAlpha(0.19f), new EllipsePolygon(center.X - radius * 0.27f, center.Y - radiusY * 0.34f, radius * 0.24f, radiusY * 0.12f));
         ctx.Fill(Color.Black.WithAlpha(0.09f), new EllipsePolygon(center.X + radius * 0.22f, center.Y + radiusY * 0.05f, radius * 0.76f, radiusY * 0.86f));
@@ -178,14 +268,25 @@ internal static class PhotoCinematicThumbnailRenderer
         return new PointF(target.X + dx / length * distance, target.Y + dy / length * distance);
     }
 
-    private static void DrawTypography(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
+    private static void DrawTypography(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, PhotoCinematicThumbnailRenderRequest request)
     {
         var hookFont = ResolveFont(spec.HookFontSize, FontStyle.BoldItalic);
         var secondaryFont = ResolveFont(spec.SecondaryFontSize, FontStyle.Bold);
         var microFont = ResolveFont(spec.MicroFontSize, FontStyle.Bold);
-        DrawTextWithShadow(ctx, HookText, hookFont, spec.HookOrigin, Color.White, 0.86f);
-        DrawTextWithShadow(ctx, SecondaryText, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFD15E"), 0.92f);
-        DrawTextWithShadow(ctx, MicroText, microFont, spec.MicroOrigin, Color.ParseHex("#7FD6FF"), 0.90f);
+        var hook = BuildHookText(request);
+        var secondary = CleanText(request.SkyDirectionHint, request.EventType, DefaultSecondaryText, 26);
+        var micro = CleanText(request.LocalPeakTime, request.EventType, DefaultMicroText, 30);
+        DrawTextWithShadow(ctx, hook, hookFont, spec.HookOrigin, Color.White, 0.86f);
+        DrawTextWithShadow(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFD15E"), 0.92f);
+        DrawTextWithShadow(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#7FD6FF"), 0.90f);
+    }
+
+    private static string BuildHookText(PhotoCinematicThumbnailRenderRequest request)
+    {
+        var text = CleanText(request.ShortTitle, request.Title, DefaultHookText, 24).ToUpperInvariant();
+        if (text.Contains('\n')) return text;
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2));
     }
 
     private static void DrawTextWithShadow(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color, float lineSpacing)
@@ -208,7 +309,6 @@ internal static class PhotoCinematicThumbnailRenderer
             new ColorStop(1f, Color.Black.WithAlpha(0.32f))), new RectangleF(0, 0, spec.Width, spec.Height));
     }
 
-
     private static void DrawGlow(IImageProcessingContext ctx, PointF center, float radiusX, float radiusY, Color color, float alpha, int rings)
     {
         for (var i = rings; i >= 1; i--)
@@ -224,17 +324,41 @@ internal static class PhotoCinematicThumbnailRenderer
         {
             if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, style);
         }
-
         var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
             throw new InvalidOperationException("No system fonts available for photo-cinematic thumbnail image generation.");
-
         return fallbackFamily.CreateFont(size, style);
+    }
+
+    private static IReadOnlyList<string> NormalizeObjects(IEnumerable<string>? objects)
+        => (objects ?? Array.Empty<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static bool ContainsObject(IEnumerable<string> objects, string objectName)
+        => objects.Any(value => value.Contains(objectName, StringComparison.OrdinalIgnoreCase));
+
+    private static string CleanText(string? preferred, string? fallback, string defaultValue, int maxLength)
+    {
+        var value = !string.IsNullOrWhiteSpace(preferred) ? preferred.Trim() : !string.IsNullOrWhiteSpace(fallback) ? fallback.Trim() : defaultValue;
+        value = string.Join(' ', value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return value.Length <= maxLength ? value : value[..maxLength].TrimEnd();
     }
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
 
-    public sealed record PhotoCinematicThumbnailRenderResult(bool Entered, bool Completed, IReadOnlyList<string> WrittenFiles);
+    public sealed record PhotoCinematicThumbnailRenderRequest(
+        string Title,
+        string ShortTitle,
+        string EventType,
+        IReadOnlyList<string> VisualObjects,
+        IReadOnlyList<string> Labels,
+        string? SkyDirectionHint,
+        string? LocalPeakTime,
+        string? SourceImagePath)
+    {
+        public static PhotoCinematicThumbnailRenderRequest Default { get; } = new("Sky Event Tonight", "Sky Event", "Unknown", ["Sky Event"], ["Sky Event"], null, null, null);
+    }
+
+    public sealed record PhotoCinematicThumbnailRenderResult(bool Entered, bool Completed, IReadOnlyList<string> WrittenFiles, IReadOnlyList<string> VisualObjectsUsed, IReadOnlyList<string> LabelsUsed);
 
     private sealed record PhotoCinematicThumbnailSpec(string Variant, string FileName, int Width, int Height)
     {
@@ -249,6 +373,8 @@ internal static class PhotoCinematicThumbnailRenderer
         public PointF HookOrigin => IsPortrait ? new PointF(70, 100) : IsSquare ? new PointF(62, 70) : new PointF(58, 56);
         public PointF SecondaryOrigin => IsPortrait ? new PointF(76, 360) : IsSquare ? new PointF(72, 250) : new PointF(72, 250);
         public PointF MicroOrigin => IsPortrait ? new PointF(80, 430) : IsSquare ? new PointF(76, 306) : new PointF(76, 302);
+        public PointF PrimaryObjectCenter => IsPortrait ? new PointF(Width * 0.57f, Height * 0.48f) : IsSquare ? new PointF(Width * 0.70f, Height * 0.48f) : new PointF(Width * 0.78f, Height * 0.45f);
+        public PointF PrimaryLabelOrigin => IsPortrait ? new PointF(Width * 0.20f, Height * 0.51f) : IsSquare ? new PointF(Width * 0.42f, Height * 0.36f) : new PointF(Width * 0.56f, Height * 0.33f);
         public PointF VenusCenter => IsPortrait ? new PointF(Width * 0.40f, Height * 0.43f) : IsSquare ? new PointF(Width * 0.57f, Height * 0.43f) : new PointF(Width * 0.70f, Height * 0.40f);
         public PointF JupiterCenter => IsPortrait ? new PointF(Width * 0.63f, Height * 0.50f) : IsSquare ? new PointF(Width * 0.76f, Height * 0.49f) : new PointF(Width * 0.84f, Height * 0.48f);
         public PointF VenusLabelOrigin => IsPortrait ? new PointF(Width * 0.19f, Height * 0.48f) : IsSquare ? new PointF(Width * 0.39f, Height * 0.36f) : new PointF(Width * 0.58f, Height * 0.32f);

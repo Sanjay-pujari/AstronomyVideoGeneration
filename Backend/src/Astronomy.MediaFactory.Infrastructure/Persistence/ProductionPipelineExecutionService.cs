@@ -1181,6 +1181,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
             : null;
+        var phase12ThumbnailDiagnostics = phaseNo == 12
+            ? BuildPhase12ThumbnailDiagnostics(context)
+            : null;
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             phaseNo,
@@ -1200,6 +1203,15 @@ public sealed partial class ProductionPipelineExecutionService(
             reason,
             canRetry,
             phase7NarrationDiagnostics,
+            phase12ThumbnailDiagnostics,
+            thumbnailRequestTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestTitle,
+            thumbnailRequestShortTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestShortTitle,
+            thumbnailPrimaryObjects = phase12ThumbnailDiagnostics?.ThumbnailPrimaryObjects,
+            thumbnailSourceManifestPath = phase12ThumbnailDiagnostics?.ThumbnailSourceManifestPath,
+            thumbnailSourceScenePath = phase12ThumbnailDiagnostics?.ThumbnailSourceScenePath,
+            visualObjectsUsed = phase12ThumbnailDiagnostics?.VisualObjectsUsed,
+            labelsUsed = phase12ThumbnailDiagnostics?.LabelsUsed,
+            forbiddenObjectsDetected = phase12ThumbnailDiagnostics?.ForbiddenObjectsDetected,
             phase10TitleDiagnostics,
             titleFoundInCaptionText = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInCaptionText"),
             titleFoundInViewerTakeaway = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInViewerTakeaway"),
@@ -1211,6 +1223,54 @@ public sealed partial class ProductionPipelineExecutionService(
         return result;
     }
 
+
+
+    private static Phase12ThumbnailDiagnostics BuildPhase12ThumbnailDiagnostics(ProductionPhaseContext context)
+    {
+        var manifestPath = Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-scene-manifest.json");
+        IReadOnlyDictionary<string, string> facts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(manifestPath))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+                if (document.RootElement.TryGetProperty("validationFacts", out var validationFacts) && validationFacts.ValueKind == JsonValueKind.Object)
+                    facts = validationFacts.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.ToString(), StringComparer.OrdinalIgnoreCase);
+            }
+            catch (JsonException)
+            {
+                facts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        return new Phase12ThumbnailDiagnostics(
+            ThumbnailRequestTitle: GetFact(facts, "thumbnailRequestTitle", context.ProductionEventIntelligence.Title),
+            ThumbnailRequestShortTitle: GetFact(facts, "thumbnailRequestShortTitle", context.ProductionEventIntelligence.ShortTitle),
+            ThumbnailPrimaryObjects: SplitFact(GetFact(facts, "thumbnailPrimaryObjects", string.Join(", ", context.ProductionEventIntelligence.PrimaryObjects))),
+            ThumbnailSourceManifestPath: GetFact(facts, "thumbnailSourceManifestPath", NormalizePath(manifestPath)),
+            ThumbnailSourceScenePath: GetFact(facts, "thumbnailSourceScenePath", string.Empty),
+            VisualObjectsUsed: SplitFact(GetFact(facts, "visualObjectsUsed", string.Join(", ", context.ProductionEventIntelligence.PrimaryObjects.Concat(context.ProductionEventIntelligence.SecondaryObjects)))),
+            LabelsUsed: SplitFact(GetFact(facts, "labelsUsed", context.ProductionEventIntelligence.ShortTitle)),
+            ForbiddenObjectsDetected: SplitFact(GetFact(facts, "forbiddenObjectsDetected", string.Empty)));
+    }
+
+    private static string GetFact(IReadOnlyDictionary<string, string> facts, string key, string fallback)
+        => facts.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : fallback;
+
+    private static IReadOnlyList<string> SplitFact(string value)
+        => string.IsNullOrWhiteSpace(value)
+            ? Array.Empty<string>()
+            : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+    private sealed record Phase12ThumbnailDiagnostics(
+        string ThumbnailRequestTitle,
+        string ThumbnailRequestShortTitle,
+        IReadOnlyList<string> ThumbnailPrimaryObjects,
+        string ThumbnailSourceManifestPath,
+        string ThumbnailSourceScenePath,
+        IReadOnlyList<string> VisualObjectsUsed,
+        IReadOnlyList<string> LabelsUsed,
+        IReadOnlyList<string> ForbiddenObjectsDetected);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
     {
