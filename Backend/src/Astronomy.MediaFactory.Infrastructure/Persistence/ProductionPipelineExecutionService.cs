@@ -1171,7 +1171,7 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(Path.Combine(root, "production-event-intelligence.json"), JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
     }
 
-    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, IReadOnlyDictionary<string, bool>? phase10TitleDiagnostics = null)
+    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null)
     {
         var started = startedUtc ?? DateTimeOffset.UtcNow;
         var finished = DateTimeOffset.UtcNow;
@@ -1212,22 +1212,24 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private static IReadOnlyDictionary<string, bool>? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
+    private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
     {
         var validationPath = outputFiles.FirstOrDefault(path => string.Equals(Path.GetFileName(path), "production-quality-validation-before-assembly.json", StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrWhiteSpace(validationPath) || !File.Exists(validationPath)) return null;
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(validationPath));
-            return new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["titleFoundInCaptionText"] = ReadBooleanProperty(doc.RootElement, "titleFoundInCaptionText"),
-                ["titleFoundInViewerTakeaway"] = ReadBooleanProperty(doc.RootElement, "titleFoundInViewerTakeaway"),
-                ["titleFoundInOverlayText"] = ReadBooleanProperty(doc.RootElement, "titleFoundInOverlayText"),
-                ["titleFoundInMetadata"] = ReadBooleanProperty(doc.RootElement, "titleFoundInMetadata"),
-                ["titleFoundInReview"] = ReadBooleanProperty(doc.RootElement, "titleFoundInReview"),
-                ["titleFoundInOcr"] = ReadBooleanProperty(doc.RootElement, "titleFoundInOcr")
-            };
+            return new Phase10ValidationDiagnostics(
+                NormalizePath(validationPath),
+                ReadBooleanProperty(doc.RootElement, "titleFoundInCaptionText"),
+                ReadBooleanProperty(doc.RootElement, "titleFoundInViewerTakeaway"),
+                ReadBooleanProperty(doc.RootElement, "titleFoundInOverlayText"),
+                ReadBooleanProperty(doc.RootElement, "titleFoundInMetadata"),
+                ReadBooleanProperty(doc.RootElement, "titleFoundInReview"),
+                ReadBooleanProperty(doc.RootElement, "titleFoundInOcr"),
+                CloneProperty(doc.RootElement, "titleValidationDiagnostics"),
+                CloneProperty(doc.RootElement, "titleValidationSourceDiagnostics"),
+                CloneProperty(doc.RootElement, "phase10VisualSourceInputDiagnostics"));
         }
         catch (JsonException)
         {
@@ -1235,11 +1237,37 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
+    private static JsonElement? CloneProperty(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var value) ? value.Clone() : null;
+
     private static bool ReadBooleanProperty(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
 
-    private static bool? GetPhase10TitleDiagnostic(IReadOnlyDictionary<string, bool>? diagnostics, string propertyName)
-        => diagnostics is not null && diagnostics.TryGetValue(propertyName, out var value) ? value : null;
+    private static bool? GetPhase10TitleDiagnostic(Phase10ValidationDiagnostics? diagnostics, string propertyName)
+        => diagnostics is null
+            ? null
+            : propertyName switch
+            {
+                "titleFoundInCaptionText" => diagnostics.TitleFoundInCaptionText,
+                "titleFoundInViewerTakeaway" => diagnostics.TitleFoundInViewerTakeaway,
+                "titleFoundInOverlayText" => diagnostics.TitleFoundInOverlayText,
+                "titleFoundInMetadata" => diagnostics.TitleFoundInMetadata,
+                "titleFoundInReview" => diagnostics.TitleFoundInReview,
+                "titleFoundInOcr" => diagnostics.TitleFoundInOcr,
+                _ => null
+            };
+
+    private sealed record Phase10ValidationDiagnostics(
+        string ValidationPathUsed,
+        bool TitleFoundInCaptionText,
+        bool TitleFoundInViewerTakeaway,
+        bool TitleFoundInOverlayText,
+        bool TitleFoundInMetadata,
+        bool TitleFoundInReview,
+        bool TitleFoundInOcr,
+        JsonElement? TitleValidationDiagnostics,
+        JsonElement? TitleValidationSourceDiagnostics,
+        JsonElement? Phase10VisualSourceInputDiagnostics);
 
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
