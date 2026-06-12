@@ -261,11 +261,14 @@ public sealed class EventProductionIntelligenceTests
         await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.enriched.json"), "Snow Moon enriched plan: a full Moon over a winter horizon, no unrelated planet leakage, viewing window 2026-02-01 18:00–23:00 UTC.");
         await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
 {
-  "title":"Snow Moon",
-  "shortTitle":"Snow Moon",
-  "astronomyEventShortTitle":"Snow Moon",
+  "viewerTakeaway":"Snow Moon Full Moon: what to watch.",
+  "captionText":"Snow Moon Full Moon: what to watch.",
+  "overlayText":"Snow Moon",
+  "resolver":{
+    "eventShortTitle":"Snow Moon",
+    "eventTitle":"Snow Moon Full Moon"
+  },
   "backgroundPrompt":"large visible Moon/Snow Moon above a snowy horizon",
-  "overlayText":["Snow Moon", "Full Moon", "2026-02-01 18:00–23:00 UTC"],
   "accessibilityCues":["Moon/Snow Moon is the dominant object"]
 }
 """);
@@ -312,6 +315,13 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
         Assert.Empty(result.Errors);
+
+        using var validation = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "production-quality-validation-before-assembly.json")));
+        Assert.True(validation.RootElement.GetProperty("titleFoundInCaptionText").GetBoolean());
+        Assert.True(validation.RootElement.GetProperty("titleFoundInViewerTakeaway").GetBoolean());
+        Assert.True(validation.RootElement.GetProperty("titleFoundInOverlayText").GetBoolean());
+        Assert.True(validation.RootElement.GetProperty("titleFoundInMetadata").GetBoolean());
+        Assert.True(validation.RootElement.GetProperty("titleFoundInReview").GetBoolean());
     }
 
 }

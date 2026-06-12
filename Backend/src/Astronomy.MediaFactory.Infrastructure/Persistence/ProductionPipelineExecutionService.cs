@@ -174,11 +174,15 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var outputs = (await action(context, cancellationToken)).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var missing = outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, [], missing, missing.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", missing.Length > 0, cancellationToken, started);
+            var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, [], missing, missing.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
+            var phase10TitleDiagnostics = phaseNo == 10
+                ? ReadPhase10TitleDiagnostics([Path.Combine(context.ExecutionContext.QuestionRoot!, "production-quality-validation-before-assembly.json")])
+                : null;
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
         }
     }
 
@@ -1167,7 +1171,7 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(Path.Combine(root, "production-event-intelligence.json"), JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
     }
 
-    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null)
+    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, IReadOnlyDictionary<string, bool>? phase10TitleDiagnostics = null)
     {
         var started = startedUtc ?? DateTimeOffset.UtcNow;
         var finished = DateTimeOffset.UtcNow;
@@ -1177,9 +1181,65 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
             : null;
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo, phaseName, status = status.ToString(), startedUtc = started, finishedUtc = finished, durationMs = result.DurationMs, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = outputFiles, inputFiles, outputFiles, warnings, errors, reason, canRetry, phase7NarrationDiagnostics }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            phaseNo,
+            phaseName,
+            status = status.ToString(),
+            startedUtc = started,
+            finishedUtc = finished,
+            durationMs = result.DurationMs,
+            sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!),
+            sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)),
+            filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
+            filesGeneratedThisRun = outputFiles,
+            inputFiles,
+            outputFiles,
+            warnings,
+            errors,
+            reason,
+            canRetry,
+            phase7NarrationDiagnostics,
+            phase10TitleDiagnostics,
+            titleFoundInCaptionText = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInCaptionText"),
+            titleFoundInViewerTakeaway = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInViewerTakeaway"),
+            titleFoundInOverlayText = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInOverlayText"),
+            titleFoundInMetadata = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInMetadata"),
+            titleFoundInReview = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInReview"),
+            titleFoundInOcr = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInOcr")
+        }, JsonOptions), cancellationToken);
         return result;
     }
+
+
+    private static IReadOnlyDictionary<string, bool>? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
+    {
+        var validationPath = outputFiles.FirstOrDefault(path => string.Equals(Path.GetFileName(path), "production-quality-validation-before-assembly.json", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(validationPath) || !File.Exists(validationPath)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(validationPath));
+            return new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["titleFoundInCaptionText"] = ReadBooleanProperty(doc.RootElement, "titleFoundInCaptionText"),
+                ["titleFoundInViewerTakeaway"] = ReadBooleanProperty(doc.RootElement, "titleFoundInViewerTakeaway"),
+                ["titleFoundInOverlayText"] = ReadBooleanProperty(doc.RootElement, "titleFoundInOverlayText"),
+                ["titleFoundInMetadata"] = ReadBooleanProperty(doc.RootElement, "titleFoundInMetadata"),
+                ["titleFoundInReview"] = ReadBooleanProperty(doc.RootElement, "titleFoundInReview"),
+                ["titleFoundInOcr"] = ReadBooleanProperty(doc.RootElement, "titleFoundInOcr")
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool ReadBooleanProperty(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
+
+    private static bool? GetPhase10TitleDiagnostic(IReadOnlyDictionary<string, bool>? diagnostics, string propertyName)
+        => diagnostics is not null && diagnostics.TryGetValue(propertyName, out var value) ? value : null;
 
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
