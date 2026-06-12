@@ -1168,21 +1168,19 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         var aliases = BuildEventTitleAliases(intelligence);
         if (aliases.Count == 0) return new(false, false, false, false, false, false, false, true);
 
-        var infographicFiles = Directory.Exists(root) ? EnumerateSceneInfographicSpecFiles(root).ToArray() : Array.Empty<string>();
+        var infographicFiles = EnumerateGeneratedSceneInfographicSpecFiles(root).ToArray();
         var reviewFiles = Directory.Exists(root) ? EnumerateSceneReviewMetadataFiles(root).ToArray() : Array.Empty<string>();
 
         var titleFoundInCaptionText = ContainsAnyAlias(ReadJsonPropertyText(infographicFiles, ["captionText"]), aliases);
         var titleFoundInViewerTakeaway = ContainsAnyAlias(ReadJsonPropertyText(infographicFiles, ["viewerTakeaway"]), aliases);
         var titleFoundInOverlayText = ContainsAnyAlias(ReadJsonPropertyText(infographicFiles, ["overlayText"]), aliases);
-        var titleFoundInMetadata = ContainsAnyAlias(ReadJsonPropertyText(infographicFiles, ["eventShortTitle", "eventTitle", "title", "shortTitle", "astronomyEventShortTitle"]), aliases);
+        var titleFoundInMetadata = ContainsAnyAlias(ReadVisualSourceResolutionMetadataTitleText(infographicFiles), aliases);
         var titleFoundInReview = ContainsAnyAlias(string.Join('\n', reviewFiles.Select(File.ReadAllText)), aliases);
         var titleFoundInOcr = ContainsAnyAlias(fallbackText, aliases);
         var titleFound = titleFoundInCaptionText
             || titleFoundInViewerTakeaway
             || titleFoundInOverlayText
-            || titleFoundInMetadata
-            || titleFoundInReview
-            || titleFoundInOcr;
+            || titleFoundInMetadata;
 
         return new(
             titleFoundInCaptionText,
@@ -1211,6 +1209,30 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             using var doc = TryParseJson(File.ReadAllText(file));
             if (doc is null) continue;
             CollectJsonPropertyText(doc.RootElement, propertyNames, values);
+        }
+        return string.Join('\n', values);
+    }
+
+    private static string ReadVisualSourceResolutionMetadataTitleText(IEnumerable<string> files)
+    {
+        var values = new List<string>();
+        foreach (var file in files)
+        {
+            using var doc = TryParseJson(File.ReadAllText(file));
+            if (doc is null) continue;
+
+            if (doc.RootElement.TryGetProperty("visualSourceResolution", out var resolution)
+                && resolution.TryGetProperty("metadata", out var metadata)
+                && metadata.ValueKind == JsonValueKind.Object)
+            {
+                CollectJsonPropertyText(metadata, ["eventTitle", "eventShortTitle"], values);
+            }
+
+            if (doc.RootElement.TryGetProperty("strategyValidationFacts", out var facts)
+                && facts.ValueKind == JsonValueKind.Object)
+            {
+                CollectJsonPropertyText(facts, ["eventTitle", "eventShortTitle"], values);
+            }
         }
         return string.Join('\n', values);
     }
@@ -1257,6 +1279,44 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             .Where(path => Path.GetFileName(path).EndsWith("-infographic-spec.json", StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private static IEnumerable<string> EnumerateGeneratedSceneInfographicSpecFiles(string root)
+    {
+        if (!Directory.Exists(root)) return [];
+
+        var roots = new List<string>
+        {
+            root,
+            Path.Combine(root, "question-engine"),
+            Path.Combine(root, "question-engine", "scene-approval-v3"),
+            Path.Combine(root, "scene-approval-v3")
+        };
+        roots.AddRange(ReadSceneApprovalStagingRoots(root));
+
+        return roots
+            .Where(Directory.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .SelectMany(EnumerateSceneInfographicSpecFiles)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IEnumerable<string> ReadSceneApprovalStagingRoots(string root)
+    {
+        var validationRoot = Path.Combine(root, "validation");
+        if (!Directory.Exists(validationRoot)) yield break;
+
+        foreach (var file in Directory.EnumerateFiles(validationRoot, "phase-*-validation.json", SearchOption.TopDirectoryOnly))
+        {
+            using var doc = TryParseJson(File.ReadAllText(file));
+            if (doc is null) continue;
+            if (doc.RootElement.TryGetProperty("sceneApprovalStagingRoot", out var stagingRoot)
+                && stagingRoot.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(stagingRoot.GetString()))
+                yield return stagingRoot.GetString()!;
+        }
+    }
 
     private static IEnumerable<string> EnumerateSceneReviewMetadataFiles(string root)
         => Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories)
