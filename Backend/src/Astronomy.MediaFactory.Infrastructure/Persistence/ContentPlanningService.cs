@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 
@@ -5,6 +6,96 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder, IAstronomyVisibilityService visibilityService, IStellariumScenePlannerResolver scenePlannerResolver) : IContentPlanningService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string[] InactivePlanStatuses = ["Completed", "ProductionCompleted", "Failed", "ProductionFailed", "Cancelled", "Canceled", "Archived"];
+
+    public async Task<CreatePlanFromEventResponse> CreatePlanFromEventAsync(CreatePlanFromEventRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.AstronomyEventIntelligenceId == Guid.Empty) throw new ArgumentException("An exact astronomyEventIntelligenceId is required.");
+        if (!request.ManualValidation) throw new ArgumentException("manualValidation must be true for manual event plan creation.");
+        if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
+        if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Language is required.");
+        if (string.IsNullOrWhiteSpace(request.PlannedFormat)) throw new ArgumentException("PlannedFormat is required.");
+
+        var regionId = request.RegionId.Trim();
+        var language = request.Language.Trim();
+        var plannedFormat = request.PlannedFormat.Trim();
+        var requestedOutputs = NormalizeRequestedOutputs(request.RequestedOutputs);
+
+        var evt = await db.AstronomyEventIntelligences
+            .Include(e => e.Objects)
+            .FirstOrDefaultAsync(e => e.Id == request.AstronomyEventIntelligenceId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Astronomy event intelligence '{request.AstronomyEventIntelligenceId}' was not found.");
+
+        if (!string.Equals(evt.RegionId, regionId, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Event RegionId '{evt.RegionId ?? "n/a"}' does not match requested RegionId '{regionId}'.");
+        if (!string.IsNullOrWhiteSpace(evt.Language) && !string.Equals(evt.Language, language, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Event Language '{evt.Language}' does not match requested Language '{language}'.");
+        if (string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("NeedsManualReview events cannot be converted into content plans by this endpoint.");
+        if (!string.Equals(evt.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Only Verified events can be converted into content plans. Current VerificationStatus is '{evt.VerificationStatus}'.");
+
+        var duplicateExists = await db.ContentGenerationPlans.AnyAsync(p =>
+            p.AstronomyEventIntelligenceId == evt.Id
+            && p.RegionId == regionId
+            && p.Language == language
+            && (p.PlannedFormat ?? string.Empty) == plannedFormat
+            && !InactivePlanStatuses.Contains(p.PlanStatus)
+            && !InactivePlanStatuses.Contains(p.Status), cancellationToken);
+        if (duplicateExists)
+            throw new InvalidOperationException("An active content generation plan already exists for this astronomy event, region, language, and planned format.");
+
+        var orderedObjects = OrderEventObjects(evt.Objects).ToArray();
+        var objectNames = orderedObjects
+            .Select(o => o.ObjectName)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var objectIds = orderedObjects
+            .Select(o => o.Id)
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
+
+        var plan = new ContentGenerationPlan
+        {
+            AstronomyEventIntelligenceId = evt.Id,
+            Title = evt.Title,
+            RegionId = regionId,
+            Language = language,
+            ContentCategoryCode = string.IsNullOrWhiteSpace(evt.RecommendedCategory) ? "CosmicStoryShort" : evt.RecommendedCategory.Trim(),
+            PrimaryAstronomyEventTypeCode = evt.EventType,
+            SourceExternalEventId = evt.ExternalEventId,
+            ScheduledUtc = ResolveManualPlanSchedule(evt),
+            Priority = 40,
+            PriorityScore = evt.ContentOpportunityScore,
+            RequestedOutputTypesJson = JsonSerializer.Serialize(requestedOutputs, JsonOptions),
+            PlannedFormat = plannedFormat,
+            PlanStatus = "Draft",
+            Status = "Draft",
+            GeneratedByAi = false,
+            PlanningReason = request.Reason,
+            PlannedObjectNamesJson = JsonSerializer.Serialize(objectNames, JsonOptions),
+            SourceEventObjectIdsJson = JsonSerializer.Serialize(objectIds, JsonOptions),
+            PrimaryCelestialObjectCode = objectNames.FirstOrDefault()
+        };
+
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new CreatePlanFromEventResponse(
+            Success: true,
+            ContentGenerationPlanId: plan.Id,
+            Title: plan.Title,
+            EventType: evt.EventType,
+            RegionId: plan.RegionId,
+            Language: plan.Language,
+            RequestedOutputs: requestedOutputs,
+            ManualValidation: true);
+    }
+
     public async Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.ContentCategoryCode)) throw new ArgumentException("ContentCategoryCode is required.");
@@ -186,6 +277,42 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             ["Language"] = language
         };
     }
+
+    private static IReadOnlyList<string> NormalizeRequestedOutputs(IReadOnlyList<string>? requestedOutputs)
+    {
+        var outputs = (requestedOutputs ?? [])
+            .Select(o => o?.Trim())
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray()!;
+        return outputs.Length == 0 ? ["ShortVideo"] : outputs;
+    }
+
+    private static DateTimeOffset ResolveManualPlanSchedule(AstronomyEventIntelligence evt)
+    {
+        var referenceUtc = evt.PeakUtc ?? evt.StartUtc;
+        var scheduledUtc = referenceUtc.AddDays(-3);
+        if (scheduledUtc >= evt.StartUtc)
+            scheduledUtc = evt.StartUtc.AddDays(-1);
+
+        var now = DateTimeOffset.UtcNow;
+        if (scheduledUtc < now && (evt.EndUtc ?? evt.StartUtc) > now)
+            return now;
+
+        return scheduledUtc;
+    }
+
+    private static IEnumerable<AstronomyEventObject> OrderEventObjects(IEnumerable<AstronomyEventObject> objects)
+        => objects
+            .Select((obj, index) => new { obj, index })
+            .OrderBy(x => IsPrimaryEventObject(x.obj) ? 0 : 1)
+            .ThenBy(x => x.index)
+            .Select(x => x.obj);
+
+    private static bool IsPrimaryEventObject(AstronomyEventObject obj)
+        => string.Equals(obj.ObjectRole, "Primary", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(obj.ObjectRole, "Radiant", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(obj.ObjectType, "Radiant", StringComparison.OrdinalIgnoreCase);
 
     private static string ApplyTemplate(string template, IReadOnlyDictionary<string, string> values)
     {

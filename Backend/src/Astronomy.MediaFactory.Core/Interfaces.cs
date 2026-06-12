@@ -235,6 +235,9 @@ public interface IContentPlanningService
     Task<GenerateContentPlanResponse> GeneratePlanAsync(
         GenerateContentPlanRequest request,
         CancellationToken cancellationToken);
+    Task<CreatePlanFromEventResponse> CreatePlanFromEventAsync(
+        CreatePlanFromEventRequest request,
+        CancellationToken cancellationToken);
     Task<ContentGenerationPlan> GenerateDailyPlanAsync(
         string contentCategoryCode,
         string language,
@@ -768,6 +771,25 @@ public sealed record GenerateContentPlanResponse(
     string Status,
     string? Title,
     string? PlanningReason);
+
+public sealed record CreatePlanFromEventRequest(
+    Guid AstronomyEventIntelligenceId,
+    string RegionId,
+    string Language = "en",
+    string PlannedFormat = "ShortVideo",
+    IReadOnlyList<string>? RequestedOutputs = null,
+    bool ManualValidation = false,
+    string? Reason = null);
+
+public sealed record CreatePlanFromEventResponse(
+    bool Success,
+    Guid ContentGenerationPlanId,
+    string? Title,
+    string EventType,
+    string RegionId,
+    string Language,
+    IReadOnlyList<string> RequestedOutputs,
+    bool ManualValidation);
 
 public sealed record ContentPlanningPipelineRequestPreview(
     Guid ContentGenerationPlanId,

@@ -1235,6 +1235,25 @@ app.MapPost("/api/content-planning/generate-plan", async (GenerateContentPlanReq
         return Results.BadRequest(new { message = ex.Message });
     }
 });
+app.MapPost("/api/content-planning/create-plan-from-event", async (CreatePlanFromEventRequest request, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await planning.CreatePlanFromEventAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/run-category-preparation", async (ManualCategoryPreparationRequest request, IManualCategoryPreparationOrchestrator orchestrator, CancellationToken ct) =>
 {
     var response = await orchestrator.RunAsync(request, ct);
