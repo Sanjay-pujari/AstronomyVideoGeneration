@@ -35,7 +35,18 @@ public sealed record QuestionSceneEnrichmentDiagnostics(
     IReadOnlyList<string> ForbiddenObjectNames,
     IReadOnlyList<string> EnrichedFieldsScanned,
     IReadOnlyList<string> LeakageTermsFound,
-    string EnrichmentSource);
+    string EnrichmentSource,
+    IReadOnlyList<string>? AllowedContextTerms = null,
+    IReadOnlyList<string>? PrimaryObjects = null,
+    IReadOnlyList<string>? SecondaryObjects = null,
+    IReadOnlyList<ObjectValidationDiagnostic>? ObjectValidationDiagnostics = null);
+
+public sealed record ObjectValidationDiagnostic(
+    string ObjectName,
+    string OccurrenceSource,
+    string OccurrenceRole,
+    string AllowedBecause,
+    string ValidationResult);
 
 public sealed record EnrichedQuestionSceneDto(
     int SceneNumber,

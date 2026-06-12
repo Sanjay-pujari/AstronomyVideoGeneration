@@ -203,6 +203,58 @@ public sealed class QuestionSceneIntentEnricherTests
     }
 
     [Fact]
+    public async Task EnrichQuestionScenePlanAsync_AllowsMeteorMoonOnlyAsViewingContext()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteQuestionDrivenScenePlanAsync(workingDirectory, BuildMeteorSourcePlan());
+        var enricher = CreateEnricher(workingDirectory);
+
+        var result = await enricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            ProductionContext: BuildProductionContext(BuildMeteorIntelligence())), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Contains("Moon", result.EnrichedScenePlan.Diagnostics?.AllowedContextTerms ?? Array.Empty<string>());
+        Assert.Empty(result.EnrichedScenePlan.Diagnostics?.LeakageTermsFound ?? Array.Empty<string>());
+        Assert.Contains(result.EnrichedScenePlan.Diagnostics?.ObjectValidationDiagnostics ?? Array.Empty<ObjectValidationDiagnostic>(), diagnostic =>
+            diagnostic.ObjectName == "Moon"
+            && diagnostic.OccurrenceRole == "ContextTerm"
+            && diagnostic.ValidationResult == "Pass");
+    }
+
+    [Fact]
+    public async Task EnrichQuestionScenePlanAsync_RejectsMeteorMoonAsDrawableObject()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        var sourcePlan = BuildMeteorSourcePlan();
+        var plan = sourcePlan with
+        {
+            Scenes = new[]
+            {
+                BuildScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "Show the Moon as a large bright object behind the Geminids meteor shower.")
+            }.Concat(sourcePlan.Scenes.Skip(1)).ToArray()
+        };
+        await WriteQuestionDrivenScenePlanAsync(workingDirectory, plan);
+        var enricher = CreateEnricher(workingDirectory);
+
+        var result = await enricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            ProductionContext: BuildProductionContext(BuildMeteorIntelligence())), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Contains("Moon", result.EnrichedScenePlan.Diagnostics?.LeakageTermsFound ?? Array.Empty<string>());
+        Assert.Contains(result.Warnings, warning => warning.Contains("Moon", StringComparison.OrdinalIgnoreCase) && warning.Contains("DrawableObject", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task EnrichQuestionScenePlanAsync_UsesActualPlanetPairingObjects()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -242,6 +294,20 @@ public sealed class QuestionSceneIntentEnricherTests
         ],
         DateTimeOffset.Parse("2026-06-07T14:00:00Z"));
 
+    private static QuestionDrivenScenePlanDto BuildMeteorSourcePlan() => new(
+        EventId,
+        RegionId,
+        "en",
+        [
+            BuildScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "The Geminids meteor shower peaks with many meteor streaks in a dark sky."),
+            BuildScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Look toward the radiant and keep as much open dark sky in view as possible."),
+            BuildScene(3, AstronomyQuestionTypes.When, "TimingGuide", "When is the best time?", "Best viewing is after midnight into the pre-dawn hours."),
+            BuildScene(4, AstronomyQuestionTypes.How, "ObservationGuide", "How can I watch?", "No telescope is needed; find a dark location and let your eyes adapt."),
+            BuildScene(5, AstronomyQuestionTypes.Why, "Significance", "Why is it special?", "Low Moon interference and only 22.5% moon illumination make faint Geminids meteor streaks easier to see."),
+            BuildScene(6, AstronomyQuestionTypes.Action, "ClosingAction", "What should I do now?", "Save the viewing window, check weather, and choose a dark-sky spot.")
+        ],
+        DateTimeOffset.Parse("2026-12-14T00:00:00Z"));
+
     private static QuestionDrivenScenePlanDto BuildFullMoonSourcePlan() => new(
         EventId,
         RegionId,
@@ -266,6 +332,34 @@ public sealed class QuestionSceneIntentEnricherTests
         Language: "en",
         EventType: intelligence.EventType,
         ProductionEventIntelligence: intelligence);
+
+    private static ProductionEventIntelligence BuildMeteorIntelligence() => new(
+        Domain: "Astronomy",
+        EventType: "MeteorShower",
+        Title: "Geminids Meteor Shower Peak",
+        ShortTitle: "Geminids",
+        EventDate: DateTimeOffset.Parse("2026-12-14T00:00:00Z"),
+        PeakUtc: DateTimeOffset.Parse("2026-12-14T00:00:00Z"),
+        LocalPeakTime: "5:30 AM IST",
+        BestViewingWindowLocal: "midnight to pre-dawn",
+        SkyDirectionHint: "radiant high overhead",
+        VisibilityRegion: RegionId,
+        PrimaryObjects: ["Geminids"],
+        SecondaryObjects: ["Meteors"],
+        ViewingQuality: "Good",
+        MoonInterference: "Low",
+        MoonIlluminationPercent: 22.5m,
+        ScientificContext: "Meteor shower with low moonlight impact.",
+        ViewerInstructions: ["Find a dark sky"],
+        VisualMotifs: ["meteor streaks", "radiant", "dark sky"],
+        SceneStrategy: ["MeteorShower"],
+        QualityWarnings: ["Moonlight estimate is low"],
+        ForbiddenTerms: ["Venus", "Jupiter", "conjunction"],
+        StrategyId: "MeteorShower",
+        ResolvedObjectNames: ["Geminids", "Meteors"],
+        ForbiddenObjectNames: ["Venus", "Jupiter"],
+        RequiredVisualObjects: ["meteor streaks", "radiant", "dark sky", "viewing window"],
+        RequiredNarrationFacts: ["moonInterference", "moonIlluminationPercent"]);
 
     private static ProductionEventIntelligence BuildFullMoonIntelligence() => new(
         Domain: "Astronomy",
