@@ -523,8 +523,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
         foreach (var profile in new[] { "short", "long" })
         {
-            var sceneRoot = Path.Combine(outputRoot, "scene-approval-v3", profile);
-            if (!Directory.Exists(sceneRoot) || !Directory.EnumerateFiles(sceneRoot, "scene-*.png").Any()) errors.Add($"{profile} scenes were not materialized in the production plan folder.");
+            var profileSceneRoot = Path.Combine(outputRoot, "scene-approval-v3", profile);
+            if (!Directory.Exists(profileSceneRoot) || !Directory.EnumerateFiles(profileSceneRoot, "scene-*.png").Any()) errors.Add($"{profile} scenes were not materialized in the production plan folder.");
             var video = Path.Combine(outputRoot, "video-assembly", profile, profile == "short" ? "final-video-short.mp4" : "final-video-long.mp4");
             if (!File.Exists(video)) errors.Add($"{profile} final video is missing from the production plan folder.");
         }
