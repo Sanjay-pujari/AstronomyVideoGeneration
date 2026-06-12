@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -563,8 +564,101 @@ public sealed class ContentPlanBatchGenerationService(
     }
 
     private static bool IsManualValidationPlan(ContentGenerationPlan plan)
-        => !plan.GeneratedByAi
-            && plan.PlanningReason?.Contains("manual validation", StringComparison.OrdinalIgnoreCase) == true;
+    {
+        if (TryReadManualValidationFlag(plan, out var manualValidation))
+            return manualValidation;
+
+        return !plan.GeneratedByAi
+            && IsManualValidationPlanningReason(plan.PlanningReason);
+    }
+
+    private static bool IsManualValidationPlanningReason(string? planningReason)
+        => ContainsAny(planningReason, "manual validation", "validation", "V1.", "Astronomy V");
+
+    private static bool ContainsAny(string? value, params string[] needles)
+        => !string.IsNullOrWhiteSpace(value)
+            && needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
+
+    private static bool TryReadManualValidationFlag(ContentGenerationPlan plan, out bool manualValidation)
+    {
+        manualValidation = false;
+
+        foreach (var propertyName in new[] { "ManualValidation", "IsManualValidation" })
+        {
+            var property = plan.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (property?.PropertyType == typeof(bool))
+            {
+                manualValidation = (bool)property.GetValue(plan)!;
+                return true;
+            }
+
+            if (property?.PropertyType == typeof(bool?))
+            {
+                var value = (bool?)property.GetValue(plan);
+                if (value.HasValue)
+                {
+                    manualValidation = value.Value;
+                    return true;
+                }
+            }
+        }
+
+        var metadataJson = ReadOptionalStringProperty(plan, "MetadataJson");
+        return TryReadManualValidationFlagFromMetadata(metadataJson, out manualValidation);
+    }
+
+    private static string? ReadOptionalStringProperty(object? value, string propertyName)
+        => value?.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(value) as string;
+
+    private static bool TryReadManualValidationFlagFromMetadata(string? metadataJson, out bool manualValidation)
+    {
+        manualValidation = false;
+        if (string.IsNullOrWhiteSpace(metadataJson)) return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(metadataJson);
+            return TryReadManualValidationFlagFromElement(document.RootElement, out manualValidation);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadManualValidationFlagFromElement(JsonElement element, out bool manualValidation)
+    {
+        manualValidation = false;
+        if (element.ValueKind != JsonValueKind.Object) return false;
+
+        if (TryReadBooleanProperty(element, "manualValidation", out manualValidation)
+            || TryReadBooleanProperty(element, "isManualValidation", out manualValidation))
+            return true;
+
+        if (element.TryGetProperty("metadata", out var nestedMetadata))
+            return TryReadManualValidationFlagFromElement(nestedMetadata, out manualValidation);
+
+        return false;
+    }
+
+    private static bool TryReadBooleanProperty(JsonElement element, string propertyName, out bool value)
+    {
+        value = false;
+
+        if (!element.TryGetProperty(propertyName, out var property))
+            return false;
+
+        if (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
+        {
+            value = property.GetBoolean();
+            return true;
+        }
+
+        if (property.ValueKind == JsonValueKind.String && bool.TryParse(property.GetString(), out value))
+            return true;
+
+        return false;
+    }
 
     private static bool IsExactPlanTitleTarget(ContentGenerationPlan plan, string requestedTitle, int requestedTitleCount)
         => requestedTitleCount == 1

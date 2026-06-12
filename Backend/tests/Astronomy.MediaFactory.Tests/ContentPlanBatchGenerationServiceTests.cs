@@ -157,6 +157,38 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.False(legacy.WasCalled);
     }
 
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_AstronomyVValidationReason_BypassesAutoGenerateAllowedWithWarning()
+    {
+        await using var db = CreateDb();
+        var intelligence = SeedManualValidationPlan(db, planningReason: "Astronomy V1.2 Planet Grouping validation");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            DryRun: true,
+            UseProductionPipeline: true,
+            PlanId: ManualValidationPlanId), CancellationToken.None);
+
+        var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(ManualValidationPlanId, response.PlanId);
+        Assert.Equal(ManualValidationPlanId, Assert.Single(response.SelectedPlans).ContentGenerationPlanId);
+        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
+            && warning.Selected
+            && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal(ManualValidationPlanId, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
     [Fact]
     public async Task GenerateFromPlansAsync_PartialManualValidationTitle_DoesNotBypassAutoGenerateAllowed()
     {
@@ -945,7 +977,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
-    private static AstronomyEventIntelligence SeedManualValidationPlan(MediaFactoryDbContext db, bool generatedByAi = false)
+    private static AstronomyEventIntelligence SeedManualValidationPlan(MediaFactoryDbContext db, bool generatedByAi = false, string planningReason = "Astronomy V1.2 manual validation")
     {
         var intelligence = new AstronomyEventIntelligence
         {
@@ -981,7 +1013,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Priority = 40,
             PriorityScore = 8,
             GeneratedByAi = generatedByAi,
-            PlanningReason = "Astronomy V1.2 manual validation",
+            PlanningReason = planningReason,
             AstronomyEventIntelligenceId = intelligence.Id,
             AstronomyEventIntelligence = intelligence,
             SourceExternalEventId = "planet-grouping-udaipur-2026",
