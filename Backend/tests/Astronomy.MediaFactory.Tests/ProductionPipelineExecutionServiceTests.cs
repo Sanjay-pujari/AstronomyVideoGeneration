@@ -81,6 +81,29 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Contains(completion, item => item.OutputType == "Thumbnail" && item.Requested && item.Status == "Succeeded");
     }
 
+
+    [Theory]
+    [InlineData("MeteorShower", "Perseids Tonight", "MeteorShower")]
+    [InlineData("PlanetPairing", "Venus Jupiter Pairing", "PlanetPairing")]
+    [InlineData("Comet", "Comet Tonight", "Comet")]
+    [InlineData("Eclipse", "Eclipse Tonight", "Eclipse")]
+    public void BuildDurationTargetedShortNarration_UsesDynamicFacts_AndTargetsProfileRange(string eventType, string shortTitle, string expectedEventType)
+    {
+        var context = CreateContext(eventType, ["ShortVideo"], shortTitle);
+        var buildMethod = typeof(ProductionPipelineExecutionService).GetMethod("BuildDurationTargetedShortNarration", BindingFlags.NonPublic | BindingFlags.Static);
+        var estimateMethod = typeof(ProductionPipelineExecutionService).GetMethod("EstimateShortNarrationSeconds", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var narration = (string)buildMethod!.Invoke(null, [context])!;
+        var estimatedSeconds = (double)estimateMethod!.Invoke(null, [narration])!;
+
+        Assert.Contains(expectedEventType, narration);
+        Assert.Contains(shortTitle, narration);
+        Assert.Contains("western sky", narration);
+        Assert.Contains("9 PM", narration);
+        Assert.Contains("check clouds", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.InRange(estimatedSeconds, 30.0, 40.0);
+    }
+
     private static bool IsPhaseRequired(ProductionPhaseContext context, int phaseNo)
     {
         var method = typeof(ProductionPipelineExecutionService).GetMethod("IsPhaseRequiredForRequestedOutputs", BindingFlags.NonPublic | BindingFlags.Static);
@@ -95,7 +118,7 @@ public sealed class ProductionPipelineExecutionServiceTests
         return (IReadOnlyList<RequestedOutputCompletion>)method.Invoke(null, [context, phaseResults])!;
     }
 
-    private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs)
+    private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null)
     {
         var planId = Guid.NewGuid();
         var outputRoot = Path.Combine(Path.GetTempPath(), "astro-pulse-phase-gating-tests", planId.ToString("N"));
@@ -103,7 +126,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             planId,
             "AstronomyEvent",
             $"Current {eventType} Event",
-            $"{eventType} Tonight",
+            shortTitleOverride ?? $"{eventType} Tonight",
             eventType,
             "us",
             "en",
