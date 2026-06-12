@@ -1338,7 +1338,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             : "It matters because the view is clear, timely, and easy to recognize.";
     }
 
-    private static IReadOnlyList<VideoNarrationSceneScriptDto> NormalizeShortFormSceneDurations(IReadOnlyList<VideoNarrationSceneScriptDto> sceneScripts, double targetDurationSeconds)
+    private IReadOnlyList<VideoNarrationSceneScriptDto> NormalizeShortFormSceneDurations(IReadOnlyList<VideoNarrationSceneScriptDto> sceneScripts, double targetDurationSeconds)
     {
         var estimatedDurations = sceneScripts.Select(scene => Math.Max(0.5, EstimateSpokenDurationSeconds(scene.Narration))).ToArray();
         var total = estimatedDurations.Sum();
