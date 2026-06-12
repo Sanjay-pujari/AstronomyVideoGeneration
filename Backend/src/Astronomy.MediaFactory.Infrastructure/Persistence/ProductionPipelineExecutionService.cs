@@ -238,6 +238,15 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string BuildEnrichedScenePlanPath(ProductionPhaseContext context)
         => Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");
 
+    private static string BuildLongNarrationRequestPath(ProductionPhaseContext context)
+        => Path.Combine(context.ExecutionContext.NarrationRoot!, "long", "long-narration-request.json");
+
+    private static string BuildLongNarrationOutputPath(ProductionPhaseContext context)
+        => Path.Combine(context.ExecutionContext.NarrationRoot!, "long", "narration.txt");
+
+    private static string BuildLongSceneApprovalRoot(ProductionPhaseContext context)
+        => Path.Combine(context.ExecutionContext.SceneRoot!, "long");
+
     private static async Task ValidatePhase6EnrichedScenePlanContractAsync(ProductionPhaseContext context, string enrichedPath, CancellationToken cancellationToken)
     {
         if (!File.Exists(enrichedPath))
@@ -513,16 +522,47 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
-        var intelligence = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Intelligence" : "LongFormIntelligence"), cancellationToken);
+        var intelligenceRequest = BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Intelligence" : "LongFormIntelligence");
+        var scriptRequest = BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Script" : "LongFormScript");
+        if (profile == ScenePresentationProfile.LongForm)
+        {
+            var requestPath = await WriteLongNarrationRequestAsync(context, scriptRequest, cancellationToken);
+            outputs.Add(requestPath);
+        }
+
+        var intelligence = await videoAssemblyEngine.GenerateVideoAssemblyAsync(intelligenceRequest, cancellationToken);
         outputs.AddRange(intelligence.GeneratedFiles);
-        var script = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Script" : "LongFormScript"), cancellationToken);
+        var script = await videoAssemblyEngine.GenerateVideoAssemblyAsync(scriptRequest, cancellationToken);
+        if (script is null)
+            throw new InvalidOperationException(profile == ScenePresentationProfile.LongForm ? "Long narration generation returned empty output." : "Short narration generation returned empty output.");
+        if (profile == ScenePresentationProfile.LongForm && !script.VideoNarrationScriptGenerated && string.IsNullOrWhiteSpace(script.VideoNarrationScriptPath))
+            throw new InvalidOperationException("Long narration generation returned empty output.");
+
         outputs.AddRange(script.GeneratedFiles);
         var scriptPath = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-narration-script.json") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-narration-script.json");
         var target = Path.Combine(context.ExecutionContext.NarrationRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.txt");
         CopyFile(scriptPath, target, outputs, jsonNarrationToText: true);
+        if (profile == ScenePresentationProfile.LongForm && (!File.Exists(target) || string.IsNullOrWhiteSpace(await File.ReadAllTextAsync(target, cancellationToken))))
+            throw new InvalidOperationException("Long narration generation returned empty output.");
+
         var validationPath = await ValidateNarrationContractAsync(context, profile, scriptPath, target, cancellationToken);
         outputs.Add(validationPath);
         return outputs;
+    }
+
+    private static async Task<string> WriteLongNarrationRequestAsync(ProductionPhaseContext context, VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var path = BuildLongNarrationRequestPath(context);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+        {
+            narrationRequestBuilt = true,
+            narrationInputScenePlanPath = NormalizePath(BuildEnrichedScenePlanPath(context)),
+            narrationInputSceneApprovalRoot = NormalizePath(BuildLongSceneApprovalRoot(context)),
+            narrationOutputPath = NormalizePath(BuildLongNarrationOutputPath(context)),
+            request
+        }, JsonOptions), cancellationToken);
+        return path;
     }
 
     private async Task<string> ValidateNarrationContractAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
@@ -538,6 +578,9 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         else
         {
+            if (!File.Exists(narrationPath) || string.IsNullOrWhiteSpace(await File.ReadAllTextAsync(narrationPath, cancellationToken)))
+                throw new InvalidOperationException("Long narration generation returned empty output.");
+
             var initial = await BuildNarrationValidationReportAsync(context, profile, scriptPath, narrationPath, false, cancellationToken);
             if (initial.EstimatedDurationSeconds < LongNarrationMinimumSeconds || initial.WordCount < ResolveLongNarrationMinimumWords())
                 expansionApplied = await ExpandLongNarrationBeforeValidationAsync(context, scriptPath, narrationPath, cancellationToken);
@@ -803,6 +846,14 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private sealed record Phase14NarrationDiagnostics(
+        bool NarrationRequestBuilt,
+        string NarrationRequestPath,
+        string NarrationInputScenePlanPath,
+        string NarrationInputSceneApprovalRoot,
+        string NarrationOutputPath,
+        bool NarrationFileExists,
+        int GeneratedNarrationTextLength,
+        int GeneratedNarrationWordCount,
         int WordCount,
         double EstimatedSeconds,
         double MinSeconds,
@@ -812,17 +863,45 @@ public sealed partial class ProductionPipelineExecutionService(
         bool ExpansionApplied,
         bool FinalValidationPassed);
 
-    private Phase14NarrationDiagnostics? ReadPhase14NarrationDiagnostics(IReadOnlyList<string> outputFiles, ProductionPhaseContext context)
+    private Phase14NarrationDiagnostics ReadPhase14NarrationDiagnostics(IReadOnlyList<string> outputFiles, ProductionPhaseContext context)
     {
+        var requestPath = BuildLongNarrationRequestPath(context);
+        var outputPath = BuildLongNarrationOutputPath(context);
+        var narrationFileExists = File.Exists(outputPath);
+        var narrationText = narrationFileExists ? File.ReadAllText(outputPath).Trim() : string.Empty;
+        var generatedWordCount = CountSpokenWords(narrationText);
+        var wordsPerMinute = ResolveLongNarrationWordsPerMinute();
+        var estimatedSeconds = EstimateLongNarrationSeconds(generatedWordCount);
         var path = outputFiles.FirstOrDefault(p => string.Equals(Path.GetFileName(p), "narration-validation.json", StringComparison.OrdinalIgnoreCase))
             ?? Path.Combine(context.ExecutionContext.NarrationRoot!, "long", "narration-validation.json");
-        if (!File.Exists(path)) return null;
-        try
+
+        NarrationValidationReport? report = null;
+        if (File.Exists(path))
         {
-            var report = JsonSerializer.Deserialize<NarrationValidationReport>(File.ReadAllText(path), JsonOptions);
-            return report is null ? null : new Phase14NarrationDiagnostics(report.WordCount, report.EstimatedDurationSeconds, report.MinimumDurationSeconds, report.MaximumDurationSeconds, report.TargetSeconds, report.WordsPerMinute, report.ExpansionApplied, report.FinalValidationPassed);
+            try
+            {
+                report = JsonSerializer.Deserialize<NarrationValidationReport>(File.ReadAllText(path), JsonOptions);
+            }
+            catch (JsonException) { }
         }
-        catch (JsonException) { return null; }
+
+        return new Phase14NarrationDiagnostics(
+            NarrationRequestBuilt: File.Exists(requestPath),
+            NarrationRequestPath: NormalizePath(requestPath),
+            NarrationInputScenePlanPath: NormalizePath(BuildEnrichedScenePlanPath(context)),
+            NarrationInputSceneApprovalRoot: NormalizePath(BuildLongSceneApprovalRoot(context)),
+            NarrationOutputPath: NormalizePath(outputPath),
+            NarrationFileExists: narrationFileExists,
+            GeneratedNarrationTextLength: narrationText.Length,
+            GeneratedNarrationWordCount: generatedWordCount,
+            WordCount: report?.WordCount ?? generatedWordCount,
+            EstimatedSeconds: report?.EstimatedDurationSeconds ?? estimatedSeconds,
+            MinSeconds: report?.MinimumDurationSeconds ?? LongNarrationMinimumSeconds,
+            MaxSeconds: report?.MaximumDurationSeconds ?? LongNarrationMaximumSeconds,
+            TargetSeconds: report?.TargetSeconds ?? ResolveLongNarrationTargetSeconds(),
+            WordsPerMinute: report is not null && report.WordsPerMinute > 0 ? report.WordsPerMinute : wordsPerMinute,
+            ExpansionApplied: report?.ExpansionApplied ?? false,
+            FinalValidationPassed: report?.FinalValidationPassed ?? false);
     }
 
     private sealed record NarrationValidationReport(
