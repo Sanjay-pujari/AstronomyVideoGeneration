@@ -1204,14 +1204,21 @@ public sealed partial class ProductionPipelineExecutionService(
             canRetry,
             phase7NarrationDiagnostics,
             phase12ThumbnailDiagnostics,
+            currentEventLock = phase12ThumbnailDiagnostics?.CurrentEventLock,
             thumbnailRequestTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestTitle,
             thumbnailRequestShortTitle = phase12ThumbnailDiagnostics?.ThumbnailRequestShortTitle,
+            thumbnailEventType = phase12ThumbnailDiagnostics?.ThumbnailEventType,
             thumbnailPrimaryObjects = phase12ThumbnailDiagnostics?.ThumbnailPrimaryObjects,
+            thumbnailSecondaryObjects = phase12ThumbnailDiagnostics?.ThumbnailSecondaryObjects,
             thumbnailSourceManifestPath = phase12ThumbnailDiagnostics?.ThumbnailSourceManifestPath,
             thumbnailSourceScenePath = phase12ThumbnailDiagnostics?.ThumbnailSourceScenePath,
+            visualResolverResult = phase12ThumbnailDiagnostics?.VisualResolverResult,
             visualObjectsUsed = phase12ThumbnailDiagnostics?.VisualObjectsUsed,
             labelsUsed = phase12ThumbnailDiagnostics?.LabelsUsed,
+            textUsed = phase12ThumbnailDiagnostics?.TextUsed,
             forbiddenObjectsDetected = phase12ThumbnailDiagnostics?.ForbiddenObjectsDetected,
+            goldenPilotLeakageDetected = phase12ThumbnailDiagnostics?.GoldenPilotLeakageDetected,
+            semanticValidationPassed = phase12ThumbnailDiagnostics?.SemanticValidationPassed,
             phase10TitleDiagnostics,
             titleFoundInCaptionText = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInCaptionText"),
             titleFoundInViewerTakeaway = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInViewerTakeaway"),
@@ -1244,14 +1251,21 @@ public sealed partial class ProductionPipelineExecutionService(
         }
 
         return new Phase12ThumbnailDiagnostics(
+            CurrentEventLock: GetFact(facts, "currentEventLock", string.Empty),
             ThumbnailRequestTitle: GetFact(facts, "thumbnailRequestTitle", context.ProductionEventIntelligence.Title),
             ThumbnailRequestShortTitle: GetFact(facts, "thumbnailRequestShortTitle", context.ProductionEventIntelligence.ShortTitle),
+            ThumbnailEventType: GetFact(facts, "thumbnailEventType", context.ProductionEventIntelligence.EventType),
             ThumbnailPrimaryObjects: SplitFact(GetFact(facts, "thumbnailPrimaryObjects", string.Join(", ", context.ProductionEventIntelligence.PrimaryObjects))),
+            ThumbnailSecondaryObjects: SplitFact(GetFact(facts, "thumbnailSecondaryObjects", string.Join(", ", context.ProductionEventIntelligence.SecondaryObjects))),
             ThumbnailSourceManifestPath: GetFact(facts, "thumbnailSourceManifestPath", NormalizePath(manifestPath)),
             ThumbnailSourceScenePath: GetFact(facts, "thumbnailSourceScenePath", string.Empty),
+            VisualResolverResult: GetFact(facts, "visualResolverResult", string.Empty),
             VisualObjectsUsed: SplitFact(GetFact(facts, "visualObjectsUsed", string.Join(", ", context.ProductionEventIntelligence.PrimaryObjects.Concat(context.ProductionEventIntelligence.SecondaryObjects)))),
             LabelsUsed: SplitFact(GetFact(facts, "labelsUsed", context.ProductionEventIntelligence.ShortTitle)),
-            ForbiddenObjectsDetected: SplitFact(GetFact(facts, "forbiddenObjectsDetected", string.Empty)));
+            TextUsed: SplitFact(GetFact(facts, "textUsed", context.ProductionEventIntelligence.ShortTitle).Replace(" | ", ", ", StringComparison.OrdinalIgnoreCase)),
+            ForbiddenObjectsDetected: SplitFact(GetFact(facts, "forbiddenObjectsDetected", string.Empty)),
+            GoldenPilotLeakageDetected: bool.TryParse(GetFact(facts, "goldenPilotLeakageDetected", "false"), out var goldenLeakage) && goldenLeakage,
+            SemanticValidationPassed: bool.TryParse(GetFact(facts, "semanticValidationPassed", "false"), out var semanticPassed) && semanticPassed);
     }
 
     private static string GetFact(IReadOnlyDictionary<string, string> facts, string key, string fallback)
@@ -1263,14 +1277,21 @@ public sealed partial class ProductionPipelineExecutionService(
             : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
     private sealed record Phase12ThumbnailDiagnostics(
+        string CurrentEventLock,
         string ThumbnailRequestTitle,
         string ThumbnailRequestShortTitle,
+        string ThumbnailEventType,
         IReadOnlyList<string> ThumbnailPrimaryObjects,
+        IReadOnlyList<string> ThumbnailSecondaryObjects,
         string ThumbnailSourceManifestPath,
         string ThumbnailSourceScenePath,
+        string VisualResolverResult,
         IReadOnlyList<string> VisualObjectsUsed,
         IReadOnlyList<string> LabelsUsed,
-        IReadOnlyList<string> ForbiddenObjectsDetected);
+        IReadOnlyList<string> TextUsed,
+        IReadOnlyList<string> ForbiddenObjectsDetected,
+        bool GoldenPilotLeakageDetected,
+        bool SemanticValidationPassed);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
     {
