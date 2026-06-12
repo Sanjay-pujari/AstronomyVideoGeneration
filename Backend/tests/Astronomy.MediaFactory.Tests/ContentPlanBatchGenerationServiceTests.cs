@@ -383,6 +383,47 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.False(legacy.WasCalled);
     }
 
+
+    [Fact]
+    public async Task ExecuteContentPlanWithProductionPipelineAsync_RebuildOutputs_ExpandsRequestedRangeForPrerequisites()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-rebuild-range-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var service = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new ThrowingProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance);
+
+            var response = await service.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
+                GeminidsPlanId,
+                DryRun: true,
+                OverwriteExisting: true,
+                StartPhaseNo: 10,
+                EndPhaseNo: 12,
+                ExecutionMode: ContentPlanExecutionMode.RebuildOutputs,
+                AllowCompletedPlanRerun: true), CancellationToken.None);
+
+            Assert.True(response.Success);
+            Assert.Equal(10, response.RequestedStartPhase);
+            Assert.Equal(12, response.RequestedEndPhase);
+            Assert.Equal(5, response.ExpandedStartPhase);
+            Assert.Equal(12, response.ExpandedEndPhase);
+            Assert.True(response.DependencyExpansionApplied);
+            Assert.Equal(5, response.StartPhaseNo);
+            Assert.Equal(12, response.EndPhaseNo);
+            Assert.Contains("Expanded rebuild range from 10-12 to 5-12 due to prerequisite dependencies.", response.Warnings);
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task GenerateFromPlansAsync_ProductionCompletedWithoutExplicitFlag_IsRejected()
     {
@@ -769,6 +810,12 @@ public sealed class ContentPlanBatchGenerationServiceTests
             CapturedArchivePreviousRun = request.ArchivePreviousRun;
             return ExecuteContentPlanAsync(request.ContentGenerationPlanId, request.DryRun, request.OverwriteExisting, cancellationToken);
         }
+    }
+
+    private sealed class ThrowingProductionPipelineExecutionService : IProductionPipelineExecutionService
+    {
+        public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("Dry-run range expansion should not execute the production pipeline.");
     }
 
     private sealed class ThrowingLegacyPipeline : IAstronomyAssetPlanningService, IAstronomyAssetProductionJobService, IVisualAssetGenerationService, ISceneRenderer

@@ -86,12 +86,15 @@ public sealed class ContentPlanBatchGenerationService(
 
             logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", selectedPlans[0].ContentGenerationPlanId);
 
+            var requestedStartPhaseNo = ResolveStartPhaseNo(request, executionMode);
+            var requestedEndPhaseNo = ResolveEndPhaseNo(request);
+
             var execution = await productionExecution.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
                 selectedPlans[0].ContentGenerationPlanId,
                 request.DryRun,
                 request.OverwriteExisting,
-                ResolveStartPhaseNo(request, executionMode),
-                ResolveEndPhaseNo(request),
+                requestedStartPhaseNo,
+                requestedEndPhaseNo,
                 executionMode == ContentPlanExecutionMode.RetryFailed || recoveryMode || request.RetryFailedOnly,
                 executionMode,
                 request.AllowCompletedPlanRerun,
@@ -138,7 +141,12 @@ public sealed class ContentPlanBatchGenerationService(
                 DeletedOutputFolders: execution.DeletedOutputFolders,
                 StartPhaseNo: execution.StartPhaseNo,
                 EndPhaseNo: execution.EndPhaseNo,
-                RequestedOutputCompletion: execution.RequestedOutputCompletion);
+                RequestedOutputCompletion: execution.RequestedOutputCompletion,
+                RequestedStartPhase: execution.RequestedStartPhase ?? requestedStartPhaseNo,
+                RequestedEndPhase: execution.RequestedEndPhase ?? requestedEndPhaseNo,
+                ExpandedStartPhase: execution.ExpandedStartPhase ?? execution.StartPhaseNo ?? requestedStartPhaseNo,
+                ExpandedEndPhase: execution.ExpandedEndPhase ?? execution.EndPhaseNo ?? requestedEndPhaseNo,
+                DependencyExpansionApplied: execution.DependencyExpansionApplied);
         }
 
         logger.LogInformation("Using placeholder planning pipeline");
@@ -475,6 +483,7 @@ public sealed class ContentPlanBatchGenerationService(
     }
 
     private static int ResolveEndPhaseNo(BatchGenerateFromPlansRequest request) => request.EndPhaseNo ?? 19;
+
 
     private TimeSpan ResolveRunningPlanRecoveryStaleAfter(BatchGenerateFromPlansRequest request)
     {

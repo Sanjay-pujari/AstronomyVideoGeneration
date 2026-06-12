@@ -81,7 +81,12 @@ public sealed record BatchGenerateFromPlansResponse(
     IReadOnlyList<string>? DeletedOutputFolders = null,
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
-    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null);
+    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null,
+    int? RequestedStartPhase = null,
+    int? RequestedEndPhase = null,
+    int? ExpandedStartPhase = null,
+    int? ExpandedEndPhase = null,
+    bool DependencyExpansionApplied = false);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -204,7 +209,9 @@ public sealed record ContentPlanProductionExecutionRequest(
     ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
     bool AllowCompletedPlanRerun = false,
     bool ArchivePreviousRun = false,
-    bool RebuildIntelligence = false);
+    bool RebuildIntelligence = false,
+    int? RequestedStartPhaseNo = null,
+    int? RequestedEndPhaseNo = null);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,
@@ -272,7 +279,9 @@ public sealed record ProductionPipelineRequest(
     ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
     bool AllowCompletedPlanRerun = false,
     bool ArchivePreviousRun = false,
-    bool RebuildIntelligence = false);
+    bool RebuildIntelligence = false,
+    int? RequestedStartPhaseNo = null,
+    int? RequestedEndPhaseNo = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProductionPhaseStatus
@@ -396,7 +405,12 @@ public sealed record ContentPlanProductionExecutionResult(
     IReadOnlyList<string>? DeletedOutputFolders = null,
     int? StartPhaseNo = null,
     int? EndPhaseNo = null,
-    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null);
+    IReadOnlyList<RequestedOutputCompletion>? RequestedOutputCompletion = null,
+    int? RequestedStartPhase = null,
+    int? RequestedEndPhase = null,
+    int? ExpandedStartPhase = null,
+    int? ExpandedEndPhase = null,
+    bool DependencyExpansionApplied = false);
 
 
 public sealed record RequestedOutputCompletion(
