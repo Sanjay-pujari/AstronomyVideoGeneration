@@ -384,7 +384,7 @@ public sealed class PlanetGroupingStrategy : MediaEventStrategyBase
         var objects = Objects(intelligence, "the visible planets");
         var objectPhrase = JoinNatural(objects);
         var anchor = objects.FirstOrDefault() ?? "the brightest planet";
-        var direction = FormattedDirection(intelligence);
+        var where = PlanetGroupingWhereAnswer(intelligence);
         var window = ViewingTime(intelligence, context);
         var why = intelligence.AngularSeparationDegrees.HasValue
             ? $"The grouping spans about {intelligence.AngularSeparationDegrees.Value:0.##}° at its tightest, making several planets share one guided viewing window."
@@ -393,12 +393,20 @@ public sealed class PlanetGroupingStrategy : MediaEventStrategyBase
         return CreateSet(intelligence, context,
         [
             Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objectPhrase} form a planet grouping in {context.LocationName}’s sky.", 1),
-            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward {direction}, then follow the group across the same part of the sky.", 2),
+            Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", where, 2),
             Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is {window}, when the planet group is above the horizon.", 3),
             Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", $"Start with {anchor}, then scan along the nearby bright points; labels should match the actual planets only.", 4),
             Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", why, 5),
             Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", "Save the viewing window, check for a clear horizon, and watch the full planet grouping.", 6)
         ]);
+    }
+
+    private static string PlanetGroupingWhereAnswer(ProductionEventIntelligence intelligence)
+    {
+        if (string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint))
+            return "Look along the clearest horizon and scan the arc above the horizon where the grouped planets appear.";
+
+        return $"Look toward {FormattedDirection(intelligence)}, then scan the arc above the horizon where the grouped planets appear.";
     }
 }
 

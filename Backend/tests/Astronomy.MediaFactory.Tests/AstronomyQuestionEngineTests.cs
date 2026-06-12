@@ -309,6 +309,49 @@ public sealed class AstronomyQuestionEngineTests
     }
 
 
+    [Fact]
+    public async Task GenerateQuestionAnswersAsync_PlanetGroupingWithoutDirectionUsesHorizonArcGuidanceAndPassesValidation()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "PLANET_GROUPING_NO_DIRECTION",
+            eventType: "PLANET_GROUPING",
+            objectName: "Venus",
+            metadataJson: """
+                {
+                  "bestViewingWindowLocal": "2026-06-07 19:30–21:00 IST"
+                }
+                """);
+        evt.Title = "Planet grouping over Udaipur";
+        evt.TimeZone = "Asia/Kolkata";
+        evt.LocationName = "Udaipur";
+        evt.PeakUtc = DateTimeOffset.Parse("2026-06-07T14:00:00Z");
+        evt.Objects.Add(new AstronomyEventObject { ObjectName = "Mars", ObjectType = "Planet", Magnitude = -1m });
+        evt.Objects.Add(new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", Magnitude = -2m });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, workingDirectory);
+        var generated = await service.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventIds: [evt.EventCode],
+            DryRun: true), CancellationToken.None);
+        var approved = await service.ValidateQuestionAnswerSetAsync(new QuestionAnswerValidationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventId: evt.EventCode,
+            Language: "en"), CancellationToken.None);
+
+        var whereAnswer = generated.QuestionSets.Single().Answers.Single(a => a.QuestionType == AstronomyQuestionTypes.Where).AnswerText;
+
+        Assert.Equal("Look along the clearest horizon and scan the arc above the horizon where the grouped planets appear.", whereAnswer);
+        Assert.Contains("horizon", whereAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("arc", whereAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.True(approved.IsApproved, string.Join(" | ", approved.Checks.SelectMany(c => c.Issues)));
+    }
+
+
+
     [Theory]
     [MemberData(nameof(EventQuestionCases))]
     public async Task GenerateQuestionAnswersAsync_StrategyDrivenEventTypesPassValidation(
