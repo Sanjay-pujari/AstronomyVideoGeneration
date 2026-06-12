@@ -13,8 +13,13 @@ public sealed class VisualSourceResolverTests
         Assert.False(result.GenericFallbackAllowed);
         Assert.Contains("Moon", result.RequiredDrawableObjects);
         Assert.Contains("Moon.FullMoon", result.ScientificAssetKeys);
-        Assert.Contains("large visible full moon", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("realistic full Moon visual source", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("crater texture", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Wolf Moon", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.RealisticObjectRequired);
+        Assert.False(result.AllowPrimitivePlaceholder);
+        Assert.Equal(VisualMinimumQuality.Realistic, result.MinimumVisualQuality);
+        Assert.Contains(VisualPreferredAssetKind.ScientificRealImage, result.PreferredAssetKind ?? []);
     }
 
     [Fact]
@@ -29,6 +34,10 @@ public sealed class VisualSourceResolverTests
         Assert.Contains("Venus", result.ForbiddenObjectNames);
         Assert.DoesNotContain("Venus", result.RequiredDrawableObjects);
         Assert.Contains("labels matching their exact names", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("real-looking planet textures", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Mars must look like Mars", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Jupiter must show banded cloud texture", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.AllowPrimitivePlaceholder);
     }
 
     [Fact]
@@ -44,6 +53,21 @@ public sealed class VisualSourceResolverTests
         Assert.NotEqual(VisualSourceType.GenericFallback, required.SourceType);
         Assert.False(required.GenericFallbackAllowed);
         Assert.Contains("Comet", required.RequiredDrawableObjects);
+        Assert.Contains("nucleus", required.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("coma", required.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tail", required.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Resolve_DeepSkyObject_ForbidsGenericGlowPlaceholder()
+    {
+        var result = new DefaultVisualSourceResolver().Resolve(BuildRequest("DeepSkyObject", "Orion Nebula", "Orion Nebula", requiredVisualObjects: ["Orion Nebula"]));
+
+        Assert.Equal(VisualSourceType.AICinematicScene, result.SourceType);
+        Assert.True(result.RealisticObjectRequired);
+        Assert.False(result.AllowPrimitivePlaceholder);
+        Assert.Contains("astrophotography detail", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("do not render a generic glow circle", result.AiCinematicPrompt, StringComparison.OrdinalIgnoreCase);
     }
 
     private static VisualSourceResolutionRequest BuildRequest(

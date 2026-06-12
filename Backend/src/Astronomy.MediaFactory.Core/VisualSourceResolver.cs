@@ -12,6 +12,20 @@ public enum VisualSourceType
     GenericFallback
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum VisualMinimumQuality
+{
+    Realistic
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum VisualPreferredAssetKind
+{
+    ScientificRealImage,
+    ScientificTexture,
+    AICinematicRealistic
+}
+
 public sealed record VisualSourceResolutionRequest(
     ProductionEventIntelligence Intelligence,
     string StrategyId,
@@ -27,7 +41,12 @@ public sealed record VisualSourceResolutionResult(
     bool GenericFallbackAllowed,
     IReadOnlyList<string> ValidationRequiredTerms,
     IReadOnlyList<string> ForbiddenObjectNames,
-    IReadOnlyDictionary<string, string> Metadata);
+    IReadOnlyDictionary<string, string> Metadata,
+    bool RealisticObjectRequired = true,
+    bool AllowPrimitivePlaceholder = false,
+    VisualMinimumQuality MinimumVisualQuality = VisualMinimumQuality.Realistic,
+    IReadOnlyList<VisualPreferredAssetKind>? PreferredAssetKind = null,
+    bool PrimitivePlaceholderUsed = false);
 
 public interface IVisualSourceResolver
 {
@@ -55,36 +74,51 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             ["sceneNumber"] = request.EnrichedScene.SceneNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["sceneQuestionType"] = request.EnrichedScene.QuestionType,
             ["eventShortTitle"] = intelligence.ShortTitle,
-            ["eventTitle"] = intelligence.Title
+            ["eventTitle"] = intelligence.Title,
+            ["realisticObjectRequired"] = "true",
+            ["allowPrimitivePlaceholder"] = "false",
+            ["minimumVisualQuality"] = VisualMinimumQuality.Realistic.ToString(),
+            ["primitivePlaceholderUsed"] = "false"
         };
 
         if (IsMeteorShower(eventType, strategyId, intelligence.Title))
         {
             var required = NormalizeList(requiredVisualObjects.Concat(["meteor streaks", "radiant/dark sky"]));
+            var prompt = "Hybrid meteor-shower scene: realistic meteor streaks radiating from a subtle radiant across a dark open sky; preserve the real viewing window and avoid unrelated planets. Meteor trails may be cinematic streaks, not symbolic icons.";
+            metadata["visualSourceType"] = VisualSourceType.Hybrid.ToString();
+            metadata["generatedRealisticPrompt"] = prompt;
             return new(
                 VisualSourceType.Hybrid,
                 required,
                 [],
-                "Hybrid meteor-shower scene: visible meteor streaks radiating from a subtle radiant across a dark open sky; preserve the real viewing window and avoid unrelated planets.",
+                prompt,
                 GenericFallbackAllowed: false,
                 NormalizeList(required.Concat(["meteor streaks", "dark sky"])),
                 forbidden,
-                metadata);
+                metadata,
+                PreferredAssetKind: [VisualPreferredAssetKind.AICinematicRealistic]);
         }
 
         if (IsNamedFullMoon(eventType, strategyId, intelligence.Title))
         {
             var shortTitle = FirstNonEmpty(intelligence.ShortTitle, intelligence.Title, "Full Moon");
             var required = NormalizeList(requiredVisualObjects.Concat(["Moon"]));
+            var moonStyle = ResolveNamedFullMoonStyle(shortTitle, intelligence.Title);
+            var prompt = $"Hybrid named full-Moon scene: render the Moon from a realistic full Moon visual source with crater texture and maria, moon glow, moonrise/eastern horizon context, {shortTitle}. {moonStyle}";
+            metadata["visualSourceType"] = VisualSourceType.Hybrid.ToString();
+            metadata["assetKey"] = "Moon.FullMoon";
+            metadata["generatedRealisticPrompt"] = prompt;
+            metadata["requiredCelestialObject"] = "Moon";
             return new(
                 VisualSourceType.Hybrid,
                 required,
                 ["Moon.FullMoon"],
-                $"Hybrid named full-Moon scene: large visible full moon, moon glow, moonrise/eastern horizon context, {shortTitle}, seasonal cinematic background.",
+                prompt,
                 GenericFallbackAllowed: false,
-                NormalizeList(required.Concat(["large visible full moon", "moon glow", "moonrise", "eastern horizon", shortTitle])),
+                NormalizeList(required.Concat(["large visible full moon", "moon texture", "craters", "maria", "moon glow", "moonrise", "eastern horizon", shortTitle])),
                 forbidden,
-                metadata);
+                metadata,
+                PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic]);
         }
 
         if (IsPlanetPairingOrConjunction(eventType, strategyId, intelligence.Title))
@@ -92,30 +126,60 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             var objects = NormalizeList(intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects));
             var required = NormalizeList(requiredVisualObjects.Concat(objects));
             var objectPhrase = string.Join(" and ", objects);
+            var textureGuidance = string.Join(" ", objects.Select(ResolvePlanetTextureGuidance));
+            var prompt = $"Computed astronomy scene for {objectPhrase}: render only the actual listed objects with labels matching their exact names; use real-looking planet textures, not generic colored circles. {textureGuidance} Show close-pairing/conjunction geometry, timing, and sky direction; do not add unrelated planets.";
             metadata["labelObjects"] = string.Join(", ", objects);
+            metadata["visualSourceType"] = (required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene).ToString();
+            metadata["assetKey"] = string.Join(", ", objects.Select(o => $"Planet.{o}"));
+            metadata["generatedRealisticPrompt"] = prompt;
             return new(
                 required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene,
                 required,
                 objects.Select(o => $"Planet.{o}").ToArray(),
-                $"Computed astronomy scene for {objectPhrase}: render only the actual listed objects with labels matching their exact names; show close-pairing/conjunction geometry, timing, and sky direction; do not add unrelated planets.",
+                prompt,
                 GenericFallbackAllowed: false,
-                NormalizeList(required.Concat(objects).Concat(["close pairing", "labels match actual object names"])),
+                NormalizeList(required.Concat(objects).Concat(["real-looking planet textures", "close pairing", "labels match actual object names"])),
                 forbidden,
-                metadata);
+                metadata,
+                PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic]);
+        }
+
+        if (IsComet(eventType, strategyId, intelligence.Title, requiredVisualObjects))
+        {
+            var required = NormalizeList(requiredVisualObjects.Count > 0 ? requiredVisualObjects : ["Comet"]);
+            var prompt = "AI cinematic realistic comet scene: visible comet nucleus, coma, and tail from a realistic comet image style; do not render a plain ellipse or a simple streak except as a separate motion-path annotation.";
+            metadata["visualSourceType"] = VisualSourceType.AICinematicScene.ToString();
+            metadata["generatedRealisticPrompt"] = prompt;
+            return new(VisualSourceType.AICinematicScene, required, [], prompt, false, NormalizeList(required.Concat(["nucleus", "coma", "tail"])), forbidden, metadata, PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic]);
+        }
+
+        if (IsDeepSkyObject(eventType, strategyId, intelligence.Title, requiredVisualObjects))
+        {
+            var required = NormalizeList(requiredVisualObjects.Count > 0 ? requiredVisualObjects : ["Deep Sky Object"]);
+            var prompt = "Scientific or AI realistic deep-sky object scene: use a real-looking nebula, galaxy, or star-cluster visual source with astrophotography detail; do not render a generic glow circle or dot.";
+            metadata["visualSourceType"] = VisualSourceType.AICinematicScene.ToString();
+            metadata["generatedRealisticPrompt"] = prompt;
+            return new(VisualSourceType.AICinematicScene, required, [], prompt, false, NormalizeList(required.Concat(["astrophotography detail", "nebula", "galaxy", "star cluster"])), forbidden, metadata, PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic]);
         }
 
         var allowsFallback = requiredVisualObjects.Count == 0;
+        metadata["visualSourceType"] = (allowsFallback ? VisualSourceType.GenericFallback : VisualSourceType.AICinematicScene).ToString();
+        metadata["realisticObjectRequired"] = (!allowsFallback).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (!allowsFallback) metadata["generatedRealisticPrompt"] = "AI cinematic astronomy scene must visibly include every required visual object using realistic sources; generic fallback and primitive placeholders are forbidden.";
         return new(
             allowsFallback ? VisualSourceType.GenericFallback : VisualSourceType.AICinematicScene,
             requiredVisualObjects,
             [],
             allowsFallback
                 ? "Generic editorial astronomy background is allowed because this scene has no required visible celestial object."
-                : "AI cinematic astronomy scene must visibly include every required visual object; generic fallback is forbidden.",
+                : "AI cinematic astronomy scene must visibly include every required visual object using realistic sources; generic fallback and primitive placeholders are forbidden.",
             allowsFallback,
             requiredVisualObjects,
             forbidden,
-            metadata);
+            metadata,
+            RealisticObjectRequired: !allowsFallback,
+            AllowPrimitivePlaceholder: false,
+            PreferredAssetKind: allowsFallback ? [] : [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic]);
     }
 
     private static bool IsMeteorShower(string eventType, string strategyId, string title)
@@ -130,6 +194,39 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
         => ContainsAny(eventType, "PlanetPairing", "Conjunction", "PlanetParade")
             || ContainsAny(strategyId, "PlanetPairing", "Conjunction", "PlanetParade")
             || ContainsAny(title, "close pairing", "pairing", "conjunction");
+
+    private static bool IsComet(string eventType, string strategyId, string title, IReadOnlyList<string> requiredObjects)
+        => ContainsAny(eventType, "Comet") || ContainsAny(strategyId, "Comet") || ContainsAny(title, "Comet") || requiredObjects.Any(value => ContainsAny(value, "Comet"));
+
+    private static bool IsDeepSkyObject(string eventType, string strategyId, string title, IReadOnlyList<string> requiredObjects)
+        => ContainsAny(eventType, "DeepSkyObject", "Deep Sky", "Nebula", "Galaxy", "StarCluster", "Star Cluster")
+            || ContainsAny(strategyId, "DeepSkyObject", "Deep Sky", "Nebula", "Galaxy", "StarCluster", "Star Cluster")
+            || ContainsAny(title, "Deep Sky", "Nebula", "Galaxy", "Star Cluster")
+            || requiredObjects.Any(value => ContainsAny(value, "Deep Sky", "Nebula", "Galaxy", "Star Cluster"));
+
+    private static string ResolveNamedFullMoonStyle(string shortTitle, string title)
+    {
+        var text = $"{shortTitle} {title}";
+        if (ContainsAny(text, "Snow Moon")) return "Snow Moon presentation: cold winter/moonrise atmosphere around the same real textured full Moon.";
+        if (ContainsAny(text, "Strawberry Moon")) return "Strawberry Moon presentation: warm reddish-golden summer moonrise atmosphere around the same real textured full Moon.";
+        if (ContainsAny(text, "Blue Moon")) return "Blue Moon presentation: natural full Moon with a subtle cool-blue cinematic mood, not a fake blue Moon unless the content explicitly explains the naming.";
+        if (ContainsAny(text, "Blood Moon")) return "Blood Moon presentation: red/copper Moon only when this is a lunar eclipse; otherwise keep a natural full Moon color.";
+        if (ContainsAny(text, "Wolf Moon")) return "Wolf Moon presentation: cold winter atmosphere around the same real textured full Moon.";
+        return "Named full Moon presentation changes the atmosphere and copy, not the physical Moon texture.";
+    }
+
+    private static string ResolvePlanetTextureGuidance(string planet)
+        => planet.Trim().ToLowerInvariant() switch
+        {
+            "mars" => "Mars must look like Mars with rusty red terrain, darker albedo markings, and polar-cap hints when possible.",
+            "jupiter" => "Jupiter must show banded cloud texture and a Great Red Spot style feature when possible.",
+            "venus" => "Venus must appear bright, cloud-covered, white/yellow, and not as a flat dot.",
+            "saturn" => "Saturn must include its rings and pale banded globe.",
+            "mercury" => "Mercury should use a gray cratered rocky texture.",
+            "uranus" => "Uranus should use a pale cyan-blue gaseous disk with subtle shading.",
+            "neptune" => "Neptune should use a deeper blue gaseous disk with subtle atmospheric shading.",
+            _ => $"{planet} must use a recognizable realistic planetary texture rather than a flat circle."
+        };
 
     private static bool ContainsAny(string? value, params string[] terms)
         => !string.IsNullOrWhiteSpace(value) && terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
