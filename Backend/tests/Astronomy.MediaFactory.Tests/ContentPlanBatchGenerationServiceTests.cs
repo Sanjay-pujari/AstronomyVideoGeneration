@@ -178,10 +178,18 @@ public sealed class ContentPlanBatchGenerationServiceTests
         var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
         Assert.True(response.Success);
         Assert.Equal(0, response.SelectedPlanCount);
-        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Planet grouping"
+        var warning = Assert.Single(response.Warnings, warning => warning.RequestedTitle == "Planet grouping"
             && warning.Matched
             && !warning.Selected
-            && warning.Reason == "Excluded because linked astronomy event AutoGenerateAllowed was false");
+            && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
+        Assert.Contains($"planId={ManualValidationPlanId:D}", warning.Reason);
+        Assert.Contains("planTitle=Planet grouping window over Udaipur, Rajasthan, India", warning.Reason);
+        Assert.Contains("GeneratedByAi=false", warning.Reason);
+        Assert.Contains("PlanningReason=Astronomy V1.2 manual validation", warning.Reason);
+        Assert.Contains("requestedPlanTitle=Planet grouping", warning.Reason);
+        Assert.Contains("isExactTarget=false", warning.Reason);
+        Assert.Contains("isManualValidationPlan=true", warning.Reason);
+        Assert.Contains("shouldBypassAutoGenerateAllowed=false", warning.Reason);
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal(Guid.Empty, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);
@@ -208,10 +216,16 @@ public sealed class ContentPlanBatchGenerationServiceTests
         var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
         Assert.True(response.Success);
         Assert.Equal(0, response.SelectedPlanCount);
-        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Planet grouping window over Udaipur, Rajasthan, India"
+        var warning = Assert.Single(response.Warnings, warning => warning.RequestedTitle == "Planet grouping window over Udaipur, Rajasthan, India"
             && warning.Matched
             && !warning.Selected
-            && warning.Reason == "Excluded because linked astronomy event AutoGenerateAllowed was false");
+            && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
+        Assert.Contains($"planId={ManualValidationPlanId:D}", warning.Reason);
+        Assert.Contains("GeneratedByAi=true", warning.Reason);
+        Assert.Contains("requestedPlanTitle=Planet grouping window over Udaipur, Rajasthan, India", warning.Reason);
+        Assert.Contains("isExactTarget=true", warning.Reason);
+        Assert.Contains("isManualValidationPlan=false", warning.Reason);
+        Assert.Contains("shouldBypassAutoGenerateAllowed=false", warning.Reason);
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal(Guid.Empty, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);
@@ -242,7 +256,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.Contains(response.Warnings, warning => warning.RequestedTitle == "Planet grouping window over Udaipur, Rajasthan, India"
             && warning.Matched
             && !warning.Selected
-            && warning.Reason == "Excluded because linked astronomy event AutoGenerateAllowed was false");
+            && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
         Assert.DoesNotContain(response.Warnings, warning => warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal(Guid.Empty, production.CapturedPlanId);

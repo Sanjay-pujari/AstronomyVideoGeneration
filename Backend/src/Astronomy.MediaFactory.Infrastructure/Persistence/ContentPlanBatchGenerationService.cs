@@ -307,7 +307,16 @@ public sealed class ContentPlanBatchGenerationService(
 
             if (runnableMatches.Length == 0)
             {
-                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(matches[0], onlyHighPriority, allowedStatuses, recoveryMode, runningPlanRecoveryStaleAfter, completedRerunMode, allowCompletedPlanRerun)));
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(
+                    matches[0],
+                    onlyHighPriority,
+                    allowedStatuses,
+                    recoveryMode,
+                    runningPlanRecoveryStaleAfter,
+                    completedRerunMode,
+                    allowCompletedPlanRerun,
+                    requestedTitle,
+                    IsExactPlanTitleTarget(matches[0], requestedTitle, requestedTitles.Count))));
                 continue;
             }
 
@@ -347,7 +356,16 @@ public sealed class ContentPlanBatchGenerationService(
             || !IsAstronomyEventRunnable(plan, AllowManualValidationAutoGenerateBypass(plan, isExactTarget: true))
             || (onlyHighPriority && !IsHighPriority(plan)))
         {
-            warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(plan, onlyHighPriority, allowedStatuses, recoveryMode, runningPlanRecoveryStaleAfter, completedRerunMode, allowCompletedPlanRerun)));
+            warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(
+                plan,
+                onlyHighPriority,
+                allowedStatuses,
+                recoveryMode,
+                runningPlanRecoveryStaleAfter,
+                completedRerunMode,
+                allowCompletedPlanRerun,
+                requestedPlanTitle: null,
+                isExactTarget: true)));
             return;
         }
 
@@ -564,9 +582,37 @@ public sealed class ContentPlanBatchGenerationService(
             warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, true, "Selected manual validation plan even though linked event AutoGenerateAllowed=false."));
     }
 
+    private static string BuildAutoGenerateAllowedExclusionReason(ContentGenerationPlan plan, string? requestedPlanTitle, bool isExactTarget)
+    {
+        var isManualValidationPlan = IsManualValidationPlan(plan);
+        var shouldBypassAutoGenerateAllowed = AllowManualValidationAutoGenerateBypass(plan, isExactTarget);
+
+        return string.Join(Environment.NewLine,
+            "Excluded because linked astronomy event AutoGenerateAllowed was false.",
+            $"planId={plan.Id:D}",
+            $"planTitle={plan.Title}",
+            $"GeneratedByAi={FormatDiagnosticBoolean(plan.GeneratedByAi)}",
+            $"PlanningReason={plan.PlanningReason}",
+            $"requestedPlanTitle={requestedPlanTitle}",
+            $"isExactTarget={FormatDiagnosticBoolean(isExactTarget)}",
+            $"isManualValidationPlan={FormatDiagnosticBoolean(isManualValidationPlan)}",
+            $"shouldBypassAutoGenerateAllowed={FormatDiagnosticBoolean(shouldBypassAutoGenerateAllowed)}");
+    }
+
+    private static string FormatDiagnosticBoolean(bool value) => value ? "true" : "false";
+
     private static bool IsHighPriority(ContentGenerationPlan plan) => plan.Priority <= 10 || plan.PriorityScore >= 7.5m;
 
-    private static string BuildExclusionReason(ContentGenerationPlan plan, bool onlyHighPriority, IReadOnlyCollection<string> allowedStatuses, bool recoveryMode = false, TimeSpan? runningPlanRecoveryStaleAfter = null, bool completedRerunMode = false, bool allowCompletedPlanRerun = false)
+    private static string BuildExclusionReason(
+        ContentGenerationPlan plan,
+        bool onlyHighPriority,
+        IReadOnlyCollection<string> allowedStatuses,
+        bool recoveryMode = false,
+        TimeSpan? runningPlanRecoveryStaleAfter = null,
+        bool completedRerunMode = false,
+        bool allowCompletedPlanRerun = false,
+        string? requestedPlanTitle = null,
+        bool isExactTarget = false)
     {
         if (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter ?? TimeSpan.Zero))
             return "Excluded because ProductionRunning plans require explicit recovery mode with allowRunningPlanRecovery=true, retryFailedOnly=true, allowFailedPlanRetry=true, startPhaseNo, endPhaseNo, and an exact planTitle or planId";
@@ -577,7 +623,7 @@ public sealed class ContentPlanBatchGenerationService(
         if (plan.AstronomyEventIntelligence is null)
             return "Excluded because linked AstronomyEventIntelligence was missing";
         if (!plan.AstronomyEventIntelligence.AutoGenerateAllowed)
-            return "Excluded because linked astronomy event AutoGenerateAllowed was false";
+            return BuildAutoGenerateAllowedExclusionReason(plan, requestedPlanTitle, isExactTarget);
         if (string.Equals(plan.AstronomyEventIntelligence.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase))
             return "Excluded because linked astronomy event VerificationStatus was NeedsManualReview";
         if (string.Equals(plan.AstronomyEventIntelligence.ContentStrategy, "SkipAutoGeneration", StringComparison.OrdinalIgnoreCase)
