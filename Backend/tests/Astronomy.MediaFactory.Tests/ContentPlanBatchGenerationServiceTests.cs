@@ -462,6 +462,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Assert.Equal("Failed", shortVideoCompletion.Status);
             Assert.Empty(shortVideoCompletion.SucceededPhases);
             Assert.Equal([13, 15, 17], shortVideoCompletion.RequiredPhases);
+            Assert.Contains("ShortVideo output incomplete outside requested rebuild range.", response.Errors);
         }
         finally
         {
@@ -943,7 +944,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
                 FinalLongVideoPath: string.Empty,
                 GeneratedFiles: [],
                 Warnings: [],
-                Errors: [],
+                Errors: ["ShortVideo output incomplete outside requested rebuild range."],
                 PhaseResults: phaseResults,
                 RequestedOutputCompletion:
                 [

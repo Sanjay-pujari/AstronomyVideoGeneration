@@ -111,7 +111,7 @@ public sealed class ContentPlanProductionExecutionService(
             var phase19Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 19);
             var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
             var partialPhaseExecution = IsPartialPhaseExecution(request);
-            var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success, requestedStartPhaseNo, requestedEndPhaseNo);
+            var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success);
             var productionFailed = partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
             var productionCompleted = !productionFailed && (phase19Succeeded || partialPhaseSuccess);
             execution.Status = productionCompleted ? "Completed" : productionFailed ? "Failed" : "Running";
@@ -192,21 +192,14 @@ public sealed class ContentPlanProductionExecutionService(
             && request.StartPhaseNo.HasValue
             && request.EndPhaseNo.HasValue;
 
-    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess, int requestedStartPhaseNo, int requestedEndPhaseNo)
+    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
     {
-        if (errors.Count > 0) return false;
-        if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess;
+        if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess && errors.Count == 0;
 
-        var requestedPhaseResults = phaseResults
-            .Where(result => result.PhaseNo >= requestedStartPhaseNo && result.PhaseNo <= requestedEndPhaseNo)
-            .ToArray();
-        var requestedPhaseResultNumbers = requestedPhaseResults.Select(result => result.PhaseNo).ToHashSet();
-        for (var phaseNo = requestedStartPhaseNo; phaseNo <= requestedEndPhaseNo; phaseNo++)
-        {
-            if (!requestedPhaseResultNumbers.Contains(phaseNo)) return false;
-        }
-
-        foreach (var result in requestedPhaseResults)
+        // Partial rebuild/rerun success is based on the phases that actually ran.
+        // Requested output completion can still surface diagnostics for phases outside
+        // the rebuild range, but those diagnostics must not fail the partial request.
+        foreach (var result in phaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
             if (result.Status == ProductionPhaseStatus.Succeeded) continue;
