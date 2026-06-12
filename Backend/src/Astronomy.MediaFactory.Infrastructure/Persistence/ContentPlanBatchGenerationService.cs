@@ -607,9 +607,6 @@ public sealed class ContentPlanBatchGenerationService(
         return TryReadManualValidationFlagFromMetadata(metadataJson, out manualValidation);
     }
 
-    private static string? ReadOptionalStringProperty(object? value, string propertyName)
-        => value?.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(value) as string;
-
     private static bool TryReadManualValidationFlagFromMetadata(string? metadataJson, out bool manualValidation)
     {
         manualValidation = false;
