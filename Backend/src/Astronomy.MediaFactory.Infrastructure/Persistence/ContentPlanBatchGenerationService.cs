@@ -298,7 +298,7 @@ public sealed class ContentPlanBatchGenerationService(
             var runnableMatches = matches
                 .Where(p => IsStatusRunnable(p, allowedStatuses))
                 .Where(p => !IsProductionRunning(p) || CanRecoverRunningPlan(p, recoveryMode, runningPlanRecoveryStaleAfter))
-                .Where(p => IsAstronomyEventRunnable(p, AllowManualValidationAutoGenerateBypass(p, exactPlanSelectorSupplied: IsExactMatch(p, requestedTitle))))
+                .Where(p => IsAstronomyEventRunnable(p, AllowManualValidationAutoGenerateBypass(p, IsExactPlanTitleTarget(p, requestedTitle, requestedTitles.Count))))
                 .Where(p => !onlyHighPriority || IsHighPriority(p))
                 .OrderBy(p => IsExactMatch(p, requestedTitle) ? 0 : 1)
                 .ThenByDescending(p => p.PriorityScore ?? 0m)
@@ -344,7 +344,7 @@ public sealed class ContentPlanBatchGenerationService(
         if (selectedIds.Contains(plan.Id)) return;
         if (!IsStatusRunnable(plan, allowedStatuses)
             || (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter))
-            || !IsAstronomyEventRunnable(plan, AllowManualValidationAutoGenerateBypass(plan, exactPlanSelectorSupplied: true))
+            || !IsAstronomyEventRunnable(plan, AllowManualValidationAutoGenerateBypass(plan, isExactTarget: true))
             || (onlyHighPriority && !IsHighPriority(plan)))
         {
             warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(plan, onlyHighPriority, allowedStatuses, recoveryMode, runningPlanRecoveryStaleAfter, completedRerunMode, allowCompletedPlanRerun)));
@@ -544,15 +544,23 @@ public sealed class ContentPlanBatchGenerationService(
             && !string.Equals(evt.ContentStrategy, "EducationalOnly", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool AllowManualValidationAutoGenerateBypass(ContentGenerationPlan plan, bool exactPlanSelectorSupplied)
-        => exactPlanSelectorSupplied
+    private static bool IsManualValidationPlan(ContentGenerationPlan plan)
+        => !plan.GeneratedByAi
+            && plan.PlanningReason?.Contains("manual validation", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsExactPlanTitleTarget(ContentGenerationPlan plan, string requestedTitle, int requestedTitleCount)
+        => requestedTitleCount == 1
+            && !string.IsNullOrWhiteSpace(requestedTitle)
+            && string.Equals(Normalize(plan.Title), Normalize(requestedTitle), StringComparison.OrdinalIgnoreCase);
+
+    private static bool AllowManualValidationAutoGenerateBypass(ContentGenerationPlan plan, bool isExactTarget)
+        => isExactTarget
             && plan.AstronomyEventIntelligence is { AutoGenerateAllowed: false }
-            && !plan.GeneratedByAi
-            && (plan.PlanningReason?.Contains("manual validation", StringComparison.OrdinalIgnoreCase) == true);
+            && IsManualValidationPlan(plan);
 
     private static void AddManualValidationAutoGenerateWarningIfNeeded(ContentGenerationPlan plan, string requestedTitle, List<BatchGenerateFromPlansWarning> warnings)
     {
-        if (AllowManualValidationAutoGenerateBypass(plan, exactPlanSelectorSupplied: true))
+        if (AllowManualValidationAutoGenerateBypass(plan, isExactTarget: true))
             warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, true, "Selected manual validation plan even though linked event AutoGenerateAllowed=false."));
     }
 
