@@ -379,6 +379,56 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     }
 
     [Fact]
+    public async Task GenerateThumbnailAssetsAsync_ImagesMarsJupiterPairingUsesOnlyCurrentPlanets()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteThumbnailCompositionInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(workingDirectory, "Mars and Jupiter Close Pairing", "Mars and Jupiter", "PlanetPairing", ["Mars"], ["Jupiter"]);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "SceneSelection",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Images",
+            ThumbnailStyle = "ScrollStopping",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        Assert.True(result.PhotoCinematicRendererUsed);
+        Assert.False(result.VenusRenderedAsStarPoint);
+        Assert.True(result.JupiterRenderedAsPlanet);
+
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")), JsonOptions);
+        Assert.NotNull(manifest);
+        Assert.Equal("Mars", manifest!.ValidationFacts["thumbnailPrimaryObjects"]);
+        Assert.Equal("Jupiter", manifest.ValidationFacts["thumbnailSecondaryObjects"]);
+        Assert.Contains("Mars", manifest.ValidationFacts["visualObjectsUsed"]);
+        Assert.Contains("Jupiter", manifest.ValidationFacts["visualObjectsUsed"]);
+        Assert.DoesNotContain("Venus", manifest.ValidationFacts["visualObjectsUsed"]);
+        Assert.DoesNotContain("Venus", manifest.ValidationFacts["labelsUsed"]);
+        Assert.Equal("True", manifest.ValidationFacts["semanticValidationPassed"]);
+    }
+
+    [Fact]
     public async Task GenerateThumbnailAssetsAsync_RejectsUnsupportedPhase()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -399,7 +449,7 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     }
 
     private static ThumbnailAssetIntelligenceService CreateService(string workingDirectory)
-        => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
+        => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), new DefaultVisualSourceResolver());
 
     private static ProductionPipelineExecutionContext BuildProductionContext(string workingDirectory, string title, string shortTitle, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
     {

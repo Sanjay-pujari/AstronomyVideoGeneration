@@ -180,6 +180,31 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
                 ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
+        if (IsEclipse(eventType, strategyId, intelligence.Title))
+        {
+            var solar = ContainsAny(eventType, "Solar") || ContainsAny(strategyId, "Solar") || ContainsAny(intelligence.Title, "Solar");
+            var required = NormalizeList(requiredVisualObjects.Concat([solar ? "Solar Eclipse" : "Lunar Eclipse", "Moon"]));
+            var prompt = solar
+                ? "Realistic solar-eclipse thumbnail scene: eclipsed Sun/Moon alignment with corona and safety-aware viewing context; do not show unrelated planets."
+                : "Realistic lunar-eclipse thumbnail scene: red/copper eclipsed Moon with shadow geometry and night-sky context; do not show unrelated planets.";
+            metadata["visualSourceType"] = VisualSourceType.Hybrid.ToString();
+            metadata["assetKey"] = solar ? "Eclipse.Solar" : "Eclipse.Lunar";
+            metadata["generatedRealisticPrompt"] = prompt;
+            metadata["safetyAwareCopyRequired"] = solar.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return new(
+                VisualSourceType.Hybrid,
+                required,
+                [solar ? "Eclipse.Solar" : "Eclipse.Lunar"],
+                prompt,
+                GenericFallbackAllowed: false,
+                NormalizeList(required.Concat(solar ? ["corona", "safe viewing"] : ["red Moon", "copper Moon"])),
+                forbidden,
+                metadata,
+                PreferredAssetKind: [VisualPreferredAssetKind.ScientificRealImage, VisualPreferredAssetKind.AICinematicRealistic],
+                ObjectSourcePriority: DefaultObjectSourcePriority,
+                ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
+        }
+
         if (IsComet(eventType, strategyId, intelligence.Title, requiredVisualObjects))
         {
             var required = NormalizeList(requiredVisualObjects.Count > 0 ? requiredVisualObjects : ["Comet"]);
@@ -300,6 +325,11 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
         => ContainsAny(eventType, "PlanetPairing", "Conjunction", "PlanetParade")
             || ContainsAny(strategyId, "PlanetPairing", "Conjunction", "PlanetParade")
             || ContainsAny(title, "close pairing", "pairing", "conjunction");
+
+    private static bool IsEclipse(string eventType, string strategyId, string title)
+        => ContainsAny(eventType, "Eclipse", "SolarEclipse", "LunarEclipse", "Solar Eclipse", "Lunar Eclipse")
+            || ContainsAny(strategyId, "Eclipse", "SolarEclipse", "LunarEclipse", "Solar Eclipse", "Lunar Eclipse")
+            || ContainsAny(title, "Eclipse", "Solar Eclipse", "Lunar Eclipse");
 
     private static bool IsComet(string eventType, string strategyId, string title, IReadOnlyList<string> requiredObjects)
         => ContainsAny(eventType, "Comet") || ContainsAny(strategyId, "Comet") || ContainsAny(title, "Comet") || requiredObjects.Any(value => ContainsAny(value, "Comet"));

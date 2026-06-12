@@ -13,7 +13,7 @@ using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions> renderingOptions) : IThumbnailAssetIntelligenceService
+public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions> renderingOptions, IVisualSourceResolver visualSourceResolver) : IThumbnailAssetIntelligenceService
 {
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string ThumbnailAssetsDirectoryName = "thumbnail-assets";
@@ -27,7 +27,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailCompositionModelFileName = "thumbnail-composition-model.json";
     private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
     private const string ThumbnailLayoutValidationFileName = "thumbnail-layout-validation.json";
-    private const string DefaultThumbnailHook = "TONIGHT'S SKY EVENT";
+    private const string Phase12SemanticValidationFileName = "phase-12-validation.json";
+    private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
 
@@ -112,7 +113,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
         if (IsMeteorShowerThumbnail(request))
             return await GenerateMeteorShowerThumbnailImagesAsync(request, thumbnailRoot, cancellationToken);
-        if (ShouldUsePhotoCinematicThumbnailRenderer(request))
+        if (request.ProductionContext is not null || ShouldUsePhotoCinematicThumbnailRenderer(request))
             return await GeneratePhotoCinematicThumbnailImagesAsync(request, thumbnailRoot, cancellationToken);
 
         var outputFiles = ThumbnailImageSpecs
@@ -217,8 +218,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             foreach (var file in outputFiles)
                 await WriteMeteorThumbnailAsync(file, request, cancellationToken);
             var renderRequest = BuildPhotoCinematicRenderRequest(request, manifest, manifestPath, forceMeteor: true);
+            ValidateThumbnailSourceBelongsToCurrentRun(request, renderRequest, manifestPath);
             var forbiddenObjects = DetectForbiddenObjects(request, renderRequest.VisualObjects.Concat(renderRequest.Labels)).ToArray();
-            ValidateThumbnailSemantics(request, renderRequest.VisualObjects, renderRequest.Labels, forbiddenObjects);
+            ValidateThumbnailSemantics(request, renderRequest.VisualObjects, renderRequest.Labels, forbiddenObjects, renderRequest.VisualResolverResult as VisualSourceResolutionResult);
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
             await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken, renderRequest, null, forbiddenObjects);
         }
@@ -283,6 +285,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private bool IsMeteorShowerThumbnail(ThumbnailAssetGenerationRequest request)
     {
+        var currentEventLock = BuildCurrentEventLock(request);
+        if (IsMeteorEvent(currentEventLock.EventType, currentEventLock.Title)) return true;
         var storyPath = Path.Combine(BuildHeroAssetsRoot(request.EventId, request.RegionId), HeroAssetStoryFileName);
         if (!File.Exists(storyPath)) return false;
         var text = File.ReadAllText(storyPath);
@@ -301,6 +305,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
 
         var renderRequest = BuildPhotoCinematicRenderRequest(request, manifest, manifestPath);
+        ValidateThumbnailSourceBelongsToCurrentRun(request, renderRequest, manifestPath);
         var initialForbiddenObjects = DetectForbiddenObjects(request, renderRequest.VisualObjects.Concat(renderRequest.Labels)).ToArray();
         if (initialForbiddenObjects.Length > 0)
             throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", initialForbiddenObjects));
@@ -352,7 +357,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 throw new InvalidOperationException($"PhotoCinematicThumbnailRenderer did not write expected thumbnail file(s): {string.Join(", ", missingWrites)}.");
 
             var forbiddenObjects = DetectForbiddenObjects(request, renderResult.VisualObjectsUsed.Concat(renderResult.LabelsUsed)).ToArray();
-            ValidateThumbnailSemantics(request, renderResult.VisualObjectsUsed, renderResult.LabelsUsed, forbiddenObjects);
+            ValidateThumbnailSemantics(request, renderResult.VisualObjectsUsed, renderResult.LabelsUsed, forbiddenObjects, renderRequest.VisualResolverResult as VisualSourceResolutionResult);
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
             await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken, renderRequest, renderResult, forbiddenObjects);
         }
@@ -360,7 +365,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             renderEntered = true;
             renderCompleted = true;
-            ValidateThumbnailSemantics(request, renderRequest.VisualObjects, renderRequest.Labels, initialForbiddenObjects);
+            ValidateThumbnailSemantics(request, renderRequest.VisualObjects, renderRequest.Labels, initialForbiddenObjects, renderRequest.VisualResolverResult as VisualSourceResolutionResult);
         }
 
         Console.WriteLine($"[ThumbnailImages] Actual renderer = {rendererName}");
@@ -371,7 +376,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validation,
             requestedRenderer: rendererName,
             actualRendererUsed: rendererName,
-            rendererSelectionReason: "Images phase uses PhotoCinematicThumbnailRenderer bound to current production event metadata and hero/scene manifest source imagery; static golden-pilot planet composition is bypassed unless the event includes those planets.",
+            rendererSelectionReason: "Images phase uses PhotoCinematicThumbnailRenderer bound to current production event metadata and hero/scene manifest source imagery; static planet compositions are bypassed unless the event includes those planets.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: renderEntered,
             photoCinematicRendererCompleted: renderCompleted,
@@ -567,7 +572,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private ThumbnailCompositionModelDto BuildThumbnailCompositionModel(ThumbnailAssetGenerationRequest request, ThumbnailIntelligenceDto intelligence)
     {
         var primaryHook = CleanTextElement(intelligence.ThumbnailCopy.PrimaryText, DefaultThumbnailHook);
-        var secondaryText = CleanTextElement(intelligence.ThumbnailCopy.SecondaryText, "Sky Event");
+        var secondaryText = CleanTextElement(intelligence.ThumbnailCopy.SecondaryText, "Current Event");
         var microText = CleanTextElement(intelligence.ThumbnailCopy.MicroText, "Tonight");
         var visualFocus = CleanTextElement(intelligence.VisualFocus, "Timely sky event above the local horizon.");
         var textElementCount = new[] { primaryHook, secondaryText, microText }.Count(text => !string.IsNullOrWhiteSpace(text));
@@ -684,7 +689,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (!string.IsNullOrWhiteSpace(fromWhat)) return fromWhat;
         var fromFocus = SummarizeThumbnailText(heroStory.HeroVisualFocus);
         if (!string.IsNullOrWhiteSpace(fromFocus)) return fromFocus;
-        return "Sky Event";
+        return "Current Event";
     }
 
     private static string DeriveMicroThumbnailText(HeroAssetStoryDto heroStory)
@@ -906,7 +911,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             }
             catch (UnknownImageFormatException)
             {
-                // Unit tests and partially prepared pilots may provide placeholder scene bytes.
+                // Unit tests and partially prepared scene runs may provide placeholder scene bytes.
                 // Fall through to a procedural emotional thumbnail background while still
                 // requiring the approved scene output file to exist.
             }
@@ -1194,27 +1199,110 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     }
 
 
-    private static PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest BuildPhotoCinematicRenderRequest(ThumbnailAssetGenerationRequest request, ThumbnailSceneManifestDto manifest, string manifestPath, bool forceMeteor = false)
+    private PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest BuildPhotoCinematicRenderRequest(ThumbnailAssetGenerationRequest request, ThumbnailSceneManifestDto manifest, string manifestPath, bool forceMeteor = false)
     {
-        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
-        var title = FirstNonEmpty(intelligence?.Title, manifest.Title, request.EventId);
-        var shortTitle = FirstNonEmpty(intelligence?.ShortTitle, title);
-        var eventType = FirstNonEmpty(intelligence?.EventType, request.ProductionContext?.EventType, manifest.EventType, "Unknown");
-        var currentObjects = NormalizeObjectList((intelligence?.PrimaryObjects ?? []).Concat(intelligence?.SecondaryObjects ?? [])).ToList();
-        if (forceMeteor || eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || title.Contains("meteor", StringComparison.OrdinalIgnoreCase))
-            currentObjects.Add("Meteor");
-        if (currentObjects.Count == 0) currentObjects.Add(shortTitle);
-        var labels = NormalizeObjectList((intelligence?.PrimaryObjects ?? []).Prepend(shortTitle));
+        var currentEventLock = BuildCurrentEventLock(request);
+        var resolverResult = ResolveThumbnailVisualSource(currentEventLock, forceMeteor);
+        var requiredObjects = NormalizeObjectList(resolverResult.RequiredDrawableObjects);
+        var eventObjects = NormalizeObjectList(currentEventLock.PrimaryObjects.Concat(currentEventLock.SecondaryObjects));
+        var visualObjects = NormalizeObjectList(requiredObjects.Concat(eventObjects));
+        visualObjects = NormalizeObjectList(visualObjects.Concat(BuildEventTypeVisualObjects(currentEventLock, forceMeteor)));
+        if (visualObjects.Count == 0)
+            visualObjects = NormalizeObjectList([currentEventLock.ShortTitle, currentEventLock.Title]);
+
+        var labels = BuildThumbnailLabels(currentEventLock, resolverResult, visualObjects);
         var sourceImagePath = ResolveThumbnailSourceImagePath(manifest, manifestPath);
+        var copy = BuildDynamicThumbnailCopy(currentEventLock);
         return new PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest(
-            title,
-            shortTitle,
-            eventType,
-            currentObjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            labels.Count > 0 ? labels : [shortTitle],
-            intelligence?.SkyDirectionHint,
-            intelligence?.LocalPeakTime,
-            sourceImagePath);
+            currentEventLock.Title,
+            currentEventLock.ShortTitle,
+            currentEventLock.EventType,
+            visualObjects,
+            labels,
+            copy.SecondaryText,
+            copy.MicroText,
+            sourceImagePath,
+            currentEventLock,
+            resolverResult,
+            ResolveThumbnailSourceManifestPath(manifest, manifestPath),
+            manifest.PrimaryScene.ImagePath);
+    }
+
+
+    private static IReadOnlyList<string> BuildEventTypeVisualObjects(CurrentEventLock currentEventLock, bool forceMeteor)
+    {
+        var values = new List<string>();
+        if (forceMeteor || IsMeteorEvent(currentEventLock.EventType, currentEventLock.Title)) values.Add("Meteor");
+        if (currentEventLock.EventType.Contains("Comet", StringComparison.OrdinalIgnoreCase) || currentEventLock.Title.Contains("Comet", StringComparison.OrdinalIgnoreCase)) values.Add("Comet");
+        if (currentEventLock.EventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase) || currentEventLock.Title.Contains("Eclipse", StringComparison.OrdinalIgnoreCase))
+            values.Add(currentEventLock.EventType.Contains("Solar", StringComparison.OrdinalIgnoreCase) || currentEventLock.Title.Contains("Solar", StringComparison.OrdinalIgnoreCase) ? "Solar Eclipse" : "Lunar Eclipse");
+        if (currentEventLock.EventType.Contains("DeepSky", StringComparison.OrdinalIgnoreCase) || currentEventLock.EventType.Contains("Deep Sky", StringComparison.OrdinalIgnoreCase)) values.Add("Deep Sky Object");
+        return NormalizeObjectList(values);
+    }
+
+    private VisualSourceResolutionResult ResolveThumbnailVisualSource(CurrentEventLock currentEventLock, bool forceMeteor)
+    {
+        var intelligence = currentEventLock.ToProductionEventIntelligence(forceMeteor);
+        var scene = new EnrichedQuestionSceneDto(
+            12,
+            "Thumbnail",
+            "Current event thumbnail visual summary",
+            "What should the thumbnail show?",
+            currentEventLock.Title,
+            "CasualSkyWatcher",
+            "Beginner",
+            currentEventLock.ShortTitle,
+            "Make the current event immediately recognizable.",
+            "Use only the current event visual objects.",
+            "Dynamic current-event thumbnail source resolution.",
+            "Minimal current event labels only.",
+            "Readable astronomy thumbnail copy.",
+            true);
+        var narration = new QuestionDrivenNarrationSceneDto(
+            12,
+            "Thumbnail",
+            "Current event thumbnail visual summary",
+            "What should the thumbnail show?",
+            currentEventLock.ShortTitle,
+            currentEventLock.Title,
+            "Thumbnail current event lock",
+            currentEventLock.Title,
+            0,
+            "Visual only",
+            currentEventLock.ShortTitle);
+        var required = NormalizeObjectList(currentEventLock.PrimaryObjects.Concat(currentEventLock.SecondaryObjects).Concat(currentEventLock.RequiredVisualObjects));
+        return visualSourceResolver.Resolve(new VisualSourceResolutionRequest(intelligence, currentEventLock.ContentStrategy ?? currentEventLock.EventType, scene, narration, required));
+    }
+
+    private static IReadOnlyList<string> BuildThumbnailLabels(CurrentEventLock currentEventLock, VisualSourceResolutionResult resolverResult, IReadOnlyList<string> visualObjects)
+    {
+        var labels = new List<string>();
+        if (!string.IsNullOrWhiteSpace(currentEventLock.ShortTitle)) labels.Add(currentEventLock.ShortTitle);
+        labels.AddRange(currentEventLock.PrimaryObjects);
+        labels.AddRange(currentEventLock.SecondaryObjects);
+        if (labels.Count == 0) labels.AddRange(visualObjects);
+        if (resolverResult.Metadata.TryGetValue("labelObjects", out var labelObjects))
+            labels.AddRange(labelObjects.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+        return NormalizeObjectList(labels);
+    }
+
+    private static ThumbnailDynamicCopy BuildDynamicThumbnailCopy(CurrentEventLock currentEventLock)
+    {
+        var secondary = ResolveEventActionPhrase(currentEventLock);
+        var micro = FirstNonEmpty(currentEventLock.SkyDirectionHint, currentEventLock.BestViewingWindowLocal, currentEventLock.LocalPeakTime, currentEventLock.EventType);
+        return new ThumbnailDynamicCopy(secondary, micro);
+    }
+
+    private static string ResolveEventActionPhrase(CurrentEventLock currentEventLock)
+    {
+        if (currentEventLock.EventType.Contains("Solar", StringComparison.OrdinalIgnoreCase) && currentEventLock.EventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return "Use Safe Viewing";
+        var direction = currentEventLock.SkyDirectionHint;
+        if (!string.IsNullOrWhiteSpace(direction))
+            return direction.StartsWith("look", StringComparison.OrdinalIgnoreCase) ? direction : $"Look {direction}";
+        if (IsMeteorEvent(currentEventLock.EventType, currentEventLock.Title)) return "Dark Sky Window";
+        if (IsFullMoonEvent(currentEventLock.EventType, currentEventLock.Title)) return "Moonrise View";
+        if (currentEventLock.EventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse View";
+        return FirstNonEmpty(currentEventLock.BestViewingWindowLocal, currentEventLock.LocalPeakTime, currentEventLock.EventType);
     }
 
     private static string? ResolveThumbnailSourceImagePath(ThumbnailSceneManifestDto manifest, string manifestPath)
@@ -1227,7 +1315,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return File.Exists(manifestPath) ? manifestPath : null;
     }
 
-    private static void ValidateThumbnailSemantics(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> visualObjectsUsed, IReadOnlyList<string> labelsUsed, IReadOnlyList<string> forbiddenObjectsDetected)
+    private static void ValidateThumbnailSemantics(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> visualObjectsUsed, IReadOnlyList<string> labelsUsed, IReadOnlyList<string> forbiddenObjectsDetected, VisualSourceResolutionResult? resolverResult = null)
     {
         if (forbiddenObjectsDetected.Count > 0)
             throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", forbiddenObjectsDetected));
@@ -1242,6 +1330,44 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var matched = requiredLabels.Any(required => observed.Any(label => LabelMatches(label, required) || LabelMatches(required, label)));
         if (!matched)
             throw new InvalidOperationException("Thumbnail semantic validation failed: required object labels must include a current primary object or shortTitle. required=" + string.Join(", ", requiredLabels) + "; labels=" + string.Join(", ", observed));
+
+        var resolverRequired = NormalizeObjectList(resolverResult?.RequiredDrawableObjects ?? []);
+        var missingRequired = resolverRequired
+            .Where(required => IsConcreteRequiredVisualObject(required))
+            .Where(required => !observed.Any(label => LabelMatches(label, required) || LabelMatches(required, label)))
+            .ToArray();
+        if (missingRequired.Length > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: required resolver visual object(s) missing: " + string.Join(", ", missingRequired));
+    }
+
+
+    private static void ValidateThumbnailSourceBelongsToCurrentRun(ThumbnailAssetGenerationRequest request, PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest renderRequest, string manifestPath)
+    {
+        var planRoot = request.ProductionContext?.PlanRoot;
+        if (string.IsNullOrWhiteSpace(planRoot)) return;
+        var normalizedPlanRoot = NormalizePath(Path.GetFullPath(planRoot)).TrimEnd('/') + "/";
+        var sourceManifestPath = NormalizePath(Path.GetFullPath(renderRequest.SourceManifestPath ?? manifestPath));
+        var sourceScenePath = string.IsNullOrWhiteSpace(renderRequest.SourceScenePath) ? string.Empty : NormalizePath(Path.GetFullPath(renderRequest.SourceScenePath));
+        if (!sourceManifestPath.StartsWith(normalizedPlanRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Thumbnail semantic validation failed: source manifest '{sourceManifestPath}' is outside current plan root '{normalizedPlanRoot}'.");
+        if (!string.IsNullOrWhiteSpace(sourceScenePath) && !sourceScenePath.StartsWith(normalizedPlanRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Thumbnail semantic validation failed: source scene '{sourceScenePath}' is outside current plan root '{normalizedPlanRoot}'.");
+    }
+
+    private static bool IsConcreteRequiredVisualObject(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var lower = value.Trim().ToLowerInvariant();
+        return !lower.Contains("dark sky")
+            && !lower.Contains("radiant")
+            && !lower.Contains("texture")
+            && !lower.Contains("label")
+            && !lower.Contains("moonrise")
+            && !lower.Contains("tail")
+            && !lower.Contains("coma")
+            && !lower.Contains("nucleus")
+            && !lower.Contains("astrophotography")
+            && !lower.Contains("close pairing");
     }
 
     private static IEnumerable<string> DetectForbiddenObjects(ThumbnailAssetGenerationRequest request, IEnumerable<string> labels)
@@ -1284,12 +1410,24 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ["forbiddenPlanetLeakage"] = (forbiddenObjectsDetected?.Count > 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["thumbnailRequestTitle"] = renderRequest?.Title ?? manifest.Title ?? string.Empty,
             ["thumbnailRequestShortTitle"] = renderRequest?.ShortTitle ?? string.Empty,
-            ["thumbnailPrimaryObjects"] = string.Join(", ", renderRequest?.VisualObjects ?? Array.Empty<string>()),
-            ["thumbnailSourceManifestPath"] = ResolveThumbnailSourceManifestPath(manifest, manifestPath),
-            ["thumbnailSourceScenePath"] = renderRequest?.SourceImagePath ?? manifest.PrimaryScene.ImagePath,
+            ["thumbnailEventType"] = renderRequest?.EventType ?? manifest.EventType ?? string.Empty,
+            ["thumbnailPrimaryObjects"] = string.Join(", ", (renderRequest?.CurrentEventLock as CurrentEventLock)?.PrimaryObjects ?? Array.Empty<string>()),
+            ["thumbnailSecondaryObjects"] = string.Join(", ", (renderRequest?.CurrentEventLock as CurrentEventLock)?.SecondaryObjects ?? Array.Empty<string>()),
+            ["thumbnailSourceManifestPath"] = renderRequest?.SourceManifestPath ?? ResolveThumbnailSourceManifestPath(manifest, manifestPath),
+            ["thumbnailSourceScenePath"] = renderRequest?.SourceScenePath ?? renderRequest?.SourceImagePath ?? manifest.PrimaryScene.ImagePath,
             ["visualObjectsUsed"] = string.Join(", ", renderResult?.VisualObjectsUsed ?? renderRequest?.VisualObjects ?? Array.Empty<string>()),
             ["labelsUsed"] = string.Join(", ", renderResult?.LabelsUsed ?? renderRequest?.Labels ?? Array.Empty<string>()),
-            ["forbiddenObjectsDetected"] = string.Join(", ", forbiddenObjectsDetected ?? Array.Empty<string>())
+            ["textUsed"] = string.Join(" | ", new[] { renderRequest?.ShortTitle, renderRequest?.SecondaryText, renderRequest?.MicroText }.Where(value => !string.IsNullOrWhiteSpace(value))),
+            ["forbiddenObjectsDetected"] = string.Join(", ", forbiddenObjectsDetected ?? Array.Empty<string>()),
+            ["goldenPilotLeakageDetected"] = DetectGoldenPilotLeakage(renderRequest, renderResult).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["semanticValidationPassed"] = ((forbiddenObjectsDetected?.Count ?? 0) == 0 && !DetectGoldenPilotLeakage(renderRequest, renderResult)).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["visualResolverSourceType"] = (renderRequest?.VisualResolverResult as VisualSourceResolutionResult)?.SourceType.ToString() ?? string.Empty,
+            ["visualResolverRequiredObjects"] = string.Join(", ", (renderRequest?.VisualResolverResult as VisualSourceResolutionResult)?.RequiredDrawableObjects ?? Array.Empty<string>()),
+            ["visualResolverForbiddenObjects"] = string.Join(", ", (renderRequest?.VisualResolverResult as VisualSourceResolutionResult)?.ForbiddenObjectNames ?? Array.Empty<string>()),
+            ["visualResolverAssetKeys"] = string.Join(", ", (renderRequest?.VisualResolverResult as VisualSourceResolutionResult)?.ScientificAssetKeys ?? Array.Empty<string>()),
+            ["visualResolverPrompt"] = (renderRequest?.VisualResolverResult as VisualSourceResolutionResult)?.AiCinematicPrompt ?? string.Empty,
+            ["currentEventLock"] = renderRequest?.CurrentEventLock is null ? string.Empty : JsonSerializer.Serialize(renderRequest.CurrentEventLock, JsonOptions),
+            ["visualResolverResult"] = renderRequest?.VisualResolverResult is null ? string.Empty : JsonSerializer.Serialize(renderRequest.VisualResolverResult, JsonOptions)
         };
 
         var updated = manifest with
@@ -1298,6 +1436,61 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ValidationFacts = facts
         };
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(updated, JsonOptions), cancellationToken);
+        await WritePhase12SemanticValidationAsync(manifestPath, facts, renderRequest, renderResult, forbiddenObjectsDetected ?? Array.Empty<string>(), cancellationToken);
+    }
+
+    private static async Task WritePhase12SemanticValidationAsync(
+        string manifestPath,
+        IReadOnlyDictionary<string, string> facts,
+        PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest? renderRequest,
+        PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderResult? renderResult,
+        IReadOnlyList<string> forbiddenObjectsDetected,
+        CancellationToken cancellationToken)
+    {
+        var outputRoot = Path.GetDirectoryName(manifestPath) ?? ".";
+        var validationPath = Path.Combine(outputRoot, Phase12SemanticValidationFileName);
+        var visualObjectsUsed = renderResult?.VisualObjectsUsed ?? renderRequest?.VisualObjects ?? Array.Empty<string>();
+        var labelsUsed = renderResult?.LabelsUsed ?? renderRequest?.Labels ?? Array.Empty<string>();
+        var textUsed = new[] { renderRequest?.ShortTitle, renderRequest?.SecondaryText, renderRequest?.MicroText }.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToArray();
+        var goldenPilotLeakageDetected = DetectGoldenPilotLeakage(renderRequest, renderResult);
+        var semanticValidationPassed = string.Equals(GetDictionaryValue(facts, "semanticValidationPassed"), "True", StringComparison.OrdinalIgnoreCase)
+            && !goldenPilotLeakageDetected
+            && forbiddenObjectsDetected.Count == 0;
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            currentEventLock = renderRequest?.CurrentEventLock,
+            thumbnailRequestTitle = renderRequest?.Title ?? string.Empty,
+            thumbnailRequestShortTitle = renderRequest?.ShortTitle ?? string.Empty,
+            thumbnailEventType = renderRequest?.EventType ?? string.Empty,
+            thumbnailPrimaryObjects = (renderRequest?.CurrentEventLock as CurrentEventLock)?.PrimaryObjects ?? Array.Empty<string>(),
+            thumbnailSecondaryObjects = (renderRequest?.CurrentEventLock as CurrentEventLock)?.SecondaryObjects ?? Array.Empty<string>(),
+            thumbnailSourceManifestPath = renderRequest?.SourceManifestPath ?? NormalizePath(manifestPath),
+            thumbnailSourceScenePath = renderRequest?.SourceScenePath ?? renderRequest?.SourceImagePath ?? string.Empty,
+            visualResolverResult = renderRequest?.VisualResolverResult,
+            visualObjectsUsed,
+            labelsUsed,
+            textUsed,
+            forbiddenObjectsDetected,
+            goldenPilotLeakageDetected,
+            semanticValidationPassed
+        }, JsonOptions), cancellationToken);
+    }
+
+    private static string GetDictionaryValue(IReadOnlyDictionary<string, string> values, string key)
+        => values.TryGetValue(key, out var value) ? value : string.Empty;
+
+    private static bool DetectGoldenPilotLeakage(PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest? renderRequest, PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderResult? renderResult)
+    {
+        var text = string.Join(" | ", (renderResult?.VisualObjectsUsed ?? renderRequest?.VisualObjects ?? Array.Empty<string>())
+            .Concat(renderResult?.LabelsUsed ?? renderRequest?.Labels ?? Array.Empty<string>())
+            .Concat([renderRequest?.Title ?? string.Empty, renderRequest?.ShortTitle ?? string.Empty, renderRequest?.SecondaryText ?? string.Empty, renderRequest?.MicroText ?? string.Empty, renderRequest?.SourceManifestPath ?? string.Empty]));
+        if (text.Contains("golden", StringComparison.OrdinalIgnoreCase) || text.Contains("pilot", StringComparison.OrdinalIgnoreCase)) return true;
+        if (text.Contains("Sky Event Tonight", StringComparison.OrdinalIgnoreCase) || text.Contains("Event Focus", StringComparison.OrdinalIgnoreCase) || text.Contains("Best Viewing Time", StringComparison.OrdinalIgnoreCase)) return true;
+        var currentEventLock = renderRequest?.CurrentEventLock as CurrentEventLock;
+        var allowedObjects = (currentEventLock?.PrimaryObjects ?? Array.Empty<string>()).Concat(currentEventLock?.SecondaryObjects ?? Array.Empty<string>());
+        var allowsVenus = allowedObjects.Any(value => LabelMatches(value, "Venus"));
+        var allowsJupiter = allowedObjects.Any(value => LabelMatches(value, "Jupiter"));
+        return (!allowsVenus && text.Contains("Venus", StringComparison.OrdinalIgnoreCase)) || (!allowsJupiter && text.Contains("Jupiter", StringComparison.OrdinalIgnoreCase));
     }
 
 
@@ -1443,6 +1636,39 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 && string.Equals(request.ThumbnailStyle, "ScrollStopping", StringComparison.OrdinalIgnoreCase))
             || string.Equals(request.ThumbnailVisualStyle, "PhotoCinematic", StringComparison.OrdinalIgnoreCase);
 
+
+    private static CurrentEventLock BuildCurrentEventLock(ThumbnailAssetGenerationRequest request)
+    {
+        var context = request.ProductionContext;
+        var intelligence = context?.ProductionEventIntelligence;
+        var title = FirstNonEmpty(intelligence?.Title, request.EventId);
+        var shortTitle = FirstNonEmpty(intelligence?.ShortTitle, title);
+        var eventType = FirstNonEmpty(intelligence?.EventType, context?.EventType, "Unknown");
+        return new CurrentEventLock(
+            PlanId: context?.ContentGenerationPlanId?.ToString("D") ?? string.Empty,
+            Title: title,
+            ShortTitle: shortTitle,
+            EventType: eventType,
+            Category: context?.Category,
+            PrimaryObjects: NormalizeObjectList(intelligence?.PrimaryObjects ?? []),
+            SecondaryObjects: NormalizeObjectList(intelligence?.SecondaryObjects ?? []),
+            SourceExternalEventId: context?.SourceExternalEventId,
+            RegionId: FirstNonEmpty(context?.RegionId, request.RegionId),
+            Language: FirstNonEmpty(context?.Language, request.Language),
+            LocalPeakTime: intelligence?.LocalPeakTime,
+            SkyDirectionHint: intelligence?.SkyDirectionHint,
+            BestViewingWindowLocal: intelligence?.BestViewingWindowLocal,
+            ContentStrategy: FirstNonEmpty(context?.ContentStrategy, intelligence?.StrategyId),
+            RequiredVisualObjects: NormalizeObjectList(intelligence?.RequiredVisualObjects ?? []),
+            ForbiddenObjectNames: NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? [])));
+    }
+
+    private static bool IsMeteorEvent(string eventType, string title)
+        => eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || title.Contains("Meteor", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsFullMoonEvent(string eventType, string title)
+        => eventType.Contains("FullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Full Moon", StringComparison.OrdinalIgnoreCase) || title.Contains("Full Moon", StringComparison.OrdinalIgnoreCase);
+
     private static readonly IReadOnlyList<ThumbnailImageSpec> ThumbnailImageSpecs =
     [
         new("Landscape", "thumbnail-landscape.png", 1280, 720, new RectangleF(58, 54, 650, 214), new PointF(74, 286), new PointF(82, 628), 70f, 36f, 28f),
@@ -1459,6 +1685,56 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static int ClampScore(int score) => Math.Clamp(score, 0, 100);
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
+
+
+    private sealed record ThumbnailDynamicCopy(string SecondaryText, string MicroText);
+
+    private sealed record CurrentEventLock(
+        string PlanId,
+        string Title,
+        string ShortTitle,
+        string EventType,
+        string? Category,
+        IReadOnlyList<string> PrimaryObjects,
+        IReadOnlyList<string> SecondaryObjects,
+        string? SourceExternalEventId,
+        string RegionId,
+        string Language,
+        string? LocalPeakTime,
+        string? SkyDirectionHint,
+        string? BestViewingWindowLocal,
+        string? ContentStrategy,
+        IReadOnlyList<string> RequiredVisualObjects,
+        IReadOnlyList<string> ForbiddenObjectNames)
+    {
+        public ProductionEventIntelligence ToProductionEventIntelligence(bool forceMeteor)
+            => new(
+                "Astronomy",
+                EventType,
+                Title,
+                ShortTitle,
+                null,
+                null,
+                LocalPeakTime,
+                BestViewingWindowLocal,
+                SkyDirectionHint,
+                null,
+                PrimaryObjects,
+                SecondaryObjects,
+                null,
+                null,
+                null,
+                "Current event thumbnail lock",
+                [],
+                [],
+                [],
+                [],
+                [],
+                StrategyId: ContentStrategy ?? EventType,
+                ForbiddenObjectNames: ForbiddenObjectNames,
+                RequiredVisualObjects: forceMeteor ? RequiredVisualObjects.Concat(["Meteor"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : RequiredVisualObjects,
+                PreferredViewingWindow: BestViewingWindowLocal);
+    }
 
     private sealed record ThumbnailImageSpec(
         string Variant,
