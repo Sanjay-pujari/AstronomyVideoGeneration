@@ -216,8 +216,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             Directory.CreateDirectory(thumbnailRoot);
             foreach (var file in outputFiles)
                 await WriteMeteorThumbnailAsync(file, request, cancellationToken);
+            var renderRequest = BuildPhotoCinematicRenderRequest(request, manifest, manifestPath, forceMeteor: true);
+            var forbiddenObjects = DetectForbiddenObjects(request, renderRequest.VisualObjects.Concat(renderRequest.Labels)).ToArray();
+            ValidateThumbnailSemantics(request, renderRequest.VisualObjects, renderRequest.Labels, forbiddenObjects);
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-            await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken);
+            await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken, renderRequest, null, forbiddenObjects);
         }
 
         return BuildImageGenerationResponse(
@@ -297,6 +300,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ValidateThumbnailSceneManifest(manifest, requireSavedManifest: true, outputPath: manifestPath);
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
 
+        var renderRequest = BuildPhotoCinematicRenderRequest(request, manifest, manifestPath);
+        var initialForbiddenObjects = DetectForbiddenObjects(request, renderRequest.VisualObjects.Concat(renderRequest.Labels)).ToArray();
+        if (initialForbiddenObjects.Length > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", initialForbiddenObjects));
+
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -305,9 +313,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ThumbnailClickabilityScore: 99,
             ThumbnailCuriosityScore: 99,
             ThumbnailVisualSourceMode: "PhotoCinematicThumbnail",
-            SourceSceneUsed: "none",
-            ApprovedSceneFoundationUsed: false,
-            IndependentPlanetRedrawUsed: true,
+            SourceSceneUsed: manifest.PrimaryScene.SceneId,
+            ApprovedSceneFoundationUsed: !string.IsNullOrWhiteSpace(renderRequest.SourceImagePath),
+            IndependentPlanetRedrawUsed: string.IsNullOrWhiteSpace(renderRequest.SourceImagePath),
             ArtificialGlowRemoved: true,
             VisualSourceQualityScore: 98,
             CinematicCropApplied: false,
@@ -318,12 +326,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             OldThumbnailRendererBypassed: true,
             SceneTextLabelsRemoved: true,
             TextBoxesRemoved: true,
-            VenusRenderedAsStarPoint: true,
-            JupiterRenderedAsPlanet: true);
+            VenusRenderedAsStarPoint: EventAllowsObject(request, "Venus") && renderRequest.VisualObjects.Any(value => value.Contains("Venus", StringComparison.OrdinalIgnoreCase)),
+            JupiterRenderedAsPlanet: EventAllowsObject(request, "Jupiter") && renderRequest.VisualObjects.Any(value => value.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)));
         ValidateThumbnailLayout(validation);
 
         var renderEntered = false;
         var renderCompleted = false;
+        PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderResult? renderResult = null;
         if (!request.DryRun)
         {
             foreach (var file in outputFiles)
@@ -332,7 +341,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 Console.WriteLine($"[ThumbnailImages] Writing {variant} = {file}");
             }
 
-            var renderResult = await PhotoCinematicThumbnailRenderer.RenderAsync(thumbnailRoot, cancellationToken);
+            renderResult = await PhotoCinematicThumbnailRenderer.RenderAsync(thumbnailRoot, renderRequest, cancellationToken);
             renderEntered = renderResult.Entered;
             renderCompleted = renderResult.Completed;
             if (!renderEntered || !renderCompleted)
@@ -342,13 +351,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             if (missingWrites.Length > 0)
                 throw new InvalidOperationException($"PhotoCinematicThumbnailRenderer did not write expected thumbnail file(s): {string.Join(", ", missingWrites)}.");
 
+            var forbiddenObjects = DetectForbiddenObjects(request, renderResult.VisualObjectsUsed.Concat(renderResult.LabelsUsed)).ToArray();
+            ValidateThumbnailSemantics(request, renderResult.VisualObjectsUsed, renderResult.LabelsUsed, forbiddenObjects);
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-            await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken);
+            await UpdateThumbnailSceneManifestGeneratedPathsAsync(manifestPath, outputFiles, validation, cancellationToken, renderRequest, renderResult, forbiddenObjects);
         }
         else
         {
             renderEntered = true;
             renderCompleted = true;
+            ValidateThumbnailSemantics(request, renderRequest.VisualObjects, renderRequest.Labels, initialForbiddenObjects);
         }
 
         Console.WriteLine($"[ThumbnailImages] Actual renderer = {rendererName}");
@@ -359,7 +371,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validation,
             requestedRenderer: rendererName,
             actualRendererUsed: rendererName,
-            rendererSelectionReason: "Images phase forced directly to PhotoCinematicThumbnailRenderer; legacy scene crop, hero, and shared infographic renderers bypassed.",
+            rendererSelectionReason: "Images phase uses PhotoCinematicThumbnailRenderer bound to current production event metadata and hero/scene manifest source imagery; static golden-pilot planet composition is bypassed unless the event includes those planets.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: renderEntered,
             photoCinematicRendererCompleted: renderCompleted,
@@ -1136,16 +1148,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var isMeteorShowerThumbnail = string.Equals(validation.ThumbnailVisualSourceMode, "MeteorShowerPhotoCinematicThumbnail", StringComparison.OrdinalIgnoreCase);
             if (!isMeteorShowerThumbnail && !string.Equals(validation.ThumbnailVisualSourceMode, "PhotoCinematicThumbnail", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic thumbnailVisualSourceMode must be PhotoCinematicThumbnail.");
-            if (!isMeteorShowerThumbnail && !string.Equals(validation.SourceSceneUsed, "none", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic sourceSceneUsed must be none.");
-            if (validation.ApprovedSceneFoundationUsed)
-                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic approvedSceneFoundationUsed must be false.");
-            if (!isMeteorShowerThumbnail && !validation.IndependentPlanetRedrawUsed)
-                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic independentPlanetRedrawUsed must be true.");
+            if (!isMeteorShowerThumbnail && string.IsNullOrWhiteSpace(validation.SourceSceneUsed))
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic sourceSceneUsed is required.");
             if (validation.CinematicCropApplied)
                 throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic cinematicCropApplied must be false.");
-            if (!validation.OldThumbnailRendererBypassed || !validation.SceneTextLabelsRemoved || !validation.TextBoxesRemoved || (!isMeteorShowerThumbnail && (!validation.VenusRenderedAsStarPoint || !validation.JupiterRenderedAsPlanet)))
-                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic bypass and rendering flags must be true.");
+            if (!validation.OldThumbnailRendererBypassed || !validation.SceneTextLabelsRemoved || !validation.TextBoxesRemoved)
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic bypass and text removal flags must be true.");
         }
         else
         {
@@ -1185,7 +1193,86 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return facts;
     }
 
-    private static async Task UpdateThumbnailSceneManifestGeneratedPathsAsync(string manifestPath, IReadOnlyList<string> generatedPaths, ThumbnailLayoutValidationDto validation, CancellationToken cancellationToken)
+
+    private static PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest BuildPhotoCinematicRenderRequest(ThumbnailAssetGenerationRequest request, ThumbnailSceneManifestDto manifest, string manifestPath, bool forceMeteor = false)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var title = FirstNonEmpty(intelligence?.Title, manifest.Title, request.EventId);
+        var shortTitle = FirstNonEmpty(intelligence?.ShortTitle, title);
+        var eventType = FirstNonEmpty(intelligence?.EventType, request.ProductionContext?.EventType, manifest.EventType, "Unknown");
+        var currentObjects = NormalizeObjectList((intelligence?.PrimaryObjects ?? []).Concat(intelligence?.SecondaryObjects ?? [])).ToList();
+        if (forceMeteor || eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || title.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            currentObjects.Add("Meteor");
+        if (currentObjects.Count == 0) currentObjects.Add(shortTitle);
+        var labels = NormalizeObjectList((intelligence?.PrimaryObjects ?? []).Prepend(shortTitle));
+        var sourceImagePath = ResolveThumbnailSourceImagePath(manifest, manifestPath);
+        return new PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest(
+            title,
+            shortTitle,
+            eventType,
+            currentObjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            labels.Count > 0 ? labels : [shortTitle],
+            intelligence?.SkyDirectionHint,
+            intelligence?.LocalPeakTime,
+            sourceImagePath);
+    }
+
+    private static string? ResolveThumbnailSourceImagePath(ThumbnailSceneManifestDto manifest, string manifestPath)
+    {
+        var heroManifestPath = manifest.SourceHeroAssets.FirstOrDefault(path => string.Equals(Path.GetFileName(path), HeroSceneManifestFileName, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(heroManifestPath) && File.Exists(heroManifestPath))
+            return manifest.PrimaryScene.ImagePath;
+        if (File.Exists(manifest.PrimaryScene.ImagePath))
+            return manifest.PrimaryScene.ImagePath;
+        return File.Exists(manifestPath) ? manifestPath : null;
+    }
+
+    private static void ValidateThumbnailSemantics(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> visualObjectsUsed, IReadOnlyList<string> labelsUsed, IReadOnlyList<string> forbiddenObjectsDetected)
+    {
+        if (forbiddenObjectsDetected.Count > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", forbiddenObjectsDetected));
+
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var requiredLabels = NormalizeObjectList(intelligence?.PrimaryObjects ?? []);
+        var shortTitle = intelligence?.ShortTitle;
+        if (!string.IsNullOrWhiteSpace(shortTitle)) requiredLabels = requiredLabels.Append(shortTitle.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (requiredLabels.Count == 0) return;
+
+        var observed = NormalizeObjectList(visualObjectsUsed.Concat(labelsUsed));
+        var matched = requiredLabels.Any(required => observed.Any(label => LabelMatches(label, required) || LabelMatches(required, label)));
+        if (!matched)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: required object labels must include a current primary object or shortTitle. required=" + string.Join(", ", requiredLabels) + "; labels=" + string.Join(", ", observed));
+    }
+
+    private static IEnumerable<string> DetectForbiddenObjects(ThumbnailAssetGenerationRequest request, IEnumerable<string> labels)
+    {
+        var forbiddenCandidates = new[] { "Venus", "Jupiter", "Mars", "Saturn", "Mercury", "Uranus", "Neptune" };
+        var allowed = NormalizeObjectList((request.ProductionContext?.ProductionEventIntelligence?.PrimaryObjects ?? []).Concat(request.ProductionContext?.ProductionEventIntelligence?.SecondaryObjects ?? []));
+        foreach (var candidate in forbiddenCandidates)
+        {
+            if (allowed.Any(value => LabelMatches(value, candidate))) continue;
+            if (labels.Any(label => LabelMatches(label, candidate))) yield return candidate;
+        }
+    }
+
+    private static bool EventAllowsObject(ThumbnailAssetGenerationRequest request, string objectName)
+        => NormalizeObjectList((request.ProductionContext?.ProductionEventIntelligence?.PrimaryObjects ?? []).Concat(request.ProductionContext?.ProductionEventIntelligence?.SecondaryObjects ?? []))
+            .Any(value => LabelMatches(value, objectName));
+
+    private static IReadOnlyList<string> NormalizeObjectList(IEnumerable<string> values)
+        => values.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static bool LabelMatches(string label, string expected)
+        => label.Equals(expected, StringComparison.OrdinalIgnoreCase) || label.Contains(expected, StringComparison.OrdinalIgnoreCase);
+
+    private static async Task UpdateThumbnailSceneManifestGeneratedPathsAsync(
+        string manifestPath,
+        IReadOnlyList<string> generatedPaths,
+        ThumbnailLayoutValidationDto validation,
+        CancellationToken cancellationToken,
+        PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderRequest? renderRequest = null,
+        PhotoCinematicThumbnailRenderer.PhotoCinematicThumbnailRenderResult? renderResult = null,
+        IReadOnlyList<string>? forbiddenObjectsDetected = null)
     {
         var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(manifestPath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException("Thumbnail scene manifest input could not be parsed.");
@@ -1194,7 +1281,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ["thumbnailVisualSourceMode"] = validation.ThumbnailVisualSourceMode,
             ["sourceSceneUsed"] = validation.SourceSceneUsed,
             ["readinessScore"] = validation.ThumbnailFinalReadinessScore.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["forbiddenPlanetLeakage"] = (validation.VenusRenderedAsStarPoint || validation.JupiterRenderedAsPlanet).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ["forbiddenPlanetLeakage"] = (forbiddenObjectsDetected?.Count > 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["thumbnailRequestTitle"] = renderRequest?.Title ?? manifest.Title ?? string.Empty,
+            ["thumbnailRequestShortTitle"] = renderRequest?.ShortTitle ?? string.Empty,
+            ["thumbnailPrimaryObjects"] = string.Join(", ", renderRequest?.VisualObjects ?? Array.Empty<string>()),
+            ["thumbnailSourceManifestPath"] = ResolveThumbnailSourceManifestPath(manifest, manifestPath),
+            ["thumbnailSourceScenePath"] = renderRequest?.SourceImagePath ?? manifest.PrimaryScene.ImagePath,
+            ["visualObjectsUsed"] = string.Join(", ", renderResult?.VisualObjectsUsed ?? renderRequest?.VisualObjects ?? Array.Empty<string>()),
+            ["labelsUsed"] = string.Join(", ", renderResult?.LabelsUsed ?? renderRequest?.Labels ?? Array.Empty<string>()),
+            ["forbiddenObjectsDetected"] = string.Join(", ", forbiddenObjectsDetected ?? Array.Empty<string>())
         };
 
         var updated = manifest with
@@ -1203,6 +1298,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ValidationFacts = facts
         };
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(updated, JsonOptions), cancellationToken);
+    }
+
+
+    private static string ResolveThumbnailSourceManifestPath(ThumbnailSceneManifestDto manifest, string manifestPath)
+    {
+        var heroManifestPath = manifest.SourceHeroAssets.FirstOrDefault(path => string.Equals(Path.GetFileName(path), HeroSceneManifestFileName, StringComparison.OrdinalIgnoreCase));
+        return !string.IsNullOrWhiteSpace(heroManifestPath) && File.Exists(heroManifestPath)
+            ? NormalizePath(heroManifestPath)
+            : NormalizePath(manifestPath);
     }
 
     private static string ResolveMeteorViewingWindow(ProductionEventIntelligence? intelligence)
