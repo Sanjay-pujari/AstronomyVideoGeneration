@@ -1,0 +1,8 @@
+{
+  "title": "Planet Parade Premium Astronomy Poster Prompt",
+  "eventType": "PlanetParade",
+  "style": "PremiumAstronomyPoster",
+  "prompt": "Create an ultra-premium astronomy poster background. NASA APOD quality. National Geographic astrophotography quality. Discovery Science documentary quality. Photorealistic twilight-to-night sky with multiple visible planets aligned along the ecliptic. Natural atmospheric depth. Dark foreground horizon with subtle landscape silhouette. Accurate celestial scale impression without diagram styling. High dynamic range. Award-winning astrophotography. No text. No labels. No arrows. No panels. No UI. No logos. No watermark.",
+  "negativePrompt": "cartoon, vector art, flat illustration, svg style, diagram, template graphics, placeholder graphics, text, letters, numbers, captions, labels, watermark, logo, ui elements, boxes, panels, arrows",
+  "qualityTarget": "NASA_APOD"
+}

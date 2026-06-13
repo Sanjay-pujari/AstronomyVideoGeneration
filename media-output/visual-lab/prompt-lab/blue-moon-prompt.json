@@ -1,0 +1,8 @@
+{
+  "title": "Blue Moon Premium Astronomy Poster Prompt",
+  "eventType": "BlueMoon",
+  "style": "PremiumAstronomyPoster",
+  "prompt": "Create an ultra-premium astronomy poster background. NASA APOD quality. National Geographic astrophotography quality. Discovery Science documentary quality. Photorealistic full moon in a deep blue night sky. Crisp lunar surface detail with natural glow and atmospheric haze. Dark landscape silhouette with subtle depth. High dynamic range. Award-winning astrophotography. Elegant cinematic composition. No text. No labels. No arrows. No panels. No UI. No logos. No watermark.",
+  "negativePrompt": "cartoon, vector art, flat illustration, svg style, diagram, template graphics, placeholder graphics, text, letters, numbers, captions, labels, watermark, logo, ui elements, boxes, panels, arrows",
+  "qualityTarget": "NASA_APOD"
+}
