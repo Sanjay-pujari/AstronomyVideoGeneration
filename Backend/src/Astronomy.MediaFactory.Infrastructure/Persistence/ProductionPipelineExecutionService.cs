@@ -616,6 +616,7 @@ public sealed partial class ProductionPipelineExecutionService(
                             throw new InvalidOperationException($"Phase 8 scene variant validation failed: generated background for scene {scene.SceneNumber} format {format.Format} variant {variant.VariantNo} is invalid: {string.Join(", ", backgroundValidationErrors)}");
 
                         await infographicRenderer.RenderAsync(imagePath, spec, string.Empty, string.Empty, cancellationToken, format.RenderVariant);
+                        await ApplyPhase8VariantVisualTreatmentAsync(imagePath, format.RenderVariant.Width, format.RenderVariant.Height, scene.SceneNumber, variant, format.Format, cancellationToken);
                     }
                     catch
                     {
@@ -676,7 +677,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static QuestionDrivenVisualSpec BuildPhase8SceneVariantVisualSpec(ProductionPhaseContext context, EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, string visualDirectorPrompt)
     {
         var intelligence = context.ProductionEventIntelligence;
-        var overlayText = SplitOverlayIntent(scene.OverlayIntent).DefaultIfEmpty(scene.ViewerTakeaway).Take(4).ToArray();
+        var overlayText = BuildPhase8VariantOverlayText(scene, variant);
         var requiredObjects = (scene.RequiredVisualObjects is { Count: > 0 } ? scene.RequiredVisualObjects : intelligence.RequiredVisualObjects) ?? Array.Empty<string>();
         var eventType = FirstNonEmpty(intelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType);
         return new QuestionDrivenVisualSpec(
@@ -693,7 +694,7 @@ public sealed partial class ProductionPipelineExecutionService(
             Math.Max(4, (int)Math.Ceiling(scene.VisualVariants?.Sum(variant => variant.RecommendedDurationSeconds) ?? 6)),
             visualDirectorPrompt,
             overlayText,
-            [visualDirectorPrompt, FirstNonEmpty(scene.VisualIntent, scene.ImagePromptIntent), variant.CompositionHint, variant.CameraStyle],
+            BuildPhase8VariantProgrammaticLayers(scene, variant, visualDirectorPrompt),
             SplitOverlayIntent(scene.AccessibilityIntent).DefaultIfEmpty(scene.ViewerTakeaway).ToArray(),
             DateTimeOffset.UtcNow,
             eventType,
@@ -708,6 +709,35 @@ public sealed partial class ProductionPipelineExecutionService(
             SplitOverlayIntent(scene.VisualIntent).ToArray(),
             requiredObjects,
             requiredObjects);
+    }
+
+    private static IReadOnlyList<string> BuildPhase8VariantOverlayText(EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant)
+    {
+        var baseLines = SplitOverlayIntent(scene.OverlayIntent).DefaultIfEmpty(scene.ViewerTakeaway).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        return NormalizePhase8VariantType(variant.VariantType) switch
+        {
+            "wide_context" => baseLines.Take(1).ToArray(),
+            "object_focus" => baseLines.Take(2).ToArray(),
+            "educational_overlay" => baseLines.Take(3).Append("Tip: compare the label with the sky position").Take(4).ToArray(),
+            "cinematic_detail" => baseLines.Take(1).ToArray(),
+            "transition_or_closing" => new[] { FirstNonEmpty(scene.ViewerTakeaway, "Save the date"), "Save this sky reminder" },
+            _ => baseLines.Take(3).ToArray()
+        };
+    }
+
+    private static IReadOnlyList<string> BuildPhase8VariantProgrammaticLayers(EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, string visualDirectorPrompt)
+    {
+        var type = NormalizePhase8VariantType(variant.VariantType);
+        return new[]
+        {
+            visualDirectorPrompt,
+            FirstNonEmpty(scene.VisualIntent, scene.ImagePromptIntent),
+            variant.CompositionHint,
+            variant.CameraStyle,
+            $"phase8-variant-type:{type}",
+            $"phase8-layout-template:{ResolveProfessionalSlideLayoutTemplate("long", variant.VariantType)}",
+            $"phase8-background-seed:{StablePhase8VariantSeed(scene.SceneNumber, variant.VariantNo, variant.VariantType)}"
+        }.Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
     }
 
     private static IEnumerable<string> SplitOverlayIntent(string? value)
@@ -732,6 +762,7 @@ public sealed partial class ProductionPipelineExecutionService(
             $"Image prompt intent: {scene.ImagePromptIntent}",
             $"Overlay intent: {scene.OverlayIntent}",
             $"Variant type: {variant.VariantType}",
+            $"Variant rendering directive: {BuildPhase8VariantRenderingDirective(variant.VariantType, format.Format, scene.SceneNumber, variant.VariantNo)}",
             $"Composition hint: {variant.CompositionHint}",
             $"Camera style: {variant.CameraStyle}",
             $"Format-specific composition: {aspect}",
@@ -740,6 +771,35 @@ public sealed partial class ProductionPipelineExecutionService(
             $"Astronomy constraints: correct event context, use only relevant celestial objects ({allowedObjects}), no unrelated planets or objects, no decorative objects that change the science meaning."
         });
     }
+
+    private static string BuildPhase8VariantRenderingDirective(string variantType, string format, int sceneNumber, int variantNo)
+    {
+        var type = NormalizePhase8VariantType(variantType);
+        var seed = StablePhase8VariantSeed(sceneNumber, variantNo, variantType);
+        return type switch
+        {
+            "wide_context" => $"wide sky landscape, broad context, minimal overlays, distant object placement, sparse star seed {seed}",
+            "object_focus" => $"radiant/object-centered composition, strong focal point, few info panels, centered crop seed {seed}",
+            "educational_overlay" => $"infographic layout with left/bottom information panel, labels, tips, dense overlay grid seed {seed}",
+            "cinematic_detail" => $"dramatic close-up/detail, minimal text, atmospheric vignette and close camera framing seed {seed}",
+            "transition_or_closing" => $"CTA/reminder/save-date closing layout, clean negative space, final card composition seed {seed}",
+            _ => $"distinct variant composition and background reference seed {seed}"
+        } + $"; output format {format}";
+    }
+
+    private static string NormalizePhase8VariantType(string? variantType)
+    {
+        var value = (variantType ?? string.Empty).Trim().ToLowerInvariant();
+        if (value.Contains("wide")) return "wide_context";
+        if (value.Contains("focus")) return "object_focus";
+        if (value.Contains("overlay") || value.Contains("education")) return "educational_overlay";
+        if (value.Contains("cinematic") || value.Contains("detail")) return "cinematic_detail";
+        if (value.Contains("transition") || value.Contains("closing") || value.Contains("cta")) return "transition_or_closing";
+        return string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+    }
+
+    private static int StablePhase8VariantSeed(int sceneNumber, int variantNo, string? variantType)
+        => Math.Abs(HashCode.Combine(sceneNumber, variantNo, NormalizePhase8VariantType(variantType)));
 
     private static Phase8SafeAreaMetadata BuildPhase8SafeAreaMetadata(string format, string variantType)
         => format.Equals("short", StringComparison.OrdinalIgnoreCase)
@@ -866,9 +926,28 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string ResolveProfessionalSlideLayoutTemplate(string format, string variantType)
-        => format.Equals("short", StringComparison.OrdinalIgnoreCase)
-            ? (variantType.Contains("overlay", StringComparison.OrdinalIgnoreCase) ? "short-bottom-info-panel-with-safe-center-object-labels" : "short-stacked-title-object-and-tips")
-            : (variantType.Contains("focus", StringComparison.OrdinalIgnoreCase) ? "long-left-info-panel-with-right-object-focus" : "long-left-info-panel-with-bottom-viewing-tips");
+    {
+        var type = NormalizePhase8VariantType(variantType);
+        return format.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? type switch
+            {
+                "wide_context" => "short-wide-sky-minimal-overlay",
+                "object_focus" => "short-centered-object-focus",
+                "educational_overlay" => "short-bottom-info-panel-with-safe-center-object-labels",
+                "cinematic_detail" => "short-dramatic-close-up-minimal-text",
+                "transition_or_closing" => "short-clean-cta-closing-card",
+                _ => "short-stacked-title-object-and-tips"
+            }
+            : type switch
+            {
+                "wide_context" => "long-landscape-wide-context-minimal-overlay",
+                "object_focus" => "long-radiant-object-centered-focus",
+                "educational_overlay" => "long-left-info-panel-with-bottom-viewing-tips-and-labels",
+                "cinematic_detail" => "long-cinematic-detail-atmosphere",
+                "transition_or_closing" => "long-clean-save-date-closing-layout",
+                _ => "long-left-info-panel-with-bottom-viewing-tips"
+            };
+    }
 
     private static async Task RenderCleanAstronomyBackgroundAsync(string path, int width, int height, int sceneNumber, int variantNo, CancellationToken cancellationToken)
     {
@@ -888,6 +967,81 @@ public sealed partial class ProductionPipelineExecutionService(
             ctx.GaussianBlur(.22f);
         });
         await image.SaveAsPngAsync(path, new PngEncoder(), cancellationToken);
+    }
+
+
+    private static async Task ApplyPhase8VariantVisualTreatmentAsync(string imagePath, int width, int height, int sceneNumber, SceneVisualVariantDto variant, string format, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(imagePath)) return;
+        using var image = await Image.LoadAsync<Rgba32>(imagePath, cancellationToken);
+        var type = NormalizePhase8VariantType(variant.VariantType);
+        var seed = StablePhase8VariantSeed(sceneNumber, variant.VariantNo, variant.VariantType);
+        var random = new Random(seed + (format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 97 : 31));
+        var accent = type switch
+        {
+            "wide_context" => new Rgba32(90, 170, 255, 58),
+            "object_focus" => new Rgba32(255, 220, 135, 74),
+            "educational_overlay" => new Rgba32(96, 210, 255, 88),
+            "cinematic_detail" => new Rgba32(255, 132, 82, 66),
+            "transition_or_closing" => new Rgba32(170, 255, 190, 72),
+            _ => new Rgba32(255, 255, 255, 48)
+        };
+
+        image.ProcessPixelRows(accessor =>
+        {
+            void BlendRect(int x0, int y0, int w, int h, Rgba32 color)
+            {
+                var x1 = Math.Clamp(x0 + w, 0, accessor.Width);
+                var y1 = Math.Clamp(y0 + h, 0, accessor.Height);
+                x0 = Math.Clamp(x0, 0, accessor.Width);
+                y0 = Math.Clamp(y0, 0, accessor.Height);
+                var alpha = color.A / 255f;
+                for (var y = y0; y < y1; y++)
+                {
+                    var row = accessor.GetRowSpan(y);
+                    for (var x = x0; x < x1; x++)
+                    {
+                        var dst = row[x];
+                        row[x] = new Rgba32(
+                            (byte)Math.Clamp(dst.R * (1f - alpha) + color.R * alpha, 0, 255),
+                            (byte)Math.Clamp(dst.G * (1f - alpha) + color.G * alpha, 0, 255),
+                            (byte)Math.Clamp(dst.B * (1f - alpha) + color.B * alpha, 0, 255),
+                            255);
+                    }
+                }
+            }
+
+            switch (type)
+            {
+                case "wide_context":
+                    BlendRect(0, (int)(height * .74f), width, Math.Max(20, height / 22), accent);
+                    for (var i = 0; i < 18; i++) BlendRect(random.Next(width), random.Next(height / 2), 2 + random.Next(4), 2 + random.Next(4), new Rgba32(220, 240, 255, 135));
+                    break;
+                case "object_focus":
+                    BlendRect((int)(width * .43f), (int)(height * .28f), Math.Max(90, width / 7), Math.Max(90, width / 7), accent);
+                    BlendRect((int)(width * .48f), (int)(height * .18f), Math.Max(12, width / 90), Math.Max(340, height / 3), new Rgba32(255, 240, 180, 42));
+                    break;
+                case "educational_overlay":
+                    BlendRect(0, format.Equals("short", StringComparison.OrdinalIgnoreCase) ? (int)(height * .69f) : 0, format.Equals("short", StringComparison.OrdinalIgnoreCase) ? width : (int)(width * .31f), format.Equals("short", StringComparison.OrdinalIgnoreCase) ? (int)(height * .21f) : height, accent);
+                    for (var i = 0; i < 4; i++) BlendRect(32, 60 + i * Math.Max(54, height / 16), Math.Max(150, width / 5), 8, new Rgba32(255, 255, 255, 115));
+                    break;
+                case "cinematic_detail":
+                    BlendRect(0, 0, width, Math.Max(40, height / 10), new Rgba32(0, 0, 0, 80));
+                    BlendRect(0, height - Math.Max(40, height / 10), width, Math.Max(40, height / 10), new Rgba32(0, 0, 0, 92));
+                    BlendRect((int)(width * .64f), (int)(height * .18f), Math.Max(120, width / 5), Math.Max(120, width / 5), accent);
+                    break;
+                case "transition_or_closing":
+                    BlendRect((int)(width * .08f), (int)(height * .18f), (int)(width * .84f), Math.Max(130, height / 5), accent);
+                    BlendRect((int)(width * .18f), (int)(height * .78f), (int)(width * .64f), Math.Max(38, height / 26), new Rgba32(255, 255, 255, 82));
+                    break;
+            }
+
+            var tagX = 8 + (variant.VariantNo * 17 % Math.Max(20, width - 80));
+            var tagY = 8 + (variant.VariantNo * 23 % Math.Max(20, height - 80));
+            BlendRect(tagX, tagY, 42, 18, new Rgba32((byte)(60 + variant.VariantNo * 31), (byte)(100 + variant.VariantNo * 19), (byte)(160 + variant.VariantNo * 11), 95));
+        });
+
+        await image.SaveAsPngAsync(imagePath, new PngEncoder(), cancellationToken);
     }
 
     private static Phase8ImageValidationResult ValidateProfessionalSlideImage(string path, int expectedWidth, int expectedHeight, List<string> validationErrors)
@@ -2225,6 +2379,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase6SceneEnrichmentDiagnostics = phaseNo == 6
             ? BuildPhase6SceneEnrichmentDiagnostics(context)
             : null;
+        var phase8SceneVariantDiagnostics = phaseNo == 8
+            ? BuildPhase8SceneVariantDiagnostics(context, reason)
+            : null;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
             ? phase6SceneEnrichmentDiagnostics
             : null;
@@ -2277,6 +2434,13 @@ public sealed partial class ProductionPipelineExecutionService(
             sceneIntents = phase6SceneEnrichmentDiagnostics?.SceneIntents,
             sceneEnrichmentMetadata = phase6SceneEnrichmentDiagnostics?.SceneEnrichmentMetadata,
             phase7NarrationDiagnostics,
+            phase8SceneVariantDiagnostics,
+            generatedImageCount = phase8SceneVariantDiagnostics?.GeneratedImageCount,
+            expectedImageCount = phase8SceneVariantDiagnostics?.ExpectedImageCount,
+            perSceneVariantHash = phase8SceneVariantDiagnostics?.PerSceneVariantHash,
+            duplicateHashGroups = phase8SceneVariantDiagnostics?.DuplicateHashGroups,
+            sceneVariantManifestPath = phase8SceneVariantDiagnostics?.ManifestPath,
+            failureReason = phase8SceneVariantDiagnostics?.FailureReason,
             phase12ThumbnailDiagnostics,
             phase13ShortNarrationDiagnostics,
             phase14NarrationDiagnostics,
@@ -2329,6 +2493,60 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
+
+
+    private static Phase8SceneVariantDiagnostics BuildPhase8SceneVariantDiagnostics(ProductionPhaseContext context, string failureReason)
+    {
+        var sceneAssetsRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets");
+        var manifestPath = Path.Combine(sceneAssetsRoot, "scene-variant-manifest.json");
+        IReadOnlyList<Phase8SceneVariantManifestItem> manifest = Array.Empty<Phase8SceneVariantManifestItem>();
+        if (File.Exists(manifestPath))
+        {
+            try
+            {
+                manifest = JsonSerializer.Deserialize<IReadOnlyList<Phase8SceneVariantManifestItem>>(File.ReadAllText(manifestPath), JsonOptions) ?? Array.Empty<Phase8SceneVariantManifestItem>();
+            }
+            catch (JsonException)
+            {
+                manifest = Array.Empty<Phase8SceneVariantManifestItem>();
+            }
+        }
+
+        var plan = TryReadEnrichedScenePlan(BuildEnrichedScenePlanPath(context));
+        var expectedImageCount = plan?.Scenes.Sum(scene => (scene.VisualVariants?.Count ?? 0) * Phase8ProfessionalSlideFormats.Length) ?? 0;
+        var generatedImageCount = manifest.Count(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && File.Exists(item.FinalImagePath));
+        var perSceneVariantHash = manifest
+            .Where(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => item.SceneNumber).ThenBy(item => item.Format).ThenBy(item => item.VariantNo)
+            .Select(item => new Phase8SceneVariantHashDiagnostic(item.SceneNumber, item.Format, item.VariantNo, item.VariantType, item.VisualHash, item.FinalImagePath))
+            .ToArray();
+        var duplicateHashGroups = manifest
+            .Where(item => !string.IsNullOrWhiteSpace(item.VisualHash))
+            .GroupBy(item => new { item.SceneNumber, item.Format, item.VisualHash })
+            .Where(group => group.Count() > 1)
+            .Select(group => new Phase8DuplicateHashGroupDiagnostic(group.Key.SceneNumber, group.Key.Format, group.Key.VisualHash, group.Select(item => item.VariantNo).OrderBy(variantNo => variantNo).ToArray(), group.Select(item => item.FinalImagePath).ToArray()))
+            .ToArray();
+
+        return new Phase8SceneVariantDiagnostics(
+            generatedImageCount,
+            expectedImageCount,
+            perSceneVariantHash,
+            duplicateHashGroups,
+            File.Exists(manifestPath) ? NormalizePath(manifestPath) : string.Empty,
+            failureReason);
+    }
+
+    private sealed record Phase8SceneVariantDiagnostics(
+        int GeneratedImageCount,
+        int ExpectedImageCount,
+        IReadOnlyList<Phase8SceneVariantHashDiagnostic> PerSceneVariantHash,
+        IReadOnlyList<Phase8DuplicateHashGroupDiagnostic> DuplicateHashGroups,
+        string ManifestPath,
+        string FailureReason);
+
+    private sealed record Phase8SceneVariantHashDiagnostic(int SceneNumber, string Format, int VariantNo, string VariantType, string VisualHash, string FinalImagePath);
+
+    private sealed record Phase8DuplicateHashGroupDiagnostic(int SceneNumber, string Format, string VisualHash, IReadOnlyList<int> VariantNos, IReadOnlyList<string> FinalImagePaths);
 
     private static Phase6SceneEnrichmentDiagnostics BuildPhase6SceneEnrichmentDiagnostics(ProductionPhaseContext context)
     {
