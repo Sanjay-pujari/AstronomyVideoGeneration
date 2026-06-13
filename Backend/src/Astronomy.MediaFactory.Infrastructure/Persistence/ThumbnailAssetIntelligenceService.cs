@@ -844,7 +844,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .Select(FormatThumbnailObjectLabel)
             .Where(IsPlanetObjectName)
             .ToArray();
-        if (fromStructuredObjects.Count > 0) return fromStructuredObjects;
+        if (fromStructuredObjects.Length > 0) return fromStructuredObjects;
         return ExtractPlanetObjectNames(FirstNonEmpty(intelligence.ShortTitle, intelligence.Title));
     }
 
