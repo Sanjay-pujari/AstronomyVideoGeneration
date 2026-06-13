@@ -183,6 +183,87 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.DoesNotContain("1.63", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_BrightPlanetVisibilityCompositionUsesObjectTonightCopy()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Saturn visible over Udaipur from June 10 through June 17 with best altitude after midnight",
+            "Saturn visibility consolidated from nightly visibility forecasts",
+            "BRIGHT_PLANET_VISIBILITY",
+            ["Saturn"],
+            []);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Composition",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var saved = JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-composition-model.json")), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.True(result.ThumbnailCompositionReadinessScore >= 90);
+        Assert.Equal("SATURN TONIGHT", saved!.PrimaryHook);
+        Assert.Equal(string.Empty, saved.SecondaryText);
+        Assert.Equal(string.Empty, saved.MicroText);
+        Assert.Equal(1, saved.Validation.TextElementCount);
+        Assert.True(saved.PrimaryHook.Length <= 28);
+        Assert.DoesNotContain("Udaipur", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("consolidated", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_PlanetGroupingCompositionUsesVisibleObjectsAndMotifCopy()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Mercury, Venus, Mars, Jupiter, and Saturn line up across the western sky above Udaipur",
+            "Mercury Venus Mars Jupiter Saturn grouping over Rajasthan after sunset",
+            "PLANET_GROUPING",
+            ["Mercury", "Venus", "Mars"],
+            ["Jupiter", "Saturn"],
+            requiredVisualObjects: ["Mercury", "Venus", "Mars", "Jupiter", "Saturn", "planet grouping", "guided scan path"]);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Composition",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var saved = JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-composition-model.json")), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.True(result.ThumbnailCompositionReadinessScore >= 90);
+        Assert.Equal("5 BRIGHT PLANETS", saved!.PrimaryHook);
+        Assert.Equal("LOOK WEST TONIGHT", saved.SecondaryText);
+        Assert.Equal(string.Empty, saved.MicroText);
+        Assert.Equal(2, saved.Validation.TextElementCount);
+        Assert.True(saved.PrimaryHook.Length <= 28);
+        Assert.True(saved.SecondaryText.Length <= 24);
+        Assert.DoesNotContain("Udaipur", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Rajasthan", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task GenerateThumbnailAssetsAsync_PlanetConjunctionImagesUseCompactThumbnailText()
     {
@@ -548,7 +629,7 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     private static ThumbnailAssetIntelligenceService CreateService(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), new DefaultVisualSourceResolver());
 
-    private static ProductionPipelineExecutionContext BuildProductionContext(string workingDirectory, string title, string shortTitle, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
+    private static ProductionPipelineExecutionContext BuildProductionContext(string workingDirectory, string title, string shortTitle, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, IReadOnlyList<string>? requiredVisualObjects = null, IReadOnlyList<string>? resolvedObjectNames = null)
     {
         var intelligence = new ProductionEventIntelligence(
             "Astronomy",
@@ -572,7 +653,9 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             ["Current event thumbnail"],
             [],
             [],
-            StrategyId: eventType);
+            StrategyId: eventType,
+            ResolvedObjectNames: resolvedObjectNames,
+            RequiredVisualObjects: requiredVisualObjects);
 
         var eventRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId);
         return new ProductionPipelineExecutionContext(

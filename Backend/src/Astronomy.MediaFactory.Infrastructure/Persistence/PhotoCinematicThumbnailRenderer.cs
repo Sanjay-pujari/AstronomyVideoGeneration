@@ -373,7 +373,7 @@ internal static class PhotoCinematicThumbnailRenderer
         var hook = BuildHookText(request);
         DrawTextWithShadow(ctx, hook, hookFont, spec.HookOrigin, Color.White, 0.86f);
 
-        if (IsPlanetConjunctionEventType(request.EventType)) return;
+        if (IsPlanetFamilyEventType(request.EventType)) return;
 
         var secondaryFont = ResolveFont(spec.SecondaryFontSize, FontStyle.Bold);
         var microFont = ResolveFont(spec.MicroFontSize, FontStyle.Bold);
@@ -385,11 +385,12 @@ internal static class PhotoCinematicThumbnailRenderer
 
     private static string BuildHookText(PhotoCinematicThumbnailRenderRequest request)
     {
-        if (IsPlanetConjunctionEventType(request.EventType))
+        if (IsPlanetFamilyEventType(request.EventType))
         {
-            var objectLine = CleanText(request.ShortTitle, request.Title, DefaultHookText, 32).ToUpperInvariant();
+            var objectLine = CleanText(request.ShortTitle, request.Title, DefaultHookText, 28).ToUpperInvariant();
             objectLine = objectLine.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? objectLine;
-            return string.IsNullOrWhiteSpace(objectLine) ? "PLANET CONJUNCTION" : $"{objectLine}\nCLOSEST APPROACH";
+            var subheadline = CleanText(request.SecondaryText, string.Empty, ResolvePlanetFamilyFallbackSubheadline(request.EventType), 24).ToUpperInvariant();
+            return string.IsNullOrWhiteSpace(subheadline) ? objectLine : $"{objectLine}\n{subheadline}";
         }
 
         var text = CleanText(request.ShortTitle, request.Title, DefaultHookText, 24).ToUpperInvariant();
@@ -398,11 +399,24 @@ internal static class PhotoCinematicThumbnailRenderer
         return words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2));
     }
 
-    private static bool IsPlanetConjunctionEventType(string? eventType)
+    private static bool IsPlanetFamilyEventType(string? eventType)
     {
         if (string.IsNullOrWhiteSpace(eventType)) return false;
         var normalized = new string(eventType.Where(char.IsLetterOrDigit).ToArray());
-        return normalized.Equals("PLANETCONJUNCTION", StringComparison.OrdinalIgnoreCase);
+        return normalized.Equals("PLANETPAIRING", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("PLANETCONJUNCTION", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("CONJUNCTION", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("PLANETGROUPING", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("BRIGHTPLANETVISIBILITY", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("PLANETPARADE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolvePlanetFamilyFallbackSubheadline(string? eventType)
+    {
+        var normalized = string.IsNullOrWhiteSpace(eventType) ? string.Empty : new string(eventType.Where(char.IsLetterOrDigit).ToArray());
+        if (normalized.Contains("CONJUNCTION", StringComparison.OrdinalIgnoreCase) || normalized.Contains("PAIRING", StringComparison.OrdinalIgnoreCase)) return "CLOSEST APPROACH";
+        if (normalized.Contains("GROUPING", StringComparison.OrdinalIgnoreCase) || normalized.Contains("PARADE", StringComparison.OrdinalIgnoreCase)) return "LOOK WEST TONIGHT";
+        return string.Empty;
     }
 
     private static void DrawTextWithShadow(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color, float lineSpacing)

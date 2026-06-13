@@ -482,11 +482,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             DeriveSecondaryThumbnailText(heroStory),
             DeriveMicroThumbnailText(heroStory));
         var scores = BuildReadinessScores(selectedHookScore);
-        if (TryBuildPlanetConjunctionThumbnailCopy(request.ProductionContext?.ProductionEventIntelligence, out var conjunctionCopy))
+        if (TryBuildPlanetFamilyThumbnailCopy(request.ProductionContext?.ProductionEventIntelligence, out var planetCopy))
         {
-            selectedHook = conjunctionCopy.PrimaryText;
-            thumbnailCopy = conjunctionCopy;
-            scores = BuildCompactPlanetConjunctionReadinessScores();
+            selectedHook = planetCopy.PrimaryText;
+            thumbnailCopy = planetCopy;
+            scores = BuildCompactPlanetFamilyReadinessScores();
         }
         var visualFocus = CleanTextElement(heroStory.HeroVisualFocus, "Timely sky event above the local horizon.");
         var emotion = "Curiosity + Wonder";
@@ -583,12 +583,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var visualFocus = CleanTextElement(intelligence.VisualFocus, "Timely sky event above the local horizon.");
         var readinessScore = ClampScore(intelligence.Scores.ThumbnailReadinessScore);
 
-        if (TryBuildPlanetConjunctionThumbnailCopy(request.ProductionContext?.ProductionEventIntelligence, out var conjunctionCopy))
+        if (TryBuildPlanetFamilyThumbnailCopy(request.ProductionContext?.ProductionEventIntelligence, out var planetCopy))
         {
-            primaryHook = conjunctionCopy.PrimaryText;
-            secondaryText = conjunctionCopy.SecondaryText;
-            microText = conjunctionCopy.MicroText;
-            readinessScore = Math.Max(readinessScore, BuildCompactPlanetConjunctionReadinessScores().ThumbnailReadinessScore);
+            primaryHook = planetCopy.PrimaryText;
+            secondaryText = planetCopy.SecondaryText;
+            microText = planetCopy.MicroText;
+            readinessScore = Math.Max(readinessScore, BuildCompactPlanetFamilyReadinessScores().ThumbnailReadinessScore);
         }
 
         var textElementCount = new[] { primaryHook, secondaryText, microText }.Count(text => !string.IsNullOrWhiteSpace(text));
@@ -797,37 +797,89 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             readiness);
     }
 
-    private static ThumbnailReadinessScoresDto BuildCompactPlanetConjunctionReadinessScores()
+    private static ThumbnailReadinessScoresDto BuildCompactPlanetFamilyReadinessScores()
         => new(96, 92, 92, 98, 95);
 
-    private static bool TryBuildPlanetConjunctionThumbnailCopy(ProductionEventIntelligence? intelligence, out ThumbnailCopyDto copy)
+    private static bool TryBuildPlanetFamilyThumbnailCopy(ProductionEventIntelligence? intelligence, out ThumbnailCopyDto copy)
     {
         copy = new ThumbnailCopyDto(string.Empty, string.Empty, string.Empty);
-        if (!IsPlanetConjunctionEventType(intelligence?.EventType)) return false;
+        if (!IsPlanetFamilyEventType(intelligence?.EventType)) return false;
 
-        var objects = NormalizeObjectList((intelligence?.PrimaryObjects ?? Array.Empty<string>()).Concat(intelligence?.SecondaryObjects ?? Array.Empty<string>()));
-        if (objects.Count < 2) objects = ExtractConjunctionObjectNames(FirstNonEmpty(intelligence?.ShortTitle, intelligence?.Title));
+        var objects = ResolvePlanetFamilyVisibleObjects(intelligence);
         if (objects.Count == 0) return false;
 
-        var primary = FormatThumbnailObjectName(objects[0]);
-        var secondary = objects.Count > 1 ? FormatThumbnailObjectName(objects[1]) : string.Empty;
-        var objectLine = string.IsNullOrWhiteSpace(secondary) ? primary : $"{primary} + {secondary}";
-        copy = new ThumbnailCopyDto(objectLine, "CLOSEST APPROACH", string.Empty);
+        copy = BuildPlanetFamilyThumbnailCopy(intelligence?.EventType, objects);
         return true;
     }
 
-    private static bool IsPlanetConjunctionEventType(string? eventType)
+    private static ThumbnailCopyDto BuildPlanetFamilyThumbnailCopy(string? eventType, IReadOnlyList<string> objects)
+    {
+        var cleanObjects = NormalizeObjectList(objects.Select(FormatThumbnailObjectLabel));
+        if (cleanObjects.Count == 0) return new ThumbnailCopyDto(string.Empty, string.Empty, string.Empty);
+
+        if (cleanObjects.Count == 1)
+        {
+            var headline = TruncateThumbnailText($"{FormatThumbnailObjectName(cleanObjects[0])} TONIGHT", 28);
+            return new ThumbnailCopyDto(headline, string.Empty, string.Empty);
+        }
+
+        if (cleanObjects.Count == 2)
+        {
+            var headline = TruncateThumbnailText($"{FormatThumbnailObjectName(cleanObjects[0])} + {FormatThumbnailObjectName(cleanObjects[1])}", 28);
+            var subheadline = IsClosestApproachPlanetEvent(eventType) ? "CLOSEST APPROACH" : "CONJUNCTION";
+            return new ThumbnailCopyDto(headline, subheadline, string.Empty);
+        }
+
+        var groupHeadline = IsPlanetParadeEventType(eventType) ? "PLANET PARADE" : $"{cleanObjects.Count} BRIGHT PLANETS";
+        return new ThumbnailCopyDto(TruncateThumbnailText(groupHeadline, 28), "LOOK WEST TONIGHT", string.Empty);
+    }
+
+    private static IReadOnlyList<string> ResolvePlanetFamilyVisibleObjects(ProductionEventIntelligence? intelligence)
+    {
+        if (intelligence is null) return Array.Empty<string>();
+        var fromStructuredObjects = NormalizeObjectList((intelligence.ResolvedObjectNames ?? Array.Empty<string>())
+            .Concat(SplitRequiredVisibleObjects(intelligence.RequiredVisualObjects ?? Array.Empty<string>()))
+            .Concat(intelligence.PrimaryObjects ?? Array.Empty<string>())
+            .Concat(intelligence.SecondaryObjects ?? Array.Empty<string>()))
+            .Select(FormatThumbnailObjectLabel)
+            .Where(IsPlanetObjectName)
+            .ToArray();
+        if (fromStructuredObjects.Count > 0) return fromStructuredObjects;
+        return ExtractPlanetObjectNames(FirstNonEmpty(intelligence.ShortTitle, intelligence.Title));
+    }
+
+    private static IEnumerable<string> SplitRequiredVisibleObjects(IEnumerable<string> values)
+        => values.SelectMany(value => (value ?? string.Empty).Split([',', '+', '&'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+
+    private static bool IsPlanetFamilyEventType(string? eventType)
     {
         if (string.IsNullOrWhiteSpace(eventType)) return false;
         var normalized = new string(eventType.Where(char.IsLetterOrDigit).ToArray());
-        return normalized.Equals("PLANETCONJUNCTION", StringComparison.OrdinalIgnoreCase);
+        return normalized.Equals("PLANETPAIRING", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("PLANETCONJUNCTION", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("CONJUNCTION", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("PLANETGROUPING", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("BRIGHTPLANETVISIBILITY", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("PLANETPARADE", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IReadOnlyList<string> ExtractConjunctionObjectNames(string? text)
+    private static bool IsClosestApproachPlanetEvent(string? eventType)
+    {
+        var normalized = NormalizeEventTypeCode(eventType);
+        return normalized.Contains("CONJUNCTION", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("PAIRING", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPlanetParadeEventType(string? eventType)
+        => NormalizeEventTypeCode(eventType).Contains("PLANETPARADE", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeEventTypeCode(string? eventType)
+        => string.IsNullOrWhiteSpace(eventType) ? string.Empty : new string(eventType.Where(char.IsLetterOrDigit).ToArray());
+
+    private static IReadOnlyList<string> ExtractPlanetObjectNames(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return Array.Empty<string>();
-        var knownPlanets = new[] { "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune" };
-        return knownPlanets
+        return KnownThumbnailPlanets
             .Select(planet => new { Planet = planet, Index = text.IndexOf(planet, StringComparison.OrdinalIgnoreCase) })
             .Where(match => match.Index >= 0)
             .OrderBy(match => match.Index)
@@ -836,7 +888,22 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     }
 
     private static string FormatThumbnailObjectName(string value)
-        => CleanTextElement(value, string.Empty).ToUpperInvariant();
+        => FormatThumbnailObjectLabel(value).ToUpperInvariant();
+
+    private static string FormatThumbnailObjectLabel(string value)
+    {
+        var cleaned = CleanTextElement(value, string.Empty);
+        var knownPlanet = KnownThumbnailPlanets.FirstOrDefault(planet => cleaned.Equals(planet, StringComparison.OrdinalIgnoreCase));
+        return knownPlanet ?? cleaned;
+    }
+
+    private static bool IsPlanetObjectName(string value)
+        => KnownThumbnailPlanets.Any(planet => value.Equals(planet, StringComparison.OrdinalIgnoreCase));
+
+    private static string TruncateThumbnailText(string value, int maxLength)
+        => value.Length <= maxLength ? value : value[..maxLength].Trim();
+
+    private static readonly IReadOnlyList<string> KnownThumbnailPlanets = ["Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"];
 
     private static IReadOnlyList<string> ValidateReadiness(ThumbnailCopyDto thumbnailCopy, string visualFocus, string emotion, ThumbnailReadinessScoresDto scores)
     {
@@ -1332,6 +1399,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static IReadOnlyList<string> BuildThumbnailLabels(CurrentEventLock currentEventLock, VisualSourceResolutionResult resolverResult, IReadOnlyList<string> visualObjects)
     {
+        if (IsPlanetFamilyEventType(currentEventLock.EventType))
+        {
+            var planetLabels = ResolvePlanetFamilyVisibleObjects(currentEventLock.ToProductionEventIntelligence(false));
+            if (planetLabels.Count == 0) planetLabels = NormalizeObjectList(visualObjects.Select(FormatThumbnailObjectLabel).Where(IsPlanetObjectName));
+            return planetLabels;
+        }
+
         var labels = new List<string>();
         if (!string.IsNullOrWhiteSpace(currentEventLock.ShortTitle)) labels.Add(currentEventLock.ShortTitle);
         labels.AddRange(currentEventLock.PrimaryObjects);
@@ -1344,8 +1418,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static ThumbnailDynamicCopy BuildDynamicThumbnailCopy(CurrentEventLock currentEventLock)
     {
-        if (IsPlanetConjunctionEventType(currentEventLock.EventType))
-            return new ThumbnailDynamicCopy("CLOSEST APPROACH", string.Empty);
+        if (IsPlanetFamilyEventType(currentEventLock.EventType))
+        {
+            var planetCopy = BuildPlanetFamilyThumbnailCopy(currentEventLock.EventType, ResolvePlanetFamilyVisibleObjects(currentEventLock.ToProductionEventIntelligence(false)));
+            return new ThumbnailDynamicCopy(planetCopy.SecondaryText, planetCopy.MicroText);
+        }
 
         var secondary = ResolveEventActionPhrase(currentEventLock);
         var micro = FirstNonEmpty(currentEventLock.SkyDirectionHint, currentEventLock.BestViewingWindowLocal, currentEventLock.LocalPeakTime, currentEventLock.EventType);
@@ -1380,9 +1457,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", forbiddenObjectsDetected));
 
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
-        var requiredLabels = NormalizeObjectList(intelligence?.PrimaryObjects ?? []);
+        var requiredLabels = IsPlanetFamilyEventType(intelligence?.EventType)
+            ? ResolvePlanetFamilyVisibleObjects(intelligence)
+            : NormalizeObjectList(intelligence?.PrimaryObjects ?? []);
         var shortTitle = intelligence?.ShortTitle;
-        if (!string.IsNullOrWhiteSpace(shortTitle)) requiredLabels = requiredLabels.Append(shortTitle.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (!IsPlanetFamilyEventType(intelligence?.EventType) && !string.IsNullOrWhiteSpace(shortTitle)) requiredLabels = requiredLabels.Append(shortTitle.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (requiredLabels.Count == 0) return;
 
         var observed = NormalizeObjectList(visualObjectsUsed.Concat(labelsUsed));
@@ -1703,8 +1782,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var title = FirstNonEmpty(intelligence?.Title, request.EventId);
         var eventType = FirstNonEmpty(intelligence?.EventType, context?.EventType, "Unknown");
         var shortTitle = FirstNonEmpty(intelligence?.ShortTitle, title);
-        if (TryBuildPlanetConjunctionThumbnailCopy(intelligence, out var conjunctionCopy))
-            shortTitle = conjunctionCopy.PrimaryText;
+        if (TryBuildPlanetFamilyThumbnailCopy(intelligence, out var planetCopy))
+            shortTitle = planetCopy.PrimaryText;
         return new CurrentEventLock(
             PlanId: context?.ContentGenerationPlanId?.ToString("D") ?? string.Empty,
             Title: title,
