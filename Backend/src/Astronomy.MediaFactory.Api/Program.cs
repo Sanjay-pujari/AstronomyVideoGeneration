@@ -5748,7 +5748,7 @@ app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRe
 }).Accepts<VisualLabGenerateRequest>("application/json");
 
 
-app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLabBackgroundGenerateRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLabBackgroundGenerateRequest request, IWebHostEnvironment environment, IOptions<AzureOpenAIForImageOptions> imageOptions, CancellationToken ct) =>
 {
     if (environment.IsProduction())
     {
@@ -5768,6 +5768,9 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
 
     var width = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
     var height = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
+    var diagnosticsEnabled = request.EnableDiagnostics == true;
+    var diagnosticsDirectory = Path.Combine(outputDirectory, "debug");
+    if (diagnosticsEnabled) Directory.CreateDirectory(diagnosticsDirectory);
     var variants = Math.Clamp(request.VariantCount.GetValueOrDefault(3), 1, 6);
     var reports = new List<VisualLabBackgroundQualityReportItem>();
 
@@ -5775,6 +5778,11 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
     {
         var prompt = BuildVisualLabBackgroundPrompt(request, width, height, i);
         var promptText = JsonSerializer.Serialize(prompt, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+        VisualLabDiagnosticsState? diagnostics = null;
+        if (diagnosticsEnabled && i == 1)
+        {
+            diagnostics = await StartVisualLabBackgroundDiagnosticsAsync(request, imageOptions.Value, diagnosticsDirectory, promptText, width, height, ct);
+        }
         var failedPromptTerms = FindVisualLabBackgroundFailedTerms(promptText);
         if (failedPromptTerms.Count > 0)
         {
@@ -5784,7 +5792,15 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
         var imagePath = Path.Combine(outputDirectory, $"background-v{i}.png");
         var promptPath = Path.Combine(outputDirectory, $"background-prompt-v{i}.json");
         await File.WriteAllTextAsync(promptPath, promptText, ct);
+        var renderStopwatch = Stopwatch.StartNew();
         await RenderVisualLabBackgroundArtworkAsync(request, imagePath, width, height, i, ct);
+        renderStopwatch.Stop();
+        var saveCompletedUtc = DateTimeOffset.UtcNow;
+
+        if (diagnostics is not null)
+        {
+            await CompleteVisualLabBackgroundDiagnosticsAsync(diagnostics, imagePath, saveCompletedUtc, renderStopwatch.ElapsedMilliseconds, ct);
+        }
 
         var imageExists = File.Exists(imagePath);
         var imageBlank = imageExists && await IsVisualLabImageBlankAsync(imagePath, ct);
@@ -5899,6 +5915,217 @@ static async Task RenderVisualLabBackgroundArtworkAsync(VisualLabBackgroundGener
     });
 
     await image.SaveAsPngAsync(imagePath, new PngEncoder(), ct);
+}
+
+static async Task<VisualLabDiagnosticsState> StartVisualLabBackgroundDiagnosticsAsync(
+    VisualLabBackgroundGenerateRequest request,
+    AzureOpenAIForImageOptions imageOptions,
+    string diagnosticsDirectory,
+    string promptText,
+    int width,
+    int height,
+    CancellationToken ct)
+{
+    Directory.CreateDirectory(diagnosticsDirectory);
+
+    var provider = "AzureOpenAIForImage";
+    var deployment = imageOptions.ImageDeployment?.Trim() ?? string.Empty;
+    var model = ResolveVisualLabImageModel(deployment);
+    var endpoint = imageOptions.Endpoint?.Trim() ?? string.Empty;
+    const string apiVersion = "2024-10-21";
+    var region = ResolveAzureRegion(endpoint);
+    var requestStartUtc = DateTimeOffset.UtcNow;
+
+    Console.WriteLine("=================================================");
+    Console.WriteLine("VISUAL LAB CONFIGURATION");
+    Console.WriteLine("========================");
+    Console.WriteLine();
+    Console.WriteLine($"Provider: {provider}");
+    Console.WriteLine($"Deployment: {deployment}");
+    Console.WriteLine($"Model: {model}");
+    Console.WriteLine($"Endpoint: {endpoint}");
+    Console.WriteLine($"ApiVersion: {apiVersion}");
+    Console.WriteLine($"Region: {region}");
+    Console.WriteLine($"ImageWidth: {width}");
+    Console.WriteLine($"ImageHeight: {height}");
+    Console.WriteLine($"VisualStyle: {request.VisualStyle}");
+    Console.WriteLine($"PromptLength: {promptText.Length}");
+    Console.WriteLine();
+
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnosticsDirectory, "configuration.json"), new
+    {
+        provider,
+        deployment,
+        model,
+        endpoint,
+        apiVersion,
+        region,
+        width,
+        height,
+        visualStyle = request.VisualStyle,
+        promptLength = promptText.Length
+    }, ct);
+
+    Console.WriteLine("=================================================");
+    Console.WriteLine("PROMPT SENT TO IMAGE MODEL");
+    Console.WriteLine("==========================");
+    Console.WriteLine();
+    Console.WriteLine(promptText);
+    Console.WriteLine();
+
+    await File.WriteAllTextAsync(Path.Combine(diagnosticsDirectory, "prompt.txt"), promptText, ct);
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnosticsDirectory, "prompt.json"), new
+    {
+        prompt = promptText,
+        promptLength = promptText.Length
+    }, ct);
+
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnosticsDirectory, "azure-request.json"), new
+    {
+        provider,
+        deployment,
+        model,
+        endpoint,
+        apiVersion,
+        prompt = promptText,
+        promptLength = promptText.Length,
+        width,
+        height,
+        requestUtc = requestStartUtc
+    }, ct);
+
+    return new VisualLabDiagnosticsState(diagnosticsDirectory, provider, deployment, model, endpoint, apiVersion, region, promptText, requestStartUtc);
+}
+
+static async Task CompleteVisualLabBackgroundDiagnosticsAsync(
+    VisualLabDiagnosticsState diagnostics,
+    string imagePath,
+    DateTimeOffset saveCompletedUtc,
+    long renderMs,
+    CancellationToken ct)
+{
+    var analysis = await AnalyzeVisualLabImageAsync(imagePath, ct);
+
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "azure-response.json"), new
+    {
+        requestId = (string?)null,
+        created = (DateTimeOffset?)null,
+        finishReason = (string?)null,
+        imageCount = 0,
+        provider = diagnostics.Provider,
+        deployment = diagnostics.Deployment,
+        model = diagnostics.Model,
+        rawResponse = (object?)null,
+        note = "No Azure response is available because the existing Visual Lab background endpoint used the local ImageSharp fallback/canvas renderer path."
+    }, ct);
+
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "generation-metadata.json"), new
+    {
+        imageGenerationPath = "CanvasRenderer",
+        rendererUsed = "CanvasRenderer",
+        fallbackRendererUsed = true,
+        providerCalled = false,
+        providerSucceeded = false,
+        imageDownloaded = false,
+        imageSaved = analysis.FileExists
+    }, ct);
+
+    Console.WriteLine("=================================================");
+    Console.WriteLine("IMAGE GENERATION PATH");
+    Console.WriteLine("=====================");
+    Console.WriteLine();
+    Console.WriteLine("Renderer: CanvasRenderer");
+    Console.WriteLine("FallbackRendererUsed: True");
+    Console.WriteLine("ProviderCalled: False");
+    Console.WriteLine("ProviderSucceeded: False");
+    Console.WriteLine();
+
+    var totalMs = Math.Max(0, (long)(saveCompletedUtc - diagnostics.RequestStartUtc).TotalMilliseconds);
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "timings.json"), new
+    {
+        requestStartUtc = diagnostics.RequestStartUtc,
+        responseReceivedUtc = (DateTimeOffset?)null,
+        downloadCompletedUtc = (DateTimeOffset?)null,
+        saveCompletedUtc,
+        requestMs = 0,
+        downloadMs = 0,
+        saveMs = renderMs,
+        totalMs
+    }, ct);
+
+    Console.WriteLine($"Azure Request Time: 0 ms (provider not called)");
+    Console.WriteLine($"Image Download Time: 0 ms (provider not called)");
+    Console.WriteLine($"Image Save Time: {renderMs} ms");
+    Console.WriteLine($"Total Time: {totalMs} ms");
+    Console.WriteLine();
+
+    await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "image-analysis.json"), analysis, ct);
+
+    Console.WriteLine("=================================================");
+    Console.WriteLine("VISUAL LAB SUMMARY");
+    Console.WriteLine("==================");
+    Console.WriteLine();
+    Console.WriteLine($"Provider: {diagnostics.Provider}");
+    Console.WriteLine($"Deployment: {diagnostics.Deployment}");
+    Console.WriteLine($"Model: {diagnostics.Model}");
+    Console.WriteLine("Renderer: CanvasRenderer");
+    Console.WriteLine("FallbackUsed: True");
+    Console.WriteLine($"PromptLength: {diagnostics.PromptText.Length}");
+    Console.WriteLine("RequestMs: 0");
+    Console.WriteLine($"ImageHash: {analysis.ImageHash}");
+    Console.WriteLine($"FileSize: {analysis.FileSizeBytes}");
+    Console.WriteLine($"ImagePath: {imagePath}");
+    Console.WriteLine();
+}
+
+static async Task<VisualLabImageAnalysis> AnalyzeVisualLabImageAsync(string imagePath, CancellationToken ct)
+{
+    if (!File.Exists(imagePath))
+    {
+        return new VisualLabImageAnalysis(false, 0, 0, 0, 0, string.Empty, 0);
+    }
+
+    var bytes = await File.ReadAllBytesAsync(imagePath, ct);
+    var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    using var image = await Image.LoadAsync<Rgba32>(imagePath, ct);
+    double brightnessTotal = 0;
+    long nonBlackPixels = 0;
+    var totalPixels = (long)image.Width * image.Height;
+
+    image.ProcessPixelRows(accessor =>
+    {
+        for (var y = 0; y < accessor.Height; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = 0; x < row.Length; x++)
+            {
+                var pixel = row[x];
+                var brightness = (0.2126 * pixel.R + 0.7152 * pixel.G + 0.0722 * pixel.B) / 255.0;
+                brightnessTotal += brightness;
+                if (pixel.R > 5 || pixel.G > 5 || pixel.B > 5) nonBlackPixels++;
+            }
+        }
+    });
+
+    return new VisualLabImageAnalysis(true, bytes.LongLength, image.Width, image.Height, brightnessTotal / totalPixels, hash, nonBlackPixels / (double)totalPixels);
+}
+
+static Task WriteVisualLabDebugJsonAsync(string path, object value, CancellationToken ct)
+    => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }), ct);
+
+static string ResolveVisualLabImageModel(string deployment)
+{
+    if (deployment.Contains("image-2", StringComparison.OrdinalIgnoreCase)) return "AzureImage2";
+    if (deployment.Contains("image-1", StringComparison.OrdinalIgnoreCase)) return "AzureImage1";
+    return string.IsNullOrWhiteSpace(deployment) ? "Unknown" : deployment;
+}
+
+static string ResolveAzureRegion(string endpoint)
+{
+    if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)) return string.Empty;
+    var host = uri.Host;
+    var match = Regex.Match(host, @"(?:^|[-.])(?<region>eastus2?|westus2?|centralus|southcentralus|northcentralus|westeurope|northeurope|uksouth|francecentral|swedencentral|canadaeast|canadacentral|australiaeast|japaneast|koreacentral)(?:[-.]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    return match.Success ? match.Groups["region"].Value : string.Empty;
 }
 
 static IReadOnlyList<string> FindVisualLabBackgroundFailedTerms(string value)
@@ -8835,7 +9062,8 @@ public sealed record VisualLabBackgroundGenerateRequest(
     string? QualityMode,
     int? VariantCount,
     string VisualStyle,
-    Dictionary<string, string>? Facts);
+    Dictionary<string, string>? Facts,
+    bool? EnableDiagnostics);
 
 public sealed record VisualLabBackgroundPrompt(
     string EventType,
@@ -8851,6 +9079,26 @@ public sealed record VisualLabBackgroundPrompt(
     IReadOnlyDictionary<string, string> Facts,
     IReadOnlyList<string> ForbiddenContent,
     string ApprovalGate);
+
+public sealed record VisualLabDiagnosticsState(
+    string DiagnosticsDirectory,
+    string Provider,
+    string Deployment,
+    string Model,
+    string Endpoint,
+    string ApiVersion,
+    string Region,
+    string PromptText,
+    DateTimeOffset RequestStartUtc);
+
+public sealed record VisualLabImageAnalysis(
+    bool FileExists,
+    long FileSizeBytes,
+    int Width,
+    int Height,
+    double AverageBrightness,
+    string ImageHash,
+    double NonBlackPixelRatio);
 
 public sealed record VisualLabBackgroundQualityReport(string OutputDirectory, string Timestamp, IReadOnlyList<VisualLabBackgroundQualityReportItem> Items);
 
