@@ -1838,14 +1838,15 @@ public sealed partial class ProductionPipelineExecutionService(
             .Select(intent => intent.Value)
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .ToArray();
+        var isPlanetGroupingEvent = IsPlanetGroupingEventType(context.ProductionEventIntelligence.EventType);
 
         return new Phase6SceneEnrichmentDiagnostics(
             EnrichedScenePlanPath: NormalizePath(enrichedPath),
             EnrichedScenePlanExists: File.Exists(enrichedPath),
             PlanetGroupingStrategyActivated: IsPlanetGroupingStrategyActivated(context),
             PlanetGroupingEnricherExecuted: plan is not null,
-            PlanetGroupingIntentInjected: generatedText.Any(text => ContainsToken(text, "planet grouping")),
-            GuidedScanPathInjected: generatedText.Any(text => ContainsToken(text, "guided scan path")),
+            PlanetGroupingIntentInjected: isPlanetGroupingEvent && ContainsAnyPhase6ValidationIntent(generatedText, "planet grouping", "multi-planet grouping"),
+            GuidedScanPathInjected: isPlanetGroupingEvent && ContainsAnyPhase6ValidationIntent(generatedText, "guided scan path", "scan path", "grouping arc"),
             EnrichedSceneIntentCount: enrichedSceneIntents.Length,
             EnrichedSceneIntents: enrichedSceneIntents,
             VisualIntentCount: visualIntents.Length,
@@ -1890,6 +1891,12 @@ public sealed partial class ProductionPipelineExecutionService(
             || string.Equals(intelligence.StrategyId, "PlanetGrouping", StringComparison.OrdinalIgnoreCase)
             || string.Equals(context.MediaEventStrategy?.EventType, "PlanetGrouping", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsPlanetGroupingEventType(string? eventType)
+        => string.Equals(eventType, "PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsAnyPhase6ValidationIntent(IEnumerable<string> values, params string[] phrases)
+        => values.Any(value => phrases.Any(phrase => ContainsToken(value, phrase)));
 
     private sealed record Phase6SceneEnrichmentDiagnostics(
         string EnrichedScenePlanPath,
