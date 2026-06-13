@@ -34,8 +34,13 @@ using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
@@ -5683,6 +5688,64 @@ app.MapGet("/api/analytics/youtube/{videoId}", async (string videoId, IPipelineR
     return items.Count == 0 ? Results.NotFound() : Results.Ok(items);
 });
 
+
+app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+{
+    if (environment.IsProduction())
+    {
+        return Results.NotFound(new { message = "The visual lab endpoint is available only in development or test environments." });
+    }
+
+    var validationErrors = ValidateVisualLabRequest(request);
+    if (validationErrors.Count > 0)
+    {
+        return Results.BadRequest(new { message = "Invalid visual lab request.", errors = validationErrors });
+    }
+
+    var eventType = request.EventType.Trim();
+    var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
+    var outputDirectory = Path.Combine(@"D:\AstronomyWorkspace\Astronomy\media-output\visual-lab", eventType, timestamp);
+    Directory.CreateDirectory(outputDirectory);
+
+    var width = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
+    var height = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
+    var variants = Math.Clamp(request.VariantCount.GetValueOrDefault(3), 1, 6);
+    var reports = new List<VisualLabQualityReportItem>();
+
+    for (var i = 1; i <= variants; i++)
+    {
+        var prompt = BuildVisualLabPrompt(request, width, height, i);
+        var promptText = JsonSerializer.Serialize(prompt, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+        var failedPromptTerms = FindVisualLabFailedTerms(promptText);
+        if (failedPromptTerms.Count > 0)
+        {
+            return Results.BadRequest(new { message = "Prompt contains placeholder or instruction text.", failedTermsFound = failedPromptTerms });
+        }
+
+        var imagePath = Path.Combine(outputDirectory, $"benchmark-v{i}.png");
+        var promptPath = Path.Combine(outputDirectory, $"prompt-v{i}.json");
+        await File.WriteAllTextAsync(promptPath, promptText, ct);
+        await RenderVisualLabBenchmarkAsync(request, prompt, imagePath, width, height, i, ct);
+
+        var imageExists = File.Exists(imagePath);
+        var imageBlank = imageExists && await IsVisualLabImageBlankAsync(imagePath, ct);
+        var dimensionsOk = imageExists && await HasVisualLabDimensionsAsync(imagePath, width, height, ct);
+        var failedTerms = FindVisualLabFailedTerms(promptText);
+        if (!imageExists || imageBlank || !dimensionsOk || string.IsNullOrWhiteSpace(Path.GetFileName(imagePath)) || failedTerms.Count > 0)
+        {
+            return Results.BadRequest(new { message = "Visual lab validation failed.", imagePath, promptPath, imageExists, imageBlank, dimensionsOk, failedTermsFound = failedTerms });
+        }
+
+        reports.Add(new VisualLabQualityReportItem(imagePath, promptPath, request.Format, width, height, eventType, request.Layout, request.Style, promptText, BuildVisualQualityNotes(request, i), failedTerms, failedTerms.Count == 0, true));
+    }
+
+    var qualityReportPath = Path.Combine(outputDirectory, "quality-report.json");
+    var qualityReport = new VisualLabQualityReport(outputDirectory, timestamp, reports);
+    await File.WriteAllTextAsync(qualityReportPath, JsonSerializer.Serialize(qualityReport, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }), ct);
+
+    return Results.Ok(new { outputDirectory, qualityReportPath, items = reports });
+}).Accepts<VisualLabGenerateRequest>("application/json");
+
 app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
     Results.Ok(await ingestion.RefreshAsync(ct)));
 app.MapGet("/api/assets/celestial/status", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
@@ -5694,6 +5757,146 @@ app.MapGet("/api/assets/celestial/{objectKey}", async (string objectKey, ICelest
 });
 
 app.Run();
+
+static IReadOnlyList<string> ValidateVisualLabRequest(VisualLabGenerateRequest request)
+{
+    var errors = new List<string>();
+    var supported = new[] { "MeteorShower", "PlanetConjunction", "BlueMoon", "PlanetParade", "LunarEclipse", "SolarEclipse" };
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supported.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add($"eventType must be one of: {string.Join(", ", supported)}.");
+    if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
+    if (string.IsNullOrWhiteSpace(request.Format)) errors.Add("format is required.");
+    if (string.IsNullOrWhiteSpace(request.Layout)) errors.Add("layout is required.");
+    if (string.IsNullOrWhiteSpace(request.Style)) errors.Add("style is required.");
+    if (request.VariantCount is < 1 or > 6) errors.Add("variantCount must be between 1 and 6.");
+    return errors;
+}
+
+static VisualLabPrompt BuildVisualLabPrompt(VisualLabGenerateRequest request, int width, int height, int variant)
+{
+    var facts = request.Facts ?? new Dictionary<string, string>();
+    var factLines = facts.Where(x => !string.IsNullOrWhiteSpace(x.Value)).Select(x => $"{ToTitleLabel(x.Key)}: {x.Value.Trim()}").ToArray();
+    var composition = request.EventType switch
+    {
+        "MeteorShower" => "Radiant star field with multiple bright meteor streaks over a subtle horizon and clean data panels.",
+        "PlanetConjunction" => "Two luminous planets close together above twilight, with angular separation callouts and viewing direction.",
+        "BlueMoon" => "Detailed full Moon disk with blue-toned accent lighting and a calendar-style explanatory panel.",
+        "PlanetParade" => "Wide ecliptic arc with labeled planets arranged in order across a dark sky map.",
+        "LunarEclipse" => "Copper-red Moon progression with shadow geometry and a compact eclipse timeline.",
+        "SolarEclipse" => "Solar corona silhouette with safe-viewing emphasis and a precise path/timing information panel.",
+        _ => "Polished astronomy scene with documentary-style educational overlays."
+    };
+
+    return new VisualLabPrompt(
+        request.Title.Trim(),
+        request.EventType.Trim(),
+        request.Format.Trim(),
+        request.Layout.Trim(),
+        request.Style.Trim(),
+        request.QualityMode ?? "Benchmark",
+        variant,
+        width,
+        height,
+        "Professional astronomy infographic blending NASA educational poster clarity, National Geographic feature polish, and Discovery documentary contrast.",
+        composition,
+        factLines,
+        "Final public astronomy copy: real labels, dates, directions, and observing tips.");
+}
+
+static async Task RenderVisualLabBenchmarkAsync(VisualLabGenerateRequest request, VisualLabPrompt prompt, string imagePath, int width, int height, int variant, CancellationToken ct)
+{
+    using var image = new Image<Rgba32>(width, height, Color.ParseHex("#050816"));
+    var titleFont = SystemFonts.CreateFont("Arial", width >= height ? 72 : 58, FontStyle.Bold);
+    var subtitleFont = SystemFonts.CreateFont("Arial", width >= height ? 34 : 30, FontStyle.Regular);
+    var labelFont = SystemFonts.CreateFont("Arial", width >= height ? 30 : 26, FontStyle.Bold);
+    var bodyFont = SystemFonts.CreateFont("Arial", width >= height ? 26 : 24, FontStyle.Regular);
+
+    image.Mutate(ctx =>
+    {
+        DrawVisualLabBackground(ctx, width, height, request.EventType, variant);
+        DrawVisualLabEventMotif(ctx, width, height, request.EventType, variant);
+        var panel = width >= height ? new RectangleF(width * 0.57f, height * 0.12f, width * 0.34f, height * 0.74f) : new RectangleF(width * 0.08f, height * 0.56f, width * 0.84f, height * 0.36f);
+        ctx.Fill(Color.ParseHex("#081A33").WithAlpha(0.86f), panel);
+        ctx.Draw(Color.ParseHex("#60D7FF").WithAlpha(0.85f), 3, panel);
+        DrawText(ctx, prompt.Title, titleFont, Color.White, new PointF(width * 0.07f, height * 0.08f));
+        DrawText(ctx, $"{SplitCamel(request.EventType)} • {request.QualityMode ?? "Benchmark"} visual study", subtitleFont, Color.ParseHex("#AEEBFF"), new PointF(width * 0.075f, height * 0.18f));
+        DrawText(ctx, "VIEWING GUIDE", labelFont, Color.ParseHex("#FFE08A"), new PointF(panel.X + 34, panel.Y + 30));
+        var y = panel.Y + 86;
+        foreach (var line in prompt.FactLines.Take(7))
+        {
+            DrawText(ctx, line, bodyFont, Color.White, new PointF(panel.X + 34, y));
+            y += bodyFont.Size + 18;
+        }
+        DrawText(ctx, request.Facts?.GetValueOrDefault("shortDescription") ?? "A notable sky event with timing, direction, and observing context.", bodyFont, Color.ParseHex("#C8D7EF"), new PointF(panel.X + 34, panel.Bottom - 92));
+    });
+
+    await image.SaveAsPngAsync(imagePath, new PngEncoder(), ct);
+}
+
+static void DrawVisualLabBackground(IImageProcessingContext ctx, int width, int height, string eventType, int seed)
+{
+    ctx.Fill(Color.ParseHex(eventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase) ? "#090711" : "#061024"));
+    var random = new Random(HashCode.Combine(eventType, seed));
+    for (var i = 0; i < 260; i++)
+    {
+        var x = random.Next(width);
+        var y = random.Next(height);
+        var r = random.NextSingle() * 2.2f + 0.4f;
+        ctx.Fill(Color.White.WithAlpha(random.NextSingle() * 0.55f + 0.25f), new EllipsePolygon(x, y, r));
+    }
+    ctx.Fill(Color.Black.WithAlpha(0.28f), new RectangleF(0, 0, width, height));
+}
+
+static void DrawVisualLabEventMotif(IImageProcessingContext ctx, int width, int height, string eventType, int variant)
+{
+    var center = new PointF(width * 0.34f, height * 0.50f);
+    if (eventType == "MeteorShower")
+    {
+        for (var i = 0; i < 9; i++) ctx.DrawLine(Color.ParseHex("#CFF7FF").WithAlpha(0.84f), 5, new PointF(width * (0.08f + i * 0.055f), height * (0.20f + i % 3 * 0.12f)), new PointF(width * (0.31f + i * 0.055f), height * (0.33f + i % 3 * 0.12f)));
+    }
+    else if (eventType.Contains("Moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase))
+    {
+        var color = eventType == "LunarEclipse" ? "#B85A38" : eventType == "SolarEclipse" ? "#050505" : "#D8E7FF";
+        ctx.Fill(Color.ParseHex("#F7D17A").WithAlpha(eventType == "SolarEclipse" ? 0.9f : 0.18f), new EllipsePolygon(center.X, center.Y, Math.Min(width, height) * 0.21f));
+        ctx.Fill(Color.ParseHex(color), new EllipsePolygon(center.X, center.Y, Math.Min(width, height) * 0.15f));
+    }
+    else
+    {
+        ctx.DrawLine(Color.ParseHex("#7BDFFF").WithAlpha(0.55f), 3, new PointF(width * 0.08f, height * 0.64f), new PointF(width * 0.56f, height * 0.32f));
+        var names = eventType == "PlanetParade" ? new[] { "Mercury", "Venus", "Mars", "Jupiter", "Saturn" } : new[] { "Venus", "Jupiter" };
+        for (var i = 0; i < names.Length; i++)
+        {
+            var x = width * (0.14f + i * 0.09f);
+            var y = height * (0.60f - i * 0.055f);
+            ctx.Fill(Color.ParseHex(i % 2 == 0 ? "#FFE08A" : "#9AD7FF"), new EllipsePolygon(x, y, 18 + i * 2));
+        }
+    }
+}
+
+static void DrawText(IImageProcessingContext ctx, string text, Font font, Color color, PointF point) => ctx.DrawText(text, font, color, point);
+static string ToTitleLabel(string value) => Regex.Replace(value ?? string.Empty, "([a-z])([A-Z])", "$1 $2", RegexOptions.CultureInvariant).Trim();
+static string SplitCamel(string value) => ToTitleLabel(value);
+static string BuildVisualQualityNotes(VisualLabGenerateRequest request, int variant) => $"Variant {variant} uses a high-contrast astronomy infographic layout with real event title, date, timing, direction, and observing guidance for manual quality review.";
+static IReadOnlyList<string> FindVisualLabFailedTerms(string value)
+{
+    var terms = new[] { "use event title", "overlay intent", "viewer question", "visual intent", "cue", "placeholder", "instruction" };
+    return terms.Where(t => value.Contains(t, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+}
+
+static async Task<bool> HasVisualLabDimensionsAsync(string path, int width, int height, CancellationToken ct)
+{
+    var info = await Image.IdentifyAsync(path, ct);
+    return info?.Width == width && info.Height == height;
+}
+
+static async Task<bool> IsVisualLabImageBlankAsync(string path, CancellationToken ct)
+{
+    using var image = await Image.LoadAsync<Rgba32>(path, ct);
+    var first = image[0, 0];
+    for (var y = 0; y < image.Height; y += Math.Max(1, image.Height / 12))
+    for (var x = 0; x < image.Width; x += Math.Max(1, image.Width / 12))
+        if (!image[x, y].Equals(first)) return false;
+    return true;
+}
 
 
 static async Task<WeeklyEndToEndStageResult<T>> PostJsonStageAsync<T>(HttpClient client, string path, object payload, string stage, CancellationToken cancellationToken)
@@ -8475,6 +8678,48 @@ static string NormalizePreferredAssetType(string? assetType)
 
 
 sealed record WeeklyEndToEndStageResult<T>(bool Success, T? Value, IReadOnlyList<string> Errors);
+
+public sealed record VisualLabGenerateRequest(
+    string EventType,
+    string Title,
+    string Format,
+    string Layout,
+    string Style,
+    string? QualityMode,
+    int? VariantCount,
+    Dictionary<string, string>? Facts);
+
+public sealed record VisualLabPrompt(
+    string Title,
+    string EventType,
+    string Format,
+    string Layout,
+    string Style,
+    string QualityMode,
+    int Variant,
+    int Width,
+    int Height,
+    string CreativeBenchmark,
+    string Composition,
+    IReadOnlyList<string> FactLines,
+    string TextPolicy);
+
+public sealed record VisualLabQualityReport(string OutputDirectory, string Timestamp, IReadOnlyList<VisualLabQualityReportItem> Items);
+
+public sealed record VisualLabQualityReportItem(
+    string ImagePath,
+    string PromptPath,
+    string Format,
+    int Width,
+    int Height,
+    string EventType,
+    string Layout,
+    string Style,
+    string PromptUsed,
+    string VisualQualityNotes,
+    IReadOnlyList<string> FailedTermsFound,
+    bool TextPlaceholderCheckPassed,
+    bool ManualReviewRequired);
 
 public sealed record WeeklySkyForecastV2EndToEndRunRequest(
     string RegionId,
