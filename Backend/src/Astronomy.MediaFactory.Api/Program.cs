@@ -5732,11 +5732,6 @@ app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRe
         await File.WriteAllTextAsync(promptPath, promptText, ct);
         await RenderVisualLabBenchmarkAsync(request, prompt, imagePath, width, height, i, ct);
 
-        if (diagnosticsEnabled)
-        {
-            await WriteVisualLabDebugJsonAsync(diagnosticsPath, BuildVisualLabBackgroundPromptDiagnostics(prompt, azureResult?.ProviderCalled == true, azureResult?.RendererUsed ?? "None", azureResult?.FallbackRendererUsed == true), ct);
-        }
-
         var imageExists = File.Exists(imagePath);
         var imageBlank = imageExists && await IsVisualLabImageBlankAsync(imagePath, ct);
         var dimensionsOk = imageExists && await HasVisualLabDimensionsAsync(imagePath, width, height, ct);
