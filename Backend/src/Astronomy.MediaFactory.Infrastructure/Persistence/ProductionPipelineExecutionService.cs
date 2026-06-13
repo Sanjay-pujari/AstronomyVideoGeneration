@@ -717,7 +717,7 @@ public sealed partial class ProductionPipelineExecutionService(
             validationErrors.Add($"missing image: {NormalizePath(path)}");
             return;
         }
-        using var image = Image.Identify(path);
+        var image = Image.Identify(path);
         if (image is null)
         {
             validationErrors.Add($"unreadable image: {NormalizePath(path)}");
