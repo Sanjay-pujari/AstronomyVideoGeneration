@@ -309,8 +309,14 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!response.IsValid)
             throw new InvalidOperationException("Phase 6 scene plan enrichment failed validation: " + string.Join(" | ", response.Warnings));
 
+        logger.LogInformation("[Phase6] enableSceneVariants={EnableSceneVariants}", context.PipelineRequest.EnableSceneVariants);
+        logger.LogInformation("[Phase6] SceneCount={SceneCount}", response.EnrichedScenePlan.Scenes.Count);
+
+        var generatedVariants = 0;
         if (context.PipelineRequest.EnableSceneVariants)
-            await AddPhase6SceneVisualVariantsAsync(enrichedPath, cancellationToken);
+            generatedVariants = await AddPhase6SceneVisualVariantsAsync(enrichedPath, cancellationToken);
+
+        logger.LogInformation("[Phase6] GeneratedVariants={GeneratedVariants}", generatedVariants);
 
         await ValidatePhase6EnrichedScenePlanContractAsync(context, enrichedPath, cancellationToken);
         return response.GeneratedFiles.Concat([enrichedPath]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -331,9 +337,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
 
 
-    private static async Task AddPhase6SceneVisualVariantsAsync(string enrichedPath, CancellationToken cancellationToken)
+    private static async Task<int> AddPhase6SceneVisualVariantsAsync(string enrichedPath, CancellationToken cancellationToken)
     {
-        if (!File.Exists(enrichedPath)) return;
+        if (!File.Exists(enrichedPath)) return 0;
 
         var json = await File.ReadAllTextAsync(enrichedPath, cancellationToken);
         var plan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(json, JsonOptions)
@@ -345,6 +351,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var enrichedPlan = plan with { Scenes = enrichedScenes };
 
         await File.WriteAllTextAsync(enrichedPath, JsonSerializer.Serialize(enrichedPlan, JsonOptions), cancellationToken);
+        return enrichedScenes.Sum(scene => scene.VisualVariants?.Count ?? 0);
     }
 
     private static IReadOnlyList<SceneVisualVariantDto> BuildPhase6SceneVisualVariants(EnrichedQuestionSceneDto scene)
@@ -395,6 +402,14 @@ public sealed partial class ProductionPipelineExecutionService(
             issues.Add("enriched plan must include at least one scene");
         if (plan.Diagnostics?.LeakageTermsFound is { Count: > 0 })
             issues.Add("diagnostics reported forbidden leakage: " + string.Join(", ", plan.Diagnostics.LeakageTermsFound));
+        if (context.PipelineRequest.EnableSceneVariants)
+        {
+            foreach (var scene in plan.Scenes)
+            {
+                if ((scene.VisualVariants?.Count ?? 0) < 3)
+                    issues.Add($"scene {scene.SceneNumber} must include at least 3 visual variants when enableSceneVariants=true");
+            }
+        }
 
         var generatedFields = ExtractEnrichedSceneGeneratedText(plan).ToArray();
         var enrichedSceneIntents = BuildPhase6ValidationIntentDiagnostics(plan).ToArray();

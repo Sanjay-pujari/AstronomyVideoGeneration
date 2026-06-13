@@ -201,6 +201,49 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public async Task Phase6SceneVisualVariants_AreWrittenIntoEnrichedScenePlan_WhenEnabled()
+    {
+        var context = CreateContext("NamedFullMoon", ["ShortVideo"], enableSceneVariants: true);
+        await WriteEnrichedScenePlanAsync(context,
+            viewerTakeaway: "The Moon is full tonight.",
+            narrationIntent: "Explain when the full Moon rises.",
+            visualIntent: "Show the Moon above the horizon.",
+            imagePromptIntent: "Full Moon over a clean horizon.",
+            overlayIntent: "Moon • eastern horizon",
+            accessibilityIntent: "Full Moon label near the horizon.");
+        var path = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("AddPhase6SceneVisualVariantsAsync", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var generatedVariants = await (Task<int>)method!.Invoke(null, [path, CancellationToken.None])!;
+
+        var json = await File.ReadAllTextAsync(path);
+        var plan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.True(generatedVariants >= 3);
+        Assert.Contains("visualVariants", json);
+        Assert.All(plan.Scenes, scene => Assert.True(scene.VisualVariants?.Count >= 3));
+    }
+
+    [Fact]
+    public async Task ValidatePhase6EnrichedScenePlanContract_Fails_WhenSceneVariantsEnabledAndAnySceneHasFewerThanThreeVariants()
+    {
+        var context = CreateContext("NamedFullMoon", ["ShortVideo"], enableSceneVariants: true);
+        await WriteEnrichedScenePlanAsync(context,
+            viewerTakeaway: "The Moon is full tonight.",
+            narrationIntent: "Explain when the full Moon rises.",
+            visualIntent: "Show the Moon above the horizon.",
+            imagePromptIntent: "Full Moon over a clean horizon.",
+            overlayIntent: "Moon • eastern horizon",
+            accessibilityIntent: "Full Moon label near the horizon.");
+        var path = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase6EnrichedScenePlanContractAsync", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await (Task)method!.Invoke(null, [context, path, CancellationToken.None])!);
+
+        Assert.Contains("at least 3 visual variants", exception.Message);
+    }
+
+    [Fact]
     public async Task Phase6PlanetGroupingDiagnostics_DetectsInjectedIntentPhrasesAcrossAllIntentFields()
     {
         var context = CreateContext("PLANET_GROUPING", ["ShortVideo"]);
@@ -349,7 +392,7 @@ public sealed class ProductionPipelineExecutionServiceTests
         return (IReadOnlyList<RequestedOutputCompletion>)method.Invoke(null, [context, phaseResults])!;
     }
 
-    private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null)
+    private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null, bool enableSceneVariants = false)
     {
         var planId = Guid.NewGuid();
         var outputRoot = Path.Combine(Path.GetTempPath(), "astro-pulse-phase-gating-tests", planId.ToString("N"));
@@ -441,7 +484,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             intelligence,
             new GenericAstronomyEventStrategy(),
             null);
-        var pipelineRequest = new ProductionPipelineRequest(request, Guid.NewGuid(), outputRoot, false, ExecutionContext: executionContext);
+        var pipelineRequest = new ProductionPipelineRequest(request, Guid.NewGuid(), outputRoot, false, ExecutionContext: executionContext, EnableSceneVariants: enableSceneVariants);
         return new ProductionPhaseContext(pipelineRequest, request, Guid.NewGuid(), Guid.NewGuid().ToString("D"), outputRoot, executionContext, intelligence, new GenericAstronomyEventStrategy(), false, false, 1, 19, false);
     }
 }
