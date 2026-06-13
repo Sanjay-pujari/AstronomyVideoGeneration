@@ -564,11 +564,11 @@ public sealed partial class ProductionPipelineExecutionService(
             var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
             generatedFiles.AddRange(response.GeneratedFiles);
         }
-        var shortRoot = context.PipelineRequest.EnableSceneVariants
-            ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short")
+        var phase8ValidationRoot = context.PipelineRequest.EnableSceneVariants
+            ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long")
             : Path.Combine(context.ExecutionContext.SceneRoot!, "short");
-        if (!DirectoryHasPngRecursive(shortRoot)) throw new InvalidOperationException($"Short scene image validation failed: no .png files were found in '{shortRoot}'.");
-        return generatedFiles.Concat(Directory.EnumerateFiles(shortRoot, "*.png", SearchOption.AllDirectories)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (!DirectoryHasPngRecursive(phase8ValidationRoot)) throw new InvalidOperationException($"Scene image validation failed: no .png files were found in '{phase8ValidationRoot}'.");
+        return generatedFiles.Concat(Directory.EnumerateFiles(phase8ValidationRoot, "*.png", SearchOption.AllDirectories)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> RenderPhase8SceneVisualVariantsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -584,16 +584,16 @@ public sealed partial class ProductionPipelineExecutionService(
         var generatedFiles = new List<string>();
         ResetPhase8SceneVariantOutputRoot(sceneAssetsRoot);
 
-        foreach (var scene in plan.Scenes.OrderBy(scene => scene.SceneNumber))
+        foreach (var scene in plan.Scenes.Where(IsPhase8PilotScene).OrderBy(scene => scene.SceneNumber))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var variants = scene.VisualVariants?.OrderBy(variant => variant.VariantNo).ToArray() ?? [];
             if (scene.IsRequired && variants.Length < 3)
                 throw new InvalidOperationException($"Phase 8 scene variant validation failed: required scene {scene.SceneNumber} has {variants.Length} visual variant(s), expected at least 3.");
 
-            foreach (var variant in variants)
+            foreach (var variant in variants.Where(IsPhase8PilotSceneVariant))
             {
-                foreach (var format in Phase8ProfessionalSlideFormats)
+                foreach (var format in Phase8ProfessionalSlideFormats.Where(IsPhase8PilotSlideFormat))
                 {
                     var imagePath = BuildProfessionalSlidePath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
                     var directorPrompt = BuildPhase8VisualDirectorPrompt(context, scene, variant, format);
@@ -662,6 +662,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
+        DeletePhase8TemporaryBackgroundRoot(sceneAssetsRoot);
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
         generatedFiles.Add(manifestPath);
         await ValidatePhase8SceneVariantOutputsAsync(plan, sceneAssetsRoot, manifestPath, cancellationToken);
@@ -671,7 +672,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private static QuestionDrivenVisualSpec BuildPhase8SceneVariantVisualSpec(ProductionPhaseContext context, EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, string visualDirectorPrompt)
     {
         var intelligence = context.ProductionEventIntelligence;
-        var overlayText = BuildPhase8VariantOverlayText(scene, variant);
+        var overlayText = BuildPhase8VariantOverlayText(context, scene, variant);
+        ValidatePhase8ViewerFacingText(scene, variant, overlayText);
         var requiredObjects = (scene.RequiredVisualObjects is { Count: > 0 } ? scene.RequiredVisualObjects : intelligence.RequiredVisualObjects) ?? Array.Empty<string>();
         var eventType = FirstNonEmpty(intelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType);
         return new QuestionDrivenVisualSpec(
@@ -705,18 +707,95 @@ public sealed partial class ProductionPipelineExecutionService(
             requiredObjects);
     }
 
-    private static IReadOnlyList<string> BuildPhase8VariantOverlayText(EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant)
+    private static IReadOnlyList<string> BuildPhase8VariantOverlayText(ProductionPhaseContext context, EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant)
     {
-        var baseLines = SplitOverlayIntent(scene.OverlayIntent).DefaultIfEmpty(scene.ViewerTakeaway).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        if (NormalizePhase8VariantType(variant.VariantType).Equals("educational_overlay", StringComparison.OrdinalIgnoreCase))
+            return BuildPhase8EducationalOverlayCopy(context, scene);
+
+        var baseLines = BuildViewerFacingOverlayCopy(context, scene).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
         return NormalizePhase8VariantType(variant.VariantType) switch
         {
-            "wide_context" => baseLines.Take(1).Select(line => $"Wide context: {line}").ToArray(),
-            "object_focus" => baseLines.Take(1).Select(line => $"Object focus: {line}").Append("Zoomed view").Take(2).ToArray(),
-            "educational_overlay" => baseLines.Take(2).Prepend("How to read the sky").Append("Tip: compare the label with the sky position").Take(4).ToArray(),
-            "cinematic_detail" => new[] { $"Detail: {FirstNonEmpty(baseLines.FirstOrDefault(), scene.ViewerTakeaway)}" },
-            "transition_or_closing" => new[] { "Save this sky reminder", FirstNonEmpty(scene.ViewerTakeaway, "Step outside tonight") },
+            "wide_context" => baseLines.Take(2).ToArray(),
+            "object_focus" => baseLines.Take(2).ToArray(),
+            "cinematic_detail" => baseLines.Take(1).ToArray(),
+            "transition_or_closing" => new[] { "Save this sky reminder", FirstNonEmpty(baseLines.FirstOrDefault(), scene.ViewerTakeaway, "Step outside tonight") },
             _ => baseLines.Take(3).ToArray()
         };
+    }
+
+    private static IReadOnlyList<string> BuildPhase8EducationalOverlayCopy(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+    {
+        var title = FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.EventType, "Astronomy Event");
+        var peakNight = ResolvePhase8PeakNight(context, scene);
+        var bestTime = FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal, ExtractBestTime(scene), "Midnight to pre-dawn");
+        var where = ResolvePhase8WhereToLook(context, scene);
+        var moon = ResolvePhase8MoonCondition(scene);
+        var radiant = ResolvePhase8RadiantLabel(context, scene);
+        return new[]
+        {
+            title,
+            $"Peak Night: {peakNight}",
+            $"Best Time: {bestTime}",
+            $"Where to Look: {where}",
+            "No telescope needed",
+            $"Moon: {moon}",
+            $"Radiant: {radiant}",
+            "Tips: dark sky • wide view • let eyes adapt"
+        };
+    }
+
+    private static IReadOnlyList<string> BuildViewerFacingOverlayCopy(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+        => new[]
+        {
+            FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, scene.ViewerTakeaway, "Astronomy Event"),
+            FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal, ExtractBestTime(scene), scene.ViewerTakeaway),
+            ResolvePhase8WhereToLook(context, scene)
+        };
+
+    private static string ResolvePhase8PeakNight(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+    {
+        var haystack = string.Join(" ", context.ProductionEventIntelligence.Title, context.ProductionEventIntelligence.BestViewingWindowLocal, scene.SourceAnswer, scene.NarrationIntent, scene.VisualIntent, scene.ImagePromptIntent, scene.OverlayIntent);
+        var match = Regex.Match(haystack, @"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:\s*/\s*\d{1,2})?\b", RegexOptions.IgnoreCase);
+        return match.Success ? CultureInfo.CurrentCulture.TextInfo.ToTitleCase(match.Value.Replace(" ", " ").Replace("/ ", "/")) : "Tonight";
+    }
+
+    private static string ExtractBestTime(EnrichedQuestionSceneDto scene)
+    {
+        var haystack = string.Join(" ", scene.SourceAnswer, scene.NarrationIntent, scene.VisualIntent, scene.ImagePromptIntent, scene.OverlayIntent);
+        if (haystack.Contains("pre-dawn", StringComparison.OrdinalIgnoreCase)) return "Midnight to pre-dawn";
+        if (haystack.Contains("after sunset", StringComparison.OrdinalIgnoreCase)) return "After sunset";
+        return string.Empty;
+    }
+
+    private static string ResolvePhase8WhereToLook(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+    {
+        var objects = (scene.RequiredVisualObjects is { Count: > 0 } ? scene.RequiredVisualObjects : context.ProductionEventIntelligence.RequiredVisualObjects) ?? Array.Empty<string>();
+        if (objects.Any(o => o.Contains("meteor", StringComparison.OrdinalIgnoreCase) || o.Contains("radiant", StringComparison.OrdinalIgnoreCase))) return "dark open sky near the radiant";
+        return FirstNonEmpty(objects.FirstOrDefault(), "clear horizon");
+    }
+
+    private static string ResolvePhase8MoonCondition(EnrichedQuestionSceneDto scene)
+    {
+        var haystack = string.Join(" ", scene.SourceAnswer, scene.NarrationIntent, scene.VisualIntent, scene.ImagePromptIntent, scene.OverlayIntent);
+        if (haystack.Contains("low moon", StringComparison.OrdinalIgnoreCase) || haystack.Contains("little moon", StringComparison.OrdinalIgnoreCase)) return "low interference";
+        if (haystack.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "check local moonlight";
+        return "minimal interference";
+    }
+
+    private static string ResolvePhase8RadiantLabel(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+    {
+        var haystack = string.Join(" ", context.ProductionEventIntelligence.Title, scene.SourceAnswer, scene.VisualIntent, scene.ImagePromptIntent);
+        if (haystack.Contains("Geminid", StringComparison.OrdinalIgnoreCase)) return "Gemini";
+        if (haystack.Contains("Perseid", StringComparison.OrdinalIgnoreCase)) return "Perseus";
+        return "shower radiant";
+    }
+
+    private static void ValidatePhase8ViewerFacingText(EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, IReadOnlyList<string> overlayText)
+    {
+        var forbidden = new[] { "Use ", "cue", "overlay intent", "viewer question", "visual intent", "placeholder" };
+        var bad = overlayText.Where(line => forbidden.Any(term => line.Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
+        if (bad.Length > 0)
+            throw new InvalidOperationException($"Phase 8 viewer-facing text quality gate failed for scene {scene.SceneNumber} variant {variant.VariantNo}: {string.Join(" | ", bad)}");
     }
 
     private static IReadOnlyList<string> BuildPhase8VariantProgrammaticLayers(EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, string visualDirectorPrompt)
@@ -762,11 +841,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             "VISUAL DIRECTOR PROMPT — generate a professional educational visual asset, not a random scene image.",
             $"Event title/context: {title}",
-            $"Viewer question: {scene.ViewerQuestion}",
-            $"Viewer takeaway: {scene.ViewerTakeaway}",
-            $"Visual intent: {scene.VisualIntent}",
-            $"Image prompt intent: {scene.ImagePromptIntent}",
-            $"Overlay intent: {scene.OverlayIntent}",
+            $"Audience takeaway: {scene.ViewerTakeaway}",
+            $"Science focus: {FirstNonEmpty(scene.VisualIntent, scene.ImagePromptIntent, scene.ViewerTakeaway)}",
             $"Variant type: {variant.VariantType}",
             $"Variant rendering directive: {BuildPhase8VariantRenderingDirective(variant.VariantType, format.Format, scene.SceneNumber, variant.VariantNo)}",
             $"Composition hint: {variant.CompositionHint}",
@@ -844,7 +920,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ?? throw new InvalidOperationException("Phase 8 scene variant validation failed: scene-variant-manifest.json could not be parsed.");
         var issues = new List<string>();
         var expectedSceneFolders = manifest.Select(item => $"scene-{item.SceneNumber:00}").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
-        foreach (var format in Phase8ProfessionalSlideFormats.Select(f => f.Format))
+        foreach (var format in Phase8ProfessionalSlideFormats.Where(IsPhase8PilotSlideFormat).Select(f => f.Format))
         {
             var formatRoot = Path.Combine(sceneAssetsRoot, format);
             var actualFolders = Directory.Exists(formatRoot)
@@ -879,8 +955,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
         foreach (var scene in plan.Scenes.Where(scene => scene.IsRequired).OrderBy(scene => scene.SceneNumber))
         {
-            var expectedVariantCount = scene.VisualVariants?.Any(variant => variant.VariantType.Equals("transition_or_closing", StringComparison.OrdinalIgnoreCase)) == true ? 5 : 4;
-            foreach (var format in Phase8ProfessionalSlideFormats.Select(f => f.Format))
+            var expectedVariantCount = scene.SceneNumber == 1 ? 1 : 0;
+            foreach (var format in Phase8ProfessionalSlideFormats.Where(IsPhase8PilotSlideFormat).Select(f => f.Format))
             {
                 var renderedCount = manifest.Count(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && item.SceneNumber == scene.SceneNumber && item.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && item.SafeAreaPassed && item.OverlapCheckPassed && item.IsBlankCheckPassed && IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) && File.Exists(item.FinalImagePath));
                 if (renderedCount != expectedVariantCount)
@@ -904,6 +980,15 @@ public sealed partial class ProductionPipelineExecutionService(
         new("short", AstronomyInfographicRenderVariant.ShortForm)
     ];
 
+    private static bool IsPhase8PilotScene(EnrichedQuestionSceneDto scene)
+        => scene.SceneNumber == 1;
+
+    private static bool IsPhase8PilotSceneVariant(SceneVisualVariantDto variant)
+        => variant.VariantNo == 3 || NormalizePhase8VariantType(variant.VariantType).Equals("educational_overlay", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPhase8PilotSlideFormat(Phase8ProfessionalSlideFormat format)
+        => format.Format.Equals("long", StringComparison.OrdinalIgnoreCase);
+
     private static string BuildProfessionalSlidePath(string sceneAssetsRoot, string format, int sceneNumber, int variantNo, string variantType)
         => Path.Combine(sceneAssetsRoot, format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}.png");
 
@@ -920,7 +1005,12 @@ public sealed partial class ProductionPipelineExecutionService(
         }
 
         Directory.CreateDirectory(Path.Combine(sceneAssetsRoot, "long"));
-        Directory.CreateDirectory(Path.Combine(sceneAssetsRoot, "short"));
+    }
+
+    private static void DeletePhase8TemporaryBackgroundRoot(string sceneAssetsRoot)
+    {
+        var path = Path.Combine(sceneAssetsRoot, ".tmp-backgrounds");
+        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
     }
 
     private static string ResolveProfessionalSlideVariantSlug(int variantNo, string variantType)
