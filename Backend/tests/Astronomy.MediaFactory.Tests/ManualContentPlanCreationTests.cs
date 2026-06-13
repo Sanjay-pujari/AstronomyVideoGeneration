@@ -43,6 +43,8 @@ public sealed class ManualContentPlanCreationTests
         Assert.False(plan.GeneratedByAi);
         Assert.True(plan.ManualValidation);
         Assert.Empty(response.Warnings);
+        Assert.False(response.ManualReviewOverrideApplied);
+        Assert.Equal("Verified", response.VerificationStatus);
         Assert.Equal("manual validation: Astronomy V1.2 Planet Grouping validation", plan.PlanningReason);
         Assert.Equal(["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"], ReadStringArray(plan.RequestedOutputTypesJson));
         Assert.Equal(["Saturn", "Mars", "Jupiter", "Venus"], ReadStringArray(plan.PlannedObjectNamesJson));
@@ -105,6 +107,8 @@ public sealed class ManualContentPlanCreationTests
 
         Assert.True(response.Success);
         Assert.True(response.ManualValidation);
+        Assert.True(response.ManualReviewOverrideApplied);
+        Assert.Equal("NeedsManualReview", response.VerificationStatus);
         Assert.Equal(["Created manual validation plan for NeedsManualReview event. This does not enable automatic generation."], response.Warnings);
         Assert.Equal("Draft", plan.Status);
         Assert.Equal("Draft", plan.PlanStatus);
@@ -125,7 +129,7 @@ public sealed class ManualContentPlanCreationTests
         var evt = SeedPlanetGroupingEvent(db, "NeedsManualReview");
         var service = CreateService(db);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
             AstronomyEventIntelligenceId: evt.Id,
             RegionId: "IN-RJ-UDAIPUR",
             Language: "en",
@@ -133,6 +137,8 @@ public sealed class ManualContentPlanCreationTests
             RequestedOutputs: ["ShortVideo"],
             ManualValidation: false,
             Reason: "Invalid status validation"), CancellationToken.None));
+
+        Assert.Equal("NeedsManualReview events cannot be converted into content plans by this endpoint.", exception.Message);
     }
 
     [Theory]
@@ -143,7 +149,7 @@ public sealed class ManualContentPlanCreationTests
         var evt = SeedPlanetGroupingEvent(db, "NeedsManualReview");
         var service = CreateService(db);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
             AstronomyEventIntelligenceId: evt.Id,
             RegionId: "IN-RJ-UDAIPUR",
             Language: "en",
@@ -151,6 +157,8 @@ public sealed class ManualContentPlanCreationTests
             RequestedOutputs: requestedOutputs,
             ManualValidation: true,
             Reason: reason), CancellationToken.None));
+
+        Assert.Equal("NeedsManualReview events cannot be converted into content plans by this endpoint.", exception.Message);
     }
 
     [Theory]

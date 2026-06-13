@@ -789,7 +789,9 @@ public sealed record CreatePlanFromEventResponse(
     string RegionId,
     string Language,
     IReadOnlyList<string> RequestedOutputs,
-    bool ManualValidation)
+    bool ManualValidation,
+    bool ManualReviewOverrideApplied,
+    string VerificationStatus)
 {
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
