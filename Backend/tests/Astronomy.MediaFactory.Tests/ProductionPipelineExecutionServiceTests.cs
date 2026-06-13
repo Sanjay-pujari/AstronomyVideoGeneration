@@ -153,6 +153,8 @@ public sealed class ProductionPipelineExecutionServiceTests
 
         Assert.True(GetBooleanDiagnostic(diagnostics, "PlanetGroupingIntentInjected"));
         Assert.True(GetBooleanDiagnostic(diagnostics, "GuidedScanPathInjected"));
+        Assert.False(GetBooleanDiagnostic(diagnostics, "LegacyValidationPathExecuted"));
+        Assert.True(GetBooleanDiagnostic(diagnostics, "PlanetGroupingValidationPathExecuted"));
         Assert.Equal(6, GetIntDiagnostic(diagnostics, "EnrichedSceneIntentCount"));
     }
 
@@ -172,6 +174,36 @@ public sealed class ProductionPipelineExecutionServiceTests
 
         Assert.False(GetBooleanDiagnostic(diagnostics, "PlanetGroupingIntentInjected"));
         Assert.False(GetBooleanDiagnostic(diagnostics, "GuidedScanPathInjected"));
+        Assert.True(GetBooleanDiagnostic(diagnostics, "LegacyValidationPathExecuted"));
+        Assert.False(GetBooleanDiagnostic(diagnostics, "PlanetGroupingValidationPathExecuted"));
+    }
+
+    [Fact]
+    public async Task Phase6PlanetGroupingContract_UsesInjectedIntentDiagnosticsInsteadOfLegacyObjectPresence()
+    {
+        var context = CreateContext("PLANET_GROUPING", ["ShortVideo"]);
+        context = context with
+        {
+            ProductionEventIntelligence = context.ProductionEventIntelligence with
+            {
+                RequiredVisualObjects = ["planet grouping", "guided scan path"]
+            }
+        };
+        await WriteEnrichedScenePlanAsync(context,
+            viewerTakeaway: "Planet grouping: show Saturn, Mars, Jupiter, and Venus in one viewing region.",
+            narrationIntent: "Explain the bright planets from the horizon upward.",
+            visualIntent: "Draw a grouping arc connecting the visible planets.",
+            imagePromptIntent: "Show a quiet western horizon with labeled planets.",
+            overlayIntent: "Saturn • Mars • Jupiter • Venus",
+            accessibilityIntent: "Begin at the western horizon and move upward.");
+
+        await ValidatePhase6EnrichedScenePlanContractAsync(context);
+
+        var diagnostics = BuildPhase6SceneEnrichmentDiagnostics(context);
+        Assert.True(GetBooleanDiagnostic(diagnostics, "PlanetGroupingIntentInjected"));
+        Assert.True(GetBooleanDiagnostic(diagnostics, "GuidedScanPathInjected"));
+        Assert.False(GetBooleanDiagnostic(diagnostics, "LegacyValidationPathExecuted"));
+        Assert.True(GetBooleanDiagnostic(diagnostics, "PlanetGroupingValidationPathExecuted"));
     }
 
     private static bool IsPhaseRequired(ProductionPhaseContext context, int phaseNo)
@@ -184,6 +216,14 @@ public sealed class ProductionPipelineExecutionServiceTests
     {
         var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildPhase6SceneEnrichmentDiagnostics", BindingFlags.NonPublic | BindingFlags.Static);
         return method!.Invoke(null, [context])!;
+    }
+
+    private static async Task ValidatePhase6EnrichedScenePlanContractAsync(ProductionPhaseContext context)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase6EnrichedScenePlanContractAsync", BindingFlags.NonPublic | BindingFlags.Static);
+        var path = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");
+        var task = (Task)method!.Invoke(null, [context, path, CancellationToken.None])!;
+        await task;
     }
 
     private static bool GetBooleanDiagnostic(object diagnostics, string propertyName)
