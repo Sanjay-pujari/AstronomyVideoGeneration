@@ -141,6 +141,103 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(saved.Validation.ThumbnailCompositionReadinessScore >= 90);
     }
 
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_PlanetConjunctionCompositionUsesCompactObjectCopy()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Jupiter and Venus conjunction over Udaipur, Rajasthan, India; minimum angular separation 1.63 degrees",
+            "Jupiter and Venus conjunction over Udaipur, Rajasthan, India",
+            "PLANET_CONJUNCTION",
+            ["Jupiter"],
+            ["Venus"]);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Composition",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        Assert.True(result.ThumbnailCompositionReadinessScore >= 90);
+
+        var outputPath = Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-composition-model.json");
+        var saved = JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal("JUPITER + VENUS", saved!.PrimaryHook);
+        Assert.Equal("CLOSEST APPROACH", saved.SecondaryText);
+        Assert.Equal(string.Empty, saved.MicroText);
+        Assert.Equal(2, saved.Validation.TextElementCount);
+        Assert.True(saved.Validation.ThumbnailCompositionReadinessScore >= 90);
+        Assert.DoesNotContain("Udaipur", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("1.63", string.Join(" ", saved.PrimaryHook, saved.SecondaryText, saved.MicroText), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_PlanetConjunctionImagesUseCompactThumbnailText()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteThumbnailCompositionInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Jupiter and Venus conjunction over Udaipur, Rajasthan, India; minimum angular separation 1.63 degrees",
+            "Jupiter and Venus conjunction over Udaipur, Rajasthan, India",
+            "PLANET_CONJUNCTION",
+            ["Jupiter"],
+            ["Venus"]);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "SceneSelection",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Images",
+            ThumbnailStyle = "ScrollStopping",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        Assert.True(result.PhotoCinematicRendererUsed);
+
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")), JsonOptions);
+        Assert.NotNull(manifest);
+        Assert.Equal("Jupiter", manifest!.ValidationFacts["thumbnailPrimaryObjects"]);
+        Assert.Equal("Venus", manifest.ValidationFacts["thumbnailSecondaryObjects"]);
+        Assert.Equal("JUPITER + VENUS", manifest.ValidationFacts["thumbnailRequestShortTitle"]);
+        Assert.Equal("JUPITER + VENUS | CLOSEST APPROACH", manifest.ValidationFacts["textUsed"]);
+        Assert.DoesNotContain("Udaipur", manifest.ValidationFacts["textUsed"], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Rajasthan", manifest.ValidationFacts["textUsed"], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("1.63", manifest.ValidationFacts["textUsed"], StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("True", manifest.ValidationFacts["semanticValidationPassed"]);
+    }
+
     [Fact]
     public async Task GenerateThumbnailAssetsAsync_SceneSelectionWritesThumbnailSceneManifestOnly()
     {
