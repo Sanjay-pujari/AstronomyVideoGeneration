@@ -270,6 +270,35 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(spec.GetProperty("requiredVisualObjects")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("resolvedObjectNames")));
         Assert.Equal(new[] { "multi-planet grouping", "guided scan path", "realistic planet textures", "grouping arc" }, ReadStringArray(spec.GetProperty("visualMotifs")));
+
+        var diagnosticsPath = Path.Combine(BuildSceneApprovalPath(workingDirectory), "phase8-visual-source-diagnostics.json");
+        Assert.True(File.Exists(diagnosticsPath));
+        using var diagnosticsDocument = JsonDocument.Parse(await File.ReadAllTextAsync(diagnosticsPath));
+        var diagnostics = diagnosticsDocument.RootElement;
+        var summary = diagnostics.GetProperty("phase8VisualSourceDiagnostics");
+        Assert.Equal("question-driven-scene-plan.enriched.json", summary.GetProperty("expectedSource").GetString());
+        Assert.Equal("question-driven-scene-plan.enriched.json", summary.GetProperty("actualSourceUsed").GetString());
+        Assert.True(summary.GetProperty("usedEnrichedScenePlan").GetBoolean());
+        Assert.False(summary.GetProperty("usedFallbackTemplate").GetBoolean());
+        Assert.False(summary.GetProperty("gapDetected").GetBoolean());
+
+        var sceneDiagnostics = diagnostics.GetProperty("scenes").EnumerateArray().Single(scene => scene.GetProperty("sceneNumber").GetInt32() == 2);
+        Assert.Equal("question-driven-scene-plan.enriched.json", sceneDiagnostics.GetProperty("selectedVisualSourceType").GetString());
+        Assert.Contains("question-driven-scene-plan.enriched.json", sceneDiagnostics.GetProperty("selectedVisualSourceFile").GetString());
+        Assert.Contains("Visual intent", sceneDiagnostics.GetProperty("selectedVisualIntent").GetString());
+        Assert.Contains("Image prompt intent", sceneDiagnostics.GetProperty("selectedImagePromptIntent").GetString());
+        Assert.Contains("Overlay intent", sceneDiagnostics.GetProperty("selectedOverlayIntent").GetString());
+        Assert.Equal("Follow the scan path.", sceneDiagnostics.GetProperty("selectedCaptionText").GetString());
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(sceneDiagnostics.GetProperty("selectedRequiredVisualObjects")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(sceneDiagnostics.GetProperty("selectedResolvedObjectNames")));
+        Assert.Equal("PlanetGrouping", sceneDiagnostics.GetProperty("selectedStrategyId").GetString());
+        Assert.True(sceneDiagnostics.GetProperty("usedEnrichedScenePlan").GetBoolean());
+        Assert.False(sceneDiagnostics.GetProperty("usedFallbackVisualTemplate").GetBoolean());
+        Assert.Equal(string.Empty, sceneDiagnostics.GetProperty("fallbackReason").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("rendererPromptBeforeRendering").GetString()));
+        Assert.Contains("scene-002-infographic-spec.json", sceneDiagnostics.GetProperty("infographicSpecPath").GetString());
+        Assert.True(sceneDiagnostics.GetProperty("infographicSpecContainsPlanetGroupingMetadata").GetBoolean());
+        Assert.True(sceneDiagnostics.GetProperty("infographicSpecContainsResolvedObjects").GetBoolean());
     }
 
 
