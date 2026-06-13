@@ -48,6 +48,18 @@ public sealed record ObjectValidationDiagnostic(
     string AllowedBecause,
     string ValidationResult);
 
+public sealed record SceneVisualVariantDto(
+    int VariantNo,
+    string VariantType,
+    string Purpose,
+    double RecommendedDurationSeconds,
+    string CameraStyle,
+    string CompositionHint,
+    string MotionHint,
+    string OverlayHint,
+    string RendererHint,
+    string OutputFileNameSuggestion);
+
 public sealed record EnrichedQuestionSceneDto(
     int SceneNumber,
     string QuestionType,
@@ -64,7 +76,8 @@ public sealed record EnrichedQuestionSceneDto(
     string AccessibilityIntent,
     bool IsRequired,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RequiredVisualObjects = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? StrategyId = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? StrategyId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<SceneVisualVariantDto>? VisualVariants = null);
 
 public interface IQuestionSceneIntentEnricher
 {

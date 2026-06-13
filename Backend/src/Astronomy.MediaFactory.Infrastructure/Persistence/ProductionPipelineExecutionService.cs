@@ -309,6 +309,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!response.IsValid)
             throw new InvalidOperationException("Phase 6 scene plan enrichment failed validation: " + string.Join(" | ", response.Warnings));
 
+        if (context.PipelineRequest.EnableSceneVariants)
+            await AddPhase6SceneVisualVariantsAsync(enrichedPath, cancellationToken);
+
         await ValidatePhase6EnrichedScenePlanContractAsync(context, enrichedPath, cancellationToken);
         return response.GeneratedFiles.Concat([enrichedPath]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
@@ -327,6 +330,42 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
+
+    private static async Task AddPhase6SceneVisualVariantsAsync(string enrichedPath, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(enrichedPath)) return;
+
+        var json = await File.ReadAllTextAsync(enrichedPath, cancellationToken);
+        var plan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(json, JsonOptions)
+            ?? throw new InvalidOperationException("Phase 6 enriched scene plan could not be parsed before visual variant enrichment.");
+
+        var enrichedScenes = plan.Scenes
+            .Select(scene => scene with { VisualVariants = BuildPhase6SceneVisualVariants(scene) })
+            .ToArray();
+        var enrichedPlan = plan with { Scenes = enrichedScenes };
+
+        await File.WriteAllTextAsync(enrichedPath, JsonSerializer.Serialize(enrichedPlan, JsonOptions), cancellationToken);
+    }
+
+    private static IReadOnlyList<SceneVisualVariantDto> BuildPhase6SceneVisualVariants(EnrichedQuestionSceneDto scene)
+    {
+        var safeScene = Math.Max(1, scene.SceneNumber);
+        var sceneToken = $"scene-{safeScene:00}";
+        var variants = new List<SceneVisualVariantDto>
+        {
+            new(1, "wide_context", "Establish the full sky context before focusing on the answer.", 6.0, "Wide locked-off sky frame", $"Show the broader viewing context for {scene.ViewerQuestion}", "Slow drift or gentle parallax only", "Minimal labels for horizon, direction, or key object group", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-wide-context.png"),
+            new(2, "object_focus", "Focus attention on the primary visual object or relationship in this scene.", 7.0, "Medium telephoto object-centered frame", $"Center the object or relationship implied by: {scene.VisualIntent}", "Subtle push-in toward the key object", "Short object label and one supporting fact", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-object-focus.png"),
+            new(3, "educational_overlay", "Clarify the lesson with concise explanatory overlays.", 7.0, "Stable infographic-friendly composition", $"Reserve clean negative space for overlays explaining: {scene.ViewerTakeaway}", "Hold mostly static so labels remain readable", "Use the scene overlay intent as the primary annotation guide", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-educational-overlay.png"),
+            new(4, "cinematic_detail", "Add a close, atmospheric detail that supports retention without changing the scene meaning.", 5.0, "Cinematic close-up detail frame", $"Highlight a visually memorable detail from: {scene.ImagePromptIntent}", "Slow cinematic reveal or light sweep", "No more than one small caption", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-cinematic-detail.png")
+        };
+
+        if (!scene.IsRequired || scene.SceneNumber > 1)
+        {
+            variants.Add(new SceneVisualVariantDto(5, "transition_or_closing", "Provide an optional bridge into the next scene or a closing beat.", 4.0, "Transition-ready composition", "Leave visual continuity space for a dissolve, wipe, or closing title card", "Gentle fade, pan, or hold for editorial transition", "Optional next-step or closing cue only", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-transition-or-closing.png"));
+        }
+
+        return variants;
+    }
 
     private static string BuildEnrichedScenePlanPath(ProductionPhaseContext context)
         => Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");

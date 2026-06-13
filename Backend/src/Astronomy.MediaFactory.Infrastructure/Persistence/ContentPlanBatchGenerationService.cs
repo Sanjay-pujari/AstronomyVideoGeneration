@@ -99,7 +99,8 @@ public sealed class ContentPlanBatchGenerationService(
                 executionMode,
                 request.AllowCompletedPlanRerun,
                 request.ArchivePreviousRun,
-                request.RebuildIntelligence), cancellationToken);
+                request.RebuildIntelligence,
+                request.EnableSceneVariants), cancellationToken);
 
             return new BatchGenerateFromPlansResponse(
                 Success: execution.Success,

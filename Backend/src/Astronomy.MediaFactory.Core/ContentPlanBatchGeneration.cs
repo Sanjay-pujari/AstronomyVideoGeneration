@@ -33,7 +33,8 @@ public sealed record BatchGenerateFromPlansRequest(
     ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
     bool AllowCompletedPlanRerun = false,
     bool ArchivePreviousRun = false,
-    bool RebuildIntelligence = false);
+    bool RebuildIntelligence = false,
+    bool EnableSceneVariants = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -213,6 +214,7 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool AllowCompletedPlanRerun = false,
     bool ArchivePreviousRun = false,
     bool RebuildIntelligence = false,
+    bool EnableSceneVariants = false,
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null);
 
@@ -283,6 +285,7 @@ public sealed record ProductionPipelineRequest(
     bool AllowCompletedPlanRerun = false,
     bool ArchivePreviousRun = false,
     bool RebuildIntelligence = false,
+    bool EnableSceneVariants = false,
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null);
 

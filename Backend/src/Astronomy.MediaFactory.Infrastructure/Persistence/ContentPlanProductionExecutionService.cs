@@ -98,6 +98,7 @@ public sealed class ContentPlanProductionExecutionService(
                 EndPhaseNo: endPhaseNo,
                 RetryFailedOnly: request.RetryFailedOnly,
                 ExecutionMode: executionMode,
+                EnableSceneVariants: request.EnableSceneVariants,
                 RequestedStartPhaseNo: requestedStartPhaseNo,
                 RequestedEndPhaseNo: requestedEndPhaseNo), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
