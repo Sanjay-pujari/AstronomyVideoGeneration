@@ -137,6 +137,69 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Contains("Check clouds", trimmed);
     }
 
+
+    [Fact]
+    public void BuildPhase6SceneVisualVariants_ReturnsPlanningOnlyMetadataWithoutRendering()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildPhase6SceneVisualVariants", BindingFlags.NonPublic | BindingFlags.Static);
+        var scene = new EnrichedQuestionSceneDto(
+            2,
+            "How",
+            "ExplainObject",
+            "How do I find Mars?",
+            "Look west after sunset.",
+            "CasualSkyWatcher",
+            "Beginner",
+            "Mars is low in the west.",
+            "Explain where Mars appears.",
+            "Show Mars above the western horizon.",
+            "Mars over a dim western horizon.",
+            "Mars • western horizon",
+            "Mars label near the horizon.",
+            true);
+
+        var variants = (IReadOnlyList<SceneVisualVariantDto>)method!.Invoke(null, [scene])!;
+
+        Assert.InRange(variants.Count, 3, 5);
+        Assert.Equal(["wide_context", "object_focus", "educational_overlay", "cinematic_detail", "transition_or_closing"], variants.Select(v => v.VariantType).ToArray());
+        Assert.Equal(Enumerable.Range(1, variants.Count), variants.Select(v => v.VariantNo));
+        Assert.All(variants, variant =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(variant.Purpose));
+            Assert.True(variant.RecommendedDurationSeconds > 0);
+            Assert.False(string.IsNullOrWhiteSpace(variant.CameraStyle));
+            Assert.False(string.IsNullOrWhiteSpace(variant.CompositionHint));
+            Assert.False(string.IsNullOrWhiteSpace(variant.MotionHint));
+            Assert.False(string.IsNullOrWhiteSpace(variant.OverlayHint));
+            Assert.Contains("do not render", variant.RendererHint, StringComparison.OrdinalIgnoreCase);
+            Assert.StartsWith("scene-02-", variant.OutputFileNameSuggestion, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Fact]
+    public void EnrichedSceneJson_OmitsVisualVariants_WhenSceneVariantsAreDisabled()
+    {
+        var scene = new EnrichedQuestionSceneDto(
+            1,
+            "What",
+            "OpeningOverview",
+            "What is happening?",
+            "The Moon is full.",
+            "CasualSkyWatcher",
+            "Beginner",
+            "The full Moon is visible tonight.",
+            "Explain the full Moon timing.",
+            "Show the Moon over the horizon.",
+            "Full Moon above trees.",
+            "Full Moon",
+            "Moon label centered.",
+            true);
+
+        var json = JsonSerializer.Serialize(scene, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.DoesNotContain("visualVariants", json);
+    }
+
     [Fact]
     public async Task Phase6PlanetGroupingDiagnostics_DetectsInjectedIntentPhrasesAcrossAllIntentFields()
     {
