@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -330,7 +329,7 @@ public sealed class ContentPlanBatchGenerationService(
             var selectedPlan = runnableMatches[0];
             selected.Add(selectedPlan);
             selectedIds.Add(selectedPlan.Id);
-            AddManualValidationAutoGenerateWarningIfNeeded(selectedPlan, requestedTitle, warnings);
+            AddManualValidationAutoGenerateWarningIfNeeded(selectedPlan, requestedTitle, warnings, isExactPlanIdTarget: false);
         }
 
         return new SelectionResult(selected, warnings);
@@ -354,7 +353,7 @@ public sealed class ContentPlanBatchGenerationService(
         if (selectedIds.Contains(plan.Id)) return;
         if (!IsStatusRunnable(plan, allowedStatuses)
             || (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter))
-            || !IsAstronomyEventRunnable(plan, AllowManualValidationAutoGenerateBypass(plan, isExactTarget: true))
+            || !IsAstronomyEventRunnable(plan, AllowManualValidationAutoGenerateBypass(plan, isExactPlanIdTarget: true))
             || (onlyHighPriority && !IsHighPriority(plan)))
         {
             warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(
@@ -372,7 +371,7 @@ public sealed class ContentPlanBatchGenerationService(
 
         selected.Add(plan);
         selectedIds.Add(plan.Id);
-        AddManualValidationAutoGenerateWarningIfNeeded(plan, requestedPlanId.ToString("D"), warnings);
+        AddManualValidationAutoGenerateWarningIfNeeded(plan, requestedPlanId.ToString("D"), warnings, isExactPlanIdTarget: true);
     }
 
     private async Task<IReadOnlyList<BatchGenerateFromPlansWarning>> RecoverRunningCandidatesAsync(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -564,112 +563,27 @@ public sealed class ContentPlanBatchGenerationService(
     }
 
     private static bool IsManualValidationPlan(ContentGenerationPlan plan)
-    {
-        if (TryReadManualValidationFlag(plan, out var manualValidation) && manualValidation)
-            return true;
-
-        return !plan.GeneratedByAi
+        => !plan.GeneratedByAi
             && IsManualValidationPlanningReason(plan.PlanningReason);
-    }
 
     private static bool IsManualValidationPlanningReason(string? planningReason)
-        => ContainsAny(planningReason, "manual validation", "validation", "V1.", "Astronomy V");
-
-    private static bool ContainsAny(string? value, params string[] needles)
-        => !string.IsNullOrWhiteSpace(value)
-            && needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
-
-    private static bool TryReadManualValidationFlag(ContentGenerationPlan plan, out bool manualValidation)
-    {
-        manualValidation = false;
-
-        foreach (var propertyName in new[] { "ManualValidation", "IsManualValidation" })
-        {
-            var property = plan.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-            if (property?.PropertyType == typeof(bool))
-            {
-                manualValidation = (bool)property.GetValue(plan)!;
-                return true;
-            }
-
-            if (property?.PropertyType == typeof(bool?))
-            {
-                var value = (bool?)property.GetValue(plan);
-                if (value.HasValue)
-                {
-                    manualValidation = value.Value;
-                    return true;
-                }
-            }
-        }
-
-        var metadataJson = ReadOptionalStringProperty(plan, "MetadataJson");
-        return TryReadManualValidationFlagFromMetadata(metadataJson, out manualValidation);
-    }
-
-    private static bool TryReadManualValidationFlagFromMetadata(string? metadataJson, out bool manualValidation)
-    {
-        manualValidation = false;
-        if (string.IsNullOrWhiteSpace(metadataJson)) return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(metadataJson);
-            return TryReadManualValidationFlagFromElement(document.RootElement, out manualValidation);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static bool TryReadManualValidationFlagFromElement(JsonElement element, out bool manualValidation)
-    {
-        manualValidation = false;
-        if (element.ValueKind != JsonValueKind.Object) return false;
-
-        if (TryReadBooleanProperty(element, "manualValidation", out manualValidation)
-            || TryReadBooleanProperty(element, "isManualValidation", out manualValidation))
-            return true;
-
-        if (element.TryGetProperty("metadata", out var nestedMetadata))
-            return TryReadManualValidationFlagFromElement(nestedMetadata, out manualValidation);
-
-        return false;
-    }
-
-    private static bool TryReadBooleanProperty(JsonElement element, string propertyName, out bool value)
-    {
-        value = false;
-
-        if (!element.TryGetProperty(propertyName, out var property))
-            return false;
-
-        if (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
-        {
-            value = property.GetBoolean();
-            return true;
-        }
-
-        if (property.ValueKind == JsonValueKind.String && bool.TryParse(property.GetString(), out value))
-            return true;
-
-        return false;
-    }
+        => !string.IsNullOrWhiteSpace(planningReason)
+            && planningReason.Contains("manual validation", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsExactPlanTitleTarget(ContentGenerationPlan plan, string requestedTitle, int requestedTitleCount)
         => requestedTitleCount == 1
             && !string.IsNullOrWhiteSpace(requestedTitle)
             && string.Equals(Normalize(plan.Title), Normalize(requestedTitle), StringComparison.OrdinalIgnoreCase);
 
-    private static bool AllowManualValidationAutoGenerateBypass(ContentGenerationPlan plan, bool isExactTarget)
-        => isExactTarget
+    private static bool AllowManualValidationAutoGenerateBypass(ContentGenerationPlan plan, bool isExactPlanIdTarget)
+        => isExactPlanIdTarget
+            && IsStatusRunnable(plan, RunnableStatuses)
             && plan.AstronomyEventIntelligence is { AutoGenerateAllowed: false }
             && IsManualValidationPlan(plan);
 
-    private static void AddManualValidationAutoGenerateWarningIfNeeded(ContentGenerationPlan plan, string requestedTitle, List<BatchGenerateFromPlansWarning> warnings)
+    private static void AddManualValidationAutoGenerateWarningIfNeeded(ContentGenerationPlan plan, string requestedTitle, List<BatchGenerateFromPlansWarning> warnings, bool isExactPlanIdTarget)
     {
-        if (AllowManualValidationAutoGenerateBypass(plan, isExactTarget: true))
+        if (AllowManualValidationAutoGenerateBypass(plan, isExactPlanIdTarget))
             warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, true, "Selected manual validation plan even though linked event AutoGenerateAllowed=false."));
     }
 

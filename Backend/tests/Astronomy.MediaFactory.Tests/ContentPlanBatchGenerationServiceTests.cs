@@ -132,7 +132,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     public async Task GenerateFromPlansAsync_ManualValidationPlanId_BypassesAutoGenerateAllowedWithWarning()
     {
         await using var db = CreateDb();
-        var intelligence = SeedManualValidationPlan(db);
+        var intelligence = SeedManualValidationPlan(db, planningReason: "manual validation: Astronomy V1.2 Solar Eclipse validation");
         var legacy = new ThrowingLegacyPipeline();
         var production = new CapturingProductionExecutionService();
         var service = CreateService(db, legacy, production);
@@ -156,6 +156,42 @@ public sealed class ContentPlanBatchGenerationServiceTests
             && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal(ManualValidationPlanId, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionCompletedManualValidationPlanId_DoesNotBypassAutoGenerateAllowed()
+    {
+        await using var db = CreateDb();
+        var intelligence = SeedManualValidationPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            MaxPlans: 1,
+            DryRun: true,
+            UseProductionPipeline: true,
+            PlanId: ManualValidationPlanId,
+            ExecutionMode: ContentPlanExecutionMode.RebuildOutputs,
+            AllowCompletedPlanRerun: true,
+            OverwriteExisting: true), CancellationToken.None);
+
+        var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
+        Assert.True(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        var warning = Assert.Single(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
+            && warning.Matched
+            && !warning.Selected
+            && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
+        Assert.Contains("isExactTarget=true", warning.Reason);
+        Assert.Contains("isManualValidationPlan=true", warning.Reason);
+        Assert.Contains("shouldBypassAutoGenerateAllowed=false", warning.Reason);
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);
     }
 
@@ -192,7 +228,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
-    public async Task GenerateFromPlansAsync_AstronomyVValidationReason_BypassesAutoGenerateAllowedWithWarning()
+    public async Task GenerateFromPlansAsync_AstronomyVValidationReasonWithoutManualPhrase_DoesNotBypassAutoGenerateAllowed()
     {
         await using var db = CreateDb();
         var intelligence = SeedManualValidationPlan(db, planningReason: "Astronomy V1.2 Planet Grouping validation");
@@ -211,14 +247,19 @@ public sealed class ContentPlanBatchGenerationServiceTests
 
         var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
         Assert.True(response.Success);
-        Assert.Equal(1, response.SelectedPlanCount);
-        Assert.Equal(ManualValidationPlanId, response.PlanId);
-        Assert.Equal(ManualValidationPlanId, Assert.Single(response.SelectedPlans).ContentGenerationPlanId);
-        Assert.Contains(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
-            && warning.Selected
-            && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+        Assert.Equal(0, response.SelectedPlanCount);
+        var warning = Assert.Single(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
+            && warning.Matched
+            && !warning.Selected
+            && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
+        Assert.Contains($"planId={ManualValidationPlanId:D}", warning.Reason);
+        Assert.Contains("GeneratedByAi=false", warning.Reason);
+        Assert.Contains("PlanningReason=Astronomy V1.2 Planet Grouping validation", warning.Reason);
+        Assert.Contains("isExactTarget=true", warning.Reason);
+        Assert.Contains("isManualValidationPlan=false", warning.Reason);
+        Assert.Contains("shouldBypassAutoGenerateAllowed=false", warning.Reason);
         Assert.False(reloadedEvent.AutoGenerateAllowed);
-        Assert.Equal(ManualValidationPlanId, production.CapturedPlanId);
+        Assert.Equal(Guid.Empty, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);
     }
 
@@ -1010,7 +1051,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Options.Create(new ProductionPipelineOptions()),
             NullLogger<ContentPlanBatchGenerationService>.Instance);
 
-    private static AstronomyEventIntelligence SeedManualValidationPlan(MediaFactoryDbContext db, bool generatedByAi = false, string planningReason = "Astronomy V1.2 manual validation", string verificationStatus = "Verified")
+    private static AstronomyEventIntelligence SeedManualValidationPlan(MediaFactoryDbContext db, bool generatedByAi = false, string planningReason = "Astronomy V1.2 manual validation", string verificationStatus = "Verified", string status = "Draft", string planStatus = "Draft")
     {
         var intelligence = new AstronomyEventIntelligence
         {
@@ -1041,8 +1082,8 @@ public sealed class ContentPlanBatchGenerationServiceTests
             RegionId = "IN-RJ-UDAIPUR",
             Language = "en",
             ScheduledUtc = new DateTimeOffset(2026, 6, 21, 0, 0, 0, TimeSpan.Zero),
-            Status = "Draft",
-            PlanStatus = "Draft",
+            Status = status,
+            PlanStatus = planStatus,
             Priority = 40,
             PriorityScore = 8,
             GeneratedByAi = generatedByAi,
