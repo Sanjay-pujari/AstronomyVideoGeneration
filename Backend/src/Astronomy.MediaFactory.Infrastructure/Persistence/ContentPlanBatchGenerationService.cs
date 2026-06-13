@@ -299,7 +299,7 @@ public sealed class ContentPlanBatchGenerationService(
             var runnableMatches = matches
                 .Where(p => IsStatusRunnable(p, allowedStatuses))
                 .Where(p => !IsProductionRunning(p) || CanRecoverRunningPlan(p, recoveryMode, runningPlanRecoveryStaleAfter))
-                .Where(p => IsAstronomyEventRunnable(p, AllowManualValidationAutoGenerateBypass(p, IsExactPlanTitleTarget(p, requestedTitle, requestedTitles.Count))))
+                .Where(p => IsAstronomyEventRunnable(p, allowManualValidationAutoGenerateBypass: false))
                 .Where(p => !onlyHighPriority || IsHighPriority(p))
                 .OrderBy(p => IsExactMatch(p, requestedTitle) ? 0 : 1)
                 .ThenByDescending(p => p.PriorityScore ?? 0m)
@@ -316,8 +316,8 @@ public sealed class ContentPlanBatchGenerationService(
                     runningPlanRecoveryStaleAfter,
                     completedRerunMode,
                     allowCompletedPlanRerun,
-                    requestedTitle,
-                    IsExactPlanTitleTarget(matches[0], requestedTitle, requestedTitles.Count))));
+                    requestedPlanTitle: requestedTitle,
+                    isExactTarget: false)));
                 continue;
             }
 
@@ -558,15 +558,15 @@ public sealed class ContentPlanBatchGenerationService(
         var evt = plan.AstronomyEventIntelligence;
         return evt is not null
             && (evt.AutoGenerateAllowed || allowManualValidationAutoGenerateBypass)
-            && !string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase)
+            && (!string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase) || allowManualValidationAutoGenerateBypass)
             && !string.Equals(evt.ContentStrategy, "SkipAutoGeneration", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(evt.ContentStrategy, "EducationalOnly", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsManualValidationPlan(ContentGenerationPlan plan)
     {
-        if (TryReadManualValidationFlag(plan, out var manualValidation))
-            return manualValidation;
+        if (TryReadManualValidationFlag(plan, out var manualValidation) && manualValidation)
+            return true;
 
         return !plan.GeneratedByAi
             && IsManualValidationPlanningReason(plan.PlanningReason);
