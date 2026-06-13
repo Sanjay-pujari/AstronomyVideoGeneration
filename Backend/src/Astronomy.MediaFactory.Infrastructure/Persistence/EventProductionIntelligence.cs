@@ -970,7 +970,7 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static void ValidateVisualSourceResolverMetadata(SceneValidationContext context, List<string> errors)
     {
-        var required = (context.Intelligence.RequiredVisualObjects ?? [])
+        var legacyRequired = (context.Intelligence.RequiredVisualObjects ?? [])
             .Concat(context.Intelligence.PrimaryObjects)
             .Concat(context.Intelligence.SecondaryObjects)
             .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -981,6 +981,17 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         {
             using var doc = JsonDocument.Parse(json);
             var fileName = Path.GetFileName(path);
+            var strategyId = ResolveSpecStrategyId(doc.RootElement, context.Intelligence);
+            var isPlanetGrouping = IsPlanetGroupingStrategy(strategyId, context.Intelligence);
+            var required = isPlanetGrouping
+                ? CollectRequiredVisualObjects(doc.RootElement)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+                : legacyRequired;
+            if (isPlanetGrouping && required.Length == 0)
+                errors.Add($"Visual source validation failed for {fileName}: PlanetGrouping infographic spec metadata must include requiredVisualObjects.");
+
             if (required.Length > 0)
             {
                 if (TryGetVisualSourceType(doc.RootElement, out var sourceType) && sourceType.Equals("GenericFallback", StringComparison.OrdinalIgnoreCase))
@@ -990,12 +1001,14 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
                 using var reviewDoc = File.Exists(reviewPath) ? TryParseJson(File.ReadAllText(reviewPath)) : null;
                 ValidatePerObjectVisualSourceMetadata(doc.RootElement, reviewDoc?.RootElement, fileName, required, errors);
 
-                var specAndReviewText = json + "\n" + (File.Exists(reviewPath) ? File.ReadAllText(reviewPath) : string.Empty);
+                var validationText = isPlanetGrouping
+                    ? BuildPlanetGroupingRequiredObjectValidationText(doc.RootElement, reviewDoc?.RootElement, context.Intelligence)
+                    : json + "\n" + (File.Exists(reviewPath) ? File.ReadAllText(reviewPath) : string.Empty);
                 var scenePurpose = ResolveScenePurpose(doc.RootElement, fileName);
-                foreach (var requiredObject in required.Where(value => !IsConceptualVisualRequirement(value)))
+                foreach (var requiredObject in required.Where(value => isPlanetGrouping || !IsConceptualVisualRequirement(value)))
                 {
-                    if (ShouldSkipSceneRequiredObjectValidation(context.Intelligence, scenePurpose, requiredObject)) continue;
-                    if (!TryMatchRequiredObjectAlias(context.Intelligence, specAndReviewText, requiredObject, out _))
+                    if (!isPlanetGrouping && ShouldSkipSceneRequiredObjectValidation(context.Intelligence, scenePurpose, requiredObject)) continue;
+                    if (!TryMatchRequiredObjectAlias(context.Intelligence, validationText, requiredObject, out _))
                         errors.Add($"Visual source validation failed for {fileName}: required visual object '{requiredObject}' is missing from current spec/review metadata.");
                 }
             }
@@ -1003,6 +1016,42 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             foreach (var forbidden in context.Intelligence.ForbiddenObjectNames ?? [])
                 if (ContainsToken(ExtractSpecGeneratedText(doc.RootElement), forbidden))
                     errors.Add($"Visual source validation failed for {fileName}: forbidden object name '{forbidden}' appears in generated spec content.");
+        }
+    }
+
+    private static string ResolveSpecStrategyId(JsonElement root, ProductionEventIntelligence intelligence)
+    {
+        if (TryGetVisualMetadataString(root, "strategyId", out var strategyId)) return strategyId;
+        if (TryGetVisualMetadataString(root, "eventType", out var eventType)) return eventType;
+        return FirstNonEmpty(intelligence.StrategyId, intelligence.EventType);
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static bool IsPlanetGroupingStrategy(string strategyId, ProductionEventIntelligence intelligence)
+        => strategyId.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || strategyId.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || (intelligence.StrategyId?.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase) ?? false)
+            || (intelligence.StrategyId?.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase) ?? false)
+            || intelligence.EventType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || intelligence.EventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildPlanetGroupingRequiredObjectValidationText(JsonElement specRoot, JsonElement? reviewRoot, ProductionEventIntelligence intelligence)
+    {
+        var values = new List<string>();
+        AddJsonFragments(values, specRoot, ["captionText", "viewerTakeaway", "overlayText", "visualSourceResolution", "drawableVisualObjects"]);
+        if (reviewRoot.HasValue) AddJsonFragments(values, reviewRoot.Value, ["captionText", "viewerTakeaway", "overlayText", "visualSourceResolution", "drawableVisualObjects", "reviewLabels", "detectedLabels", "renderedLabels"]);
+        values.AddRange(intelligence.ResolvedObjectNames ?? []);
+        return string.Join('\n', values.Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    private static void AddJsonFragments(List<string> values, JsonElement root, IReadOnlyCollection<string> propertyNames)
+    {
+        foreach (var fragment in CollectJsonPropertyFragments(root, propertyNames))
+        {
+            var value = JsonTextValue(fragment.Value);
+            if (!string.IsNullOrWhiteSpace(value)) values.Add(value);
         }
     }
 
@@ -1109,6 +1158,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             || value.Contains("moonrise", StringComparison.OrdinalIgnoreCase)
             || value.Contains("eastern horizon", StringComparison.OrdinalIgnoreCase)
             || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)
             || value.Contains("sky direction", StringComparison.OrdinalIgnoreCase)
             || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
             || value.Contains("label", StringComparison.OrdinalIgnoreCase);

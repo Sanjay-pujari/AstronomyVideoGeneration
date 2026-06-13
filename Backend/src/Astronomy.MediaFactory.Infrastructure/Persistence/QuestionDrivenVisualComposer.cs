@@ -306,6 +306,7 @@ public sealed class QuestionDrivenVisualComposer(
         var isMeteorShower = IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent) || IsMeteorText(narrationScene.SourceAnswer) || IsMeteorText(narrationScene.NarrationText);
         var isNamedFullMoon = IsNamedFullMoonEvent(request.ProductionContext, eventType);
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var isPlanetGrouping = IsPlanetGroupingEvent(intelligence, eventType);
         var isPlanetPairing = intelligence is not null && IsPlanetPairingEvent(eventType);
         var resolvedObjects = ResolvePairingObjects(intelligence).ToArray();
         var objectPairLabel = JoinObjectPair(resolvedObjects);
@@ -333,7 +334,7 @@ public sealed class QuestionDrivenVisualComposer(
             "why" => new[] { fullMoonLabel, "full Moon glow", "winter Moon significance" },
             "action" => new[] { "Look east at moonrise", fullMoonLabel },
             _ => new[] { fullMoonLabel, narrationScene.ViewerTakeaway }
-        } : isPlanetPairing ? BuildPlanetPairingOverlays(scene, narrationScene, resolvedObjects, objectPairLabel) : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
+        } : isPlanetGrouping ? BuildPlanetGroupingOverlays(scene, narrationScene, resolvedObjects, objectPairLabel) : isPlanetPairing ? BuildPlanetPairingOverlays(scene, narrationScene, resolvedObjects, objectPairLabel) : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "Venus & Jupiter", "After sunset" },
             "where" => new[] { "W", "Venus", "Jupiter", "Western horizon", "reference stars" },
@@ -371,7 +372,7 @@ public sealed class QuestionDrivenVisualComposer(
             "why" => new[] { "mood:Meaningful", "background:deep winter astronomy sky premium editorial background with atmospheric starfield depth", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true source=Moon.FullMoon realisticTexture=craters-maria label={fullMoonLabel} placement=eastern horizon moonrise", $"significance:{fullMoonLabel} full Moon seasonal meaning", "annotation:floating full Moon significance note" },
             "action" => new[] { "mood:Inspirational", "background:beautiful poster-quality cinematic moonrise sky over Udaipur with atmospheric depth and smooth sky gradient", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true source=Moon.FullMoon realisticTexture=craters-maria label={fullMoonLabel} placement=eastern horizon moonrise", "composition:premium shareable poster composition focused on the Moon", $"typography:minimal poster CTA Look east for {fullMoonLabel}" },
             _ => new[] { "background:dark full Moon sky", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true source=Moon.FullMoon realisticTexture=craters-maria label={fullMoonLabel} placement=eastern horizon moonrise" }
-        } : isPlanetPairing ? BuildPlanetPairingLayers(scene, request, resolvedObjects, objectPairLabel) : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
+        } : isPlanetGrouping ? BuildPlanetGroupingLayers(scene, request, resolvedObjects, objectPairLabel) : isPlanetPairing ? BuildPlanetPairingLayers(scene, request, resolvedObjects, objectPairLabel) : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "mood:Dramatic", "background:professional astronomy magazine cover western twilight over Rajasthan with richer twilight colors, natural atmospheric glow, and smooth sky gradient", "horizon:stronger golden-orange western horizon glow with subtle atmospheric haze", "texture:documentary sky grain, twilight haze, natural density variation starfield, magnitude variation, brightness variation", "composition:strong focal contrast clickable thumbnail composition with slightly brighter focal region around Venus/Jupiter", "vignette:soft natural edge falloff", "celestial:reduced-scale Venus/Jupiter sky targets integrated with atmospheric blending and subtle shared glow", "typography:premium thumbnail title Venus & Jupiter subtitle After sunset" },
             "where" => new[] { "mood:Educational", "background:observation-chart sky with astronomy guide aesthetic and subtle atmospheric realism", "horizon:subtle real western horizon", "guide:delicate altitude guide", "celestial:Venus/Jupiter plotted positions integrated with subtle glow", "reference:subtle sky grid", "reference:Leo Regulus constellation-star guide", "direction:West marker", "annotation:floating labels and leader lines" },
@@ -419,6 +420,11 @@ public sealed class QuestionDrivenVisualComposer(
 
         var drawableObjects = BuildDrawableObjects(sourceResolution, isNamedFullMoon, fullMoonLabel);
         strategyValidationFacts ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (isPlanetGrouping)
+        {
+            strategyValidationFacts["requiredVisualObjects"] = string.Join(", ", requiredVisualObjects);
+            strategyValidationFacts["strategyId"] = "PlanetGrouping";
+        }
         strategyValidationFacts["visualSourceType"] = sourceResolution.SourceType.ToString();
         strategyValidationFacts["assetKey"] = string.Join(", ", sourceResolution.ScientificAssetKeys);
         strategyValidationFacts["generatedRealisticPrompt"] = sourceResolution.AiCinematicPrompt;
@@ -447,6 +453,14 @@ public sealed class QuestionDrivenVisualComposer(
         => eventType.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase)
             || eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase)
             || eventType.Equals("PlanetParade", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPlanetGroupingEvent(ProductionEventIntelligence? intelligence, string eventType)
+        => eventType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || eventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || (intelligence?.EventType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase) ?? false)
+            || (intelligence?.EventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase) ?? false)
+            || (intelligence?.StrategyId?.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase) ?? false)
+            || (intelligence?.StrategyId?.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase) ?? false);
 
     private static IEnumerable<string> ResolvePairingObjects(ProductionEventIntelligence? intelligence)
         => intelligence is null
@@ -478,6 +492,22 @@ public sealed class QuestionDrivenVisualComposer(
         };
     }
 
+    private static IReadOnlyList<string> BuildPlanetGroupingOverlays(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, IReadOnlyList<string> objects, string objectGroupLabel)
+    {
+        var first = objects.FirstOrDefault() ?? "first planet";
+        var last = objects.LastOrDefault() ?? "last planet";
+        return scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => [objectGroupLabel, "planet grouping", "guided scan path"],
+            "where" => [objectGroupLabel, "sky direction", "local horizon", "guided scan path"],
+            "when" => [narrationScene.ViewerTakeaway, "viewing window", "planet grouping"],
+            "how" => [$"Start at {first}", $"Scan toward {last}", "guided scan path"],
+            "why" => [objectGroupLabel, "multi-planet grouping", "same sky"],
+            "action" => [$"Watch {objectGroupLabel}", "follow the guided scan path", "check weather"],
+            _ => [objectGroupLabel, "planet grouping", "guided scan path"]
+        };
+    }
+
     private static IReadOnlyList<string> BuildPlanetPairingLayers(EnrichedQuestionSceneDto scene, QuestionDrivenVisualGenerationRequest request, IReadOnlyList<string> objects, string objectPairLabel)
     {
         var direction = request.ProductionContext?.ProductionEventIntelligence?.SkyDirectionHint ?? "event-specific sky direction";
@@ -494,6 +524,25 @@ public sealed class QuestionDrivenVisualComposer(
             "why" => ["mood:Meaningful", "background:deep astronomy sky premium editorial background with atmospheric starfield depth", $"celestial:{objectPairLabel} close pairing as actual textured planet objects", $"labels:{objectLabels}", "significance:shared sky close approach and visual relationship", "direction:closeness bracket", "annotation:floating human-interest significance note"],
             "action" => ["mood:Inspirational", "background:beautiful poster-quality cinematic astronomy sky with atmospheric depth and smooth sky gradient", $"celestial:{objectPairLabel} labeled as actual textured planet objects", $"labels:{objectLabels}", "composition:premium shareable poster composition", $"typography:minimal poster CTA Watch {objectPairLabel}"],
             _ => [$"background:computed astronomy sky for {objectPairLabel}", $"labels:{objectLabels}"]
+        };
+    }
+
+    private static IReadOnlyList<string> BuildPlanetGroupingLayers(EnrichedQuestionSceneDto scene, QuestionDrivenVisualGenerationRequest request, IReadOnlyList<string> objects, string objectGroupLabel)
+    {
+        var direction = request.ProductionContext?.ProductionEventIntelligence?.SkyDirectionHint ?? "event-specific sky direction";
+        var window = request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal
+            ?? request.ProductionContext?.ProductionEventIntelligence?.LocalPeakTime
+            ?? "best viewing window";
+        var objectLabels = string.Join(", ", objects);
+        return scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => ["mood:Dramatic", $"background:computed astronomy scene for planet grouping {objectGroupLabel} with smooth sky gradient and atmospheric depth", $"celestial:{objectGroupLabel} rendered as the complete multi-planet grouping using realistic planet textures", $"labels:{objectLabels}", "composition:planet grouping with guided scan path across the labeled planets", "texture:documentary sky grain natural starfield magnitude variation"],
+            "where" => ["mood:Educational", $"background:observation-chart sky with {direction} local horizon context", $"celestial:{objectGroupLabel} plotted at computed sky positions using realistic planet textures", $"labels:{objectLabels}", $"direction:{direction}", "annotation:guided scan path and floating labels match actual object names"],
+            "when" => ["mood:Informational", "background:computed sky timing visual with smooth sky gradient", $"time:{window} marker", $"celestial:planet grouping {objectGroupLabel} visible in same frame using realistic planet textures", $"labels:{objectLabels}", "annotation:floating timeline labels and guided scan path"],
+            "how" => ["mood:Instructional", $"background:observer-friendly sky toward {direction} with natural atmospheric depth", $"celestial:planet grouping {objectGroupLabel}", $"labels:{objectLabels}", "direction:guided scan path arrow across actual planets", $"steps:Start at {objects.FirstOrDefault() ?? "the first planet"}; Scan through the planet grouping; Use {direction}"],
+            "why" => ["mood:Meaningful", "background:deep astronomy sky premium editorial background with atmospheric starfield depth", $"celestial:{objectGroupLabel} multi-planet grouping as actual textured planet objects", $"labels:{objectLabels}", "significance:multiple planets sharing one viewing window", "direction:guided scan path", "annotation:floating human-interest significance note"],
+            "action" => ["mood:Inspirational", "background:beautiful poster-quality cinematic astronomy sky with atmospheric depth and smooth sky gradient", $"celestial:{objectGroupLabel} labeled as actual textured planet objects", $"labels:{objectLabels}", "composition:premium shareable planet grouping poster with guided scan path", $"typography:minimal poster CTA Watch {objectGroupLabel}"],
+            _ => [$"background:computed astronomy sky for planet grouping {objectGroupLabel}", $"labels:{objectLabels}", "guided scan path"]
         };
     }
 
@@ -576,6 +625,8 @@ public sealed class QuestionDrivenVisualComposer(
             || value.Contains("moonrise", StringComparison.OrdinalIgnoreCase)
             || value.Contains("eastern horizon", StringComparison.OrdinalIgnoreCase)
             || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)
             || value.Contains("sky direction", StringComparison.OrdinalIgnoreCase)
             || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
             || value.Contains("label", StringComparison.OrdinalIgnoreCase);
@@ -650,9 +701,11 @@ public sealed class QuestionDrivenVisualComposer(
     {
         IReadOnlyList<string> required = intelligence?.RequiredVisualObjects is { Count: > 0 }
             ? intelligence.RequiredVisualObjects
-            : intelligence?.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) == true
-                ? new[] { "Moon" }
-                : Array.Empty<string>();
+            : IsPlanetGroupingEvent(intelligence, intelligence?.EventType ?? string.Empty) && intelligence is not null
+                ? intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Concat(["planet grouping", "guided scan path"]).ToArray()
+                : intelligence?.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) == true
+                    ? new[] { "Moon" }
+                    : Array.Empty<string>();
         return required.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -692,6 +745,8 @@ public sealed class QuestionDrivenVisualComposer(
         if (requiredObject.Equals("Moon", StringComparison.OrdinalIgnoreCase)) return ContainsToken(drawableText, "Moon") || ContainsToken(specText, "Moon");
         if (requiredObject.Contains("radiant/dark sky", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "radiant") && (ContainsToken(specText, "dark sky") || ContainsToken(specText, "dark"));
         if (requiredObject.Contains("meteor streak", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "meteor") && ContainsToken(specText, "streak");
+        if (requiredObject.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "planet grouping") || ContainsToken(specText, "multi-planet grouping");
+        if (requiredObject.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "guided scan path") || (ContainsToken(specText, "scan") && ContainsToken(specText, "path"));
         if (requiredObject.Contains("moonrise", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "moonrise");
         if (requiredObject.Contains("eastern sky", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "eastern") && (ContainsToken(specText, "sky") || ContainsToken(specText, "horizon"));
         if (requiredObject.Contains("full moon glow", StringComparison.OrdinalIgnoreCase)) return ContainsToken(specText, "full Moon") && ContainsToken(specText, "glow");
