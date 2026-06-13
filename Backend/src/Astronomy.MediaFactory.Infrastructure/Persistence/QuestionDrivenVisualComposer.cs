@@ -476,6 +476,7 @@ public sealed class QuestionDrivenVisualComposer(
         var isMeteorShower = IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent) || IsMeteorText(narrationScene.SourceAnswer) || IsMeteorText(narrationScene.NarrationText);
         var isNamedFullMoon = IsNamedFullMoonEvent(request.ProductionContext, eventType);
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var isSolarEclipse = IsSolarEclipseEvent(intelligence, eventType);
         var isPlanetGrouping = IsPlanetGroupingEvent(intelligence, eventType) || IsPlanetGroupingStrategyId(enrichedPlan.Diagnostics?.StrategyId);
         var isPlanetPairing = intelligence is not null && IsPlanetPairingEvent(eventType);
         var resolvedObjects = ResolveSceneObjects(intelligence, enrichedPlan.Diagnostics).ToArray();
@@ -500,6 +501,15 @@ public sealed class QuestionDrivenVisualComposer(
             "how" => ["No telescope", "Avoid city lights", "20 min dark adaptation"],
             "why" => ["Strong annual shower", "Low Moon Interference", "Meteor streaks"],
             "action" => ["Best viewing window", meteorReminder, "Check weather"],
+            _ => new[] { narrationScene.ViewerTakeaway }
+        } : isSolarEclipse ? scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => ["Solar Eclipse", "Eye safety required"],
+            "where" => ["Visible region", "Use certified protection"],
+            "when" => [narrationScene.ViewerTakeaway, "Use certified protection"],
+            "how" => ["Safe Viewing", "Never view the Sun directly without certified solar viewing glasses."],
+            "why" => ["Sun-Moon alignment", "Safety first"],
+            "action" => ["Check weather", "Prepare certified solar eclipse glasses"],
             _ => new[] { narrationScene.ViewerTakeaway }
         } : isNamedFullMoon ? scene.QuestionType.ToLowerInvariant() switch
         {
@@ -548,6 +558,15 @@ public sealed class QuestionDrivenVisualComposer(
             "why" => new[] { "mood:Meaningful", "background:deep winter astronomy sky premium editorial background with atmospheric starfield depth", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true source=Moon.FullMoon realisticTexture=craters-maria label={fullMoonLabel} placement=eastern horizon moonrise", $"significance:{fullMoonLabel} full Moon seasonal meaning", "annotation:floating full Moon significance note" },
             "action" => new[] { "mood:Inspirational", "background:beautiful poster-quality cinematic moonrise sky over Udaipur with atmospheric depth and smooth sky gradient", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true source=Moon.FullMoon realisticTexture=craters-maria label={fullMoonLabel} placement=eastern horizon moonrise", "composition:premium shareable poster composition focused on the Moon", $"typography:minimal poster CTA Look east for {fullMoonLabel}" },
             _ => new[] { "background:dark full Moon sky", $"drawable-object:Moon phase=FullMoon size=large/hero-visible glow=true source=Moon.FullMoon realisticTexture=craters-maria label={fullMoonLabel} placement=eastern horizon moonrise" }
+        } : isSolarEclipse ? scene.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => new[] { "mood:Safety-first", "background:stylized solar eclipse silhouette", "celestial:Sun and Moon silhouette", "annotation:eye safety required" },
+            "where" => new[] { "mood:Educational", "background:solar eclipse visibility guide", "guide:visible region", "safety:certified solar viewing glasses" },
+            "when" => new[] { "mood:Informational", "background:solar eclipse timing visual", "time:eclipse timing marker", "safety:certified eye protection throughout" },
+            "how" => new[] { "mood:Instructional", "background:Safe Viewing solar eclipse safety card", "steps:Never view the Sun directly without certified solar viewing glasses.", "safety:certified solar eclipse glasses; ISO 12312-2 solar viewer; approved solar filter" },
+            "why" => new[] { "mood:Meaningful", "background:Sun Moon alignment diagram", "significance:rare solar eclipse alignment", "safety:filtered stylized Sun only" },
+            "action" => new[] { "mood:Urgent", "background:solar eclipse preparation checklist", "safety:prepare certified solar eclipse glasses", "typography:minimal CTA Check weather and save time" },
+            _ => new[] { "background:solar eclipse safety-first visual", "safety:certified protection" }
         } : isPlanetGrouping ? BuildPlanetGroupingLayers(scene, request, resolvedObjects, objectPairLabel) : isPlanetPairing ? BuildPlanetPairingLayers(scene, request, resolvedObjects, objectPairLabel) : usesLocalPlanetAssets ? scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "mood:Dramatic", "background:professional astronomy magazine cover western twilight over Rajasthan with richer twilight colors, natural atmospheric glow, and smooth sky gradient", "horizon:stronger golden-orange western horizon glow with subtle atmospheric haze", "texture:documentary sky grain, twilight haze, natural density variation starfield, magnitude variation, brightness variation", "composition:strong focal contrast clickable thumbnail composition with slightly brighter focal region around Venus/Jupiter", "vignette:soft natural edge falloff", "celestial:reduced-scale Venus/Jupiter sky targets integrated with atmospheric blending and subtle shared glow", "typography:premium thumbnail title Venus & Jupiter subtitle After sunset" },
@@ -593,6 +612,13 @@ public sealed class QuestionDrivenVisualComposer(
             strategyValidationFacts["requiredDrawableObject"] = "Moon phase=FullMoon size=large/hero-visible glow=true";
             strategyValidationFacts["forbiddenVisualObjects"] = "meteor, planet conjunction, Venus, Jupiter";
         }
+        if (isSolarEclipse && scene.QuestionType.Equals("How", StringComparison.OrdinalIgnoreCase))
+        {
+            strategyValidationFacts ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            strategyValidationFacts["eventType"] = "SolarEclipse";
+            strategyValidationFacts["sceneElement"] = "Safe Viewing";
+            strategyValidationFacts["eyeSafetyWarning"] = "Never view the Sun directly without certified solar viewing glasses.";
+        }
 
         var drawableObjects = BuildDrawableObjects(sourceResolution, isNamedFullMoon, fullMoonLabel);
         strategyValidationFacts ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -627,6 +653,11 @@ public sealed class QuestionDrivenVisualComposer(
     }
 
 
+
+    private static bool IsSolarEclipseEvent(ProductionEventIntelligence? intelligence, string eventType)
+        => eventType.Equals("SolarEclipse", StringComparison.OrdinalIgnoreCase)
+            || intelligence?.EventType.Equals("SolarEclipse", StringComparison.OrdinalIgnoreCase) == true
+            || intelligence?.Title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool IsPlanetPairingEvent(string eventType)
         => eventType.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase)

@@ -405,10 +405,24 @@ public sealed class AstronomyQuestionEngine(
 
         if (IsEventType(set, "SolarEclipse"))
         {
-            if (!ContainsAny(combined, "certified eclipse glasses", "certified eye protection", "solar filters")) issues.Add("SolarEclipse answers must include eye safety.");
-            if (ContainsAny(combined, "look directly at the Sun")) issues.Add("SolarEclipse answers must not instruct viewers to look directly at the Sun.");
+            if (!ContainsSolarEclipseEyeSafetyWarning(combined)) issues.Add("SolarEclipse answers must include eye safety.");
+            if (ContainsUnsafeDirectSunInstruction(combined)) issues.Add("SolarEclipse answers must not instruct viewers to look directly at the Sun.");
         }
     }
+
+    private static bool ContainsSolarEclipseEyeSafetyWarning(string text)
+        => ContainsAny(text,
+            "Never view the Sun directly without certified solar viewing glasses",
+            "certified solar eclipse glasses",
+            "ISO 12312-2 solar viewer",
+            "approved solar filter",
+            "never look directly at the Sun",
+            "certified eclipse glasses",
+            "certified eye protection",
+            "solar filters");
+
+    private static bool ContainsUnsafeDirectSunInstruction(string text)
+        => ContainsAny(text, "look directly at the Sun") && !ContainsAny(text, "never look directly at the Sun", "do not look directly at the Sun", "don’t look directly at the Sun");
 
     private static bool IsEventType(QuestionAnswerSetDto set, string eventType)
         => set.EventType.Contains(eventType, StringComparison.OrdinalIgnoreCase);

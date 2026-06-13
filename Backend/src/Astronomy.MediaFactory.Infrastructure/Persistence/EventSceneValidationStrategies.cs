@@ -414,10 +414,19 @@ public sealed class SolarEclipseSceneValidationStrategy : EventSceneValidationSt
         RequireAny(errors, allText, "SolarEclipse scene validation must include eclipse language.", "eclipse", "solar eclipse");
         RequireAny(errors, allText, "SolarEclipse scene validation must include Sun language.", "Sun");
         RequireAny(errors, allText, "SolarEclipse scene validation must include timing language.", "timing", "watch during", "time");
-        if (!(ContainsToken(allText, "certified") && ContainsAnyToken(allText, "eclipse glasses", "solar filter", "eye protection"))) errors.Add("SolarEclipse scene validation must include a certified eye-safety warning.");
+        if (!ContainsSolarEclipseEyeSafetyWarning(allText)) errors.Add("SolarEclipse scene validation must include a certified eye-safety warning.");
         RejectForbiddenLeakage(errors, OutputContentText(context), context.Intelligence, "SolarEclipse scene validation");
         return Result(warnings, errors);
     }
+
+    private static bool ContainsSolarEclipseEyeSafetyWarning(string text)
+        => ContainsAnyToken(text,
+            "Never view the Sun directly without certified solar viewing glasses",
+            "certified solar eclipse glasses",
+            "ISO 12312-2 solar viewer",
+            "approved solar filter",
+            "never look directly at the Sun")
+            || (ContainsToken(text, "certified") && ContainsAnyToken(text, "eclipse glasses", "solar filter", "eye protection"));
 }
 
 public sealed class GenericEventSceneValidationStrategy : EventSceneValidationStrategyBase

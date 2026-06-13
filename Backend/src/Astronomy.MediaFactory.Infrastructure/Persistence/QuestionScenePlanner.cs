@@ -15,6 +15,8 @@ public sealed class QuestionScenePlanner(
     ILogger<QuestionScenePlanner> logger) : IQuestionScenePlanner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private const string SolarEclipseEyeSafetyWarning = "Never view the Sun directly without certified solar viewing glasses.";
+
     private static readonly string[] SceneOrder =
     [
         AstronomyQuestionTypes.What,
@@ -327,14 +329,16 @@ public sealed class QuestionScenePlanner(
             .ToDictionary(g => g.Key, g => g.OrderBy(a => a.DisplayOrder).First(), StringComparer.OrdinalIgnoreCase);
         var isMeteorShower = questionSet.AstronomyEventIntelligence?.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true
             || questionSet.AstronomyEventIntelligence?.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true;
+        var isSolarEclipse = questionSet.AstronomyEventIntelligence?.EventType.Contains("SolarEclipse", StringComparison.OrdinalIgnoreCase) == true
+            || questionSet.AstronomyEventIntelligence?.Title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase) == true;
 
         var scenes = SceneOrder.Select((questionType, index) =>
         {
             if (!answersByType.TryGetValue(questionType, out var answer))
                 throw new ArgumentException($"Question answer set is missing the required '{questionType}' answer.");
 
-            var scenePurpose = ScenePurposeByQuestionType[questionType];
-            var sourceAnswer = Clean(answer.AnswerText);
+            var scenePurpose = ResolveScenePurpose(questionType, isSolarEclipse);
+            var sourceAnswer = ResolveSourceAnswer(questionType, Clean(answer.AnswerText), isSolarEclipse);
             return new QuestionDrivenSceneDto(
                 index + 1,
                 questionType,
@@ -342,8 +346,8 @@ public sealed class QuestionScenePlanner(
                 Clean(answer.QuestionText),
                 sourceAnswer,
                 sourceAnswer,
-                BuildVisualIntent(questionType, scenePurpose, sourceAnswer, isMeteorShower),
-                BuildNarrationIntent(questionType, scenePurpose, sourceAnswer, isMeteorShower),
+                BuildVisualIntent(questionType, scenePurpose, sourceAnswer, isMeteorShower, isSolarEclipse),
+                BuildNarrationIntent(questionType, scenePurpose, sourceAnswer, isMeteorShower, isSolarEclipse),
                 true);
         }).ToArray();
 
@@ -354,6 +358,16 @@ public sealed class QuestionScenePlanner(
             scenes,
             DateTimeOffset.UtcNow);
     }
+
+    private static string ResolveScenePurpose(string questionType, bool isSolarEclipse)
+        => isSolarEclipse && string.Equals(questionType, AstronomyQuestionTypes.How, StringComparison.OrdinalIgnoreCase)
+            ? "SafeViewing"
+            : ScenePurposeByQuestionType[questionType];
+
+    private static string ResolveSourceAnswer(string questionType, string sourceAnswer, bool isSolarEclipse)
+        => isSolarEclipse && string.Equals(questionType, AstronomyQuestionTypes.How, StringComparison.OrdinalIgnoreCase)
+            ? SolarEclipseEyeSafetyWarning
+            : sourceAnswer;
 
     private static IReadOnlyList<string> ValidateScenePlan(QuestionDrivenScenePlanDto plan)
     {
@@ -387,8 +401,11 @@ public sealed class QuestionScenePlanner(
         return issues;
     }
 
-    private static string BuildVisualIntent(string questionType, string scenePurpose, string sourceAnswer, bool isMeteorShower)
+    private static string BuildVisualIntent(string questionType, string scenePurpose, string sourceAnswer, bool isMeteorShower, bool isSolarEclipse)
     {
+        if (isSolarEclipse && string.Equals(questionType, AstronomyQuestionTypes.How, StringComparison.OrdinalIgnoreCase))
+            return $"Safe Viewing — mandatory eye-safety card with certified solar viewing glasses warning: {sourceAnswer}";
+
         if (isMeteorShower)
         {
             var motif = "meteor streaks, dark sky, radiant hint, open local landscape, clean cinematic astronomy style, no unrelated planets";
@@ -416,8 +433,11 @@ public sealed class QuestionScenePlanner(
         };
     }
 
-    private static string BuildNarrationIntent(string questionType, string scenePurpose, string sourceAnswer, bool isMeteorShower)
+    private static string BuildNarrationIntent(string questionType, string scenePurpose, string sourceAnswer, bool isMeteorShower, bool isSolarEclipse)
     {
+        if (isSolarEclipse && string.Equals(questionType, AstronomyQuestionTypes.How, StringComparison.OrdinalIgnoreCase))
+            return $"Plan a Safe Viewing narration beat that states the mandatory eye-safety warning verbatim: {sourceAnswer}";
+
         var prefix = isMeteorShower ? "Use story-driven meteor-shower narration with the generated question answer; include what viewers see, when and where to look, no telescope, moon conditions, and CTA. " : string.Empty;
         return questionType switch
         {
