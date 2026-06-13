@@ -165,7 +165,13 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.Equal("PLANET_GROUPING", result.EventType);
         Assert.Equal("PlanetGrouping", result.StrategyId);
-        Assert.Contains("planet grouping", result.RequiredVisualObjects!);
+        Assert.Contains("Venus", result.RequiredVisualObjects!);
+        Assert.Contains("Jupiter", result.RequiredVisualObjects!);
+        Assert.Contains("Mars", result.RequiredVisualObjects!);
+        Assert.DoesNotContain("planet grouping", result.RequiredVisualObjects!, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("guided scan path", result.RequiredVisualObjects!, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("multi-planet grouping", result.VisualMotifs, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("guided scan path", result.VisualMotifs, StringComparer.OrdinalIgnoreCase);
         Assert.Contains("PlanetGroupingSceneStrategy", string.Join(" ", result.SceneStrategy));
         Assert.Contains("PlanetGroupingHeroStrategy", result.HeroCopyCandidates!);
         Assert.Contains("PlanetGrouping", result.ThumbnailCopyCandidates!);
@@ -660,6 +666,95 @@ public sealed class EventProductionIntelligenceTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, error => error.Contains("primitivePlaceholderUsed=true", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    [Fact]
+    public async Task ProductionQualityValidator_PlanetGroupingValidatesIndividualVisibleObjectsOnly()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase10-planet-grouping-visible-objects-{Guid.NewGuid():N}");
+        var sceneRoot = Path.Combine(root, "scene-approval-v3");
+        Directory.CreateDirectory(sceneRoot);
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "short"));
+        Directory.CreateDirectory(Path.Combine(sceneRoot, "long"));
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "short", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "long", "scene-001-final.png"), "fake");
+        await File.WriteAllTextAsync(Path.Combine(root, "question-driven-scene-plan.json"), "PlanetGrouping scene plan for Saturn, Mars, Jupiter, and Venus in the western sky.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-infographic-spec.json"), """
+{
+  "strategyId":"PlanetGrouping",
+  "viewerTakeaway":"Four planets are visible together.",
+  "captionText":"Follow the scan path across the western sky.",
+  "overlayText":["Saturn", "Mars", "Jupiter", "Venus"],
+  "labels":["Saturn", "Mars", "Jupiter", "Venus"],
+  "requiredVisualObjects":["Saturn, Mars, Jupiter, Venus", "planet grouping", "guided scan path", "grouping arc"],
+  "visibleObjects":["Saturn", "Mars", "Jupiter", "Venus"],
+  "visualMotifs":["planet grouping", "guided scan path", "grouping arc"],
+  "visualSourceResolution":{
+    "sourceType":"Hybrid",
+    "requiredDrawableObjects":["Saturn", "Mars", "Jupiter", "Venus"],
+    "assetKey":"Planet.Saturn, Planet.Mars, Planet.Jupiter, Planet.Venus",
+    "realisticObjectRequired":"true",
+    "primitivePlaceholderUsed":"false",
+    "objectVisualSources":[
+      {"objectType":"Saturn", "assetKey":"Planet.Saturn", "objectVisualSource":"LocalAsset:Planet.Saturn"},
+      {"objectType":"Mars", "assetKey":"Planet.Mars", "objectVisualSource":"LocalAsset:Planet.Mars"},
+      {"objectType":"Jupiter", "assetKey":"Planet.Jupiter", "objectVisualSource":"LocalAsset:Planet.Jupiter"},
+      {"objectType":"Venus", "assetKey":"Planet.Venus", "objectVisualSource":"LocalAsset:Planet.Venus"}
+    ]
+  }
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-review.json"), """
+{
+  "reviewLabels":["Saturn", "Mars", "Jupiter", "Venus"],
+  "ocrText":"Saturn Mars Jupiter Venus"
+}
+""");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001-narration.txt"), "Saturn, Mars, Jupiter, and Venus share the western sky.");
+        await File.WriteAllTextAsync(Path.Combine(sceneRoot, "scene-001.srt"), """
+1
+00:00:00,000 --> 00:00:05,000
+Saturn, Mars, Jupiter, and Venus share the western sky.
+""");
+
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy",
+            "PlanetGrouping",
+            "Planet grouping over Udaipur",
+            "Planet grouping",
+            DateTimeOffset.Parse("2026-06-20T00:00:00Z"),
+            DateTimeOffset.Parse("2026-06-20T14:30:00Z"),
+            "20:00 IST",
+            "2026-06-20 20:00–21:30 IST",
+            "western sky",
+            "India",
+            ["Saturn", "Mars"],
+            ["Jupiter", "Venus"],
+            null,
+            "Low",
+            20m,
+            "Saturn, Mars, Jupiter, and Venus planet grouping",
+            [],
+            ["planet grouping", "guided scan path", "grouping arc"],
+            [],
+            [],
+            [],
+            StrategyId: "PlanetGrouping",
+            ResolvedObjectNames: ["Saturn", "Mars", "Jupiter", "Venus"],
+            RequiredVisualObjects: ["Saturn, Mars, Jupiter, Venus", "planet grouping", "guided scan path", "grouping arc"]);
+
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([
+            new GenericEventSceneValidationStrategy()
+        ]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.DoesNotContain(result.Errors, error => error.Contains("Saturn, Mars, Jupiter, Venus", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.Errors, error => error.Contains("planet grouping", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.Errors, error => error.Contains("guided scan path", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.Errors, error => error.Contains("grouping arc", StringComparison.OrdinalIgnoreCase));
     }
 
 

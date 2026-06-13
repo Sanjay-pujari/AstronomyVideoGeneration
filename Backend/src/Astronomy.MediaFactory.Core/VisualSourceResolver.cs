@@ -158,12 +158,14 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
 
         if (IsPlanetPairingConjunctionOrGrouping(eventType, strategyId, intelligence.Title))
         {
-            var objects = NormalizeList(intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects));
+            var eventObjects = NormalizeList(intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects));
+            var requiredObjectNames = NormalizeList(SplitRequiredVisibleObjects(requiredVisualObjects).Where(value => !IsPlanetGroupingVisualMotif(value)));
+            var objects = eventObjects.Count > 0 ? eventObjects : requiredObjectNames;
             var isPlanetGrouping = IsPlanetGrouping(eventType, strategyId, intelligence.Title);
             var visualMotifs = isPlanetGrouping ? new[] { "planet grouping", "guided scan path", "grouping arc" } : Array.Empty<string>();
             var requiredCelestialObjects = isPlanetGrouping
                 ? objects
-                : NormalizeList(requiredVisualObjects.Concat(objects)).Where(value => !IsPlanetGroupingVisualMotif(value)).ToArray();
+                : NormalizeList(SplitRequiredVisibleObjects(requiredVisualObjects).Concat(objects)).Where(value => !IsPlanetGroupingVisualMotif(value)).ToArray();
             var objectPhrase = isPlanetGrouping ? string.Join(", ", objects) : string.Join(" and ", objects);
             var textureGuidance = string.Join(" ", objects.Select(ResolvePlanetTextureGuidance));
             var groupingGuidance = isPlanetGrouping
@@ -185,7 +187,7 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
                 objects.Select(o => $"Planet.{o}").ToArray(),
                 prompt,
                 GenericFallbackAllowed: false,
-                NormalizeList(requiredCelestialObjects.Concat(isPlanetGrouping ? ["real-looking planet textures", "planet grouping", "guided scan path", "grouping arc", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
+                NormalizeList(requiredCelestialObjects.Concat(isPlanetGrouping ? ["real-looking planet textures", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
                 forbidden,
                 metadata,
                 PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
@@ -345,7 +347,22 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             || ContainsAny(title, "planet grouping", "planet group");
 
     private static bool IsPlanetGroupingVisualMotif(string value)
-        => ContainsAny(value, "planet grouping", "guided scan path", "grouping arc");
+        => ContainsAny(value, "planet grouping", "multi-planet grouping", "guided scan path", "grouping arc");
+
+    private static IEnumerable<string> SplitRequiredVisibleObjects(IEnumerable<string> values)
+    {
+        foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            if (value.Contains(',', StringComparison.Ordinal))
+            {
+                foreach (var part in value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)) yield return part;
+            }
+            else
+            {
+                yield return value;
+            }
+        }
+    }
 
     private static bool IsEclipse(string eventType, string strategyId, string title)
         => ContainsAny(eventType, "Eclipse", "SolarEclipse", "LunarEclipse", "Solar Eclipse", "Lunar Eclipse")

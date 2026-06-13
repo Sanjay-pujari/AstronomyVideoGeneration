@@ -115,8 +115,9 @@ public sealed record QuestionDrivenVisualSpec(
     VisualSourceResolutionResult? VisualSourceResolution = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? StrategyId = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? ResolvedObjectNames = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? VisualMotifs = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RequiredCelestialObjects = null);
+    IReadOnlyList<string>? VisualMotifs = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RequiredCelestialObjects = null,
+    IReadOnlyList<string>? VisibleObjects = null);
 
 public sealed record SceneDrawableVisualObject(
     string ObjectType,

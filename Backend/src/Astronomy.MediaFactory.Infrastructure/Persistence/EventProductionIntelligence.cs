@@ -375,7 +375,7 @@ public sealed class PlanetGroupingStrategy : MediaEventStrategyBase
         ["Planet Grouping", "Look for the Lineup", "Multiple Planets"],
         ["meteor shower", "radiant", "eclipse shadow", "full moon only"],
         ["Use PlanetGroupingSceneStrategy for scene visuals.", "Use PlanetGroupingHeroStrategy for hero framing.", "Use PlanetGroupingThumbnailStrategy for thumbnails.", "Render every listed planet with exact names and no generic sky-only fallback."],
-        RequiredVisualObjects: Objects(intelligence, "planet group").Concat(["planet grouping", "guided scan path"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+        RequiredVisualObjects: intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
         RequiredNarrationFacts: [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint), nameof(ProductionEventIntelligence.PrimaryObjects)],
         HeroCopyCandidates: ["PlanetGroupingHeroStrategy", "Multiple planets in one sky", "Follow the grouping"]);
 
@@ -970,11 +970,10 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static void ValidateVisualSourceResolverMetadata(SceneValidationContext context, List<string> errors)
     {
-        var legacyRequired = (context.Intelligence.RequiredVisualObjects ?? [])
+        var legacyRequired = NormalizeRequiredVisibleObjects((context.Intelligence.RequiredVisualObjects ?? [])
+            .Concat(context.Intelligence.ResolvedObjectNames ?? [])
             .Concat(context.Intelligence.PrimaryObjects)
-            .Concat(context.Intelligence.SecondaryObjects)
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Concat(context.Intelligence.SecondaryObjects))
             .ToArray();
 
         foreach (var (path, json) in context.InfographicSpecs)
@@ -984,9 +983,10 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             var strategyId = ResolveSpecStrategyId(doc.RootElement, context.Intelligence);
             var isPlanetGrouping = IsPlanetGroupingStrategy(strategyId, context.Intelligence);
             var required = isPlanetGrouping
-                ? CollectRequiredVisualObjects(doc.RootElement)
-                    .Where(value => !string.IsNullOrWhiteSpace(value))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                ? NormalizeRequiredVisibleObjects(CollectRequiredVisualObjects(doc.RootElement)
+                    .Concat(context.Intelligence.ResolvedObjectNames ?? [])
+                    .Concat(context.Intelligence.PrimaryObjects)
+                    .Concat(context.Intelligence.SecondaryObjects))
                     .ToArray()
                 : legacyRequired;
             if (isPlanetGrouping && required.Length == 0)
@@ -1040,8 +1040,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
     private static string BuildPlanetGroupingRequiredObjectValidationText(JsonElement specRoot, JsonElement? reviewRoot, ProductionEventIntelligence intelligence)
     {
         var values = new List<string>();
-        AddJsonFragments(values, specRoot, ["captionText", "viewerTakeaway", "overlayText", "visualSourceResolution", "drawableVisualObjects"]);
-        if (reviewRoot.HasValue) AddJsonFragments(values, reviewRoot.Value, ["captionText", "viewerTakeaway", "overlayText", "visualSourceResolution", "drawableVisualObjects", "reviewLabels", "detectedLabels", "renderedLabels"]);
+        AddJsonFragments(values, specRoot, ["captionText", "viewerTakeaway", "overlayText", "labels", "visualSourceResolution", "drawableVisualObjects", "visibleObjects", "reviewLabels", "detectedLabels", "renderedLabels", "ocrText", "ocr", "metadata"]);
+        if (reviewRoot.HasValue) AddJsonFragments(values, reviewRoot.Value, ["captionText", "viewerTakeaway", "overlayText", "labels", "visualSourceResolution", "drawableVisualObjects", "visibleObjects", "reviewLabels", "detectedLabels", "renderedLabels", "ocrText", "ocr", "metadata", "checks"]);
         values.AddRange(intelligence.ResolvedObjectNames ?? []);
         return string.Join('\n', values.Where(value => !string.IsNullOrWhiteSpace(value)));
     }
@@ -1160,6 +1160,8 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase)
             || value.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)
             || value.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("grouping arc", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("multi-planet grouping", StringComparison.OrdinalIgnoreCase)
             || value.Contains("sky direction", StringComparison.OrdinalIgnoreCase)
             || value.Contains("viewing window", StringComparison.OrdinalIgnoreCase)
             || value.Contains("label", StringComparison.OrdinalIgnoreCase);
@@ -1936,12 +1938,11 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var requiredObjects = CollectRequiredVisualObjects(root)
+        var requiredObjects = NormalizeRequiredVisibleObjects(CollectRequiredVisualObjects(root)
             .Concat(intelligence.RequiredVisualObjects ?? [])
+            .Concat(intelligence.ResolvedObjectNames ?? [])
             .Concat(intelligence.PrimaryObjects)
-            .Concat(intelligence.SecondaryObjects)
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Concat(intelligence.SecondaryObjects))
             .ToArray();
         var objectMetadata = requiredObjects.Select(required => FindDrawableObjectMetadata(root, required) ?? BuildRootObjectMetadata(root)).FirstOrDefault(value => value is not null) ?? BuildRootObjectMetadata(root);
         var scenePurpose = ResolveScenePurpose(root, Path.GetFileName(specFile));
@@ -1992,11 +1993,32 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
 
     private static IEnumerable<string> CollectRequiredVisualObjects(JsonElement root)
     {
-        foreach (var fragment in CollectJsonPropertyFragments(root, ["requiredVisualObjects", "primaryObjects", "secondaryObjects"]))
+        foreach (var fragment in CollectJsonPropertyFragments(root, ["visibleObjects", "requiredCelestialObjects", "requiredVisualObjects", "primaryObjects", "secondaryObjects"]))
         {
             foreach (var value in JsonTextValue(fragment.Value).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 yield return value;
         }
+    }
+
+    private static IEnumerable<string> NormalizeRequiredVisibleObjects(IEnumerable<string> values)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            foreach (var part in SplitRequiredVisibleObject(value))
+            {
+                var normalized = part.Trim();
+                if (string.IsNullOrWhiteSpace(normalized) || IsConceptualVisualRequirement(normalized) || !seen.Add(normalized)) continue;
+                yield return normalized;
+            }
+        }
+    }
+
+    private static IEnumerable<string> SplitRequiredVisibleObject(string value)
+    {
+        if (value.Contains(',', StringComparison.Ordinal))
+            return value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return new[] { value };
     }
 
     private static string ResolveVisualSourceFragment(JsonElement root)

@@ -485,6 +485,8 @@ public sealed class QuestionDrivenVisualComposer(
             ?? (sourceResolution.RequiredDrawableObjects.Count > 0 ? sourceResolution.RequiredDrawableObjects.ToArray() : ResolveRequiredVisualObjects(intelligence).ToArray());
         var requiredCelestialObjects = planetGroupingMetadata?.ResolvedObjectNames
             ?? requiredVisualObjects.Where(value => !IsConceptualDrawableRequirement(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var visualMotifs = planetGroupingMetadata?.VisualMotifs ?? ResolveVisualMotifs(intelligence);
+        var visibleObjects = requiredCelestialObjects;
         var fullMoonLabel = ResolveFullMoonLabel(intelligence);
         var meteorContextText = $"{narrationScene.SourceAnswer} {narrationScene.ViewerTakeaway} {narrationScene.NarrationText} {narrationScene.CaptionText}";
         var meteorWindow = ResolveMeteorViewingWindow(request, meteorContextText);
@@ -599,7 +601,8 @@ public sealed class QuestionDrivenVisualComposer(
             strategyValidationFacts["requiredVisualObjects"] = string.Join(", ", planetGroupingMetadata.RequiredVisualObjects);
             strategyValidationFacts["strategyId"] = planetGroupingMetadata.StrategyId;
             strategyValidationFacts["resolvedObjectNames"] = string.Join(", ", planetGroupingMetadata.ResolvedObjectNames);
-            strategyValidationFacts["visualMotifs"] = string.Join(", ", planetGroupingMetadata.VisualMotifs);
+            strategyValidationFacts["visibleObjects"] = string.Join(", ", visibleObjects);
+            strategyValidationFacts["visualMotifs"] = string.Join(", ", visualMotifs);
         }
         strategyValidationFacts["visualSourceType"] = sourceResolution.SourceType.ToString();
         strategyValidationFacts["assetKey"] = string.Join(", ", sourceResolution.ScientificAssetKeys);
@@ -620,7 +623,7 @@ public sealed class QuestionDrivenVisualComposer(
         strategyValidationFacts["validationRequiredTerms"] = string.Join(", ", sourceResolution.ValidationRequiredTerms);
         foreach (var item in sourceResolution.Metadata) strategyValidationFacts[$"resolver.{item.Key}"] = item.Value;
 
-        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects, sourceResolution, planetGroupingMetadata?.StrategyId, planetGroupingMetadata?.ResolvedObjectNames, planetGroupingMetadata?.VisualMotifs, requiredCelestialObjects);
+        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects, sourceResolution, planetGroupingMetadata?.StrategyId, planetGroupingMetadata?.ResolvedObjectNames, visualMotifs, requiredCelestialObjects, visibleObjects);
     }
 
 
@@ -693,6 +696,10 @@ public sealed class QuestionDrivenVisualComposer(
             .Select(value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+
+    private static IReadOnlyList<string> ResolveVisualMotifs(ProductionEventIntelligence? intelligence)
+        => NormalizeMetadataList(intelligence?.VisualMotifs ?? Array.Empty<string>());
 
     private static IReadOnlyList<string> NormalizePlanetGroupingVisualMotifs(ProductionEventIntelligence? intelligence)
     {

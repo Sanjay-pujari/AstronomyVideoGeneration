@@ -270,7 +270,11 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("requiredVisualObjects")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("requiredCelestialObjects")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("resolvedObjectNames")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("visibleObjects")));
         Assert.Equal(new[] { "planet grouping", "guided scan path", "grouping arc" }, ReadStringArray(spec.GetProperty("visualMotifs")));
+        Assert.DoesNotContain("planet grouping", spec.GetProperty("visualSourceResolution").GetProperty("validationRequiredTerms").EnumerateArray().Select(item => item.GetString()), StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("guided scan path", spec.GetProperty("visualSourceResolution").GetProperty("validationRequiredTerms").EnumerateArray().Select(item => item.GetString()), StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("grouping arc", spec.GetProperty("visualSourceResolution").GetProperty("validationRequiredTerms").EnumerateArray().Select(item => item.GetString()), StringComparer.OrdinalIgnoreCase);
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, spec.GetProperty("drawableVisualObjects").EnumerateArray().Select(item => item.GetProperty("objectType").GetString()).ToArray());
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, spec.GetProperty("visualSourceResolution").GetProperty("requiredDrawableObjects").EnumerateArray().Select(item => item.GetString()).ToArray());
 
