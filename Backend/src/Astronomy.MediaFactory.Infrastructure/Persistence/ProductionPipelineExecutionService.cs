@@ -560,10 +560,16 @@ public sealed partial class ProductionPipelineExecutionService(
             Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "long"));
         }
         ValidateSceneApprovalTextBeforeRendering(context);
-        var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
-        var generatedFiles = new List<string>(response.GeneratedFiles);
+        var generatedFiles = new List<string>();
         if (context.PipelineRequest.EnableSceneVariants)
+        {
             generatedFiles.AddRange(await RenderPhase8SceneVisualVariantsAsync(context, cancellationToken));
+        }
+        else
+        {
+            var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
+            generatedFiles.AddRange(response.GeneratedFiles);
+        }
         var shortRoot = context.PipelineRequest.EnableSceneVariants
             ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short")
             : Path.Combine(context.ExecutionContext.SceneRoot!, "short");
@@ -591,10 +597,7 @@ public sealed partial class ProductionPipelineExecutionService(
             if (scene.IsRequired && variants.Length < 3)
                 throw new InvalidOperationException($"Phase 8 scene variant validation failed: required scene {scene.SceneNumber} has {variants.Length} visual variant(s), expected at least 3.");
 
-            var specPath = Path.Combine(context.ExecutionContext.SceneRoot!, $"scene-{scene.SceneNumber:000}-infographic-spec.json");
-            RequireFile(specPath, $"Phase 8 infographic spec for scene {scene.SceneNumber}");
-            var spec = JsonSerializer.Deserialize<QuestionDrivenVisualSpec>(await File.ReadAllTextAsync(specPath, cancellationToken), JsonOptions)
-                ?? throw new InvalidOperationException($"Phase 8 scene variant rendering could not parse infographic spec for scene {scene.SceneNumber}.");
+            var spec = BuildPhase8SceneVariantVisualSpec(context, scene);
 
             foreach (var variant in variants)
             {
@@ -654,17 +657,61 @@ public sealed partial class ProductionPipelineExecutionService(
 
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
         generatedFiles.Add(manifestPath);
-        ValidatePhase8SceneVariantOutputs(plan, sceneAssetsRoot, manifestPath, manifest);
+        await ValidatePhase8SceneVariantOutputsAsync(plan, sceneAssetsRoot, manifestPath, cancellationToken);
         return generatedFiles;
     }
 
-    private static void ValidatePhase8SceneVariantOutputs(EnrichedQuestionScenePlanDto plan, string sceneAssetsRoot, string manifestPath, IReadOnlyList<Phase8SceneVariantManifestItem> manifest)
+    private static QuestionDrivenVisualSpec BuildPhase8SceneVariantVisualSpec(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+    {
+        var intelligence = context.ProductionEventIntelligence;
+        var overlayText = SplitOverlayIntent(scene.OverlayIntent).DefaultIfEmpty(scene.ViewerTakeaway).Take(4).ToArray();
+        var requiredObjects = (scene.RequiredVisualObjects is { Count: > 0 } ? scene.RequiredVisualObjects : intelligence.RequiredVisualObjects) ?? Array.Empty<string>();
+        var eventType = FirstNonEmpty(intelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType);
+        return new QuestionDrivenVisualSpec(
+            context.EventId.ToString("D"),
+            context.Request.RegionId,
+            context.Request.Language,
+            scene.SceneNumber,
+            scene.QuestionType,
+            scene.ScenePurpose,
+            scene.ViewerQuestion,
+            scene.ViewerTakeaway,
+            FirstNonEmpty(scene.NarrationIntent, scene.SourceAnswer, scene.ViewerTakeaway),
+            scene.ViewerTakeaway,
+            Math.Max(4, (int)Math.Ceiling(scene.VisualVariants?.Sum(variant => variant.RecommendedDurationSeconds) ?? 6)),
+            FirstNonEmpty(scene.ImagePromptIntent, scene.VisualIntent),
+            overlayText,
+            [FirstNonEmpty(scene.VisualIntent, scene.ImagePromptIntent)],
+            SplitOverlayIntent(scene.AccessibilityIntent).DefaultIfEmpty(scene.ViewerTakeaway).ToArray(),
+            DateTimeOffset.UtcNow,
+            eventType,
+            false,
+            intelligence.BestViewingWindowLocal,
+            null,
+            null,
+            requiredObjects,
+            null,
+            FirstNonEmpty(scene.StrategyId, intelligence.StrategyId),
+            intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            SplitOverlayIntent(scene.VisualIntent).ToArray(),
+            requiredObjects,
+            requiredObjects);
+    }
+
+    private static IEnumerable<string> SplitOverlayIntent(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split([';', '\n', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static async Task ValidatePhase8SceneVariantOutputsAsync(EnrichedQuestionScenePlanDto plan, string sceneAssetsRoot, string manifestPath, CancellationToken cancellationToken)
     {
         if (!File.Exists(manifestPath))
             throw new InvalidOperationException("Phase 8 scene variant validation failed: scene-variant-manifest.json was not written.");
 
+        var manifest = JsonSerializer.Deserialize<IReadOnlyList<Phase8SceneVariantManifestItem>>(await File.ReadAllTextAsync(manifestPath, cancellationToken), JsonOptions)
+            ?? throw new InvalidOperationException("Phase 8 scene variant validation failed: scene-variant-manifest.json could not be parsed.");
         var issues = new List<string>();
-        var expectedSceneFolders = Enumerable.Range(1, 6).Select(sceneNumber => $"scene-{sceneNumber:00}").ToArray();
+        var expectedSceneFolders = manifest.Select(item => $"scene-{item.SceneNumber:00}").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (var format in Phase8ProfessionalSlideFormats.Select(f => f.Format))
         {
             var formatRoot = Path.Combine(sceneAssetsRoot, format);
@@ -673,7 +720,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 : [];
             var duplicateFolders = actualFolders.Where(name => Regex.IsMatch(name, "^scene-\\d{3,}$", RegexOptions.IgnoreCase)).ToArray();
             if (!actualFolders.SequenceEqual(expectedSceneFolders, StringComparer.OrdinalIgnoreCase))
-                issues.Add($"format {format} must contain exactly these 6 scene folders: {string.Join(", ", expectedSceneFolders)}; actual: {string.Join(", ", actualFolders)}");
+                issues.Add($"format {format} must contain exactly the manifest scene folders: {string.Join(", ", expectedSceneFolders)}; actual: {string.Join(", ", actualFolders)}");
             if (duplicateFolders.Length > 0)
                 issues.Add($"format {format} contains unsupported scene-001 style duplicate folder(s): {string.Join(", ", duplicateFolders)}");
         }
@@ -704,7 +751,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
-        var failed = manifest.Where(item => !item.SafeAreaPassed || !item.OverlapCheckPassed || !item.IsBlankCheckPassed || !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.ImagePath) || (item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.FinalImagePath))).ToArray();
+        var failed = manifest.Where(item => !item.SafeAreaPassed || !item.OverlapCheckPassed || !item.IsBlankCheckPassed || !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.FinalImagePath) || (item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.FinalImagePath))).ToArray();
         issues.AddRange(failed.Select(item => $"scene {item.SceneNumber} format {item.Format} variant {item.VariantNo} role={item.ImageRole} renderStatus={item.RenderStatus} imagePath={item.ImagePath} errors={string.Join(",", item.ValidationErrors)}"));
         if (issues.Count > 0)
             throw new InvalidOperationException("Phase 8 scene variant validation failed: " + string.Join("; ", issues));
@@ -833,13 +880,40 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseValidateSceneAssetsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var currentRunValidationRoot = context.ExecutionContext.QuestionRoot!;
-        var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, currentRunValidationRoot, cancellationToken);
-        if (!validation.IsValid) throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", validation.Errors));
-        var materialized = await MaterializeSceneApprovalAsync(context.ExecutionContext.SceneRoot!, GetSceneApprovalNormalizedRoot(context.OutputRoot), cancellationToken);
+        IReadOnlyList<string> materialized;
+        if (context.PipelineRequest.EnableSceneVariants)
+        {
+            await ValidatePhase8SceneVariantManifestOnlyAsync(context.ExecutionContext.SceneRoot!, cancellationToken);
+            materialized = await MaterializeSceneVariantApprovalAsync(context.ExecutionContext.SceneRoot!, GetSceneApprovalNormalizedRoot(context.OutputRoot), cancellationToken);
+        }
+        else
+        {
+            var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, currentRunValidationRoot, cancellationToken);
+            if (!validation.IsValid) throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", validation.Errors));
+            materialized = await MaterializeSceneApprovalAsync(context.ExecutionContext.SceneRoot!, GetSceneApprovalNormalizedRoot(context.OutputRoot), cancellationToken);
+        }
         var sceneImageRoots = context.PipelineRequest.EnableSceneVariants
             ? new[] { Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long") }
             : new[] { Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long") };
-        return materialized.Concat(sceneImageRoots).Concat([Path.Combine(currentRunValidationRoot, "production-quality-validation-before-assembly.json")]).ToArray();
+        var validationOutputs = context.PipelineRequest.EnableSceneVariants
+            ? Array.Empty<string>()
+            : [Path.Combine(currentRunValidationRoot, "production-quality-validation-before-assembly.json")];
+        return materialized.Concat(sceneImageRoots).Concat(validationOutputs).ToArray();
+    }
+
+
+    private static async Task ValidatePhase8SceneVariantManifestOnlyAsync(string stagingRoot, CancellationToken cancellationToken)
+    {
+        var sceneAssetsRoot = Path.Combine(stagingRoot, "scene-assets");
+        var manifestPath = Path.Combine(sceneAssetsRoot, "scene-variant-manifest.json");
+        if (!File.Exists(manifestPath))
+            throw new InvalidOperationException($"Scene variant validation failed: scene-variant-manifest.json is required at '{NormalizePath(manifestPath)}'.");
+
+        var manifest = JsonSerializer.Deserialize<IReadOnlyList<Phase8SceneVariantManifestItem>>(await File.ReadAllTextAsync(manifestPath, cancellationToken), JsonOptions)
+            ?? throw new InvalidOperationException("Scene variant validation failed: scene-variant-manifest.json could not be parsed.");
+        var missing = manifest.Where(item => !File.Exists(item.FinalImagePath)).Select(item => NormalizePath(item.FinalImagePath)).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException("Scene variant validation failed: manifest references missing image(s): " + string.Join(", ", missing));
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -1839,6 +1913,31 @@ public sealed partial class ProductionPipelineExecutionService(
             SourceNotes = context.Request.SourceNotes ?? Array.Empty<string>()
         };
 
+
+
+    private static async Task<IReadOnlyList<string>> MaterializeSceneVariantApprovalAsync(string stagingRoot, string normalizedRoot, CancellationToken cancellationToken)
+    {
+        var sceneAssetsRoot = Path.Combine(stagingRoot, "scene-assets");
+        var manifestPath = Path.Combine(sceneAssetsRoot, "scene-variant-manifest.json");
+        if (!File.Exists(manifestPath))
+            throw new InvalidOperationException($"Scene variant materialization failed: scene-variant-manifest.json is required at '{NormalizePath(manifestPath)}'.");
+
+        var manifest = JsonSerializer.Deserialize<IReadOnlyList<Phase8SceneVariantManifestItem>>(await File.ReadAllTextAsync(manifestPath, cancellationToken), JsonOptions)
+            ?? throw new InvalidOperationException("Scene variant materialization failed: scene-variant-manifest.json could not be parsed.");
+        var copied = new List<string>();
+        foreach (var item in manifest.Where(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!File.Exists(item.FinalImagePath))
+                throw new InvalidOperationException($"Scene variant materialization failed: manifest references missing image '{NormalizePath(item.FinalImagePath)}'.");
+
+            var relativePath = Path.GetRelativePath(sceneAssetsRoot, item.FinalImagePath);
+            CopyFile(item.FinalImagePath, Path.Combine(normalizedRoot, "scene-assets", relativePath), copied);
+        }
+
+        CopyFile(manifestPath, Path.Combine(normalizedRoot, "scene-assets", "scene-variant-manifest.json"), copied);
+        await WriteScenesManifestsAsync(Path.GetDirectoryName(normalizedRoot)!, cancellationToken);
+        return copied;
+    }
 
     private static async Task<IReadOnlyList<string>> MaterializeSceneApprovalAsync(string stagingRoot, string normalizedRoot, CancellationToken cancellationToken)
     {
