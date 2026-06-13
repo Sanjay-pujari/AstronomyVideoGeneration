@@ -1711,6 +1711,20 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase6SceneEnrichmentDiagnostics = phaseNo == 6
             ? BuildPhase6SceneEnrichmentDiagnostics(context)
             : null;
+        var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
+            ? phase6SceneEnrichmentDiagnostics
+            : null;
+        if (planetGroupingDiagnostics is not null)
+        {
+            logger.LogInformation(
+                "PlanetGrouping enrichment diagnostics:\n strategyActivated={StrategyActivated}\n enricherExecuted={EnricherExecuted}\n planetGroupingIntentInjected={PlanetGroupingIntentInjected}\n guidedScanPathInjected={GuidedScanPathInjected}\n enrichedSceneIntentCount={EnrichedSceneIntentCount}\n visualIntentCount={VisualIntentCount}",
+                planetGroupingDiagnostics.PlanetGroupingStrategyActivated,
+                planetGroupingDiagnostics.PlanetGroupingEnricherExecuted,
+                planetGroupingDiagnostics.PlanetGroupingIntentInjected,
+                planetGroupingDiagnostics.GuidedScanPathInjected,
+                planetGroupingDiagnostics.EnrichedSceneIntentCount,
+                planetGroupingDiagnostics.VisualIntentCount);
+        }
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             phaseNo,
@@ -1730,11 +1744,19 @@ public sealed partial class ProductionPipelineExecutionService(
             reason,
             canRetry,
             phase6SceneEnrichmentDiagnostics,
-            planetGroupingStrategyActivated = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated,
-            planetGroupingIntentInjected = phase6SceneEnrichmentDiagnostics?.PlanetGroupingIntentInjected,
-            guidedScanPathInjected = phase6SceneEnrichmentDiagnostics?.GuidedScanPathInjected,
+            planetGroupingStrategyActivated = planetGroupingDiagnostics?.PlanetGroupingStrategyActivated,
+            planetGroupingEnricherExecuted = planetGroupingDiagnostics?.PlanetGroupingEnricherExecuted,
+            planetGroupingIntentInjected = planetGroupingDiagnostics?.PlanetGroupingIntentInjected,
+            guidedScanPathInjected = planetGroupingDiagnostics?.GuidedScanPathInjected,
+            enrichedSceneIntentCount = planetGroupingDiagnostics?.EnrichedSceneIntentCount,
+            enrichedSceneIntents = planetGroupingDiagnostics?.EnrichedSceneIntents,
+            visualIntentCount = planetGroupingDiagnostics?.VisualIntentCount,
+            visualIntents = planetGroupingDiagnostics?.VisualIntents,
+            scenePlanInputPath = planetGroupingDiagnostics?.ScenePlanInputPath,
+            enrichedScenePlanOutputPath = planetGroupingDiagnostics?.EnrichedScenePlanOutputPath,
+            validationIntentSourcePath = planetGroupingDiagnostics?.ValidationIntentSourcePath,
+            validationIntentSourceField = planetGroupingDiagnostics?.ValidationIntentSourceField,
             sceneIntents = phase6SceneEnrichmentDiagnostics?.SceneIntents,
-            visualIntents = phase6SceneEnrichmentDiagnostics?.VisualIntents,
             sceneEnrichmentMetadata = phase6SceneEnrichmentDiagnostics?.SceneEnrichmentMetadata,
             phase7NarrationDiagnostics,
             phase12ThumbnailDiagnostics,
@@ -1792,19 +1814,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static Phase6SceneEnrichmentDiagnostics BuildPhase6SceneEnrichmentDiagnostics(ProductionPhaseContext context)
     {
+        var scenePlanInputPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.json");
         var enrichedPath = BuildEnrichedScenePlanPath(context);
         var plan = TryReadEnrichedScenePlan(enrichedPath);
-        var generatedText = plan is null
-            ? Array.Empty<string>()
-            : ExtractEnrichedSceneGeneratedText(plan).Where(text => !string.IsNullOrWhiteSpace(text)).ToArray();
-
-        return new Phase6SceneEnrichmentDiagnostics(
-            EnrichedScenePlanPath: NormalizePath(enrichedPath),
-            EnrichedScenePlanExists: File.Exists(enrichedPath),
-            PlanetGroupingStrategyActivated: IsPlanetGroupingStrategyActivated(context),
-            PlanetGroupingIntentInjected: generatedText.Any(text => text.Contains("Planet grouping:", StringComparison.OrdinalIgnoreCase)),
-            GuidedScanPathInjected: generatedText.Any(text => text.Contains("Guided scan path:", StringComparison.OrdinalIgnoreCase)),
-            SceneIntents: plan?.Scenes.Select(scene => new Phase6SceneIntentDiagnostics(
+        var sceneIntents = plan?.Scenes.Select(scene => new Phase6SceneIntentDiagnostics(
                 scene.SceneNumber,
                 scene.QuestionType,
                 scene.ScenePurpose,
@@ -1813,13 +1826,35 @@ public sealed partial class ProductionPipelineExecutionService(
                 scene.VisualIntent,
                 scene.ImagePromptIntent,
                 scene.OverlayIntent,
-                scene.AccessibilityIntent)).ToArray() ?? Array.Empty<Phase6SceneIntentDiagnostics>(),
-            VisualIntents: plan?.Scenes.Select(scene => new Phase6VisualIntentDiagnostics(
+                scene.AccessibilityIntent)).ToArray() ?? Array.Empty<Phase6SceneIntentDiagnostics>();
+        var visualIntents = plan?.Scenes.Select(scene => new Phase6VisualIntentDiagnostics(
                 scene.SceneNumber,
                 scene.QuestionType,
                 scene.VisualIntent,
                 scene.ImagePromptIntent,
-                scene.OverlayIntent)).ToArray() ?? Array.Empty<Phase6VisualIntentDiagnostics>(),
+                scene.OverlayIntent)).ToArray() ?? Array.Empty<Phase6VisualIntentDiagnostics>();
+        var enrichedSceneIntents = BuildPhase6ValidationIntentDiagnostics(plan).ToArray();
+        var generatedText = enrichedSceneIntents
+            .Select(intent => intent.Value)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToArray();
+
+        return new Phase6SceneEnrichmentDiagnostics(
+            EnrichedScenePlanPath: NormalizePath(enrichedPath),
+            EnrichedScenePlanExists: File.Exists(enrichedPath),
+            PlanetGroupingStrategyActivated: IsPlanetGroupingStrategyActivated(context),
+            PlanetGroupingEnricherExecuted: plan is not null,
+            PlanetGroupingIntentInjected: generatedText.Any(text => ContainsToken(text, "planet grouping")),
+            GuidedScanPathInjected: generatedText.Any(text => ContainsToken(text, "guided scan path")),
+            EnrichedSceneIntentCount: enrichedSceneIntents.Length,
+            EnrichedSceneIntents: enrichedSceneIntents,
+            VisualIntentCount: visualIntents.Length,
+            ScenePlanInputPath: NormalizePath(scenePlanInputPath),
+            EnrichedScenePlanOutputPath: NormalizePath(enrichedPath),
+            ValidationIntentSourcePath: NormalizePath(enrichedPath),
+            ValidationIntentSourceField: "scenes[*].viewerTakeaway|scenes[*].narrationIntent|scenes[*].visualIntent|scenes[*].imagePromptIntent|scenes[*].overlayIntent|scenes[*].accessibilityIntent",
+            SceneIntents: sceneIntents,
+            VisualIntents: visualIntents,
             SceneEnrichmentMetadata: plan?.Diagnostics,
             StrategyId: plan?.Diagnostics?.StrategyId ?? context.ProductionEventIntelligence.StrategyId,
             EventType: context.ProductionEventIntelligence.EventType,
@@ -1860,8 +1895,16 @@ public sealed partial class ProductionPipelineExecutionService(
         string EnrichedScenePlanPath,
         bool EnrichedScenePlanExists,
         bool PlanetGroupingStrategyActivated,
+        bool PlanetGroupingEnricherExecuted,
         bool PlanetGroupingIntentInjected,
         bool GuidedScanPathInjected,
+        int EnrichedSceneIntentCount,
+        IReadOnlyList<Phase6ValidationIntentDiagnostics> EnrichedSceneIntents,
+        int VisualIntentCount,
+        string ScenePlanInputPath,
+        string EnrichedScenePlanOutputPath,
+        string ValidationIntentSourcePath,
+        string ValidationIntentSourceField,
         IReadOnlyList<Phase6SceneIntentDiagnostics> SceneIntents,
         IReadOnlyList<Phase6VisualIntentDiagnostics> VisualIntents,
         QuestionSceneEnrichmentDiagnostics? SceneEnrichmentMetadata,
@@ -1888,6 +1931,27 @@ public sealed partial class ProductionPipelineExecutionService(
         string VisualIntent,
         string ImagePromptIntent,
         string OverlayIntent);
+
+    private sealed record Phase6ValidationIntentDiagnostics(
+        int SceneNumber,
+        string QuestionType,
+        string FieldPath,
+        string Value);
+
+    private static IEnumerable<Phase6ValidationIntentDiagnostics> BuildPhase6ValidationIntentDiagnostics(EnrichedQuestionScenePlanDto? plan)
+    {
+        if (plan is null) yield break;
+
+        foreach (var scene in plan.Scenes)
+        {
+            yield return new(scene.SceneNumber, scene.QuestionType, $"scenes[{scene.SceneNumber}].viewerTakeaway", scene.ViewerTakeaway);
+            yield return new(scene.SceneNumber, scene.QuestionType, $"scenes[{scene.SceneNumber}].narrationIntent", scene.NarrationIntent);
+            yield return new(scene.SceneNumber, scene.QuestionType, $"scenes[{scene.SceneNumber}].visualIntent", scene.VisualIntent);
+            yield return new(scene.SceneNumber, scene.QuestionType, $"scenes[{scene.SceneNumber}].imagePromptIntent", scene.ImagePromptIntent);
+            yield return new(scene.SceneNumber, scene.QuestionType, $"scenes[{scene.SceneNumber}].overlayIntent", scene.OverlayIntent);
+            yield return new(scene.SceneNumber, scene.QuestionType, $"scenes[{scene.SceneNumber}].accessibilityIntent", scene.AccessibilityIntent);
+        }
+    }
 
 
 
