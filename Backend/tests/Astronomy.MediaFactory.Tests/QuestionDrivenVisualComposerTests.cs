@@ -299,6 +299,20 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Contains("scene-002-infographic-spec.json", sceneDiagnostics.GetProperty("infographicSpecPath").GetString());
         Assert.True(sceneDiagnostics.GetProperty("infographicSpecContainsPlanetGroupingMetadata").GetBoolean());
         Assert.True(sceneDiagnostics.GetProperty("infographicSpecContainsResolvedObjects").GetBoolean());
+
+        var mappingDiagnostics = sceneDiagnostics.GetProperty("buildSpecMappingDiagnostics");
+        Assert.Contains("Visual intent", mappingDiagnostics.GetProperty("visualIntent").GetProperty("sourceValue").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(mappingDiagnostics.GetProperty("visualIntent").GetProperty("mappedValue").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(mappingDiagnostics.GetProperty("visualIntent").GetProperty("finalSerializedValue").GetString()));
+        Assert.Contains("Image prompt intent", mappingDiagnostics.GetProperty("imagePromptIntent").GetProperty("sourceValue").GetString());
+        Assert.Equal(new[] { "Saturn, Mars, Jupiter, Venus", "sky direction", "local horizon", "guided scan path" }, ReadStringArray(mappingDiagnostics.GetProperty("overlayIntent").GetProperty("mappedValue")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(mappingDiagnostics.GetProperty("requiredVisualObjects").GetProperty("mappedValue")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(mappingDiagnostics.GetProperty("requiredVisualObjects").GetProperty("finalSerializedValue")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(mappingDiagnostics.GetProperty("resolvedObjectNames").GetProperty("mappedValue")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(mappingDiagnostics.GetProperty("resolvedObjectNames").GetProperty("finalSerializedValue")));
+        Assert.Equal("PlanetGrouping", mappingDiagnostics.GetProperty("strategyId").GetProperty("sourceValue").GetString());
+        Assert.Equal("PlanetGrouping", mappingDiagnostics.GetProperty("strategyId").GetProperty("mappedValue").GetString());
+        Assert.Equal("PlanetGrouping", mappingDiagnostics.GetProperty("strategyId").GetProperty("finalSerializedValue").GetString());
     }
 
 

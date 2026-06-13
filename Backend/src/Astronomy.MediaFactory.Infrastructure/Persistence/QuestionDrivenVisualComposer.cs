@@ -135,6 +135,9 @@ public sealed class QuestionDrivenVisualComposer(
                 promptImageIntent,
                 usesLocalPlanetAssets && venusAsset is not null && jupiterAsset is not null));
             var spec = BuildSpec(request, enrichedPlan, scene, narrationScene, prompt, eventType, usesLocalPlanetAssets, sourceResolution);
+            var serializedSpec = JsonSerializer.Serialize(spec, JsonOptions);
+            var buildSpecMappingDiagnostics = BuildSpecMappingDiagnostics(request, enrichedPlan, scene, spec, sourceRequiredVisualObjects, serializedSpec);
+            LogBuildSpecMappingDiagnostics(scene, spec, buildSpecMappingDiagnostics);
             LogSceneRequiredVisualObjectPropagation(scene, sourceRequiredVisualObjects, spec.RequiredVisualObjects ?? []);
             ValidateLocalPlanetAssetContract(spec);
             ValidateRequiredVisualObjectContract(spec, request.ProductionContext);
@@ -161,7 +164,7 @@ public sealed class QuestionDrivenVisualComposer(
                 ? new QuestionDrivenPresentationVariants(NormalizePath(longFinalPath), NormalizePath(shortFinalPath))
                 : null;
             var plannedOutputs = new QuestionDrivenPlannedOutputs(NormalizePath(finalPath), NormalizePath(srtPath), NormalizePath(narrationTextPath), NormalizePath(specPath), string.Empty, NormalizePath(reviewPath), presentationVariants);
-            var phase8SceneDiagnostic = BuildPhase8SceneVisualSourceDiagnostic(scene, narrationScene, spec, sourceResolution, planPath, specPath, prompt, sourceRequiredVisualObjects);
+            var phase8SceneDiagnostic = BuildPhase8SceneVisualSourceDiagnostic(scene, narrationScene, spec, sourceResolution, planPath, specPath, prompt, sourceRequiredVisualObjects, buildSpecMappingDiagnostics);
             phase8SceneDiagnostics.Add(phase8SceneDiagnostic);
             logger.LogInformation("Phase 8 visual source diagnostics scene {SceneNumber}: source={SelectedVisualSourceType} enriched={UsedEnrichedScenePlan} fallback={UsedFallbackVisualTemplate} spec={InfographicSpecPath}", phase8SceneDiagnostic.SceneNumber, phase8SceneDiagnostic.SelectedVisualSourceType, phase8SceneDiagnostic.UsedEnrichedScenePlan, phase8SceneDiagnostic.UsedFallbackVisualTemplate, phase8SceneDiagnostic.InfographicSpecPath);
             var validationPreview = BuildValidationPreview(spec, srt, review, overlayPlan, plannedOutputs);
@@ -196,7 +199,7 @@ public sealed class QuestionDrivenVisualComposer(
             }
             await File.WriteAllTextAsync(srtPath, srt, cancellationToken);
             await File.WriteAllTextAsync(narrationTextPath, spec.NarrationText + Environment.NewLine, cancellationToken);
-            await File.WriteAllTextAsync(specPath, JsonSerializer.Serialize(spec, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(specPath, serializedSpec, cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
             if (includeSceneApprovalVariants)
             {
@@ -351,6 +354,73 @@ public sealed class QuestionDrivenVisualComposer(
             scenes);
     }
 
+    private void LogBuildSpecMappingDiagnostics(EnrichedQuestionSceneDto scene, QuestionDrivenVisualSpec spec, BuildSpecMappingDiagnostics diagnostics)
+    {
+        if (scene.SceneNumber != 2) return;
+
+        logger.LogInformation(
+            "BuildSpecMappingDiagnostics scene {SceneNumber:000}: scene.visualIntent source={VisualIntentSource}; mapped={VisualIntentMapped}; finalSerialized={VisualIntentFinal}; scene.imagePromptIntent source={ImagePromptIntentSource}; mapped={ImagePromptIntentMapped}; finalSerialized={ImagePromptIntentFinal}; scene.overlayIntent source={OverlayIntentSource}; mapped={OverlayIntentMapped}; finalSerialized={OverlayIntentFinal}; scene.requiredVisualObjects source={RequiredVisualObjectsSource}; mapped={RequiredVisualObjectsMapped}; finalSerialized={RequiredVisualObjectsFinal}; scene.strategyId source={StrategyIdSource}; spec.strategyId mapped={StrategyIdMapped}; finalSerialized={StrategyIdFinal}; spec.requiredVisualObjects={SpecRequiredVisualObjects}; spec.resolvedObjectNames mapped={ResolvedObjectNamesMapped}; finalSerialized={ResolvedObjectNamesFinal}",
+            scene.SceneNumber,
+            FormatDiagnosticValue(diagnostics.VisualIntent.SourceValue),
+            FormatDiagnosticValue(diagnostics.VisualIntent.MappedValue),
+            FormatDiagnosticValue(diagnostics.VisualIntent.FinalSerializedValue),
+            FormatDiagnosticValue(diagnostics.ImagePromptIntent.SourceValue),
+            FormatDiagnosticValue(diagnostics.ImagePromptIntent.MappedValue),
+            FormatDiagnosticValue(diagnostics.ImagePromptIntent.FinalSerializedValue),
+            FormatDiagnosticValue(diagnostics.OverlayIntent.SourceValue),
+            FormatDiagnosticValue(diagnostics.OverlayIntent.MappedValue),
+            FormatDiagnosticValue(diagnostics.OverlayIntent.FinalSerializedValue),
+            FormatDiagnosticValue(diagnostics.RequiredVisualObjects.SourceValue),
+            FormatDiagnosticValue(diagnostics.RequiredVisualObjects.MappedValue),
+            FormatDiagnosticValue(diagnostics.RequiredVisualObjects.FinalSerializedValue),
+            FormatDiagnosticValue(diagnostics.StrategyId.SourceValue),
+            FormatDiagnosticValue(diagnostics.StrategyId.MappedValue),
+            FormatDiagnosticValue(diagnostics.StrategyId.FinalSerializedValue),
+            FormatDiagnosticValue(spec.RequiredVisualObjects ?? []),
+            FormatDiagnosticValue(diagnostics.ResolvedObjectNames.MappedValue),
+            FormatDiagnosticValue(diagnostics.ResolvedObjectNames.FinalSerializedValue));
+    }
+
+    private static string FormatDiagnosticValue(object? value)
+        => value is null ? "null" : JsonSerializer.Serialize(value, JsonOptions);
+
+    private static BuildSpecMappingDiagnostics BuildSpecMappingDiagnostics(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionScenePlanDto enrichedPlan, EnrichedQuestionSceneDto scene, QuestionDrivenVisualSpec spec, IReadOnlyList<string> sourceRequiredVisualObjects, string serializedSpec)
+    {
+        using var document = JsonDocument.Parse(serializedSpec);
+        var root = document.RootElement;
+        var serializedRequiredVisualObjects = ReadSerializedStringArray(root, "requiredVisualObjects");
+        var serializedResolvedObjectNames = ReadSerializedStringArray(root, "resolvedObjectNames");
+        var serializedOverlayText = ReadSerializedStringArray(root, "overlayText");
+        var serializedStrategyId = ReadSerializedString(root, "strategyId");
+        var serializedBackgroundPrompt = ReadSerializedString(root, "backgroundPrompt");
+
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var sourceResolvedObjectNames = intelligence?.ResolvedObjectNames is { Count: > 0 }
+            ? intelligence.ResolvedObjectNames
+            : (IReadOnlyList<string>)[.. (enrichedPlan.Diagnostics?.PrimaryObjects ?? []), .. (enrichedPlan.Diagnostics?.SecondaryObjects ?? [])];
+        var sourceStrategyId = FirstNonEmpty(scene.StrategyId, enrichedPlan.Diagnostics?.StrategyId, intelligence?.StrategyId, intelligence?.EventType);
+
+        return new BuildSpecMappingDiagnostics(
+            new BuildSpecMappingValue(scene.VisualIntent, spec.BackgroundPrompt, serializedBackgroundPrompt),
+            new BuildSpecMappingValue(scene.ImagePromptIntent, spec.BackgroundPrompt, serializedBackgroundPrompt),
+            new BuildSpecMappingValue(scene.OverlayIntent, spec.OverlayText, serializedOverlayText),
+            new BuildSpecMappingValue(new
+            {
+                sceneRequiredVisualObjects = scene.RequiredVisualObjects,
+                resolvedSourceRequiredVisualObjects = sourceRequiredVisualObjects
+            }, spec.RequiredVisualObjects ?? [], serializedRequiredVisualObjects),
+            new BuildSpecMappingValue(sourceResolvedObjectNames, spec.ResolvedObjectNames ?? [], serializedResolvedObjectNames),
+            new BuildSpecMappingValue(sourceStrategyId, spec.StrategyId, serializedStrategyId));
+    }
+
+    private static string? ReadSerializedString(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
+
+    private static IReadOnlyList<string> ReadSerializedStringArray(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Array
+            ? property.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!).ToArray()
+            : [];
+
     private void LogSceneRequiredVisualObjectPropagation(EnrichedQuestionSceneDto scene, IReadOnlyList<string> sourceRequiredVisualObjects, IReadOnlyList<string> finalRequiredVisualObjectsWrittenToSpec)
     {
         if (scene.SceneNumber != 2) return;
@@ -366,7 +436,7 @@ public sealed class QuestionDrivenVisualComposer(
             finalRequiredVisualObjectsWrittenToSpec);
     }
 
-    private static Phase8SceneVisualSourceDiagnostic BuildPhase8SceneVisualSourceDiagnostic(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, QuestionDrivenVisualSpec spec, VisualSourceResolutionResult sourceResolution, string planPath, string specPath, string rendererPromptBeforeRendering, IReadOnlyList<string> sourceRequiredVisualObjects)
+    private static Phase8SceneVisualSourceDiagnostic BuildPhase8SceneVisualSourceDiagnostic(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, QuestionDrivenVisualSpec spec, VisualSourceResolutionResult sourceResolution, string planPath, string specPath, string rendererPromptBeforeRendering, IReadOnlyList<string> sourceRequiredVisualObjects, BuildSpecMappingDiagnostics buildSpecMappingDiagnostics)
     {
         var usedFallbackVisualTemplate = sourceResolution.SourceType == VisualSourceType.GenericFallback || sourceResolution.GenericFallbackAllowed;
         var fallbackReason = usedFallbackVisualTemplate
@@ -397,7 +467,8 @@ public sealed class QuestionDrivenVisualComposer(
             rendererPromptBeforeRendering,
             NormalizePath(specPath),
             containsPlanetGroupingMetadata,
-            containsResolvedObjects);
+            containsResolvedObjects,
+            buildSpecMappingDiagnostics);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionScenePlanDto enrichedPlan, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt, string eventType, bool usesLocalPlanetAssets, VisualSourceResolutionResult sourceResolution)

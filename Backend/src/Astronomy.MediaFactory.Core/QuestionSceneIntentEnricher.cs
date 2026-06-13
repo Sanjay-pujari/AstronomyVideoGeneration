@@ -62,7 +62,9 @@ public sealed record EnrichedQuestionSceneDto(
     string ImagePromptIntent,
     string OverlayIntent,
     string AccessibilityIntent,
-    bool IsRequired);
+    bool IsRequired,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RequiredVisualObjects = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? StrategyId = null);
 
 public interface IQuestionSceneIntentEnricher
 {
