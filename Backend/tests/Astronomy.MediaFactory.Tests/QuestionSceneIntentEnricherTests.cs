@@ -318,6 +318,31 @@ public sealed class QuestionSceneIntentEnricherTests
         Assert.True(document.RootElement.GetProperty("isValid").GetBoolean());
     }
 
+    [Fact]
+    public async Task EnrichQuestionScenePlanAsync_InjectsSolarEclipseSafeViewingWarningInScene4()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteQuestionDrivenScenePlanAsync(workingDirectory, BuildSourcePlan());
+        var enricher = CreateEnricher(workingDirectory);
+
+        var result = await enricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            ProductionContext: BuildProductionContext(BuildSolarEclipseIntelligence())), CancellationToken.None);
+
+        Assert.True(result.IsValid, string.Join(" | ", result.Warnings));
+        var safeViewing = result.EnrichedScenePlan.Scenes.Single(scene => scene.SceneNumber == 4);
+        var safeViewingText = string.Join(" ", safeViewing.ViewerTakeaway, safeViewing.NarrationIntent, safeViewing.VisualIntent, safeViewing.OverlayIntent);
+
+        Assert.Equal(AstronomyQuestionTypes.How, safeViewing.QuestionType);
+        Assert.Contains("Never view the Sun directly without certified solar viewing glasses.", safeViewingText);
+        Assert.Contains("Safe Viewing", safeViewingText);
+        Assert.Contains("certified solar eclipse glasses", safeViewingText);
+    }
+
     private static QuestionSceneIntentEnricher CreateEnricher(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<QuestionSceneIntentEnricher>.Instance);
 
@@ -429,6 +454,34 @@ public sealed class QuestionSceneIntentEnricherTests
         ForbiddenObjectNames: ["Venus", "Jupiter"],
         RequiredVisualObjects: ["Moon", "moonrise", "eastern sky", "full moon glow"],
         RequiredNarrationFacts: ["localPeakTime", "seasonal name"]);
+
+    private static ProductionEventIntelligence BuildSolarEclipseIntelligence() => new(
+        Domain: "Astronomy",
+        EventType: "SolarEclipse",
+        Title: "Partial Solar Eclipse",
+        ShortTitle: "Solar Eclipse",
+        EventDate: DateTimeOffset.Parse("2026-08-12T10:40:00Z"),
+        PeakUtc: DateTimeOffset.Parse("2026-08-12T10:40:00Z"),
+        LocalPeakTime: "4:10 PM IST",
+        BestViewingWindowLocal: "2026-08-12 16:10–17:20 IST",
+        SkyDirectionHint: "western sky",
+        VisibilityRegion: RegionId,
+        PrimaryObjects: ["Sun"],
+        SecondaryObjects: ["Moon"],
+        ViewingQuality: "Good",
+        MoonInterference: null,
+        MoonIlluminationPercent: null,
+        ScientificContext: "Solar eclipse alignment",
+        ViewerInstructions: ["Never view the Sun directly without certified solar viewing glasses."],
+        VisualMotifs: ["Sun and Moon silhouette", "eclipse path", "certified solar eclipse glasses"],
+        SceneStrategy: ["SolarEclipse"],
+        QualityWarnings: [],
+        ForbiddenTerms: ["meteor shower", "naked-eye Sun viewing"],
+        StrategyId: "SolarEclipse",
+        ResolvedObjectNames: ["Sun", "Moon"],
+        ForbiddenObjectNames: [],
+        RequiredVisualObjects: ["Sun", "eclipse", "eye safety", "eclipse timing"],
+        RequiredNarrationFacts: ["bestViewingWindowLocal", "visibilityRegion"]);
 
     private static ProductionEventIntelligence BuildMarsJupiterIntelligence() => new(
         Domain: "Astronomy",

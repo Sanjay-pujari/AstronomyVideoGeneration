@@ -97,6 +97,8 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
         if (!string.IsNullOrWhiteSpace(source.BestViewingWindowLocal)) instructions.Add($"Watch during {source.BestViewingWindowLocal}.");
         if (!string.IsNullOrWhiteSpace(source.SkyDirectionHint)) instructions.Add($"Look {source.SkyDirectionHint}.");
         if (source.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) instructions.Add("Use naked-eye viewing from a dark open location; no telescope is needed.");
+        if (source.EventType.Contains("SolarEclipse", StringComparison.OrdinalIgnoreCase) || source.Title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase))
+            instructions.Add("Never view the Sun directly without certified solar viewing glasses.");
         return instructions;
     }
 
@@ -527,11 +529,11 @@ public sealed class SolarEclipseStrategy : MediaEventStrategyBase
         WhatRequiredIntents: [Intent("solar-eclipse overview", "solar eclipse", "Moon covers", "Sun", "sky")],
         WhereRequiredIntents: [Intent("safe visibility guidance", "visible", "visibility", "Sun safely filtered", "local sky", "sky")],
         WhenRequiredIntents: [Intent("safe eclipse timing", "watch during", "certified eye protection", "AM", "PM", "IST")],
-        HowRequiredIntents: [Intent("eye-safety instruction", "certified eclipse glasses", "solar filters", "eye protection", "view the Sun")],
+        HowRequiredIntents: [Intent("eye-safety instruction", "Never view the Sun directly without certified solar viewing glasses", "certified solar eclipse glasses", "ISO 12312-2 solar viewer", "approved solar filter", "certified eclipse glasses", "solar filters", "eye protection")],
         WhyRequiredIntents: [Intent("solar-eclipse significance", "solar eclipse", "rare", "dramatic", "Moon and Sun align", "align")],
         ActionRequiredIntents: [Intent("safe eclipse CTA", "check weather", "save", "prepare", "certified eclipse glasses", "before viewing")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("SolarEclipse", StringComparison.OrdinalIgnoreCase) || title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase);
-    public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Eclipse type", "Timing", "Where visible", "Eye safety", "CTA"], ["Intro", "Eclipse geometry", "Local circumstances", "Visibility map", "Eye safety", "What to expect", "Weather reminder", "CTA"], ["Sun and Moon silhouette", "eclipse path", "certified eclipse glasses", "clean safety labels"], [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.VisibilityRegion)], "urgent, safety-first, precise", ["Solar Eclipse", "Eye Safety", "Visible From"], ["meteor shower", "naked-eye Sun viewing"], ["Never imply direct Sun viewing without certified protection."]);
+    public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Eclipse type", "Timing", "Where visible", "Eye safety", "CTA"], ["Intro", "Eclipse geometry", "Local circumstances", "Visibility map", "Eye safety", "What to expect", "Weather reminder", "CTA"], ["Sun and Moon silhouette", "eclipse path", "certified solar eclipse glasses", "clean safety labels", "Never view the Sun directly without certified solar viewing glasses."], [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.VisibilityRegion)], "urgent, safety-first, precise", ["Solar Eclipse", "Eye Safety", "Visible From"], ["meteor shower", "naked-eye Sun viewing"], ["Never view the Sun directly without certified solar viewing glasses."]);
 
     public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
         => CreateSet(intelligence, context,
@@ -539,9 +541,9 @@ public sealed class SolarEclipseStrategy : MediaEventStrategyBase
             Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{intelligence.Title} will happen when the Moon covers part of the Sun in the sky.", 1),
             Answer(AstronomyQuestionTypes.Where, "Where is it visible?", "Where visible", $"Use local sky visibility for {intelligence.VisibilityRegion ?? context.LocationName} and keep the Sun safely filtered.", 2),
             Answer(AstronomyQuestionTypes.When, "When is the best time?", "Eclipse timing", $"Watch during {ViewingTime(intelligence, context)} using certified eye protection throughout.", 3),
-            Answer(AstronomyQuestionTypes.How, "How can I watch safely?", "Eye safety", "Use certified eclipse glasses or solar filters every time you view the Sun.", 4),
+            Answer(AstronomyQuestionTypes.How, "How can I watch safely?", "Safe Viewing", "Never view the Sun directly without certified solar viewing glasses.", 4),
             Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", "A solar eclipse is rare and dramatic because Moon and Sun align from our viewpoint.", 5),
-            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Prepare safely", "Check weather, save the time, and prepare certified eclipse glasses before viewing.", 6)
+            Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Prepare safely", "Check weather, save the time, and prepare certified solar eclipse glasses before viewing.", 6)
         ]);
 }
 
