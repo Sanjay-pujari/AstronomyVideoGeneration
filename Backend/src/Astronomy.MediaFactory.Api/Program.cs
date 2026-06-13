@@ -5732,6 +5732,11 @@ app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRe
         await File.WriteAllTextAsync(promptPath, promptText, ct);
         await RenderVisualLabBenchmarkAsync(request, prompt, imagePath, width, height, i, ct);
 
+        if (diagnosticsEnabled)
+        {
+            await WriteVisualLabDebugJsonAsync(diagnosticsPath, BuildVisualLabBackgroundPromptDiagnostics(prompt, azureResult?.ProviderCalled == true, azureResult?.RendererUsed ?? "None", azureResult?.FallbackRendererUsed == true), ct);
+        }
+
         var imageExists = File.Exists(imagePath);
         var imageBlank = imageExists && await IsVisualLabImageBlankAsync(imagePath, ct);
         var dimensionsOk = imageExists && await HasVisualLabDimensionsAsync(imagePath, width, height, ct);
@@ -5773,17 +5778,19 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
     var width = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
     var height = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
     var diagnosticsEnabled = request.EnableDiagnostics == true;
+    var promptOnly = request.PromptOnly == true;
     var diagnosticsDirectory = Path.Combine(outputDirectory, "debug");
-    if (diagnosticsEnabled) Directory.CreateDirectory(diagnosticsDirectory);
-    var variants = Math.Clamp(request.VariantCount.GetValueOrDefault(3), 1, 6);
+    if (diagnosticsEnabled || promptOnly) Directory.CreateDirectory(diagnosticsDirectory);
+    var variants = promptOnly ? 1 : Math.Clamp(request.VariantCount.GetValueOrDefault(3), 1, 6);
     var reports = new List<VisualLabBackgroundQualityReportItem>();
 
     for (var i = 1; i <= variants; i++)
     {
         var prompt = BuildVisualLabBackgroundPrompt(request, width, height, i);
-        var promptText = JsonSerializer.Serialize(prompt, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+        var promptModelJson = JsonSerializer.Serialize(prompt, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+        var promptText = prompt.FinalPromptText;
         VisualLabDiagnosticsState? diagnostics = null;
-        if (diagnosticsEnabled && i == 1)
+        if (diagnosticsEnabled && i == 1 && !promptOnly)
         {
             diagnostics = await StartVisualLabBackgroundDiagnosticsAsync(request, imageOptions.Value, diagnosticsDirectory, promptText, width, height, ct);
         }
@@ -5795,7 +5802,30 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
 
         var imagePath = Path.Combine(outputDirectory, $"background-v{i}.png");
         var promptPath = Path.Combine(outputDirectory, $"background-prompt-v{i}.json");
-        await File.WriteAllTextAsync(promptPath, promptText, ct);
+        var promptTextPath = Path.Combine(outputDirectory, $"background-prompt-v{i}.txt");
+        await File.WriteAllTextAsync(promptPath, promptModelJson, ct);
+        await File.WriteAllTextAsync(promptTextPath, promptText, ct);
+        var promptDiagnostics = BuildVisualLabBackgroundPromptDiagnostics(prompt, false, "None", false);
+        var diagnosticsPath = Path.Combine(diagnosticsDirectory, $"background-prompt-diagnostics-v{i}.json");
+        if (diagnosticsEnabled || promptOnly)
+        {
+            await WriteVisualLabDebugJsonAsync(diagnosticsPath, promptDiagnostics, ct);
+        }
+        if (promptOnly)
+        {
+            return Results.Ok(new
+            {
+                success = true,
+                promptOnly = true,
+                eventType,
+                selectedPromptTemplate = prompt.SelectedPromptTemplate,
+                finalPromptText = prompt.FinalPromptText,
+                diagnosticsPath,
+                promptPath,
+                promptTextPath,
+                diagnostics = promptDiagnostics
+            });
+        }
         var renderStopwatch = Stopwatch.StartNew();
         VisualLabAzureImageGenerationResult? azureResult = null;
         if (IsVisualLabAzureImageConfigured(imageOptions.Value))
@@ -5869,6 +5899,11 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
             });
         }
 
+        if (diagnosticsEnabled)
+        {
+            await WriteVisualLabDebugJsonAsync(diagnosticsPath, BuildVisualLabBackgroundPromptDiagnostics(prompt, azureResult?.ProviderCalled == true, azureResult?.RendererUsed ?? "None", azureResult?.FallbackRendererUsed == true), ct);
+        }
+
         var imageExists = File.Exists(imagePath);
         var imageBlank = imageExists && await IsVisualLabImageBlankAsync(imagePath, ct);
         var dimensionsOk = imageExists && await HasVisualLabDimensionsAsync(imagePath, width, height, ct);
@@ -5878,7 +5913,7 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
             return Results.BadRequest(new { message = "Visual lab background validation failed.", imagePath, promptPath, imageExists, imageBlank, dimensionsOk, failedTermsFound = failedTerms });
         }
 
-        reports.Add(new VisualLabBackgroundQualityReportItem(imagePath, promptPath, request.Format, width, height, eventType, request.VisualStyle, promptText, "Manual review required: confirm premium astronomy background quality and absence of visible text, letters, numbers, labels, panels, arrows, or diagram boxes.", failedTerms, failedTerms.Count == 0, true));
+        reports.Add(new VisualLabBackgroundQualityReportItem(imagePath, promptPath, request.Format, width, height, eventType, request.VisualStyle, promptText, prompt.SelectedPromptTemplate, prompt.FinalPromptText, prompt.Facts, azureResult?.ProviderCalled == true, azureResult?.RendererUsed ?? "None", azureResult?.FallbackRendererUsed == true, "Manual review required: confirm premium astronomy background quality and absence of visible text, letters, numbers, labels, panels, arrows, or diagram boxes.", failedTerms, failedTerms.Count == 0, true));
     }
 
     var qualityReportPath = Path.Combine(outputDirectory, "background-quality-report.json");
@@ -6108,8 +6143,11 @@ static VisualLabBackgroundPrompt BuildVisualLabBackgroundPrompt(VisualLabBackgro
 {
     var facts = request.Facts ?? new Dictionary<string, string>();
     var cleanFacts = facts.Where(x => !string.IsNullOrWhiteSpace(x.Value)).ToDictionary(x => x.Key, x => x.Value.Trim(), StringComparer.OrdinalIgnoreCase);
+    var eventType = request.EventType.Trim();
+    var (selectedPromptTemplate, finalPromptText) = BuildVisualLabBackgroundPromptTemplate(eventType, cleanFacts);
+
     return new VisualLabBackgroundPrompt(
-        request.EventType.Trim(),
+        eventType,
         request.Title.Trim(),
         request.Format.Trim(),
         request.QualityMode ?? "Benchmark",
@@ -6117,12 +6155,98 @@ static VisualLabBackgroundPrompt BuildVisualLabBackgroundPrompt(VisualLabBackgro
         variant,
         width,
         height,
+        selectedPromptTemplate,
         "AI-first premium astronomy poster background artwork only; reserve clean negative space for future deterministic overlays.",
-        "Photorealistic dark sky with bright meteor streaks, subtle Geminids radiant area, dark mountain or open landscape horizon, high contrast, cinematic lighting, atmospheric depth, premium astronomy poster finish.",
+        finalPromptText,
+        finalPromptText,
         cleanFacts,
         new[] { "no text", "no letters", "no numbers", "no labels", "no UI panels", "no diagram boxes", "no arrows" },
         "Manual review required before overlay composer work begins.");
 }
+
+static (string SelectedPromptTemplate, string FinalPromptText) BuildVisualLabBackgroundPromptTemplate(string eventType, IReadOnlyDictionary<string, string> facts)
+{
+    if (string.Equals(eventType, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+    {
+        return ("PlanetConjunctionPremiumBackground", """
+Create a premium astronomy poster background.
+
+Subject:
+A beautiful planet conjunction visible after sunset.
+
+Scene:
+A realistic western twilight sky above a natural landscape or city-horizon silhouette.
+Three bright celestial objects are visible near the western horizon:
+Venus is the brightest object.
+Jupiter is bright and slightly higher.
+Mercury is lower and fainter near the horizon.
+
+Style:
+NASA educational poster quality.
+National Geographic astronomy photography.
+Discovery science documentary visual.
+Photorealistic sky.
+Cinematic twilight gradient.
+Realistic atmosphere.
+Premium astronomy publication quality.
+
+Composition:
+Clean open sky.
+Objects clearly separated.
+Leave negative space around each planet for future deterministic labels.
+No text.
+No labels.
+No arrows.
+No UI panels.
+No diagram boxes.
+No logo.
+No watermark.
+
+Important:
+Do not create meteor streaks.
+Do not create a meteor shower.
+Do not create radiant circles.
+Do not create fantasy planets.
+Show the planets as bright sky objects, not giant close-up planets.
+""".Trim());
+    }
+
+    if (string.Equals(eventType, "PlanetParade", StringComparison.OrdinalIgnoreCase))
+    {
+        return ("PlanetParadePremiumBackground", """
+Create a premium astronomy poster background.
+
+Subject:
+A broad planet parade visible across the sky.
+
+Scene:
+A realistic twilight-to-night sky over a natural landscape or clean city-horizon silhouette. Multiple bright planets appear as separated star-like sky objects along a wide ecliptic arc, with open negative space around each object for future deterministic labels.
+
+Style:
+NASA educational poster quality. National Geographic astronomy photography. Discovery science documentary visual. Photorealistic sky, realistic atmosphere, premium astronomy publication quality.
+
+Composition:
+Clean open sky. Wide horizon. Objects clearly separated. No text. No labels. No arrows. No UI panels. No diagram boxes. No logo. No watermark.
+
+Important:
+Do not create meteor streaks. Do not create a meteor shower. Do not create radiant circles. Do not create fantasy planets. Show planets as bright sky objects, not giant close-up planets.
+""".Trim());
+    }
+
+    return ("MeteorShowerPremiumBackground", "Photorealistic dark sky with bright meteor streaks, subtle meteor-shower radiant area, dark mountain or open landscape horizon, high contrast, cinematic lighting, atmospheric depth, premium astronomy poster finish. No text. No labels. No arrows. No UI panels. No diagram boxes. No logo. No watermark.");
+}
+
+static object BuildVisualLabBackgroundPromptDiagnostics(VisualLabBackgroundPrompt prompt, bool providerCalled, string rendererUsed, bool fallbackRendererUsed)
+    => new
+    {
+        selectedPromptTemplate = prompt.SelectedPromptTemplate,
+        eventType = prompt.EventType,
+        factsUsed = prompt.Facts,
+        finalPromptText = prompt.FinalPromptText,
+        providerCalled,
+        rendererUsed,
+        fallbackRendererUsed
+    };
 
 static async Task RenderVisualLabBackgroundArtworkAsync(VisualLabBackgroundGenerateRequest request, string imagePath, int width, int height, int variant, CancellationToken ct)
 {
@@ -9434,7 +9558,8 @@ public sealed record VisualLabBackgroundGenerateRequest(
     string VisualStyle,
     Dictionary<string, string>? Facts,
     bool? EnableDiagnostics,
-    bool? FallbackAllowed);
+    bool? FallbackAllowed,
+    bool? PromptOnly);
 
 public sealed record VisualLabBackgroundPrompt(
     string EventType,
@@ -9445,8 +9570,10 @@ public sealed record VisualLabBackgroundPrompt(
     int Variant,
     int Width,
     int Height,
+    string SelectedPromptTemplate,
     string CreativeDirection,
     string Prompt,
+    string FinalPromptText,
     IReadOnlyDictionary<string, string> Facts,
     IReadOnlyList<string> ForbiddenContent,
     string ApprovalGate);
@@ -9509,6 +9636,12 @@ public sealed record VisualLabBackgroundQualityReportItem(
     string EventType,
     string VisualStyle,
     string PromptUsed,
+    string SelectedPromptTemplate,
+    string FinalPromptText,
+    IReadOnlyDictionary<string, string> FactsUsed,
+    bool ProviderCalled,
+    string RendererUsed,
+    bool FallbackRendererUsed,
     string VisualQualityNotes,
     IReadOnlyList<string> FailedTermsFound,
     bool TextPolicyCheckPassed,
