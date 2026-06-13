@@ -2035,6 +2035,12 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<string>("NarrationStyleCode")
                         .HasColumnType("text");
 
+                    b.Property<bool>("ManualValidation")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("manual_validation");
+
                     b.Property<Guid?>("PipelineRunId")
                         .HasColumnType("uuid");
 

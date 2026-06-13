@@ -789,7 +789,10 @@ public sealed record CreatePlanFromEventResponse(
     string RegionId,
     string Language,
     IReadOnlyList<string> RequestedOutputs,
-    bool ManualValidation);
+    bool ManualValidation)
+{
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+}
 
 public sealed record ContentPlanningPipelineRequestPreview(
     Guid ContentGenerationPlanId,

@@ -18,6 +18,9 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Language is required.");
         if (string.IsNullOrWhiteSpace(request.PlannedFormat)) throw new ArgumentException("PlannedFormat is required.");
 
+        var hasExplicitRequestedOutputs = request.RequestedOutputs is { Count: > 0 }
+            && request.RequestedOutputs.Any(o => !string.IsNullOrWhiteSpace(o));
+
         var regionId = request.RegionId.Trim();
         var language = request.Language.Trim();
         var plannedFormat = request.PlannedFormat.Trim();
@@ -32,9 +35,15 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             throw new ArgumentException($"Event RegionId '{evt.RegionId ?? "n/a"}' does not match requested RegionId '{regionId}'.");
         if (!string.IsNullOrWhiteSpace(evt.Language) && !string.Equals(evt.Language, language, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"Event Language '{evt.Language}' does not match requested Language '{language}'.");
-        if (string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("NeedsManualReview events cannot be converted into content plans by this endpoint.");
-        if (!string.Equals(evt.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase))
+        var isNeedsManualReview = string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase);
+        if (isNeedsManualReview)
+        {
+            if (string.IsNullOrWhiteSpace(request.Reason))
+                throw new ArgumentException("Reason is required to create a manual validation plan for a NeedsManualReview event.");
+            if (!hasExplicitRequestedOutputs)
+                throw new ArgumentException("requestedOutputs must not be empty to create a manual validation plan for a NeedsManualReview event.");
+        }
+        if (!isNeedsManualReview && !string.Equals(evt.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"Only Verified events can be converted into content plans. Current VerificationStatus is '{evt.VerificationStatus}'.");
 
         var duplicateExists = await db.ContentGenerationPlans.AnyAsync(p =>
@@ -76,7 +85,8 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             PlanStatus = "Draft",
             Status = "Draft",
             GeneratedByAi = false,
-            PlanningReason = BuildManualValidationPlanningReason(request.Reason),
+            ManualValidation = true,
+            PlanningReason = isNeedsManualReview ? request.Reason!.Trim() : BuildManualValidationPlanningReason(request.Reason),
             PlannedObjectNamesJson = JsonSerializer.Serialize(objectNames, JsonOptions),
             SourceEventObjectIdsJson = JsonSerializer.Serialize(objectIds, JsonOptions),
             PrimaryCelestialObjectCode = objectNames.FirstOrDefault()
@@ -93,7 +103,12 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             RegionId: plan.RegionId,
             Language: plan.Language,
             RequestedOutputs: requestedOutputs,
-            ManualValidation: true);
+            ManualValidation: true)
+        {
+            Warnings = isNeedsManualReview
+                ? ["Created manual validation plan for NeedsManualReview event. This does not enable automatic generation."]
+                : []
+        };
     }
 
     public async Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)

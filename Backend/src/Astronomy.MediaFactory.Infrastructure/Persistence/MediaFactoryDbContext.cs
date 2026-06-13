@@ -284,6 +284,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlannedObjectNamesJson).HasColumnName("planned_object_names_json").HasColumnType("jsonb");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AssetPlanJson).HasColumnName("asset_plan_json").HasColumnType("jsonb");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AssetPlanStatus).HasColumnName("asset_plan_status").HasMaxLength(50).HasDefaultValue("Planned");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.ManualValidation).HasColumnName("manual_validation").HasDefaultValue(false);
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlanStatus).HasColumnName("plan_status").HasMaxLength(60).HasDefaultValue("Planned");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlannedFormat).HasColumnName("planned_format").HasMaxLength(80);
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PriorityScore).HasColumnName("priority_score").HasPrecision(5, 2);

@@ -41,6 +41,8 @@ public sealed class ManualContentPlanCreationTests
         Assert.Equal(40, plan.Priority);
         Assert.Equal(evt.ContentOpportunityScore, plan.PriorityScore);
         Assert.False(plan.GeneratedByAi);
+        Assert.True(plan.ManualValidation);
+        Assert.Empty(response.Warnings);
         Assert.Equal("manual validation: Astronomy V1.2 Planet Grouping validation", plan.PlanningReason);
         Assert.Equal(["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"], ReadStringArray(plan.RequestedOutputTypesJson));
         Assert.Equal(["Saturn", "Mars", "Jupiter", "Venus"], ReadStringArray(plan.PlannedObjectNamesJson));
@@ -82,8 +84,76 @@ public sealed class ManualContentPlanCreationTests
             Reason: "Duplicate validation"), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task CreatePlanFromEventAsync_NeedsManualReviewWithExplicitManualValidation_CreatesDraftPlanWithWarning()
+    {
+        await using var db = CreateDb();
+        var evt = SeedPlanetGroupingEvent(db, "NeedsManualReview");
+        var service = CreateService(db);
+
+        var response = await service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+            AstronomyEventIntelligenceId: evt.Id,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            PlannedFormat: "ShortVideo",
+            RequestedOutputs: ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"],
+            ManualValidation: true,
+            Reason: "Astronomy V1.2 Solar Eclipse validation"), CancellationToken.None);
+
+        var plan = await db.ContentGenerationPlans.SingleAsync();
+        var reloadedEvent = await db.AstronomyEventIntelligences.Include(e => e.Objects).SingleAsync();
+
+        Assert.True(response.Success);
+        Assert.True(response.ManualValidation);
+        Assert.Equal(["Created manual validation plan for NeedsManualReview event. This does not enable automatic generation."], response.Warnings);
+        Assert.Equal("Draft", plan.Status);
+        Assert.Equal("Draft", plan.PlanStatus);
+        Assert.False(plan.GeneratedByAi);
+        Assert.True(plan.ManualValidation);
+        Assert.Equal("Astronomy V1.2 Solar Eclipse validation", plan.PlanningReason);
+        Assert.Equal(["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"], ReadStringArray(plan.RequestedOutputTypesJson));
+        Assert.False(reloadedEvent.AutoGenerateAllowed);
+        Assert.Equal("NeedsManualReview", reloadedEvent.VerificationStatus);
+        Assert.Equal("ManualValidationCandidate", reloadedEvent.ContentStrategy);
+        Assert.Equal("{\"rule\":\"do-not-overwrite\"}", reloadedEvent.RulesAppliedJson);
+    }
+
+    [Fact]
+    public async Task CreatePlanFromEventAsync_NeedsManualReviewWithoutManualValidation_RejectsRequest()
+    {
+        await using var db = CreateDb();
+        var evt = SeedPlanetGroupingEvent(db, "NeedsManualReview");
+        var service = CreateService(db);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+            AstronomyEventIntelligenceId: evt.Id,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            PlannedFormat: "ShortVideo",
+            RequestedOutputs: ["ShortVideo"],
+            ManualValidation: false,
+            Reason: "Invalid status validation"), CancellationToken.None));
+    }
+
     [Theory]
-    [InlineData("NeedsManualReview")]
+    [MemberData(nameof(InvalidNeedsManualReviewOverrideFields))]
+    public async Task CreatePlanFromEventAsync_NeedsManualReviewMissingRequiredOverrideFields_RejectsRequest(string? reason, string[] requestedOutputs)
+    {
+        await using var db = CreateDb();
+        var evt = SeedPlanetGroupingEvent(db, "NeedsManualReview");
+        var service = CreateService(db);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+            AstronomyEventIntelligenceId: evt.Id,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            PlannedFormat: "ShortVideo",
+            RequestedOutputs: requestedOutputs,
+            ManualValidation: true,
+            Reason: reason), CancellationToken.None));
+    }
+
+    [Theory]
     [InlineData("Rejected")]
     public async Task CreatePlanFromEventAsync_NotVerified_RejectsRequest(string verificationStatus)
     {
@@ -100,6 +170,13 @@ public sealed class ManualContentPlanCreationTests
             ManualValidation: true,
             Reason: "Invalid status validation"), CancellationToken.None));
     }
+
+    public static TheoryData<string?, string[]> InvalidNeedsManualReviewOverrideFields => new()
+    {
+        { null, ["ShortVideo"] },
+        { "", ["ShortVideo"] },
+        { "Needs outputs", [] }
+    };
 
     private static ContentPlanningService CreateService(MediaFactoryDbContext db)
         => new(db, null!, null!, null!, null!, null!);

@@ -544,6 +544,7 @@ public sealed class ContentGenerationPlan : EntityBase
     public string? NarrationStyleCode { get; set; }
     public string? ThumbnailStyleCode { get; set; }
     public bool GeneratedByAi { get; set; }
+    public bool ManualValidation { get; set; }
     public int Priority { get; set; } = 100;
     public string? PlanningReason { get; set; }
     public string? AssetPlanJson { get; set; }
