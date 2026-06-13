@@ -106,6 +106,7 @@ public sealed class QuestionDrivenVisualComposer(
         var failedSceneCount = 0;
         var seenSrtTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenLayoutKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var phase8SceneDiagnostics = new List<Phase8SceneVisualSourceDiagnostic>();
         var isMeteorShowerPlan = scenes.Any(scene => IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent));
         var eventType = ResolveVisualEventType(request.ProductionContext, enrichedPlan, isMeteorShowerPlan, scenes);
         var usesLocalPlanetAssets = AllowsLocalPlanetAssets(eventType) && UsesExactLocalVenusJupiterAssets(request.ProductionContext?.ProductionEventIntelligence);
@@ -158,6 +159,9 @@ public sealed class QuestionDrivenVisualComposer(
                 ? new QuestionDrivenPresentationVariants(NormalizePath(longFinalPath), NormalizePath(shortFinalPath))
                 : null;
             var plannedOutputs = new QuestionDrivenPlannedOutputs(NormalizePath(finalPath), NormalizePath(srtPath), NormalizePath(narrationTextPath), NormalizePath(specPath), string.Empty, NormalizePath(reviewPath), presentationVariants);
+            var phase8SceneDiagnostic = BuildPhase8SceneVisualSourceDiagnostic(scene, narrationScene, spec, sourceResolution, planPath, specPath, prompt);
+            phase8SceneDiagnostics.Add(phase8SceneDiagnostic);
+            logger.LogInformation("Phase 8 visual source diagnostics scene {SceneNumber}: source={SelectedVisualSourceType} enriched={UsedEnrichedScenePlan} fallback={UsedFallbackVisualTemplate} spec={InfographicSpecPath}", phase8SceneDiagnostic.SceneNumber, phase8SceneDiagnostic.SelectedVisualSourceType, phase8SceneDiagnostic.UsedEnrichedScenePlan, phase8SceneDiagnostic.UsedFallbackVisualTemplate, phase8SceneDiagnostic.InfographicSpecPath);
             var validationPreview = BuildValidationPreview(spec, srt, review, overlayPlan, plannedOutputs);
             var isolationValidation = ValidateSceneQuestionIsolation(spec, overlayPlan);
             sceneValidation.Add(isolationValidation);
@@ -204,6 +208,22 @@ public sealed class QuestionDrivenVisualComposer(
             }
             srtCount++;
         }
+
+        var phase8VisualSourceDiagnostics = BuildPhase8VisualSourceDiagnostics(phase8SceneDiagnostics);
+        var phase8DiagnosticsPath = Path.Combine(outputRoot, "phase8-visual-source-diagnostics.json");
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(outputRoot);
+            await File.WriteAllTextAsync(phase8DiagnosticsPath, JsonSerializer.Serialize(phase8VisualSourceDiagnostics, JsonOptions), cancellationToken);
+            generatedFiles.Add(phase8DiagnosticsPath);
+        }
+        logger.LogInformation("Phase 8 visual source diagnostics summary: expected={ExpectedSource} actual={ActualSourceUsed} enriched={UsedEnrichedScenePlan} fallback={UsedFallbackTemplate} gap={GapDetected} reason={GapReason}",
+            phase8VisualSourceDiagnostics.Phase8VisualSourceDiagnostics.ExpectedSource,
+            phase8VisualSourceDiagnostics.Phase8VisualSourceDiagnostics.ActualSourceUsed,
+            phase8VisualSourceDiagnostics.Phase8VisualSourceDiagnostics.UsedEnrichedScenePlan,
+            phase8VisualSourceDiagnostics.Phase8VisualSourceDiagnostics.UsedFallbackTemplate,
+            phase8VisualSourceDiagnostics.Phase8VisualSourceDiagnostics.GapDetected,
+            phase8VisualSourceDiagnostics.Phase8VisualSourceDiagnostics.GapReason);
 
         AddPlanLevelWarnings(plannedScenes, warnings);
         var crossSceneLeakageDetected = sceneValidation.Any(scene => scene.LeakageWarnings.Count > 0);
@@ -298,7 +318,66 @@ public sealed class QuestionDrivenVisualComposer(
             DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected,
             SceneVariantFinalImages: sceneVariantFinalImages,
             Diagnostics: diagnostics,
-            ShortFormValidation: shortFormValidation);
+            ShortFormValidation: shortFormValidation,
+            Phase8VisualSourceDiagnostics: phase8VisualSourceDiagnostics);
+    }
+
+    private static Phase8VisualSourceDiagnosticsDocument BuildPhase8VisualSourceDiagnostics(IReadOnlyList<Phase8SceneVisualSourceDiagnostic> scenes)
+    {
+        const string expectedSource = EnrichedPlanFileName;
+        var actualSources = scenes.Select(scene => scene.SelectedVisualSourceType).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var actualSourceUsed = actualSources.Length switch
+        {
+            0 => "fallback/default",
+            1 => actualSources[0],
+            _ => "mixed: " + string.Join(", ", actualSources)
+        };
+        var usedEnrichedScenePlan = scenes.Count > 0 && scenes.All(scene => scene.UsedEnrichedScenePlan);
+        var usedFallbackTemplate = scenes.Any(scene => scene.UsedFallbackVisualTemplate);
+        var gapDetected = !usedEnrichedScenePlan || usedFallbackTemplate || !actualSourceUsed.Equals(expectedSource, StringComparison.OrdinalIgnoreCase);
+        var gapReason = gapDetected
+            ? string.Join("; ", new[]
+                {
+                    !usedEnrichedScenePlan ? $"Actual Phase 8 source was {actualSourceUsed}, not {expectedSource}." : null,
+                    usedFallbackTemplate ? "At least one scene used a fallback visual template." : null,
+                    !actualSourceUsed.Equals(expectedSource, StringComparison.OrdinalIgnoreCase) ? $"Top-level actualSourceUsed={actualSourceUsed}." : null
+                }.Where(value => !string.IsNullOrWhiteSpace(value)))
+            : "Phase 8 consumed question-driven-scene-plan.enriched.json without a fallback visual template.";
+
+        return new Phase8VisualSourceDiagnosticsDocument(
+            new Phase8VisualSourceDiagnosticsSummary(expectedSource, actualSourceUsed, usedEnrichedScenePlan, usedFallbackTemplate, gapDetected, gapReason),
+            scenes);
+    }
+
+    private static Phase8SceneVisualSourceDiagnostic BuildPhase8SceneVisualSourceDiagnostic(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, QuestionDrivenVisualSpec spec, VisualSourceResolutionResult sourceResolution, string planPath, string specPath, string rendererPromptBeforeRendering)
+    {
+        var usedFallbackVisualTemplate = sourceResolution.SourceType == VisualSourceType.GenericFallback || sourceResolution.GenericFallbackAllowed;
+        var fallbackReason = usedFallbackVisualTemplate
+            ? (sourceResolution.Metadata.TryGetValue("generatedRealisticPrompt", out var reason) && !string.IsNullOrWhiteSpace(reason) ? reason : "Visual source resolver selected a generic fallback/default visual template.")
+            : string.Empty;
+        var containsPlanetGroupingMetadata = !string.IsNullOrWhiteSpace(spec.StrategyId)
+            || (spec.VisualMotifs?.Count > 0)
+            || (spec.RequiredVisualObjects?.Any(value => value.Contains("planet grouping", StringComparison.OrdinalIgnoreCase) || value.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)) == true);
+        var containsResolvedObjects = spec.ResolvedObjectNames?.Count > 0;
+
+        return new Phase8SceneVisualSourceDiagnostic(
+            scene.SceneNumber,
+            NormalizePath(planPath),
+            EnrichedPlanFileName,
+            scene.VisualIntent,
+            scene.ImagePromptIntent,
+            scene.OverlayIntent,
+            narrationScene.CaptionText,
+            spec.RequiredVisualObjects ?? [],
+            spec.ResolvedObjectNames ?? [],
+            spec.StrategyId,
+            true,
+            usedFallbackVisualTemplate,
+            fallbackReason,
+            rendererPromptBeforeRendering,
+            NormalizePath(specPath),
+            containsPlanetGroupingMetadata,
+            containsResolvedObjects);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionScenePlanDto enrichedPlan, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt, string eventType, bool usesLocalPlanetAssets, VisualSourceResolutionResult sourceResolution)

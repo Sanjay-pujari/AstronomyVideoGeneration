@@ -271,7 +271,39 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     bool DuplicateObjectRenderingDetected = false,
     SceneVariantFinalImagesResponse? SceneVariantFinalImages = null,
     SceneVariantGenerationDiagnostics? Diagnostics = null,
-    ShortFormValidation? ShortFormValidation = null);
+    ShortFormValidation? ShortFormValidation = null,
+    Phase8VisualSourceDiagnosticsDocument? Phase8VisualSourceDiagnostics = null);
+
+public sealed record Phase8VisualSourceDiagnosticsDocument(
+    Phase8VisualSourceDiagnosticsSummary Phase8VisualSourceDiagnostics,
+    IReadOnlyList<Phase8SceneVisualSourceDiagnostic> Scenes);
+
+public sealed record Phase8VisualSourceDiagnosticsSummary(
+    string ExpectedSource,
+    string ActualSourceUsed,
+    bool UsedEnrichedScenePlan,
+    bool UsedFallbackTemplate,
+    bool GapDetected,
+    string GapReason);
+
+public sealed record Phase8SceneVisualSourceDiagnostic(
+    int SceneNumber,
+    string SelectedVisualSourceFile,
+    string SelectedVisualSourceType,
+    string SelectedVisualIntent,
+    string SelectedImagePromptIntent,
+    string SelectedOverlayIntent,
+    string SelectedCaptionText,
+    IReadOnlyList<string> SelectedRequiredVisualObjects,
+    IReadOnlyList<string> SelectedResolvedObjectNames,
+    string? SelectedStrategyId,
+    bool UsedEnrichedScenePlan,
+    bool UsedFallbackVisualTemplate,
+    string FallbackReason,
+    string RendererPromptBeforeRendering,
+    string InfographicSpecPath,
+    bool InfographicSpecContainsPlanetGroupingMetadata,
+    bool InfographicSpecContainsResolvedObjects);
 
 public sealed record SceneVariantFinalImagesResponse(
     SceneVariantFinalImageSet LongForm,
