@@ -554,16 +554,21 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "short"));
-        Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "long"));
+        if (!context.PipelineRequest.EnableSceneVariants)
+        {
+            Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "short"));
+            Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "long"));
+        }
         ValidateSceneApprovalTextBeforeRendering(context);
         var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
         var generatedFiles = new List<string>(response.GeneratedFiles);
         if (context.PipelineRequest.EnableSceneVariants)
             generatedFiles.AddRange(await RenderPhase8SceneVisualVariantsAsync(context, cancellationToken));
-        var shortRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "short");
-        if (!DirectoryHasPng(shortRoot)) throw new InvalidOperationException($"Short scene image validation failed: no .png files were found in '{shortRoot}'.");
-        return generatedFiles.Concat(Directory.EnumerateFiles(shortRoot, "*.png")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var shortRoot = context.PipelineRequest.EnableSceneVariants
+            ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short")
+            : Path.Combine(context.ExecutionContext.SceneRoot!, "short");
+        if (!DirectoryHasPngRecursive(shortRoot)) throw new InvalidOperationException($"Short scene image validation failed: no .png files were found in '{shortRoot}'.");
+        return generatedFiles.Concat(Directory.EnumerateFiles(shortRoot, "*.png", SearchOption.AllDirectories)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> RenderPhase8SceneVisualVariantsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -596,7 +601,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 {
                     var imagePath = BuildProfessionalSlidePath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
                     var backgroundPath = BuildProfessionalSlideBackgroundPath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
-                    var validationErrors = new List<string>();
+                    var finalValidationErrors = new List<string>();
+                    var backgroundValidationErrors = new List<string>();
                     var renderStatus = "rendered";
                     try
                     {
@@ -613,24 +619,46 @@ public sealed partial class ProductionPipelineExecutionService(
                         throw;
                     }
 
-                    ValidateProfessionalSlideImage(imagePath, format.RenderVariant.Width, format.RenderVariant.Height, validationErrors);
-                    ValidateProfessionalSlideImage(backgroundPath, format.RenderVariant.Width, format.RenderVariant.Height, validationErrors);
+                    var finalImageValidation = ValidateProfessionalSlideImage(imagePath, format.RenderVariant.Width, format.RenderVariant.Height, finalValidationErrors);
+                    var backgroundImageValidation = ValidateProfessionalSlideImage(backgroundPath, format.RenderVariant.Width, format.RenderVariant.Height, backgroundValidationErrors);
                     var layoutTemplate = ResolveProfessionalSlideLayoutTemplate(format.Format, variant.VariantType);
-                    var safeAreaPassed = validationErrors.Count == 0;
-                    var overlapCheckPassed = validationErrors.Count == 0;
+                    var safeAreaPassed = finalValidationErrors.Count == 0;
+                    var overlapCheckPassed = finalValidationErrors.Count == 0;
 
                     manifest.Add(new Phase8SceneVariantManifestItem(
                         scene.SceneNumber,
                         format.Format,
                         variant.VariantNo,
                         variant.VariantType,
+                        "background",
+                        NormalizePath(backgroundPath),
+                        NormalizePath(backgroundPath),
+                        string.Empty,
+                        layoutTemplate,
+                        backgroundValidationErrors.Count == 0,
+                        backgroundValidationErrors.Count == 0,
+                        renderStatus,
+                        backgroundImageValidation.IsBlankCheckPassed,
+                        backgroundImageValidation.NonBlackPixelRatio,
+                        backgroundImageValidation.FileSizeBytes,
+                        backgroundValidationErrors.ToArray()));
+                    manifest.Add(new Phase8SceneVariantManifestItem(
+                        scene.SceneNumber,
+                        format.Format,
+                        variant.VariantNo,
+                        variant.VariantType,
+                        "final",
+                        NormalizePath(imagePath),
                         NormalizePath(backgroundPath),
                         NormalizePath(imagePath),
                         layoutTemplate,
                         safeAreaPassed,
                         overlapCheckPassed,
                         renderStatus,
-                        validationErrors.ToArray()));
+                        finalImageValidation.IsBlankCheckPassed,
+                        finalImageValidation.NonBlackPixelRatio,
+                        finalImageValidation.FileSizeBytes,
+                        finalValidationErrors.ToArray()));
                     generatedFiles.Add(backgroundPath);
                     generatedFiles.Add(imagePath);
                 }
@@ -653,14 +681,14 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             foreach (var format in Phase8ProfessionalSlideFormats.Select(f => f.Format))
             {
-                var renderedCount = manifest.Count(item => item.SceneNumber == scene.SceneNumber && item.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && item.SafeAreaPassed && item.OverlapCheckPassed && IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) && File.Exists(item.FinalImagePath) && File.Exists(item.BackgroundPath));
+                var renderedCount = manifest.Count(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && item.SceneNumber == scene.SceneNumber && item.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && item.SafeAreaPassed && item.OverlapCheckPassed && item.IsBlankCheckPassed && IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) && File.Exists(item.FinalImagePath));
                 if (renderedCount < 3)
                     issues.Add($"required scene {scene.SceneNumber} format {format} has {renderedCount} rendered professional slide variant image(s), expected at least 3");
             }
         }
 
-        var failed = manifest.Where(item => !item.SafeAreaPassed || !item.OverlapCheckPassed || !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.FinalImagePath) || !File.Exists(item.BackgroundPath)).ToArray();
-        issues.AddRange(failed.Select(item => $"scene {item.SceneNumber} format {item.Format} variant {item.VariantNo} renderStatus={item.RenderStatus} finalImagePath={item.FinalImagePath}"));
+        var failed = manifest.Where(item => !item.SafeAreaPassed || !item.OverlapCheckPassed || !item.IsBlankCheckPassed || !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.ImagePath) || (item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.FinalImagePath))).ToArray();
+        issues.AddRange(failed.Select(item => $"scene {item.SceneNumber} format {item.Format} variant {item.VariantNo} role={item.ImageRole} renderStatus={item.RenderStatus} imagePath={item.ImagePath} errors={string.Join(",", item.ValidationErrors)}"));
         if (issues.Count > 0)
             throw new InvalidOperationException("Phase 8 scene variant validation failed: " + string.Join("; ", issues));
     }
@@ -675,7 +703,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => Path.Combine(sceneAssetsRoot, format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}.png");
 
     private static string BuildProfessionalSlideBackgroundPath(string sceneAssetsRoot, string format, int sceneNumber, int variantNo, string variantType)
-        => Path.Combine(sceneAssetsRoot, format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}-background.png");
+        => Path.Combine(sceneAssetsRoot, "backgrounds", format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}-background.png");
 
     private static string ResolveProfessionalSlideVariantSlug(int variantNo, string variantType)
     {
@@ -710,21 +738,45 @@ public sealed partial class ProductionPipelineExecutionService(
         await image.SaveAsPngAsync(path, new PngEncoder(), cancellationToken);
     }
 
-    private static void ValidateProfessionalSlideImage(string path, int expectedWidth, int expectedHeight, List<string> validationErrors)
+    private static Phase8ImageValidationResult ValidateProfessionalSlideImage(string path, int expectedWidth, int expectedHeight, List<string> validationErrors)
     {
         if (!File.Exists(path))
         {
             validationErrors.Add($"missing image: {NormalizePath(path)}");
-            return;
+            return new(false, 0, 0);
         }
-        var image = Image.Identify(path);
-        if (image is null)
+
+        var fileSizeBytes = new FileInfo(path).Length;
+        try
         {
-            validationErrors.Add($"unreadable image: {NormalizePath(path)}");
-            return;
+            using var image = Image.Load<Rgba32>(path);
+            if (image.Width != expectedWidth || image.Height != expectedHeight)
+                validationErrors.Add($"image dimensions must be {expectedWidth}x{expectedHeight}: {NormalizePath(path)} was {image.Width}x{image.Height}");
+
+            var total = (long)image.Width * image.Height;
+            var nonBlack = 0L;
+            image.ProcessPixelRows(accessor =>
+            {
+                for (var y = 0; y < accessor.Height; y++)
+                {
+                    var row = accessor.GetRowSpan(y);
+                    for (var x = 0; x < row.Length; x++)
+                    {
+                        var pixel = row[x];
+                        if (pixel.A > 0 && Math.Max(pixel.R, Math.Max(pixel.G, pixel.B)) > 24) nonBlack++;
+                    }
+                }
+            });
+            var ratio = total == 0 ? 0 : nonBlack / (double)total;
+            var blankPassed = ratio >= 0.015;
+            if (!blankPassed) validationErrors.Add($"blank-or-mostly-black image: {NormalizePath(path)} nonBlackPixelRatio={ratio:0.####}");
+            return new(blankPassed, Math.Round(ratio, 6), fileSizeBytes);
         }
-        if (image.Width != expectedWidth || image.Height != expectedHeight)
-            validationErrors.Add($"image dimensions must be {expectedWidth}x{expectedHeight}: {NormalizePath(path)} was {image.Width}x{image.Height}");
+        catch (Exception ex)
+        {
+            validationErrors.Add($"unreadable image: {NormalizePath(path)} ({ex.GetType().Name})");
+            return new(false, 0, fileSizeBytes);
+        }
     }
 
     private static bool IsSuccessfulSceneVariantRenderStatus(string renderStatus)
@@ -741,9 +793,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private Task<IReadOnlyList<string>> PhaseValidateLongSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var longRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "long");
-        if (!DirectoryHasPng(longRoot)) throw new InvalidOperationException($"Long scene image validation failed: no .png files were found in '{longRoot}'.");
-        return Task.FromResult<IReadOnlyList<string>>(Directory.EnumerateFiles(longRoot, "*.png").ToArray());
+        var longRoot = context.PipelineRequest.EnableSceneVariants
+            ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long")
+            : Path.Combine(context.ExecutionContext.SceneRoot!, "long");
+        if (!DirectoryHasPngRecursive(longRoot)) throw new InvalidOperationException($"Long scene image validation failed: no .png files were found in '{longRoot}'.");
+        return Task.FromResult<IReadOnlyList<string>>(Directory.EnumerateFiles(longRoot, "*.png", SearchOption.AllDirectories).ToArray());
     }
 
     private async Task<IReadOnlyList<string>> PhaseValidateSceneAssetsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -752,7 +806,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var validation = await qualityValidator.ValidateBeforeVideoAssemblyAsync(context.ProductionEventIntelligence, currentRunValidationRoot, cancellationToken);
         if (!validation.IsValid) throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", validation.Errors));
         var materialized = await MaterializeSceneApprovalAsync(context.ExecutionContext.SceneRoot!, GetSceneApprovalNormalizedRoot(context.OutputRoot), cancellationToken);
-        return materialized.Concat([Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long"), Path.Combine(currentRunValidationRoot, "production-quality-validation-before-assembly.json")]).ToArray();
+        var sceneImageRoots = context.PipelineRequest.EnableSceneVariants
+            ? new[] { Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long") }
+            : new[] { Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long") };
+        return materialized.Concat(sceneImageRoots).Concat([Path.Combine(currentRunValidationRoot, "production-quality-validation-before-assembly.json")]).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -2597,6 +2654,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private string ResolveWorkingDirectoryRoot() => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string Sanitize(string value) => string.Join("-", (value ?? "unknown").Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
     private static bool DirectoryHasPng(string path) => Directory.Exists(path) && Directory.EnumerateFiles(path, "*.png").Any();
+    private static bool DirectoryHasPngRecursive(string path) => Directory.Exists(path) && Directory.EnumerateFiles(path, "*.png", SearchOption.AllDirectories).Any();
     private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-scene-manifest.json"));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
 
@@ -2605,13 +2663,20 @@ public sealed partial class ProductionPipelineExecutionService(
         string Format,
         int VariantNo,
         string VariantType,
+        string ImageRole,
+        string ImagePath,
         string BackgroundPath,
         string FinalImagePath,
         string LayoutTemplate,
         bool SafeAreaPassed,
         bool OverlapCheckPassed,
         string RenderStatus,
+        bool IsBlankCheckPassed,
+        double NonBlackPixelRatio,
+        long FileSizeBytes,
         IReadOnlyList<string> ValidationErrors);
+
+    private sealed record Phase8ImageValidationResult(bool IsBlankCheckPassed, double NonBlackPixelRatio, long FileSizeBytes);
 
     private sealed record Phase8ProfessionalSlideFormat(string Format, AstronomyInfographicRenderVariant RenderVariant);
 }
