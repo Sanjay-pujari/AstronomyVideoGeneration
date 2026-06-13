@@ -370,22 +370,39 @@ internal static class PhotoCinematicThumbnailRenderer
     private static void DrawTypography(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, PhotoCinematicThumbnailRenderRequest request)
     {
         var hookFont = ResolveFont(spec.HookFontSize, FontStyle.BoldItalic);
+        var hook = BuildHookText(request);
+        DrawTextWithShadow(ctx, hook, hookFont, spec.HookOrigin, Color.White, 0.86f);
+
+        if (IsPlanetConjunctionEventType(request.EventType)) return;
+
         var secondaryFont = ResolveFont(spec.SecondaryFontSize, FontStyle.Bold);
         var microFont = ResolveFont(spec.MicroFontSize, FontStyle.Bold);
-        var hook = BuildHookText(request);
         var secondary = CleanText(request.SecondaryText, request.EventType, "Current Event", 26);
         var micro = CleanText(request.MicroText, request.LocalPeakTime, "Viewing Window", 30);
-        DrawTextWithShadow(ctx, hook, hookFont, spec.HookOrigin, Color.White, 0.86f);
         DrawTextWithShadow(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFD15E"), 0.92f);
         DrawTextWithShadow(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#7FD6FF"), 0.90f);
     }
 
     private static string BuildHookText(PhotoCinematicThumbnailRenderRequest request)
     {
+        if (IsPlanetConjunctionEventType(request.EventType))
+        {
+            var objectLine = CleanText(request.ShortTitle, request.Title, DefaultHookText, 32).ToUpperInvariant();
+            objectLine = objectLine.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? objectLine;
+            return string.IsNullOrWhiteSpace(objectLine) ? "PLANET CONJUNCTION" : $"{objectLine}\nCLOSEST APPROACH";
+        }
+
         var text = CleanText(request.ShortTitle, request.Title, DefaultHookText, 24).ToUpperInvariant();
         if (text.Contains('\n')) return text;
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         return words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2));
+    }
+
+    private static bool IsPlanetConjunctionEventType(string? eventType)
+    {
+        if (string.IsNullOrWhiteSpace(eventType)) return false;
+        var normalized = new string(eventType.Where(char.IsLetterOrDigit).ToArray());
+        return normalized.Equals("PLANETCONJUNCTION", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void DrawTextWithShadow(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color, float lineSpacing)
