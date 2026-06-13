@@ -5888,6 +5888,51 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
     return Results.Ok(new { outputDirectory, qualityReportPath, items = reports });
 }).Accepts<VisualLabBackgroundGenerateRequest>("application/json");
 
+app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabComposeOverlayRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+{
+    if (environment.IsProduction())
+    {
+        return Results.NotFound(new { message = "The visual lab endpoint is available only in development or test environments." });
+    }
+
+    var validationErrors = ValidateVisualLabComposeOverlayRequest(request);
+    if (validationErrors.Count > 0)
+    {
+        return Results.BadRequest(new { message = "Invalid visual lab overlay compose request.", errors = validationErrors });
+    }
+
+    var backgroundPath = Path.GetFullPath(request.BackgroundImagePath.Trim());
+    if (!File.Exists(backgroundPath))
+    {
+        return Results.BadRequest(new { message = "AzureImage2 background image was not found.", backgroundImagePath = backgroundPath });
+    }
+
+    if (!Path.GetFileName(backgroundPath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { message = "backgroundImagePath must point to a Visual Lab AzureImage2 background output such as background-v1.png.", backgroundImagePath = backgroundPath });
+    }
+
+    using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
+    var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
+    var composedPath = Path.Combine(outputDirectory, "benchmark-composed-v1.png");
+    var specPath = Path.Combine(outputDirectory, "overlay-spec.json");
+    var validationPath = Path.Combine(outputDirectory, "overlay-validation.json");
+    var spec = BuildVisualLabOverlaySpec(request, image.Width, image.Height, composedPath, specPath, validationPath);
+    var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height);
+    if (!validation.IsValid)
+    {
+        await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+        return Results.BadRequest(new { message = "Visual lab overlay validation failed.", validationPath, validation });
+    }
+
+    image.Mutate(ctx => DrawVisualLabOverlay(ctx, spec));
+    await image.SaveAsPngAsync(composedPath, new PngEncoder(), ct);
+    await WriteVisualLabDebugJsonAsync(specPath, spec, ct);
+    await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+
+    return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, overlaySpecPath = specPath, overlayValidationPath = validationPath, validation });
+}).Accepts<VisualLabComposeOverlayRequest>("application/json");
+
 app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
     Results.Ok(await ingestion.RefreshAsync(ct)));
 app.MapGet("/api/assets/celestial/status", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
@@ -5910,6 +5955,153 @@ static IReadOnlyList<string> ValidateVisualLabBackgroundRequest(VisualLabBackgro
     if (string.IsNullOrWhiteSpace(request.VisualStyle)) errors.Add("visualStyle is required.");
     if (request.VariantCount is < 1 or > 6) errors.Add("variantCount must be between 1 and 6.");
     return errors;
+}
+
+static IReadOnlyList<string> ValidateVisualLabComposeOverlayRequest(VisualLabComposeOverlayRequest request)
+{
+    var errors = new List<string>();
+    var supportedEvents = new[] { "MeteorShower", "PlanetConjunction", "BlueMoon", "PlanetParade", "LunarEclipse", "SolarEclipse" };
+    var supportedLayouts = new[] { "EducationalOverlay" };
+    var supportedFormats = new[] { "Long", "Short" };
+    if (string.IsNullOrWhiteSpace(request.BackgroundImagePath)) errors.Add("backgroundImagePath is required.");
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add($"eventType must be one of: {string.Join(", ", supportedEvents)}.");
+    if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
+    if (string.IsNullOrWhiteSpace(request.Layout) || !supportedLayouts.Contains(request.Layout, StringComparer.OrdinalIgnoreCase)) errors.Add("layout must be EducationalOverlay.");
+    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long or Short.");
+    if (request.Facts is null || request.Facts.Count == 0) errors.Add("facts are required.");
+    return errors;
+}
+
+static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayRequest request, int width, int height, string composedPath, string specPath, string validationPath)
+{
+    var isLong = width >= height;
+    var safeMargin = Math.Max(48, (int)Math.Round(Math.Min(width, height) * 0.05));
+    var panel = isLong
+        ? new VisualLabOverlayRect(safeMargin, safeMargin, (int)Math.Round(width * 0.32), height - safeMargin * 2 - 120)
+        : new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.48));
+    var tips = new VisualLabOverlayRect(safeMargin, height - safeMargin - 104, width - safeMargin * 2, 104);
+    var titleFont = isLong ? 46 : 42;
+    var labelFont = isLong ? 26 : 25;
+    var bodyFont = isLong ? 28 : 26;
+    var facts = request.Facts ?? new Dictionary<string, string>();
+    string Fact(string key, string fallback = "") => facts.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : fallback;
+    var rows = new[]
+    {
+        new VisualLabOverlayTextItem("Date", Fact("date"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Peak night", Fact("peakNight"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Best time", Fact("bestTime"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Look", Fact("direction"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Moon", Fact("moonCondition"), labelFont, bodyFont)
+    }.Where(x => !string.IsNullOrWhiteSpace(x.Value)).ToArray();
+    var tipsText = new[] { Fact("equipment", "No telescope needed"), Fact("shortDescription", "Watch from a dark location with a wide open sky.") }
+        .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+
+    return new VisualLabOverlaySpec(
+        "VisualLabDeterministicOverlayComposer",
+        "AzureImage2BackgroundOnly",
+        request.BackgroundImagePath.Trim(),
+        composedPath,
+        specPath,
+        validationPath,
+        request.EventType.Trim(),
+        request.Title.Trim(),
+        request.Layout.Trim(),
+        request.Format.Trim(),
+        width,
+        height,
+        safeMargin,
+        titleFont,
+        labelFont,
+        bodyFont,
+        panel,
+        tips,
+        rows,
+        tipsText,
+        DateTimeOffset.UtcNow);
+}
+
+static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlaySpec spec, int width, int height)
+{
+    var checks = new List<VisualLabOverlayValidationCheck>();
+    var safe = new RectangleF(spec.SafeMargin, spec.SafeMargin, width - spec.SafeMargin * 2, height - spec.SafeMargin * 2);
+    var panel = ToRectangleF(spec.LeftInfoPanel);
+    var tips = ToRectangleF(spec.BottomTipsBar);
+    AddCheck("noOverlap", !RectIntersects(panel, tips), "Left info panel and bottom tips bar do not overlap.");
+    AddCheck("leftPanelNoClipping", RectContains(safe, panel), "Left info panel is inside safe margins.");
+    AddCheck("tipsBarNoClipping", RectContains(safe, tips), "Bottom tips bar is inside safe margins.");
+    AddCheck("readableFontSize", spec.TitleFontSize >= 40 && spec.LabelFontSize >= 24 && spec.BodyFontSize >= 24, "Title, label, and body fonts meet readable size minimums.");
+    AddCheck("safeMargins", spec.SafeMargin >= 48, "Safe margin is at least 48 px.");
+    AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses provided AzureImage2 background output only.");
+
+    return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks);
+
+    void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
+}
+
+static RectangleF ToRectangleF(VisualLabOverlayRect rect) => new(rect.X, rect.Y, rect.Width, rect.Height);
+static bool RectContains(RectangleF outer, RectangleF inner)
+    => inner.Left >= outer.Left && inner.Top >= outer.Top && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
+static bool RectIntersects(RectangleF a, RectangleF b)
+    => a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
+
+static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySpec spec)
+{
+    var titleFont = SystemFonts.CreateFont("Arial", spec.TitleFontSize, FontStyle.Bold);
+    var labelFont = SystemFonts.CreateFont("Arial", spec.LabelFontSize, FontStyle.Bold);
+    var bodyFont = SystemFonts.CreateFont("Arial", spec.BodyFontSize, FontStyle.Regular);
+    var panel = ToRectangleF(spec.LeftInfoPanel);
+    var tips = ToRectangleF(spec.BottomTipsBar);
+
+    ctx.Fill(Color.ParseHex("#031126").WithAlpha(0.84f), panel);
+    ctx.Draw(Color.ParseHex("#65D8FF").WithAlpha(0.85f), 3, panel);
+    ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.78f), tips);
+    ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.78f), 3, tips);
+
+    var x = panel.X + 30;
+    var y = panel.Y + 28;
+    DrawWrappedText(ctx, spec.Title, titleFont, Color.White, new RectangleF(x, y, panel.Width - 60, 126), spec.TitleFontSize + 8);
+    y += 142;
+    DrawText(ctx, SplitCamel(spec.EventType).ToUpperInvariant(), labelFont, Color.ParseHex("#FFE08A"), new PointF(x, y));
+    y += 52;
+
+    foreach (var row in spec.FactRows)
+    {
+        DrawText(ctx, row.Label.ToUpperInvariant(), labelFont, Color.ParseHex("#8EEBFF"), new PointF(x, y));
+        DrawWrappedText(ctx, row.Value, bodyFont, Color.White, new RectangleF(x, y + 31, panel.Width - 60, 64), spec.BodyFontSize + 8);
+        y += 92;
+    }
+
+    var tipX = tips.X + 30;
+    DrawText(ctx, "VIEWING TIPS", labelFont, Color.ParseHex("#FFE08A"), new PointF(tipX, tips.Y + 24));
+    var tipText = string.Join("  •  ", spec.Tips);
+    DrawWrappedText(ctx, tipText, bodyFont, Color.White, new RectangleF(tipX + 230, tips.Y + 22, tips.Width - 260, tips.Height - 36), spec.BodyFontSize + 8);
+}
+
+static void DrawWrappedText(IImageProcessingContext ctx, string text, Font font, Color color, RectangleF bounds, float lineHeight)
+{
+    var words = (text ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    var line = string.Empty;
+    var y = bounds.Y;
+    foreach (var word in words)
+    {
+        var candidate = string.IsNullOrWhiteSpace(line) ? word : $"{line} {word}";
+        var size = TextMeasurer.MeasureSize(candidate, new TextOptions(font));
+        if (size.Width > bounds.Width && !string.IsNullOrWhiteSpace(line))
+        {
+            if (y + lineHeight <= bounds.Bottom) DrawText(ctx, line, font, color, new PointF(bounds.X, y));
+            y += lineHeight;
+            line = word;
+        }
+        else
+        {
+            line = candidate;
+        }
+    }
+
+    if (!string.IsNullOrWhiteSpace(line) && y + lineHeight <= bounds.Bottom)
+    {
+        DrawText(ctx, line, font, color, new PointF(bounds.X, y));
+    }
 }
 
 static VisualLabBackgroundPrompt BuildVisualLabBackgroundPrompt(VisualLabBackgroundGenerateRequest request, int width, int height, int variant)
@@ -9321,6 +9513,42 @@ public sealed record VisualLabBackgroundQualityReportItem(
     IReadOnlyList<string> FailedTermsFound,
     bool TextPolicyCheckPassed,
     bool ManualReviewRequired);
+
+public sealed record VisualLabComposeOverlayRequest(
+    string BackgroundImagePath,
+    string EventType,
+    string Title,
+    string Layout,
+    string Format,
+    Dictionary<string, string>? Facts);
+
+public sealed record VisualLabOverlaySpec(
+    string Composer,
+    string BackgroundSource,
+    string BackgroundImagePath,
+    string ComposedImagePath,
+    string OverlaySpecPath,
+    string OverlayValidationPath,
+    string EventType,
+    string Title,
+    string Layout,
+    string Format,
+    int Width,
+    int Height,
+    int SafeMargin,
+    int TitleFontSize,
+    int LabelFontSize,
+    int BodyFontSize,
+    VisualLabOverlayRect LeftInfoPanel,
+    VisualLabOverlayRect BottomTipsBar,
+    IReadOnlyList<VisualLabOverlayTextItem> FactRows,
+    IReadOnlyList<string> Tips,
+    DateTimeOffset CreatedUtc);
+
+public sealed record VisualLabOverlayRect(int X, int Y, int Width, int Height);
+public sealed record VisualLabOverlayTextItem(string Label, string Value, int LabelFontSize, int BodyFontSize);
+public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks);
+public sealed record VisualLabOverlayValidationCheck(string Name, bool Passed, string Message);
 
 public sealed record VisualLabGenerateRequest(
     string EventType,
