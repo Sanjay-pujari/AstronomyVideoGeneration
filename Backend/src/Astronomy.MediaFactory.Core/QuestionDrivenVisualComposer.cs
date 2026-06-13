@@ -286,6 +286,19 @@ public sealed record Phase8VisualSourceDiagnosticsSummary(
     bool GapDetected,
     string GapReason);
 
+public sealed record BuildSpecMappingDiagnostics(
+    BuildSpecMappingValue VisualIntent,
+    BuildSpecMappingValue ImagePromptIntent,
+    BuildSpecMappingValue OverlayIntent,
+    BuildSpecMappingValue RequiredVisualObjects,
+    BuildSpecMappingValue ResolvedObjectNames,
+    BuildSpecMappingValue StrategyId);
+
+public sealed record BuildSpecMappingValue(
+    object? SourceValue,
+    object? MappedValue,
+    object? FinalSerializedValue);
+
 public sealed record Phase8SceneVisualSourceDiagnostic(
     int SceneNumber,
     string SelectedVisualSourceFile,
@@ -306,7 +319,8 @@ public sealed record Phase8SceneVisualSourceDiagnostic(
     string RendererPromptBeforeRendering,
     string InfographicSpecPath,
     bool InfographicSpecContainsPlanetGroupingMetadata,
-    bool InfographicSpecContainsResolvedObjects);
+    bool InfographicSpecContainsResolvedObjects,
+    BuildSpecMappingDiagnostics? BuildSpecMappingDiagnostics = null);
 
 public sealed record SceneVariantFinalImagesResponse(
     SceneVariantFinalImageSet LongForm,
