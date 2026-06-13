@@ -22,6 +22,8 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Azure.Core;
+using Azure.Identity;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 using Microsoft.EntityFrameworkCore;
@@ -30,6 +32,7 @@ using Astronomy.MediaFactory.Api;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -5748,7 +5751,7 @@ app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRe
 }).Accepts<VisualLabGenerateRequest>("application/json");
 
 
-app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLabBackgroundGenerateRequest request, IWebHostEnvironment environment, IOptions<AzureOpenAIForImageOptions> imageOptions, CancellationToken ct) =>
+app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLabBackgroundGenerateRequest request, IWebHostEnvironment environment, IOptions<AzureOpenAIForImageOptions> imageOptions, IHttpClientFactory httpClientFactory, CancellationToken ct) =>
 {
     if (environment.IsProduction())
     {
@@ -5793,13 +5796,76 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
         var promptPath = Path.Combine(outputDirectory, $"background-prompt-v{i}.json");
         await File.WriteAllTextAsync(promptPath, promptText, ct);
         var renderStopwatch = Stopwatch.StartNew();
-        await RenderVisualLabBackgroundArtworkAsync(request, imagePath, width, height, i, ct);
-        renderStopwatch.Stop();
-        var saveCompletedUtc = DateTimeOffset.UtcNow;
-
-        if (diagnostics is not null)
+        VisualLabAzureImageGenerationResult? azureResult = null;
+        if (IsVisualLabAzureImageConfigured(imageOptions.Value))
         {
-            await CompleteVisualLabBackgroundDiagnosticsAsync(diagnostics, imagePath, saveCompletedUtc, renderStopwatch.ElapsedMilliseconds, ct);
+            azureResult = await GenerateVisualLabBackgroundWithAzureImageAsync(httpClientFactory.CreateClient(), imageOptions.Value, promptText, imagePath, width, height, ct);
+            renderStopwatch.Stop();
+            var saveCompletedUtc = DateTimeOffset.UtcNow;
+
+            if (diagnostics is not null)
+            {
+                await CompleteVisualLabBackgroundDiagnosticsAsync(diagnostics, imagePath, saveCompletedUtc, renderStopwatch.ElapsedMilliseconds, azureResult, ct);
+            }
+            else
+            {
+                WriteVisualLabGenerationPathToConsole(azureResult);
+            }
+
+            if (!azureResult.ProviderSucceeded)
+            {
+                return Results.BadRequest(new
+                {
+                    message = "Azure Image2 background generation failed.",
+                    outputDirectory,
+                    diagnosticsDirectory = diagnosticsEnabled ? diagnosticsDirectory : null,
+                    providerCalled = azureResult.ProviderCalled,
+                    providerSucceeded = azureResult.ProviderSucceeded,
+                    rendererUsed = azureResult.RendererUsed,
+                    fallbackRendererUsed = azureResult.FallbackRendererUsed,
+                    statusCode = azureResult.StatusCode,
+                    error = azureResult.Error,
+                    responseBody = azureResult.ResponseBody
+                });
+            }
+        }
+        else if (request.FallbackAllowed == true)
+        {
+            await RenderVisualLabBackgroundArtworkAsync(request, imagePath, width, height, i, ct);
+            renderStopwatch.Stop();
+            var saveCompletedUtc = DateTimeOffset.UtcNow;
+            azureResult = VisualLabAzureImageGenerationResult.CanvasFallback("AzureOpenAIForImage is not configured.");
+
+            if (diagnostics is not null)
+            {
+                await CompleteVisualLabBackgroundDiagnosticsAsync(diagnostics, imagePath, saveCompletedUtc, renderStopwatch.ElapsedMilliseconds, azureResult, ct);
+            }
+            else
+            {
+                WriteVisualLabGenerationPathToConsole(azureResult);
+            }
+        }
+        else
+        {
+            renderStopwatch.Stop();
+            var configurationErrors = GetVisualLabAzureImageConfigurationErrors(imageOptions.Value);
+            if (diagnostics is not null)
+            {
+                var failedResult = VisualLabAzureImageGenerationResult.ConfigurationFailure(configurationErrors);
+                await CompleteVisualLabBackgroundDiagnosticsAsync(diagnostics, imagePath, DateTimeOffset.UtcNow, renderStopwatch.ElapsedMilliseconds, failedResult, ct);
+            }
+
+            return Results.BadRequest(new
+            {
+                message = "AzureOpenAIForImage is not configured and fallbackAllowed was not true.",
+                outputDirectory,
+                diagnosticsDirectory = diagnosticsEnabled ? diagnosticsDirectory : null,
+                providerCalled = false,
+                providerSucceeded = false,
+                rendererUsed = "None",
+                fallbackRendererUsed = false,
+                errors = configurationErrors
+            });
         }
 
         var imageExists = File.Exists(imagePath);
@@ -6002,31 +6068,33 @@ static async Task CompleteVisualLabBackgroundDiagnosticsAsync(
     string imagePath,
     DateTimeOffset saveCompletedUtc,
     long renderMs,
+    VisualLabAzureImageGenerationResult generationResult,
     CancellationToken ct)
 {
     var analysis = await AnalyzeVisualLabImageAsync(imagePath, ct);
 
     await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "azure-response.json"), new
     {
-        requestId = (string?)null,
-        created = (DateTimeOffset?)null,
+        requestId = generationResult.RequestId,
+        created = generationResult.ResponseReceivedUtc,
         finishReason = (string?)null,
-        imageCount = 0,
+        imageCount = generationResult.ProviderSucceeded ? 1 : 0,
         provider = diagnostics.Provider,
         deployment = diagnostics.Deployment,
         model = diagnostics.Model,
-        rawResponse = (object?)null,
-        note = "No Azure response is available because the existing Visual Lab background endpoint used the local ImageSharp fallback/canvas renderer path."
+        statusCode = generationResult.StatusCode,
+        rawResponse = generationResult.ResponseBody,
+        error = generationResult.Error
     }, ct);
 
     await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "generation-metadata.json"), new
     {
-        imageGenerationPath = "CanvasRenderer",
-        rendererUsed = "CanvasRenderer",
-        fallbackRendererUsed = true,
-        providerCalled = false,
-        providerSucceeded = false,
-        imageDownloaded = false,
+        imageGenerationPath = generationResult.RendererUsed,
+        rendererUsed = generationResult.RendererUsed,
+        fallbackRendererUsed = generationResult.FallbackRendererUsed,
+        providerCalled = generationResult.ProviderCalled,
+        providerSucceeded = generationResult.ProviderSucceeded,
+        imageDownloaded = generationResult.ProviderSucceeded,
         imageSaved = analysis.FileExists
     }, ct);
 
@@ -6034,27 +6102,27 @@ static async Task CompleteVisualLabBackgroundDiagnosticsAsync(
     Console.WriteLine("IMAGE GENERATION PATH");
     Console.WriteLine("=====================");
     Console.WriteLine();
-    Console.WriteLine("Renderer: CanvasRenderer");
-    Console.WriteLine("FallbackRendererUsed: True");
-    Console.WriteLine("ProviderCalled: False");
-    Console.WriteLine("ProviderSucceeded: False");
+    Console.WriteLine($"Renderer: {generationResult.RendererUsed}");
+    Console.WriteLine($"FallbackRendererUsed: {generationResult.FallbackRendererUsed}");
+    Console.WriteLine($"ProviderCalled: {generationResult.ProviderCalled}");
+    Console.WriteLine($"ProviderSucceeded: {generationResult.ProviderSucceeded}");
     Console.WriteLine();
 
     var totalMs = Math.Max(0, (long)(saveCompletedUtc - diagnostics.RequestStartUtc).TotalMilliseconds);
     await WriteVisualLabDebugJsonAsync(Path.Combine(diagnostics.DiagnosticsDirectory, "timings.json"), new
     {
         requestStartUtc = diagnostics.RequestStartUtc,
-        responseReceivedUtc = (DateTimeOffset?)null,
-        downloadCompletedUtc = (DateTimeOffset?)null,
+        responseReceivedUtc = generationResult.ResponseReceivedUtc,
+        downloadCompletedUtc = generationResult.ProviderSucceeded ? saveCompletedUtc : (DateTimeOffset?)null,
         saveCompletedUtc,
-        requestMs = 0,
-        downloadMs = 0,
+        requestMs = generationResult.RequestMs,
+        downloadMs = generationResult.DownloadMs,
         saveMs = renderMs,
         totalMs
     }, ct);
 
-    Console.WriteLine($"Azure Request Time: 0 ms (provider not called)");
-    Console.WriteLine($"Image Download Time: 0 ms (provider not called)");
+    Console.WriteLine($"Azure Request Time: {generationResult.RequestMs} ms");
+    Console.WriteLine($"Image Download Time: {generationResult.DownloadMs} ms");
     Console.WriteLine($"Image Save Time: {renderMs} ms");
     Console.WriteLine($"Total Time: {totalMs} ms");
     Console.WriteLine();
@@ -6068,14 +6136,123 @@ static async Task CompleteVisualLabBackgroundDiagnosticsAsync(
     Console.WriteLine($"Provider: {diagnostics.Provider}");
     Console.WriteLine($"Deployment: {diagnostics.Deployment}");
     Console.WriteLine($"Model: {diagnostics.Model}");
-    Console.WriteLine("Renderer: CanvasRenderer");
-    Console.WriteLine("FallbackUsed: True");
+    Console.WriteLine($"Renderer: {generationResult.RendererUsed}");
+    Console.WriteLine($"FallbackUsed: {generationResult.FallbackRendererUsed}");
     Console.WriteLine($"PromptLength: {diagnostics.PromptText.Length}");
-    Console.WriteLine("RequestMs: 0");
+    Console.WriteLine($"RequestMs: {generationResult.RequestMs}");
     Console.WriteLine($"ImageHash: {analysis.ImageHash}");
     Console.WriteLine($"FileSize: {analysis.FileSizeBytes}");
     Console.WriteLine($"ImagePath: {imagePath}");
     Console.WriteLine();
+}
+
+static void WriteVisualLabGenerationPathToConsole(VisualLabAzureImageGenerationResult generationResult)
+{
+    Console.WriteLine($"Renderer: {generationResult.RendererUsed}");
+    Console.WriteLine($"FallbackRendererUsed: {generationResult.FallbackRendererUsed}");
+    Console.WriteLine($"ProviderCalled: {generationResult.ProviderCalled}");
+    Console.WriteLine($"ProviderSucceeded: {generationResult.ProviderSucceeded}");
+}
+
+static bool IsVisualLabAzureImageConfigured(AzureOpenAIForImageOptions options) => GetVisualLabAzureImageConfigurationErrors(options).Count == 0;
+
+static IReadOnlyList<string> GetVisualLabAzureImageConfigurationErrors(AzureOpenAIForImageOptions options)
+{
+    var errors = new List<string>();
+    if (string.IsNullOrWhiteSpace(options.Endpoint)) errors.Add("AzureOpenAIForImage:Endpoint is required.");
+    if (string.IsNullOrWhiteSpace(options.ImageDeployment)) errors.Add("AzureOpenAIForImage:ImageDeployment is required.");
+    if (!options.UseManagedIdentity && string.IsNullOrWhiteSpace(options.ApiKey)) errors.Add("AzureOpenAIForImage:ApiKey is required unless AzureOpenAIForImage:UseManagedIdentity=true.");
+    return errors;
+}
+
+static async Task<VisualLabAzureImageGenerationResult> GenerateVisualLabBackgroundWithAzureImageAsync(
+    HttpClient httpClient,
+    AzureOpenAIForImageOptions options,
+    string promptText,
+    string imagePath,
+    int width,
+    int height,
+    CancellationToken ct)
+{
+    var endpoint = options.Endpoint.TrimEnd('/');
+    var deployment = Uri.EscapeDataString(options.ImageDeployment.Trim());
+    const string apiVersion = "2024-10-21";
+    var requestUri = $"{endpoint}/openai/deployments/{deployment}/images/generations?api-version={apiVersion}";
+    var size = width >= height ? "1792x1024" : "1024x1792";
+    var requestBody = new { prompt = promptText, n = 1, size };
+
+    using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+    {
+        Content = JsonContent.Create(requestBody)
+    };
+    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+    await AddVisualLabAzureImageAuthorizationAsync(request, options, ct);
+
+    var stopwatch = Stopwatch.StartNew();
+    try
+    {
+        using var response = await httpClient.SendAsync(request, ct);
+        var responseReceivedUtc = DateTimeOffset.UtcNow;
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        stopwatch.Stop();
+        var requestId = response.Headers.TryGetValues("x-request-id", out var values) ? values.FirstOrDefault() : null;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return VisualLabAzureImageGenerationResult.AzureFailure((int)response.StatusCode, payload, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}).", stopwatch.ElapsedMilliseconds, responseReceivedUtc, requestId);
+        }
+
+        var downloadStopwatch = Stopwatch.StartNew();
+        var imageBytes = await ExtractVisualLabAzureImageBytesAsync(httpClient, payload, ct);
+        Directory.CreateDirectory(Path.GetDirectoryName(imagePath) ?? Directory.GetCurrentDirectory());
+        await File.WriteAllBytesAsync(imagePath, imageBytes, ct);
+        downloadStopwatch.Stop();
+        return VisualLabAzureImageGenerationResult.AzureSuccess((int)response.StatusCode, payload, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, responseReceivedUtc, requestId);
+    }
+    catch (OperationCanceledException)
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        stopwatch.Stop();
+        return VisualLabAzureImageGenerationResult.AzureFailure(null, null, ex.ToString(), stopwatch.ElapsedMilliseconds, DateTimeOffset.UtcNow, null);
+    }
+}
+
+static async Task AddVisualLabAzureImageAuthorizationAsync(HttpRequestMessage request, AzureOpenAIForImageOptions options, CancellationToken ct)
+{
+    if (options.UseManagedIdentity)
+    {
+        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        {
+            ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId) ? null : options.ManagedIdentityClientId.Trim()
+        });
+        var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), ct);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+        return;
+    }
+
+    request.Headers.Add("api-key", options.ApiKey);
+}
+
+static async Task<byte[]> ExtractVisualLabAzureImageBytesAsync(HttpClient httpClient, string payload, CancellationToken ct)
+{
+    using var document = JsonDocument.Parse(payload);
+    var firstImage = document.RootElement.GetProperty("data")[0];
+    if (firstImage.TryGetProperty("b64_json", out var b64Element) && b64Element.ValueKind == JsonValueKind.String)
+    {
+        var b64 = b64Element.GetString();
+        if (!string.IsNullOrWhiteSpace(b64)) return Convert.FromBase64String(b64);
+    }
+
+    if (firstImage.TryGetProperty("url", out var urlElement) && urlElement.ValueKind == JsonValueKind.String)
+    {
+        var url = urlElement.GetString();
+        if (!string.IsNullOrWhiteSpace(url)) return await httpClient.GetByteArrayAsync(url, ct);
+    }
+
+    throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content.");
 }
 
 static async Task<VisualLabImageAnalysis> AnalyzeVisualLabImageAsync(string imagePath, CancellationToken ct)
@@ -9063,7 +9240,8 @@ public sealed record VisualLabBackgroundGenerateRequest(
     int? VariantCount,
     string VisualStyle,
     Dictionary<string, string>? Facts,
-    bool? EnableDiagnostics);
+    bool? EnableDiagnostics,
+    bool? FallbackAllowed);
 
 public sealed record VisualLabBackgroundPrompt(
     string EventType,
@@ -9099,6 +9277,33 @@ public sealed record VisualLabImageAnalysis(
     double AverageBrightness,
     string ImageHash,
     double NonBlackPixelRatio);
+
+public sealed record VisualLabAzureImageGenerationResult(
+    bool ProviderCalled,
+    bool ProviderSucceeded,
+    string RendererUsed,
+    bool FallbackRendererUsed,
+    int? StatusCode,
+    string? ResponseBody,
+    string? Error,
+    long RequestMs,
+    long DownloadMs,
+    DateTimeOffset? ResponseReceivedUtc,
+    string? RequestId)
+{
+    public static VisualLabAzureImageGenerationResult AzureSuccess(int statusCode, string responseBody, long requestMs, long downloadMs, DateTimeOffset responseReceivedUtc, string? requestId)
+        => new(true, true, "AzureImage2", false, statusCode, responseBody, null, requestMs, downloadMs, responseReceivedUtc, requestId);
+
+    public static VisualLabAzureImageGenerationResult AzureFailure(int? statusCode, string? responseBody, string error, long requestMs, DateTimeOffset responseReceivedUtc, string? requestId)
+        => new(true, false, "AzureImage2", false, statusCode, responseBody, error, requestMs, 0, responseReceivedUtc, requestId);
+
+    public static VisualLabAzureImageGenerationResult CanvasFallback(string reason)
+        => new(false, false, "CanvasRenderer", true, null, null, reason, 0, 0, null, null);
+
+    public static VisualLabAzureImageGenerationResult ConfigurationFailure(IReadOnlyList<string> errors)
+        => new(false, false, "None", false, null, null, string.Join(" | ", errors), 0, 0, null, null);
+}
+
 
 public sealed record VisualLabBackgroundQualityReport(string OutputDirectory, string Timestamp, IReadOnlyList<VisualLabBackgroundQualityReportItem> Items);
 
