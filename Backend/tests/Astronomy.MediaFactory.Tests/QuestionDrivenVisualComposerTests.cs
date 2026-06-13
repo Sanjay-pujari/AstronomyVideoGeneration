@@ -267,9 +267,12 @@ public sealed class QuestionDrivenVisualComposerTests
         var spec = specDocument.RootElement;
 
         Assert.Equal("PlanetGrouping", spec.GetProperty("strategyId").GetString());
-        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(spec.GetProperty("requiredVisualObjects")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("requiredVisualObjects")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("requiredCelestialObjects")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("resolvedObjectNames")));
-        Assert.Equal(new[] { "multi-planet grouping", "guided scan path", "realistic planet textures", "grouping arc" }, ReadStringArray(spec.GetProperty("visualMotifs")));
+        Assert.Equal(new[] { "planet grouping", "guided scan path", "grouping arc" }, ReadStringArray(spec.GetProperty("visualMotifs")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, spec.GetProperty("drawableVisualObjects").EnumerateArray().Select(item => item.GetProperty("objectType").GetString()).ToArray());
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, spec.GetProperty("visualSourceResolution").GetProperty("requiredDrawableObjects").EnumerateArray().Select(item => item.GetString()).ToArray());
 
         var diagnosticsPath = Path.Combine(BuildSceneApprovalPath(workingDirectory), "phase8-visual-source-diagnostics.json");
         Assert.True(File.Exists(diagnosticsPath));
@@ -289,13 +292,18 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Contains("Image prompt intent", sceneDiagnostics.GetProperty("selectedImagePromptIntent").GetString());
         Assert.Contains("Overlay intent", sceneDiagnostics.GetProperty("selectedOverlayIntent").GetString());
         Assert.Equal("Follow the scan path.", sceneDiagnostics.GetProperty("selectedCaptionText").GetString());
-        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(sceneDiagnostics.GetProperty("selectedRequiredVisualObjects")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(sceneDiagnostics.GetProperty("selectedRequiredVisualObjects")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(sceneDiagnostics.GetProperty("selectedResolvedObjectNames")));
         Assert.Equal("PlanetGrouping", sceneDiagnostics.GetProperty("selectedStrategyId").GetString());
         Assert.True(sceneDiagnostics.GetProperty("usedEnrichedScenePlan").GetBoolean());
         Assert.False(sceneDiagnostics.GetProperty("usedFallbackVisualTemplate").GetBoolean());
         Assert.Equal(string.Empty, sceneDiagnostics.GetProperty("fallbackReason").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(sceneDiagnostics.GetProperty("rendererPromptBeforeRendering").GetString()));
+        var rendererPrompt = sceneDiagnostics.GetProperty("rendererPromptBeforeRendering").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(rendererPrompt));
+        Assert.Contains("Saturn", rendererPrompt);
+        Assert.Contains("Mars", rendererPrompt);
+        Assert.Contains("Jupiter", rendererPrompt);
+        Assert.Contains("Venus", rendererPrompt);
         Assert.Contains("scene-002-infographic-spec.json", sceneDiagnostics.GetProperty("infographicSpecPath").GetString());
         Assert.True(sceneDiagnostics.GetProperty("infographicSpecContainsPlanetGroupingMetadata").GetBoolean());
         Assert.True(sceneDiagnostics.GetProperty("infographicSpecContainsResolvedObjects").GetBoolean());
@@ -306,8 +314,8 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.False(string.IsNullOrWhiteSpace(mappingDiagnostics.GetProperty("visualIntent").GetProperty("finalSerializedValue").GetString()));
         Assert.Contains("Image prompt intent", mappingDiagnostics.GetProperty("imagePromptIntent").GetProperty("sourceValue").GetString());
         Assert.Equal(new[] { "Saturn, Mars, Jupiter, Venus", "sky direction", "local horizon", "guided scan path" }, ReadStringArray(mappingDiagnostics.GetProperty("overlayIntent").GetProperty("mappedValue")));
-        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(mappingDiagnostics.GetProperty("requiredVisualObjects").GetProperty("mappedValue")));
-        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(mappingDiagnostics.GetProperty("requiredVisualObjects").GetProperty("finalSerializedValue")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(mappingDiagnostics.GetProperty("requiredVisualObjects").GetProperty("mappedValue")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(mappingDiagnostics.GetProperty("requiredVisualObjects").GetProperty("finalSerializedValue")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(mappingDiagnostics.GetProperty("resolvedObjectNames").GetProperty("mappedValue")));
         Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(mappingDiagnostics.GetProperty("resolvedObjectNames").GetProperty("finalSerializedValue")));
         Assert.Equal("PlanetGrouping", mappingDiagnostics.GetProperty("strategyId").GetProperty("sourceValue").GetString());

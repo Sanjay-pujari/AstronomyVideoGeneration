@@ -160,32 +160,37 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
         {
             var objects = NormalizeList(intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects));
             var isPlanetGrouping = IsPlanetGrouping(eventType, strategyId, intelligence.Title);
-            var required = NormalizeList(requiredVisualObjects.Concat(objects).Concat(isPlanetGrouping ? new[] { "planet grouping", "guided scan path" } : Array.Empty<string>()));
+            var visualMotifs = isPlanetGrouping ? new[] { "planet grouping", "guided scan path", "grouping arc" } : Array.Empty<string>();
+            var requiredCelestialObjects = isPlanetGrouping
+                ? objects
+                : NormalizeList(requiredVisualObjects.Concat(objects)).Where(value => !IsPlanetGroupingVisualMotif(value)).ToArray();
             var objectPhrase = isPlanetGrouping ? string.Join(", ", objects) : string.Join(" and ", objects);
             var textureGuidance = string.Join(" ", objects.Select(ResolvePlanetTextureGuidance));
             var groupingGuidance = isPlanetGrouping
-                ? "Use PlanetGroupingSceneStrategy: show the complete multi-planet arrangement, a guided scan path, timing, and sky direction; do not collapse it into a generic planet scene."
+                ? "Use PlanetGroupingSceneStrategy: show the complete multi-planet arrangement, a guided scan path, timing, and sky direction; treat grouping/path/arc terms as overlays only, never as planet objects."
                 : "Show close-pairing/conjunction geometry, timing, and sky direction; do not add unrelated planets.";
             var prompt = $"Computed astronomy scene for {objectPhrase}: render only the actual listed objects with labels matching their exact names; use real-looking planet textures, not generic colored circles. {textureGuidance} {groupingGuidance}";
             metadata["labelObjects"] = string.Join(", ", objects);
-            metadata["visualSourceType"] = (required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene).ToString();
+            metadata["requiredCelestialObjects"] = string.Join(", ", requiredCelestialObjects);
+            metadata["visualMotifs"] = string.Join(", ", visualMotifs);
+            metadata["visualSourceType"] = (requiredCelestialObjects.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene).ToString();
             metadata["assetKey"] = string.Join(", ", objects.Select(o => $"Planet.{o}"));
             metadata["generatedRealisticPrompt"] = prompt;
             metadata["sceneStrategy"] = isPlanetGrouping ? "PlanetGroupingSceneStrategy" : "PlanetPairingSceneStrategy";
             metadata["heroStrategy"] = isPlanetGrouping ? "PlanetGroupingHeroStrategy" : "PlanetPairingHeroStrategy";
             metadata["thumbnailStrategy"] = isPlanetGrouping ? "PlanetGroupingThumbnailStrategy" : "PlanetPairingThumbnailStrategy";
             return new(
-                required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene,
-                required,
+                requiredCelestialObjects.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene,
+                requiredCelestialObjects,
                 objects.Select(o => $"Planet.{o}").ToArray(),
                 prompt,
                 GenericFallbackAllowed: false,
-                NormalizeList(required.Concat(objects).Concat(isPlanetGrouping ? ["real-looking planet textures", "planet grouping", "guided scan path", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
+                NormalizeList(requiredCelestialObjects.Concat(isPlanetGrouping ? ["real-looking planet textures", "planet grouping", "guided scan path", "grouping arc", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
                 forbidden,
                 metadata,
                 PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
                 ObjectSourcePriority: DefaultObjectSourcePriority,
-                ObjectVisualSources: BuildObjectVisualSources(required, prompt, ResolveAssetKey, ResolveObjectVisualSource));
+                ObjectVisualSources: BuildObjectVisualSources(requiredCelestialObjects, prompt, ResolveAssetKey, ResolveObjectVisualSource));
         }
 
         if (IsEclipse(eventType, strategyId, intelligence.Title))
@@ -338,6 +343,9 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
         => ContainsAny(eventType, "PlanetGrouping", "PLANET_GROUPING")
             || ContainsAny(strategyId, "PlanetGrouping")
             || ContainsAny(title, "planet grouping", "planet group");
+
+    private static bool IsPlanetGroupingVisualMotif(string value)
+        => ContainsAny(value, "planet grouping", "guided scan path", "grouping arc");
 
     private static bool IsEclipse(string eventType, string strategyId, string title)
         => ContainsAny(eventType, "Eclipse", "SolarEclipse", "LunarEclipse", "Solar Eclipse", "Lunar Eclipse")

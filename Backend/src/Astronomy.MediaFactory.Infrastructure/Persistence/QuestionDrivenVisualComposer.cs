@@ -483,6 +483,8 @@ public sealed class QuestionDrivenVisualComposer(
         var planetGroupingMetadata = ResolvePlanetGroupingInfographicMetadata(enrichedPlan, intelligence, isPlanetGrouping);
         var requiredVisualObjects = planetGroupingMetadata?.RequiredVisualObjects
             ?? (sourceResolution.RequiredDrawableObjects.Count > 0 ? sourceResolution.RequiredDrawableObjects.ToArray() : ResolveRequiredVisualObjects(intelligence).ToArray());
+        var requiredCelestialObjects = planetGroupingMetadata?.ResolvedObjectNames
+            ?? requiredVisualObjects.Where(value => !IsConceptualDrawableRequirement(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var fullMoonLabel = ResolveFullMoonLabel(intelligence);
         var meteorContextText = $"{narrationScene.SourceAnswer} {narrationScene.ViewerTakeaway} {narrationScene.NarrationText} {narrationScene.CaptionText}";
         var meteorWindow = ResolveMeteorViewingWindow(request, meteorContextText);
@@ -618,7 +620,7 @@ public sealed class QuestionDrivenVisualComposer(
         strategyValidationFacts["validationRequiredTerms"] = string.Join(", ", sourceResolution.ValidationRequiredTerms);
         foreach (var item in sourceResolution.Metadata) strategyValidationFacts[$"resolver.{item.Key}"] = item.Value;
 
-        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects, sourceResolution, planetGroupingMetadata?.StrategyId, planetGroupingMetadata?.ResolvedObjectNames, planetGroupingMetadata?.VisualMotifs);
+        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects, sourceResolution, planetGroupingMetadata?.StrategyId, planetGroupingMetadata?.ResolvedObjectNames, planetGroupingMetadata?.VisualMotifs, requiredCelestialObjects);
     }
 
 
@@ -673,12 +675,15 @@ public sealed class QuestionDrivenVisualComposer(
         if (!isPlanetGrouping) return null;
 
         var strategyId = FirstNonEmpty(enrichedPlan.Diagnostics?.StrategyId, intelligence?.StrategyId, intelligence?.EventType, "PlanetGrouping");
-        var requiredVisualObjects = NormalizeMetadataList(FirstNonEmptyList(enrichedPlan.Diagnostics?.RequiredVisualObjects, intelligence?.RequiredVisualObjects));
         var resolvedObjectNames = NormalizeMetadataList(FirstNonEmptyList(
             intelligence?.ResolvedObjectNames,
             enrichedPlan.Diagnostics?.PrimaryObjects?.Concat(enrichedPlan.Diagnostics.SecondaryObjects ?? Array.Empty<string>()),
             intelligence?.PrimaryObjects.Concat(intelligence.SecondaryObjects)));
-        var visualMotifs = NormalizeMetadataList(FirstNonEmptyList(intelligence?.VisualMotifs));
+        var requiredVisualObjects = NormalizeMetadataList(FirstNonEmptyList(
+            resolvedObjectNames,
+            (enrichedPlan.Diagnostics?.RequiredVisualObjects ?? []).Where(value => !IsPlanetGroupingVisualMotif(value)),
+            (intelligence?.RequiredVisualObjects ?? []).Where(value => !IsPlanetGroupingVisualMotif(value))));
+        var visualMotifs = NormalizePlanetGroupingVisualMotifs(intelligence);
 
         return new PlanetGroupingInfographicMetadata(strategyId, requiredVisualObjects, resolvedObjectNames, visualMotifs);
     }
@@ -688,6 +693,26 @@ public sealed class QuestionDrivenVisualComposer(
             .Select(value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private static IReadOnlyList<string> NormalizePlanetGroupingVisualMotifs(ProductionEventIntelligence? intelligence)
+    {
+        var motifs = new List<string>();
+        foreach (var motif in intelligence?.VisualMotifs ?? [])
+        {
+            if (motif.Contains("planet grouping", StringComparison.OrdinalIgnoreCase) || motif.Contains("multi-planet grouping", StringComparison.OrdinalIgnoreCase)) motifs.Add("planet grouping");
+            else if (motif.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)) motifs.Add("guided scan path");
+            else if (motif.Contains("grouping arc", StringComparison.OrdinalIgnoreCase)) motifs.Add("grouping arc");
+        }
+
+        motifs.AddRange(["planet grouping", "guided scan path", "grouping arc"]);
+        return NormalizeMetadataList(motifs);
+    }
+
+    private static bool IsPlanetGroupingVisualMotif(string value)
+        => value.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("multi-planet grouping", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("grouping arc", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> FirstNonEmptyList(params IEnumerable<string>?[] lists)
         => lists.FirstOrDefault(list => list?.Any(value => !string.IsNullOrWhiteSpace(value)) == true) ?? Array.Empty<string>();
@@ -921,14 +946,14 @@ public sealed class QuestionDrivenVisualComposer(
 
     private static IEnumerable<string> ResolveRequiredVisualObjects(ProductionEventIntelligence? intelligence)
     {
-        IReadOnlyList<string> required = intelligence?.RequiredVisualObjects is { Count: > 0 }
-            ? intelligence.RequiredVisualObjects
-            : IsPlanetGroupingEvent(intelligence, intelligence?.EventType ?? string.Empty) && intelligence is not null
-                ? intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Concat(["planet grouping", "guided scan path"]).ToArray()
+        IReadOnlyList<string> required = IsPlanetGroupingEvent(intelligence, intelligence?.EventType ?? string.Empty) && intelligence is not null
+            ? intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).ToArray()
+            : intelligence?.RequiredVisualObjects is { Count: > 0 }
+                ? intelligence.RequiredVisualObjects
                 : intelligence?.EventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) == true
                     ? new[] { "Moon" }
                     : Array.Empty<string>();
-        return required.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase);
+        return required.Where(value => !string.IsNullOrWhiteSpace(value) && !IsPlanetGroupingVisualMotif(value)).Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string ResolveFullMoonLabel(ProductionEventIntelligence? intelligence)
@@ -1277,7 +1302,7 @@ public sealed class QuestionDrivenVisualComposer(
             || spec.DrawableVisualObjects?.Any(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase) && (obj.Phase?.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) ?? false)) == true;
 
     private static bool IsPlanetPairingSpec(QuestionDrivenVisualSpec spec)
-        => IsPlanetPairingEvent(spec.EventType);
+        => IsPlanetPairingEvent(spec.EventType) || IsPlanetGroupingEvent(null, spec.EventType) || IsPlanetGroupingStrategyId(spec.StrategyId);
 
     private static string ResolveSpecMoonLabel(QuestionDrivenVisualSpec spec)
         => spec.DrawableVisualObjects?.FirstOrDefault(obj => obj.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))?.Label

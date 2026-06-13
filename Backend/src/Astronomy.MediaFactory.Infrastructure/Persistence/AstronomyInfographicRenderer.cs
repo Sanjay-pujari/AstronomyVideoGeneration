@@ -229,6 +229,7 @@ public sealed class AstronomyInfographicRenderer(
         image.Mutate(ctx =>
         {
             backgroundLayer.RenderEventSpecificForeground(ctx, spec);
+            DrawResolvedCelestialObjects(ctx, spec, AstronomyInfographicRenderVariant.LongForm.Width, AstronomyInfographicRenderVariant.LongForm.Height);
             DrawNamedFullMoonVisual(ctx, spec, AstronomyInfographicRenderVariant.LongForm.Width, AstronomyInfographicRenderVariant.LongForm.Height);
             skyGuidanceLayer.Render(ctx, spec, fonts);
             if (spec.UsesLocalPlanetAssets && File.Exists(venusAssetPath) && File.Exists(jupiterAssetPath)) celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
@@ -238,6 +239,140 @@ public sealed class AstronomyInfographicRenderer(
         });
 
         return image;
+    }
+
+
+    private void DrawResolvedCelestialObjects(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, int width, int height)
+    {
+        if (spec.UsesLocalPlanetAssets || IsNamedFullMoonVisual(spec)) return;
+        var objects = (spec.DrawableVisualObjects ?? [])
+            .Where(obj => !string.IsNullOrWhiteSpace(obj.ObjectType) && !IsConceptualDrawableRequirement(obj.ObjectType))
+            .DistinctBy(obj => obj.ObjectType, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (objects.Length == 0) return;
+
+        var shortForm = width < 1400;
+        var y = shortForm ? height * .42f : height * .43f;
+        var minX = shortForm ? width * .20f : width * .55f;
+        var maxX = shortForm ? width * .80f : width * .88f;
+        var span = Math.Max(1, objects.Length - 1);
+        var centers = objects.Select((obj, index) => new PointF(
+            objects.Length == 1 ? (minX + maxX) / 2f : minX + (maxX - minX) * index / span,
+            y + (float)Math.Sin(index * 1.35f) * (shortForm ? 46f : 34f))).ToArray();
+
+        if (IsPlanetGroupingSpec(spec) && centers.Length > 1)
+        {
+            var path = new PathBuilder();
+            path.AddLine(centers[0], centers[^1]);
+            ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.46f), shortForm ? 4f : 3f, path.Build());
+        }
+
+        for (var i = 0; i < objects.Length; i++)
+        {
+            var obj = objects[i];
+            var center = centers[i];
+            var diameter = ResolveDrawableObjectDiameter(obj.ObjectType, shortForm, width);
+            var assetPath = ResolveLocalCelestialAssetPath(obj.AssetKey, obj.ObjectType);
+            var glowColor = ResolvePlanetGlowColor(obj.ObjectType);
+            DrawResolvedObjectGlow(ctx, center, diameter, glowColor);
+            if (!string.IsNullOrWhiteSpace(assetPath)) DrawResolvedObjectAsset(ctx, assetPath, center, diameter);
+            else DrawTexturedFallbackPlanet(ctx, obj.ObjectType, center, diameter, glowColor);
+            DrawResolvedObjectLabel(ctx, obj.Label ?? obj.ObjectType, center, diameter, shortForm);
+        }
+    }
+
+    private static bool IsPlanetGroupingSpec(QuestionDrivenVisualSpec spec)
+        => spec.EventType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || spec.EventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || spec.StrategyId?.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase) == true
+            || spec.StrategyId?.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsConceptualDrawableRequirement(string value)
+        => value.Contains("streak", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("dark sky", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("radiant", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("glow", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("moonrise", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("close pairing", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("guided scan path", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("grouping arc", StringComparison.OrdinalIgnoreCase);
+
+    private static int ResolveDrawableObjectDiameter(string objectType, bool shortForm, int width)
+    {
+        var baseSize = shortForm ? width * .095f : width * .045f;
+        var factor = objectType.ToLowerInvariant() switch
+        {
+            "jupiter" => 1.22f,
+            "saturn" => 1.18f,
+            "venus" => .92f,
+            "mars" => .86f,
+            _ => 1f
+        };
+        return (int)MathF.Round(baseSize * factor);
+    }
+
+    private string? ResolveLocalCelestialAssetPath(string? assetKey, string objectType)
+    {
+        var normalized = NormalizeCelestialAssetName(FirstNonEmpty(assetKey?.Replace("Planet.", string.Empty, StringComparison.OrdinalIgnoreCase), objectType));
+        foreach (var directory in EnumerateRepositoryDirectories())
+        {
+            foreach (var fileName in new[] { "hero-transparent.png", "hero.png" })
+            {
+                var apiPath = Path.Combine(directory.FullName, "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "celestial", normalized, fileName);
+                if (File.Exists(apiPath)) return apiPath;
+                var rootPath = Path.Combine(directory.FullName, "assets", "celestial", normalized, fileName);
+                if (File.Exists(rootPath)) return rootPath;
+            }
+        }
+        return null;
+    }
+
+    private static string NormalizeCelestialAssetName(string value)
+        => value.Trim().ToLowerInvariant().Replace(' ', '-');
+
+    private static string ResolvePlanetGlowColor(string objectType)
+        => objectType.ToLowerInvariant() switch
+        {
+            "saturn" => "#E8C98F",
+            "mars" => "#E0734A",
+            "jupiter" => "#E5C18D",
+            "venus" => "#FFF2B8",
+            "mercury" => "#C9BCA8",
+            "uranus" => "#9FE6E8",
+            "neptune" => "#79A7FF",
+            _ => "#B7E0FF"
+        };
+
+    private static void DrawResolvedObjectGlow(IImageProcessingContext ctx, PointF center, int diameter, string color)
+    {
+        ctx.Fill(Color.ParseHex(color).WithAlpha(.040f), new EllipsePolygon(center.X, center.Y, diameter * 1.25f));
+        ctx.Fill(Color.ParseHex(color).WithAlpha(.065f), new EllipsePolygon(center.X, center.Y, diameter * .82f));
+    }
+
+    private static void DrawResolvedObjectAsset(IImageProcessingContext ctx, string assetPath, PointF center, int diameter)
+    {
+        using var asset = Image.Load<Rgba32>(assetPath);
+        asset.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(diameter, diameter), Mode = ResizeMode.Max }));
+        ctx.DrawImage(asset, new Point((int)(center.X - asset.Width / 2f), (int)(center.Y - asset.Height / 2f)), 1f);
+    }
+
+    private static void DrawTexturedFallbackPlanet(IImageProcessingContext ctx, string objectType, PointF center, int diameter, string color)
+    {
+        var baseColor = Color.ParseHex(color);
+        ctx.Fill(baseColor.WithAlpha(.82f), new EllipsePolygon(center.X, center.Y, diameter / 2f));
+        ctx.Fill(Color.White.WithAlpha(.14f), new EllipsePolygon(center.X - diameter * .15f, center.Y - diameter * .18f, diameter * .18f));
+        ctx.Draw(baseColor.WithAlpha(.70f), Math.Max(2, diameter * .04f), new EllipsePolygon(center.X, center.Y, diameter / 2f));
+        if (objectType.Equals("Saturn", StringComparison.OrdinalIgnoreCase))
+            ctx.Draw(Color.ParseHex("#E8C98F").WithAlpha(.70f), Math.Max(2, diameter * .05f), new EllipsePolygon(center.X, center.Y, diameter * .78f, diameter * .27f));
+    }
+
+    private static void DrawResolvedObjectLabel(IImageProcessingContext ctx, string label, PointF center, int diameter, bool shortForm)
+    {
+        var font = shortForm ? EditorialFonts.CreateScaled(.82f).SmallFont : EditorialFonts.Create().SmallFont;
+        var origin = new PointF(center.X - diameter * .72f, center.Y + diameter * .62f);
+        ctx.DrawText(new RichTextOptions(font) { Origin = origin, WrappingLength = diameter * 2.2f }, label, Color.White.WithAlpha(.94f));
+        ctx.Draw(Color.White.WithAlpha(.36f), 1.5f, new PathBuilder().AddLine(new PointF(center.X, center.Y + diameter * .34f), new PointF(origin.X + 8, origin.Y - 4)).Build());
     }
 
     private async Task<Image<Rgba32>> RenderNativeShortFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
@@ -261,6 +396,7 @@ public sealed class AstronomyInfographicRenderer(
         {
             DrawShortFormAtmosphere(ctx, spec.SceneNumber, variant.Width, variant.Height);
             DrawNativeShortFormVisual(ctx, spec, venusAssetPath, jupiterAssetPath);
+            DrawResolvedCelestialObjects(ctx, spec, variant.Width, variant.Height);
             DrawNamedFullMoonVisual(ctx, spec, variant.Width, variant.Height);
             DrawNativeShortFormText(ctx, spec, fonts, variant);
             DrawPortraitVignette(ctx, variant.Width, variant.Height);
