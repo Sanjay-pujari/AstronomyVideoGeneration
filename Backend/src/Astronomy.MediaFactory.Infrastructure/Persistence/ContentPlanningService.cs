@@ -6,6 +6,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder, IAstronomyVisibilityService visibilityService, IStellariumScenePlannerResolver scenePlannerResolver) : IContentPlanningService
 {
+    private const string NeedsManualReviewPlanCreationError = "NeedsManualReview events cannot be converted into content plans by this endpoint.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] InactivePlanStatuses = ["Completed", "ProductionCompleted", "Failed", "ProductionFailed", "Cancelled", "Canceled", "Archived"];
 
@@ -13,38 +14,52 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.AstronomyEventIntelligenceId == Guid.Empty) throw new ArgumentException("An exact astronomyEventIntelligenceId is required.");
-        if (!request.ManualValidation) throw new ArgumentException("manualValidation must be true for manual event plan creation.");
-        if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
-        if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Language is required.");
         if (string.IsNullOrWhiteSpace(request.PlannedFormat)) throw new ArgumentException("PlannedFormat is required.");
 
         var hasExplicitRequestedOutputs = request.RequestedOutputs is { Count: > 0 }
             && request.RequestedOutputs.Any(o => !string.IsNullOrWhiteSpace(o));
-
-        var regionId = request.RegionId.Trim();
-        var language = request.Language.Trim();
-        var plannedFormat = request.PlannedFormat.Trim();
-        var requestedOutputs = NormalizeRequestedOutputs(request.RequestedOutputs);
 
         var evt = await db.AstronomyEventIntelligences
             .Include(e => e.Objects)
             .FirstOrDefaultAsync(e => e.Id == request.AstronomyEventIntelligenceId, cancellationToken)
             ?? throw new KeyNotFoundException($"Astronomy event intelligence '{request.AstronomyEventIntelligenceId}' was not found.");
 
+        var isNeedsManualReview = string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase);
+        var allowManualReviewPlanCreation = false;
+        if (isNeedsManualReview)
+        {
+            if (request.ManualValidation
+                && !string.IsNullOrWhiteSpace(request.Reason)
+                && hasExplicitRequestedOutputs
+                && !string.IsNullOrWhiteSpace(request.RegionId)
+                && !string.IsNullOrWhiteSpace(request.Language))
+            {
+                allowManualReviewPlanCreation = true;
+            }
+            else
+            {
+                throw new ArgumentException(NeedsManualReviewPlanCreationError);
+            }
+        }
+        else
+        {
+            if (!request.ManualValidation) throw new ArgumentException("manualValidation must be true for manual event plan creation.");
+            if (!string.Equals(evt.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Only Verified events can be converted into content plans. Current VerificationStatus is '{evt.VerificationStatus}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
+        if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Language is required.");
+
+        var regionId = request.RegionId.Trim();
+        var language = request.Language.Trim();
+        var plannedFormat = request.PlannedFormat.Trim();
+        var requestedOutputs = NormalizeRequestedOutputs(request.RequestedOutputs);
+
         if (!string.Equals(evt.RegionId, regionId, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"Event RegionId '{evt.RegionId ?? "n/a"}' does not match requested RegionId '{regionId}'.");
         if (!string.IsNullOrWhiteSpace(evt.Language) && !string.Equals(evt.Language, language, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"Event Language '{evt.Language}' does not match requested Language '{language}'.");
-        var isNeedsManualReview = string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase);
-        if (isNeedsManualReview)
-        {
-            if (string.IsNullOrWhiteSpace(request.Reason))
-                throw new ArgumentException("Reason is required to create a manual validation plan for a NeedsManualReview event.");
-            if (!hasExplicitRequestedOutputs)
-                throw new ArgumentException("requestedOutputs must not be empty to create a manual validation plan for a NeedsManualReview event.");
-        }
-        if (!isNeedsManualReview && !string.Equals(evt.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException($"Only Verified events can be converted into content plans. Current VerificationStatus is '{evt.VerificationStatus}'.");
 
         var duplicateExists = await db.ContentGenerationPlans.AnyAsync(p =>
             p.AstronomyEventIntelligenceId == evt.Id
@@ -103,7 +118,9 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             RegionId: plan.RegionId,
             Language: plan.Language,
             RequestedOutputs: requestedOutputs,
-            ManualValidation: true)
+            ManualValidation: true,
+            ManualReviewOverrideApplied: allowManualReviewPlanCreation,
+            VerificationStatus: evt.VerificationStatus)
         {
             Warnings = isNeedsManualReview
                 ? ["Created manual validation plan for NeedsManualReview event. This does not enable automatic generation."]
