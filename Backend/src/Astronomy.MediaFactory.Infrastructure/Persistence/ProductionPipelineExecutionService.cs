@@ -358,11 +358,26 @@ public sealed partial class ProductionPipelineExecutionService(
             issues.Add("diagnostics reported forbidden leakage: " + string.Join(", ", plan.Diagnostics.LeakageTermsFound));
 
         var generatedFields = ExtractEnrichedSceneGeneratedText(plan).ToArray();
-        var requiredObjects = ResolveRequiredVisualObjectsForPhase6(context, plan).ToArray();
-        foreach (var requiredObject in requiredObjects)
+        var enrichedSceneIntents = BuildPhase6ValidationIntentDiagnostics(plan).ToArray();
+        var planetGroupingValidation = ResolvePlanetGroupingPhase6Validation(context, enrichedSceneIntents);
+        if (planetGroupingValidation.PlanetGroupingValidationPathExecuted)
         {
-            if (!generatedFields.Any(field => ContainsToken(field, requiredObject)))
-                issues.Add($"required visual object '{requiredObject}' was not present in enriched scene intents");
+            if (!planetGroupingValidation.PlanetGroupingVisualContractPassed)
+            {
+                if (!planetGroupingValidation.PlanetGroupingIntentInjected)
+                    issues.Add("PlanetGrouping visual contract failed: planetGroupingIntentInjected=false");
+                if (!planetGroupingValidation.GuidedScanPathInjected)
+                    issues.Add("PlanetGrouping visual contract failed: guidedScanPathInjected=false");
+            }
+        }
+        else
+        {
+            var requiredObjects = ResolveRequiredVisualObjectsForPhase6(context, plan).ToArray();
+            foreach (var requiredObject in requiredObjects)
+            {
+                if (!generatedFields.Any(field => ContainsToken(field, requiredObject)))
+                    issues.Add($"required visual object '{requiredObject}' was not present in enriched scene intents");
+            }
         }
 
         var forbiddenTerms = BuildForbiddenTermsForStrategy(context).ToArray();
@@ -1717,11 +1732,13 @@ public sealed partial class ProductionPipelineExecutionService(
         if (planetGroupingDiagnostics is not null)
         {
             logger.LogInformation(
-                "PlanetGrouping enrichment diagnostics:\n strategyActivated={StrategyActivated}\n enricherExecuted={EnricherExecuted}\n planetGroupingIntentInjected={PlanetGroupingIntentInjected}\n guidedScanPathInjected={GuidedScanPathInjected}\n enrichedSceneIntentCount={EnrichedSceneIntentCount}\n visualIntentCount={VisualIntentCount}",
+                "PlanetGrouping enrichment diagnostics:\n strategyActivated={StrategyActivated}\n enricherExecuted={EnricherExecuted}\n planetGroupingIntentInjected={PlanetGroupingIntentInjected}\n guidedScanPathInjected={GuidedScanPathInjected}\n legacyValidationPathExecuted={LegacyValidationPathExecuted}\n planetGroupingValidationPathExecuted={PlanetGroupingValidationPathExecuted}\n enrichedSceneIntentCount={EnrichedSceneIntentCount}\n visualIntentCount={VisualIntentCount}",
                 planetGroupingDiagnostics.PlanetGroupingStrategyActivated,
                 planetGroupingDiagnostics.PlanetGroupingEnricherExecuted,
                 planetGroupingDiagnostics.PlanetGroupingIntentInjected,
                 planetGroupingDiagnostics.GuidedScanPathInjected,
+                planetGroupingDiagnostics.LegacyValidationPathExecuted,
+                planetGroupingDiagnostics.PlanetGroupingValidationPathExecuted,
                 planetGroupingDiagnostics.EnrichedSceneIntentCount,
                 planetGroupingDiagnostics.VisualIntentCount);
         }
@@ -1748,6 +1765,8 @@ public sealed partial class ProductionPipelineExecutionService(
             planetGroupingEnricherExecuted = planetGroupingDiagnostics?.PlanetGroupingEnricherExecuted,
             planetGroupingIntentInjected = planetGroupingDiagnostics?.PlanetGroupingIntentInjected,
             guidedScanPathInjected = planetGroupingDiagnostics?.GuidedScanPathInjected,
+            legacyValidationPathExecuted = planetGroupingDiagnostics?.LegacyValidationPathExecuted,
+            planetGroupingValidationPathExecuted = planetGroupingDiagnostics?.PlanetGroupingValidationPathExecuted,
             enrichedSceneIntentCount = planetGroupingDiagnostics?.EnrichedSceneIntentCount,
             enrichedSceneIntents = planetGroupingDiagnostics?.EnrichedSceneIntents,
             visualIntentCount = planetGroupingDiagnostics?.VisualIntentCount,
@@ -1834,15 +1853,17 @@ public sealed partial class ProductionPipelineExecutionService(
                 scene.ImagePromptIntent,
                 scene.OverlayIntent)).ToArray() ?? Array.Empty<Phase6VisualIntentDiagnostics>();
         var enrichedSceneIntents = BuildPhase6ValidationIntentDiagnostics(plan).ToArray();
-        var planetGroupingInjectionDiagnostics = BuildPlanetGroupingPhase6InjectionDiagnostics(context, enrichedSceneIntents);
+        var planetGroupingValidationDiagnostics = ResolvePlanetGroupingPhase6Validation(context, enrichedSceneIntents);
 
         return new Phase6SceneEnrichmentDiagnostics(
             EnrichedScenePlanPath: NormalizePath(enrichedPath),
             EnrichedScenePlanExists: File.Exists(enrichedPath),
             PlanetGroupingStrategyActivated: IsPlanetGroupingStrategyActivated(context),
             PlanetGroupingEnricherExecuted: plan is not null,
-            PlanetGroupingIntentInjected: planetGroupingInjectionDiagnostics.PlanetGroupingIntentInjected,
-            GuidedScanPathInjected: planetGroupingInjectionDiagnostics.GuidedScanPathInjected,
+            PlanetGroupingIntentInjected: planetGroupingValidationDiagnostics.PlanetGroupingIntentInjected,
+            GuidedScanPathInjected: planetGroupingValidationDiagnostics.GuidedScanPathInjected,
+            LegacyValidationPathExecuted: planetGroupingValidationDiagnostics.LegacyValidationPathExecuted,
+            PlanetGroupingValidationPathExecuted: planetGroupingValidationDiagnostics.PlanetGroupingValidationPathExecuted,
             EnrichedSceneIntentCount: enrichedSceneIntents.Length,
             EnrichedSceneIntents: enrichedSceneIntents,
             VisualIntentCount: visualIntents.Length,
@@ -1896,16 +1917,22 @@ public sealed partial class ProductionPipelineExecutionService(
             || IsPlanetGroupingEventType(context.Request.EventType)
             || IsPlanetGroupingEventType(context.ExecutionContext.EventType);
 
-    private static PlanetGroupingPhase6InjectionDiagnostics BuildPlanetGroupingPhase6InjectionDiagnostics(
+    private static Phase6ContractValidationPathDiagnostics ResolvePlanetGroupingPhase6Validation(
         ProductionPhaseContext context,
         IReadOnlyList<Phase6ValidationIntentDiagnostics> enrichedSceneIntents)
     {
-        if (!IsPlanetGroupingPhase6Event(context))
-            return new(false, false);
+        var planetGroupingValidationPathExecuted = IsPlanetGroupingPhase6Event(context);
+        if (!planetGroupingValidationPathExecuted)
+            return new(false, false, false, false, true);
 
+        var planetGroupingIntentInjected = ContainsAnyPhase6ValidationIntent(enrichedSceneIntents, "planet grouping");
+        var guidedScanPathInjected = ContainsAnyPhase6ValidationIntent(enrichedSceneIntents, "guided scan path", "scan path", "grouping arc");
         return new(
-            PlanetGroupingIntentInjected: ContainsAnyPhase6ValidationIntent(enrichedSceneIntents, "planet grouping"),
-            GuidedScanPathInjected: ContainsAnyPhase6ValidationIntent(enrichedSceneIntents, "guided scan path", "scan path", "grouping arc"));
+            planetGroupingValidationPathExecuted,
+            planetGroupingIntentInjected,
+            guidedScanPathInjected,
+            planetGroupingIntentInjected && guidedScanPathInjected,
+            false);
     }
 
     private static bool ContainsAnyPhase6ValidationIntent(
@@ -1918,9 +1945,12 @@ public sealed partial class ProductionPipelineExecutionService(
             && !string.IsNullOrWhiteSpace(phrase)
             && value.Contains(phrase, StringComparison.OrdinalIgnoreCase);
 
-    private sealed record PlanetGroupingPhase6InjectionDiagnostics(
+    private sealed record Phase6ContractValidationPathDiagnostics(
+        bool PlanetGroupingValidationPathExecuted,
         bool PlanetGroupingIntentInjected,
-        bool GuidedScanPathInjected);
+        bool GuidedScanPathInjected,
+        bool PlanetGroupingVisualContractPassed,
+        bool LegacyValidationPathExecuted);
 
     private sealed record Phase6SceneEnrichmentDiagnostics(
         string EnrichedScenePlanPath,
@@ -1929,6 +1959,8 @@ public sealed partial class ProductionPipelineExecutionService(
         bool PlanetGroupingEnricherExecuted,
         bool PlanetGroupingIntentInjected,
         bool GuidedScanPathInjected,
+        bool LegacyValidationPathExecuted,
+        bool PlanetGroupingValidationPathExecuted,
         int EnrichedSceneIntentCount,
         IReadOnlyList<Phase6ValidationIntentDiagnostics> EnrichedSceneIntents,
         int VisualIntentCount,
