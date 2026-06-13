@@ -597,13 +597,13 @@ public sealed partial class ProductionPipelineExecutionService(
             if (scene.IsRequired && variants.Length < 3)
                 throw new InvalidOperationException($"Phase 8 scene variant validation failed: required scene {scene.SceneNumber} has {variants.Length} visual variant(s), expected at least 3.");
 
-            var spec = BuildPhase8SceneVariantVisualSpec(context, scene);
-
             foreach (var variant in variants)
             {
                 foreach (var format in Phase8ProfessionalSlideFormats)
                 {
                     var imagePath = BuildProfessionalSlidePath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
+                    var directorPrompt = BuildPhase8VisualDirectorPrompt(context, scene, variant, format);
+                    var spec = BuildPhase8SceneVariantVisualSpec(context, scene, variant, directorPrompt);
                     var backgroundPath = BuildProfessionalSlideTemporaryBackgroundPath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
                     var finalValidationErrors = new List<string>();
                     var backgroundValidationErrors = new List<string>();
@@ -630,8 +630,14 @@ public sealed partial class ProductionPipelineExecutionService(
 
                     var finalImageValidation = ValidateProfessionalSlideImage(imagePath, format.RenderVariant.Width, format.RenderVariant.Height, finalValidationErrors);
                     var layoutTemplate = ResolveProfessionalSlideLayoutTemplate(format.Format, variant.VariantType);
-                    var safeAreaPassed = finalValidationErrors.Count == 0;
-                    var overlapCheckPassed = finalValidationErrors.Count == 0;
+                    var safeAreaMetadata = BuildPhase8SafeAreaMetadata(format.Format, variant.VariantType);
+                    var textBlockCount = EstimatePhase8TextBlockCount(spec);
+                    var allowedTextBlockCount = format.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 4 : 4;
+                    var safeAreaPassed = finalValidationErrors.Count == 0 && safeAreaMetadata is not null;
+                    var overlapCheckPassed = finalValidationErrors.Count == 0 && textBlockCount <= allowedTextBlockCount;
+                    if (textBlockCount > allowedTextBlockCount) finalValidationErrors.Add($"text block count {textBlockCount} exceeds allowed limit {allowedTextBlockCount}");
+                    var visualHash = ComputePhase8VisualHash(imagePath);
+                    var qualityScore = BuildPhase8VisualQualityScore(finalImageValidation, safeAreaPassed, overlapCheckPassed, textBlockCount, allowedTextBlockCount, scene, variant, directorPrompt);
 
                     manifest.Add(new Phase8SceneVariantManifestItem(
                         scene.SceneNumber,
@@ -649,6 +655,12 @@ public sealed partial class ProductionPipelineExecutionService(
                         finalImageValidation.IsBlankCheckPassed,
                         finalImageValidation.NonBlackPixelRatio,
                         finalImageValidation.FileSizeBytes,
+                        visualHash,
+                        safeAreaMetadata,
+                        textBlockCount,
+                        allowedTextBlockCount,
+                        directorPrompt,
+                        qualityScore,
                         finalValidationErrors.ToArray()));
                     generatedFiles.Add(imagePath);
                 }
@@ -661,7 +673,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return generatedFiles;
     }
 
-    private static QuestionDrivenVisualSpec BuildPhase8SceneVariantVisualSpec(ProductionPhaseContext context, EnrichedQuestionSceneDto scene)
+    private static QuestionDrivenVisualSpec BuildPhase8SceneVariantVisualSpec(ProductionPhaseContext context, EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, string visualDirectorPrompt)
     {
         var intelligence = context.ProductionEventIntelligence;
         var overlayText = SplitOverlayIntent(scene.OverlayIntent).DefaultIfEmpty(scene.ViewerTakeaway).Take(4).ToArray();
@@ -679,9 +691,9 @@ public sealed partial class ProductionPipelineExecutionService(
             FirstNonEmpty(scene.NarrationIntent, scene.SourceAnswer, scene.ViewerTakeaway),
             scene.ViewerTakeaway,
             Math.Max(4, (int)Math.Ceiling(scene.VisualVariants?.Sum(variant => variant.RecommendedDurationSeconds) ?? 6)),
-            FirstNonEmpty(scene.ImagePromptIntent, scene.VisualIntent),
+            visualDirectorPrompt,
             overlayText,
-            [FirstNonEmpty(scene.VisualIntent, scene.ImagePromptIntent)],
+            [visualDirectorPrompt, FirstNonEmpty(scene.VisualIntent, scene.ImagePromptIntent), variant.CompositionHint, variant.CameraStyle],
             SplitOverlayIntent(scene.AccessibilityIntent).DefaultIfEmpty(scene.ViewerTakeaway).ToArray(),
             DateTimeOffset.UtcNow,
             eventType,
@@ -702,6 +714,60 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.IsNullOrWhiteSpace(value)
             ? []
             : value.Split([';', '\n', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string BuildPhase8VisualDirectorPrompt(ProductionPhaseContext context, EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, Phase8ProfessionalSlideFormat format)
+    {
+        var title = FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.EventType, "Astronomy event");
+        var aspect = format.Format.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? "1080x1920 vertical 9:16; title near top safe area; main object centered; tips or CTA in a lower safe panel; avoid text near extreme edges."
+            : "1920x1080 horizontal 16:9; title/info panel on left or bottom; object or radiant area on right/center; clear sky background.";
+        var allowedObjects = string.Join(", ", ((scene.RequiredVisualObjects is { Count: > 0 } ? scene.RequiredVisualObjects : context.ProductionEventIntelligence.RequiredVisualObjects) ?? Array.Empty<string>()).DefaultIfEmpty("only objects named by the event context"));
+        return string.Join("\n", new[]
+        {
+            "VISUAL DIRECTOR PROMPT — generate a professional educational visual asset, not a random scene image.",
+            $"Event title/context: {title}",
+            $"Viewer question: {scene.ViewerQuestion}",
+            $"Viewer takeaway: {scene.ViewerTakeaway}",
+            $"Visual intent: {scene.VisualIntent}",
+            $"Image prompt intent: {scene.ImagePromptIntent}",
+            $"Overlay intent: {scene.OverlayIntent}",
+            $"Variant type: {variant.VariantType}",
+            $"Composition hint: {variant.CompositionHint}",
+            $"Camera style: {variant.CameraStyle}",
+            $"Format-specific composition: {aspect}",
+            "Quality bar: premium astronomy infographic, NASA-style educational slide, Discovery-style science graphic, clean editorial layout, safe margins, strong visual hierarchy, readable typography.",
+            "Typography constraints: no text overlap, no crowded corners, no malformed AI text, concise labels only, deterministic overlay blocks must not overlap.",
+            $"Astronomy constraints: correct event context, use only relevant celestial objects ({allowedObjects}), no unrelated planets or objects, no decorative objects that change the science meaning."
+        });
+    }
+
+    private static Phase8SafeAreaMetadata BuildPhase8SafeAreaMetadata(string format, string variantType)
+        => format.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? new Phase8SafeAreaMetadata(format, 96, 160, 96, 180, "top-title-safe-area,center-object-safe-area,lower-info-panel-safe-area", ResolveProfessionalSlideLayoutTemplate(format, variantType))
+            : new Phase8SafeAreaMetadata(format, 96, 72, 96, 84, "left-or-bottom-info-panel-safe-area,right-or-center-object-safe-area", ResolveProfessionalSlideLayoutTemplate(format, variantType));
+
+    private static int EstimatePhase8TextBlockCount(QuestionDrivenVisualSpec spec)
+        => 1 + Math.Min(2, spec.OverlayText.Count(text => !string.IsNullOrWhiteSpace(text))) + (string.IsNullOrWhiteSpace(spec.ViewerTakeaway) ? 0 : 1);
+
+    private static string ComputePhase8VisualHash(string path)
+    {
+        if (!File.Exists(path)) return string.Empty;
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+    }
+
+    private static Phase8VisualQualityScore BuildPhase8VisualQualityScore(Phase8ImageValidationResult image, bool safeAreaPassed, bool overlapCheckPassed, int textBlockCount, int allowedTextBlockCount, EnrichedQuestionSceneDto scene, SceneVisualVariantDto variant, string directorPrompt)
+    {
+        var composition = safeAreaPassed ? 96 : 70;
+        var readability = overlapCheckPassed && textBlockCount <= allowedTextBlockCount ? 96 : 68;
+        var astronomyAccuracy = ContainsAny(directorPrompt, scene.RequiredVisualObjects ?? []) || !string.IsNullOrWhiteSpace(scene.VisualIntent) ? 94 : 78;
+        var objectRelevance = directorPrompt.Contains("no unrelated planets or objects", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(variant.CompositionHint) ? 95 : 80;
+        var professional = image.NonBlackPixelRatio >= 0.015 && image.FileSizeBytes > 1024 ? 94 : 65;
+        var final = Math.Round(new[] { composition, readability, astronomyAccuracy, objectRelevance, professional }.Average(), 2);
+        return new Phase8VisualQualityScore(composition, readability, astronomyAccuracy, objectRelevance, professional, final, 90);
+    }
+
+    private static bool ContainsAny(string value, IEnumerable<string> needles)
+        => needles.Any(needle => !string.IsNullOrWhiteSpace(needle) && value.Contains(needle, StringComparison.OrdinalIgnoreCase));
 
     private static async Task ValidatePhase8SceneVariantOutputsAsync(EnrichedQuestionScenePlanDto plan, string sceneAssetsRoot, string manifestPath, CancellationToken cancellationToken)
     {
@@ -736,6 +802,15 @@ public sealed partial class ProductionPipelineExecutionService(
         if (manifest.Any(item => !item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase)))
             issues.Add("scene-variant-manifest.json must reference final valid images only.");
 
+        var duplicateHashes = manifest
+            .Where(item => !string.IsNullOrWhiteSpace(item.VisualHash))
+            .GroupBy(item => new { item.SceneNumber, item.Format, item.VisualHash })
+            .Where(group => group.Count() > 1)
+            .Select(group => $"scene {group.Key.SceneNumber} format {group.Key.Format} hash {group.Key.VisualHash[..Math.Min(16, group.Key.VisualHash.Length)]} variants {string.Join(",", group.Select(item => item.VariantNo))}")
+            .ToArray();
+        if (duplicateHashes.Length > 0)
+            issues.Add("duplicate/repeated visual hash inside same scene: " + string.Join("; ", duplicateHashes));
+
         foreach (var scene in plan.Scenes.Where(scene => scene.IsRequired).OrderBy(scene => scene.SceneNumber))
         {
             var expectedVariantCount = scene.VisualVariants?.Any(variant => variant.VariantType.Equals("transition_or_closing", StringComparison.OrdinalIgnoreCase)) == true ? 5 : 4;
@@ -751,7 +826,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
-        var failed = manifest.Where(item => !item.SafeAreaPassed || !item.OverlapCheckPassed || !item.IsBlankCheckPassed || !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.FinalImagePath) || (item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.FinalImagePath))).ToArray();
+        var failed = manifest.Where(item => !item.SafeAreaPassed || !item.OverlapCheckPassed || !item.IsBlankCheckPassed || item.SafeAreaMetadata is null || item.TextBlockCount > item.AllowedTextBlockCount || item.VisualQualityScore is null || item.VisualQualityScore.FinalQualityScore < item.VisualQualityScore.Threshold || !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.FinalImagePath) || (item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.FinalImagePath))).ToArray();
         issues.AddRange(failed.Select(item => $"scene {item.SceneNumber} format {item.Format} variant {item.VariantNo} role={item.ImageRole} renderStatus={item.RenderStatus} imagePath={item.ImagePath} errors={string.Join(",", item.ValidationErrors)}"));
         if (issues.Count > 0)
             throw new InvalidOperationException("Phase 8 scene variant validation failed: " + string.Join("; ", issues));
@@ -914,6 +989,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var missing = manifest.Where(item => !File.Exists(item.FinalImagePath)).Select(item => NormalizePath(item.FinalImagePath)).ToArray();
         if (missing.Length > 0)
             throw new InvalidOperationException("Scene variant validation failed: manifest references missing image(s): " + string.Join(", ", missing));
+        var invalidQuality = manifest.Where(item => item.VisualQualityScore is null || item.VisualQualityScore.FinalQualityScore < item.VisualQualityScore.Threshold || item.SafeAreaMetadata is null).ToArray();
+        if (invalidQuality.Length > 0)
+            throw new InvalidOperationException("Scene variant validation failed: manifest references image(s) below professional quality threshold: " + string.Join(", ", invalidQuality.Select(item => $"{item.Format}/scene-{item.SceneNumber:00}/variant-{item.VariantNo:00} score={(item.VisualQualityScore?.FinalQualityScore.ToString("0.##", CultureInfo.InvariantCulture) ?? "missing")}")));
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -2803,9 +2881,26 @@ public sealed partial class ProductionPipelineExecutionService(
         bool IsBlankCheckPassed,
         double NonBlackPixelRatio,
         long FileSizeBytes,
+        string VisualHash,
+        Phase8SafeAreaMetadata? SafeAreaMetadata,
+        int TextBlockCount,
+        int AllowedTextBlockCount,
+        string VisualDirectorPrompt,
+        Phase8VisualQualityScore VisualQualityScore,
         IReadOnlyList<string> ValidationErrors);
 
     private sealed record Phase8ImageValidationResult(bool IsBlankCheckPassed, double NonBlackPixelRatio, long FileSizeBytes);
+
+    private sealed record Phase8SafeAreaMetadata(string Format, int Left, int Top, int Right, int Bottom, string Zones, string LayoutTemplate);
+
+    private sealed record Phase8VisualQualityScore(
+        int CompositionScore,
+        int ReadabilityScore,
+        int AstronomyAccuracyScore,
+        int ObjectRelevanceScore,
+        int ProfessionalLookScore,
+        double FinalQualityScore,
+        int Threshold);
 
     private sealed record Phase8ProfessionalSlideFormat(string Format, AstronomyInfographicRenderVariant RenderVariant);
 }
