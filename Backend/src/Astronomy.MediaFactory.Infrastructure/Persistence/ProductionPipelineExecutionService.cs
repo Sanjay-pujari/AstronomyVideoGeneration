@@ -1834,19 +1834,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 scene.ImagePromptIntent,
                 scene.OverlayIntent)).ToArray() ?? Array.Empty<Phase6VisualIntentDiagnostics>();
         var enrichedSceneIntents = BuildPhase6ValidationIntentDiagnostics(plan).ToArray();
-        var generatedText = enrichedSceneIntents
-            .Select(intent => intent.Value)
-            .Where(text => !string.IsNullOrWhiteSpace(text))
-            .ToArray();
-        var isPlanetGroupingEvent = IsPlanetGroupingEventType(context.ProductionEventIntelligence.EventType);
+        var planetGroupingInjectionDiagnostics = BuildPlanetGroupingPhase6InjectionDiagnostics(context, enrichedSceneIntents);
 
         return new Phase6SceneEnrichmentDiagnostics(
             EnrichedScenePlanPath: NormalizePath(enrichedPath),
             EnrichedScenePlanExists: File.Exists(enrichedPath),
             PlanetGroupingStrategyActivated: IsPlanetGroupingStrategyActivated(context),
             PlanetGroupingEnricherExecuted: plan is not null,
-            PlanetGroupingIntentInjected: isPlanetGroupingEvent && ContainsAnyPhase6ValidationIntent(generatedText, "planet grouping", "multi-planet grouping"),
-            GuidedScanPathInjected: isPlanetGroupingEvent && ContainsAnyPhase6ValidationIntent(generatedText, "guided scan path", "scan path", "grouping arc"),
+            PlanetGroupingIntentInjected: planetGroupingInjectionDiagnostics.PlanetGroupingIntentInjected,
+            GuidedScanPathInjected: planetGroupingInjectionDiagnostics.GuidedScanPathInjected,
             EnrichedSceneIntentCount: enrichedSceneIntents.Length,
             EnrichedSceneIntents: enrichedSceneIntents,
             VisualIntentCount: visualIntents.Length,
@@ -1893,10 +1889,38 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static bool IsPlanetGroupingEventType(string? eventType)
-        => string.Equals(eventType, "PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(eventType?.Trim(), "PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
 
-    private static bool ContainsAnyPhase6ValidationIntent(IEnumerable<string> values, params string[] phrases)
-        => values.Any(value => phrases.Any(phrase => ContainsToken(value, phrase)));
+    private static bool IsPlanetGroupingPhase6Event(ProductionPhaseContext context)
+        => IsPlanetGroupingEventType(context.ProductionEventIntelligence.EventType)
+            || IsPlanetGroupingEventType(context.Request.EventType)
+            || IsPlanetGroupingEventType(context.ExecutionContext.EventType);
+
+    private static PlanetGroupingPhase6InjectionDiagnostics BuildPlanetGroupingPhase6InjectionDiagnostics(
+        ProductionPhaseContext context,
+        IReadOnlyList<Phase6ValidationIntentDiagnostics> enrichedSceneIntents)
+    {
+        if (!IsPlanetGroupingPhase6Event(context))
+            return new(false, false);
+
+        return new(
+            PlanetGroupingIntentInjected: ContainsAnyPhase6ValidationIntent(enrichedSceneIntents, "planet grouping"),
+            GuidedScanPathInjected: ContainsAnyPhase6ValidationIntent(enrichedSceneIntents, "guided scan path", "scan path", "grouping arc"));
+    }
+
+    private static bool ContainsAnyPhase6ValidationIntent(
+        IEnumerable<Phase6ValidationIntentDiagnostics> enrichedSceneIntents,
+        params string[] phrases)
+        => enrichedSceneIntents.Any(intent => phrases.Any(phrase => ContainsPhraseIgnoreCase(intent.Value, phrase)));
+
+    private static bool ContainsPhraseIgnoreCase(string? value, string phrase)
+        => !string.IsNullOrWhiteSpace(value)
+            && !string.IsNullOrWhiteSpace(phrase)
+            && value.Contains(phrase, StringComparison.OrdinalIgnoreCase);
+
+    private sealed record PlanetGroupingPhase6InjectionDiagnostics(
+        bool PlanetGroupingIntentInjected,
+        bool GuidedScanPathInjected);
 
     private sealed record Phase6SceneEnrichmentDiagnostics(
         string EnrichedScenePlanPath,
