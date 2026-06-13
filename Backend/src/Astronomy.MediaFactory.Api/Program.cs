@@ -5747,6 +5747,64 @@ app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRe
     return Results.Ok(new { outputDirectory, qualityReportPath, items = reports });
 }).Accepts<VisualLabGenerateRequest>("application/json");
 
+
+app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLabBackgroundGenerateRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+{
+    if (environment.IsProduction())
+    {
+        return Results.NotFound(new { message = "The visual lab endpoint is available only in development or test environments." });
+    }
+
+    var validationErrors = ValidateVisualLabBackgroundRequest(request);
+    if (validationErrors.Count > 0)
+    {
+        return Results.BadRequest(new { message = "Invalid visual lab background request.", errors = validationErrors });
+    }
+
+    var eventType = request.EventType.Trim();
+    var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
+    var outputDirectory = Path.Combine(@"D:\AstronomyWorkspace\Astronomy\media-output\visual-lab\backgrounds", eventType, timestamp);
+    Directory.CreateDirectory(outputDirectory);
+
+    var width = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
+    var height = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
+    var variants = Math.Clamp(request.VariantCount.GetValueOrDefault(3), 1, 6);
+    var reports = new List<VisualLabBackgroundQualityReportItem>();
+
+    for (var i = 1; i <= variants; i++)
+    {
+        var prompt = BuildVisualLabBackgroundPrompt(request, width, height, i);
+        var promptText = JsonSerializer.Serialize(prompt, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+        var failedPromptTerms = FindVisualLabBackgroundFailedTerms(promptText);
+        if (failedPromptTerms.Count > 0)
+        {
+            return Results.BadRequest(new { message = "Background prompt contains forbidden text, label, panel, or UI instructions.", failedTermsFound = failedPromptTerms });
+        }
+
+        var imagePath = Path.Combine(outputDirectory, $"background-v{i}.png");
+        var promptPath = Path.Combine(outputDirectory, $"background-prompt-v{i}.json");
+        await File.WriteAllTextAsync(promptPath, promptText, ct);
+        await RenderVisualLabBackgroundArtworkAsync(request, imagePath, width, height, i, ct);
+
+        var imageExists = File.Exists(imagePath);
+        var imageBlank = imageExists && await IsVisualLabImageBlankAsync(imagePath, ct);
+        var dimensionsOk = imageExists && await HasVisualLabDimensionsAsync(imagePath, width, height, ct);
+        var failedTerms = FindVisualLabBackgroundFailedTerms(promptText);
+        if (!imageExists || imageBlank || !dimensionsOk || failedTerms.Count > 0)
+        {
+            return Results.BadRequest(new { message = "Visual lab background validation failed.", imagePath, promptPath, imageExists, imageBlank, dimensionsOk, failedTermsFound = failedTerms });
+        }
+
+        reports.Add(new VisualLabBackgroundQualityReportItem(imagePath, promptPath, request.Format, width, height, eventType, request.VisualStyle, promptText, "Manual review required: confirm premium astronomy background quality and absence of visible text, letters, numbers, labels, panels, arrows, or diagram boxes.", failedTerms, failedTerms.Count == 0, true));
+    }
+
+    var qualityReportPath = Path.Combine(outputDirectory, "background-quality-report.json");
+    var qualityReport = new VisualLabBackgroundQualityReport(outputDirectory, timestamp, reports);
+    await File.WriteAllTextAsync(qualityReportPath, JsonSerializer.Serialize(qualityReport, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }), ct);
+
+    return Results.Ok(new { outputDirectory, qualityReportPath, items = reports });
+}).Accepts<VisualLabBackgroundGenerateRequest>("application/json");
+
 app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
     Results.Ok(await ingestion.RefreshAsync(ct)));
 app.MapGet("/api/assets/celestial/status", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
@@ -5758,6 +5816,96 @@ app.MapGet("/api/assets/celestial/{objectKey}", async (string objectKey, ICelest
 });
 
 app.Run();
+
+static IReadOnlyList<string> ValidateVisualLabBackgroundRequest(VisualLabBackgroundGenerateRequest request)
+{
+    var errors = new List<string>();
+    var supported = new[] { "MeteorShower", "PlanetConjunction", "BlueMoon", "PlanetParade", "LunarEclipse", "SolarEclipse" };
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supported.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add($"eventType must be one of: {string.Join(", ", supported)}.");
+    if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
+    if (string.IsNullOrWhiteSpace(request.Format)) errors.Add("format is required.");
+    if (string.IsNullOrWhiteSpace(request.VisualStyle)) errors.Add("visualStyle is required.");
+    if (request.VariantCount is < 1 or > 6) errors.Add("variantCount must be between 1 and 6.");
+    return errors;
+}
+
+static VisualLabBackgroundPrompt BuildVisualLabBackgroundPrompt(VisualLabBackgroundGenerateRequest request, int width, int height, int variant)
+{
+    var facts = request.Facts ?? new Dictionary<string, string>();
+    var cleanFacts = facts.Where(x => !string.IsNullOrWhiteSpace(x.Value)).ToDictionary(x => x.Key, x => x.Value.Trim(), StringComparer.OrdinalIgnoreCase);
+    return new VisualLabBackgroundPrompt(
+        request.EventType.Trim(),
+        request.Title.Trim(),
+        request.Format.Trim(),
+        request.QualityMode ?? "Benchmark",
+        request.VisualStyle.Trim(),
+        variant,
+        width,
+        height,
+        "AI-first premium astronomy poster background artwork only; reserve clean negative space for future deterministic overlays.",
+        "Photorealistic dark sky with bright meteor streaks, subtle Geminids radiant area, dark mountain or open landscape horizon, high contrast, cinematic lighting, atmospheric depth, premium astronomy poster finish.",
+        cleanFacts,
+        new[] { "no text", "no letters", "no numbers", "no labels", "no UI panels", "no diagram boxes", "no arrows" },
+        "Manual review required before overlay composer work begins.");
+}
+
+static async Task RenderVisualLabBackgroundArtworkAsync(VisualLabBackgroundGenerateRequest request, string imagePath, int width, int height, int variant, CancellationToken ct)
+{
+    using var image = new Image<Rgba32>(width, height, Color.ParseHex("#020611"));
+    var random = new Random(HashCode.Combine(request.EventType, request.Title, variant));
+
+    image.Mutate(ctx =>
+    {
+        for (var y = 0; y < height; y += 3)
+        {
+            var t = y / (float)height;
+            var color = Color.FromRgb((byte)(2 + 8 * t), (byte)(7 + 14 * t), (byte)(18 + 22 * t));
+            ctx.Fill(color, new RectangleF(0, y, width, 3));
+        }
+
+        ctx.Fill(Color.ParseHex("#2E6BBA").WithAlpha(0.18f), new EllipsePolygon(width * 0.52f, height * 0.26f, width * 0.26f));
+        ctx.Fill(Color.ParseHex("#7F4DFF").WithAlpha(0.10f), new EllipsePolygon(width * 0.35f, height * 0.35f, width * 0.22f));
+
+        for (var i = 0; i < 520; i++)
+        {
+            var x = random.Next(width);
+            var y = random.Next((int)(height * 0.72f));
+            var r = random.NextSingle() * 1.7f + 0.25f;
+            ctx.Fill(Color.White.WithAlpha(random.NextSingle() * 0.65f + 0.22f), new EllipsePolygon(x, y, r));
+        }
+
+        var radiant = new PointF(width * (0.50f + (variant - 2) * 0.035f), height * 0.25f);
+        ctx.Fill(Color.ParseHex("#BBD9FF").WithAlpha(0.10f), new EllipsePolygon(radiant.X, radiant.Y, width * 0.055f));
+        for (var i = 0; i < 12; i++)
+        {
+            var start = new PointF(radiant.X + random.Next(-260, 260), radiant.Y + random.Next(-80, 210));
+            var length = random.Next(140, 390);
+            var end = new PointF(start.X + length * (0.72f + random.NextSingle() * 0.18f), start.Y + length * (0.28f + random.NextSingle() * 0.16f));
+            var thickness = random.NextSingle() * 3.2f + 1.8f;
+            ctx.DrawLine(Color.ParseHex("#E9FBFF").WithAlpha(0.88f), thickness, start, end);
+            ctx.DrawLine(Color.ParseHex("#74D7FF").WithAlpha(0.28f), thickness + 5.5f, start, end);
+        }
+
+        var horizon = height * 0.78f;
+        var mountainPoints = new List<PointF> { new(0, height), new(0, horizon + random.Next(-20, 25)) };
+        for (var x = 0; x <= width; x += width / 10)
+        {
+            mountainPoints.Add(new PointF(x, horizon + random.Next(-90, 45)));
+        }
+        mountainPoints.Add(new PointF(width, height));
+        ctx.Fill(Color.ParseHex("#03050A").WithAlpha(0.96f), new Polygon(new LinearLineSegment(mountainPoints.ToArray())));
+        ctx.Fill(Color.Black.WithAlpha(0.24f), new RectangleF(0, 0, width, height));
+        ctx.Fill(Color.ParseHex("#07101D").WithAlpha(0.62f), new RectangleF(0, horizon, width, height - horizon));
+    });
+
+    await image.SaveAsPngAsync(imagePath, new PngEncoder(), ct);
+}
+
+static IReadOnlyList<string> FindVisualLabBackgroundFailedTerms(string value)
+{
+    var positiveForbiddenPatterns = new[] { "add text", "include text", "render text", "add labels", "include labels", "render labels", "add numbers", "include numbers", "add letters", "include letters" };
+    return positiveForbiddenPatterns.Where(t => value.Contains(t, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+}
 
 static IReadOnlyList<string> ValidateVisualLabRequest(VisualLabGenerateRequest request)
 {
@@ -8679,6 +8827,46 @@ static string NormalizePreferredAssetType(string? assetType)
 
 
 sealed record WeeklyEndToEndStageResult<T>(bool Success, T? Value, IReadOnlyList<string> Errors);
+
+public sealed record VisualLabBackgroundGenerateRequest(
+    string EventType,
+    string Title,
+    string Format,
+    string? QualityMode,
+    int? VariantCount,
+    string VisualStyle,
+    Dictionary<string, string>? Facts);
+
+public sealed record VisualLabBackgroundPrompt(
+    string EventType,
+    string Title,
+    string Format,
+    string QualityMode,
+    string VisualStyle,
+    int Variant,
+    int Width,
+    int Height,
+    string CreativeDirection,
+    string Prompt,
+    IReadOnlyDictionary<string, string> Facts,
+    IReadOnlyList<string> ForbiddenContent,
+    string ApprovalGate);
+
+public sealed record VisualLabBackgroundQualityReport(string OutputDirectory, string Timestamp, IReadOnlyList<VisualLabBackgroundQualityReportItem> Items);
+
+public sealed record VisualLabBackgroundQualityReportItem(
+    string ImagePath,
+    string PromptPath,
+    string Format,
+    int Width,
+    int Height,
+    string EventType,
+    string VisualStyle,
+    string PromptUsed,
+    string VisualQualityNotes,
+    IReadOnlyList<string> FailedTermsFound,
+    bool TextPolicyCheckPassed,
+    bool ManualReviewRequired);
 
 public sealed record VisualLabGenerateRequest(
     string EventType,
