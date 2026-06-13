@@ -122,6 +122,7 @@ public sealed class QuestionDrivenVisualComposer(
             var narrationScene = narration.Scenes.FirstOrDefault(s => s.SceneNumber == sceneNumber)
                 ?? throw new ArgumentException($"Question-driven narration is missing scene {sceneNumber}.", nameof(request));
             var sourceResolution = ResolveVisualSource(request, enrichedPlan, scene, narrationScene);
+            var sourceRequiredVisualObjects = ResolveSourceRequiredVisualObjects(enrichedPlan, request.ProductionContext?.ProductionEventIntelligence);
             var promptVisualIntent = $"{scene.VisualIntent} {narrationScene.SourceAnswer} {narrationScene.NarrationText} {sourceResolution.AiCinematicPrompt}";
             var promptImageIntent = $"{scene.ImagePromptIntent} {narrationScene.ViewerTakeaway} {narrationScene.CaptionText} {sourceResolution.AiCinematicPrompt}";
             var prompt = promptGenerator.GeneratePrompt(new QuestionDrivenImagePromptRequest(
@@ -134,6 +135,7 @@ public sealed class QuestionDrivenVisualComposer(
                 promptImageIntent,
                 usesLocalPlanetAssets && venusAsset is not null && jupiterAsset is not null));
             var spec = BuildSpec(request, enrichedPlan, scene, narrationScene, prompt, eventType, usesLocalPlanetAssets, sourceResolution);
+            LogSceneRequiredVisualObjectPropagation(scene, sourceRequiredVisualObjects, spec.RequiredVisualObjects ?? []);
             ValidateLocalPlanetAssetContract(spec);
             ValidateRequiredVisualObjectContract(spec, request.ProductionContext);
             ValidateVisualSourceResolutionContract(spec, sourceResolution);
@@ -159,7 +161,7 @@ public sealed class QuestionDrivenVisualComposer(
                 ? new QuestionDrivenPresentationVariants(NormalizePath(longFinalPath), NormalizePath(shortFinalPath))
                 : null;
             var plannedOutputs = new QuestionDrivenPlannedOutputs(NormalizePath(finalPath), NormalizePath(srtPath), NormalizePath(narrationTextPath), NormalizePath(specPath), string.Empty, NormalizePath(reviewPath), presentationVariants);
-            var phase8SceneDiagnostic = BuildPhase8SceneVisualSourceDiagnostic(scene, narrationScene, spec, sourceResolution, planPath, specPath, prompt);
+            var phase8SceneDiagnostic = BuildPhase8SceneVisualSourceDiagnostic(scene, narrationScene, spec, sourceResolution, planPath, specPath, prompt, sourceRequiredVisualObjects);
             phase8SceneDiagnostics.Add(phase8SceneDiagnostic);
             logger.LogInformation("Phase 8 visual source diagnostics scene {SceneNumber}: source={SelectedVisualSourceType} enriched={UsedEnrichedScenePlan} fallback={UsedFallbackVisualTemplate} spec={InfographicSpecPath}", phase8SceneDiagnostic.SceneNumber, phase8SceneDiagnostic.SelectedVisualSourceType, phase8SceneDiagnostic.UsedEnrichedScenePlan, phase8SceneDiagnostic.UsedFallbackVisualTemplate, phase8SceneDiagnostic.InfographicSpecPath);
             var validationPreview = BuildValidationPreview(spec, srt, review, overlayPlan, plannedOutputs);
@@ -349,7 +351,22 @@ public sealed class QuestionDrivenVisualComposer(
             scenes);
     }
 
-    private static Phase8SceneVisualSourceDiagnostic BuildPhase8SceneVisualSourceDiagnostic(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, QuestionDrivenVisualSpec spec, VisualSourceResolutionResult sourceResolution, string planPath, string specPath, string rendererPromptBeforeRendering)
+    private void LogSceneRequiredVisualObjectPropagation(EnrichedQuestionSceneDto scene, IReadOnlyList<string> sourceRequiredVisualObjects, IReadOnlyList<string> finalRequiredVisualObjectsWrittenToSpec)
+    {
+        if (scene.SceneNumber != 2) return;
+
+        logger.LogInformation(
+            "Phase 8 scene {SceneNumber:000} PlanetGrouping metadata propagation: sourceVisualIntent={SourceVisualIntent}; sourceImagePromptIntent={SourceImagePromptIntent}; sourceOverlayIntent={SourceOverlayIntent}; sourceRequiredVisualObjects={SourceRequiredVisualObjects}; mappedRequiredVisualObjects={MappedRequiredVisualObjects}; finalRequiredVisualObjectsWrittenToSpec={FinalRequiredVisualObjectsWrittenToSpec}",
+            scene.SceneNumber,
+            scene.VisualIntent,
+            scene.ImagePromptIntent,
+            scene.OverlayIntent,
+            sourceRequiredVisualObjects,
+            finalRequiredVisualObjectsWrittenToSpec,
+            finalRequiredVisualObjectsWrittenToSpec);
+    }
+
+    private static Phase8SceneVisualSourceDiagnostic BuildPhase8SceneVisualSourceDiagnostic(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, QuestionDrivenVisualSpec spec, VisualSourceResolutionResult sourceResolution, string planPath, string specPath, string rendererPromptBeforeRendering, IReadOnlyList<string> sourceRequiredVisualObjects)
     {
         var usedFallbackVisualTemplate = sourceResolution.SourceType == VisualSourceType.GenericFallback || sourceResolution.GenericFallbackAllowed;
         var fallbackReason = usedFallbackVisualTemplate
@@ -368,6 +385,9 @@ public sealed class QuestionDrivenVisualComposer(
             scene.ImagePromptIntent,
             scene.OverlayIntent,
             narrationScene.CaptionText,
+            sourceRequiredVisualObjects,
+            spec.RequiredVisualObjects ?? [],
+            spec.RequiredVisualObjects ?? [],
             spec.RequiredVisualObjects ?? [],
             spec.ResolvedObjectNames ?? [],
             spec.StrategyId,
@@ -572,6 +592,10 @@ public sealed class QuestionDrivenVisualComposer(
         IReadOnlyList<string> RequiredVisualObjects,
         IReadOnlyList<string> ResolvedObjectNames,
         IReadOnlyList<string> VisualMotifs);
+
+
+    private static IReadOnlyList<string> ResolveSourceRequiredVisualObjects(EnrichedQuestionScenePlanDto enrichedPlan, ProductionEventIntelligence? intelligence)
+        => NormalizeMetadataList(FirstNonEmptyList(enrichedPlan.Diagnostics?.RequiredVisualObjects, intelligence?.RequiredVisualObjects));
 
     private static PlanetGroupingInfographicMetadata? ResolvePlanetGroupingInfographicMetadata(EnrichedQuestionScenePlanDto enrichedPlan, ProductionEventIntelligence? intelligence, bool isPlanetGrouping)
     {
