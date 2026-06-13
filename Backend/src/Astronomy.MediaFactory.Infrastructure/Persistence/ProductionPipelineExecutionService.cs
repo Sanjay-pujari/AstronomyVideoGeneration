@@ -582,6 +582,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var manifestPath = Path.Combine(sceneAssetsRoot, "scene-variant-manifest.json");
         var manifest = new List<Phase8SceneVariantManifestItem>();
         var generatedFiles = new List<string>();
+        ResetPhase8SceneVariantOutputRoot(sceneAssetsRoot);
 
         foreach (var scene in plan.Scenes.OrderBy(scene => scene.SceneNumber))
         {
@@ -600,27 +601,31 @@ public sealed partial class ProductionPipelineExecutionService(
                 foreach (var format in Phase8ProfessionalSlideFormats)
                 {
                     var imagePath = BuildProfessionalSlidePath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
-                    var backgroundPath = BuildProfessionalSlideBackgroundPath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
+                    var backgroundPath = BuildProfessionalSlideTemporaryBackgroundPath(sceneAssetsRoot, format.Format, scene.SceneNumber, variant.VariantNo, variant.VariantType);
                     var finalValidationErrors = new List<string>();
                     var backgroundValidationErrors = new List<string>();
                     var renderStatus = "rendered";
                     try
                     {
-                        if (context.OverwriteExisting || !File.Exists(backgroundPath))
-                            await RenderCleanAstronomyBackgroundAsync(backgroundPath, format.RenderVariant.Width, format.RenderVariant.Height, scene.SceneNumber, variant.VariantNo, cancellationToken);
-                        if (context.OverwriteExisting || !File.Exists(imagePath))
-                            await infographicRenderer.RenderAsync(imagePath, spec, string.Empty, string.Empty, cancellationToken, format.RenderVariant);
-                        else
-                            renderStatus = "existing";
+                        await RenderCleanAstronomyBackgroundAsync(backgroundPath, format.RenderVariant.Width, format.RenderVariant.Height, scene.SceneNumber, variant.VariantNo, cancellationToken);
+                        var backgroundImageValidation = ValidateProfessionalSlideImage(backgroundPath, format.RenderVariant.Width, format.RenderVariant.Height, backgroundValidationErrors);
+                        if (backgroundValidationErrors.Count > 0 || !backgroundImageValidation.IsBlankCheckPassed)
+                            throw new InvalidOperationException($"Phase 8 scene variant validation failed: generated background for scene {scene.SceneNumber} format {format.Format} variant {variant.VariantNo} is invalid: {string.Join(", ", backgroundValidationErrors)}");
+
+                        await infographicRenderer.RenderAsync(imagePath, spec, string.Empty, string.Empty, cancellationToken, format.RenderVariant);
                     }
                     catch
                     {
                         renderStatus = "failed";
                         throw;
                     }
+                    finally
+                    {
+                        if (File.Exists(backgroundPath))
+                            File.Delete(backgroundPath);
+                    }
 
                     var finalImageValidation = ValidateProfessionalSlideImage(imagePath, format.RenderVariant.Width, format.RenderVariant.Height, finalValidationErrors);
-                    var backgroundImageValidation = ValidateProfessionalSlideImage(backgroundPath, format.RenderVariant.Width, format.RenderVariant.Height, backgroundValidationErrors);
                     var layoutTemplate = ResolveProfessionalSlideLayoutTemplate(format.Format, variant.VariantType);
                     var safeAreaPassed = finalValidationErrors.Count == 0;
                     var overlapCheckPassed = finalValidationErrors.Count == 0;
@@ -630,26 +635,9 @@ public sealed partial class ProductionPipelineExecutionService(
                         format.Format,
                         variant.VariantNo,
                         variant.VariantType,
-                        "background",
-                        NormalizePath(backgroundPath),
-                        NormalizePath(backgroundPath),
-                        string.Empty,
-                        layoutTemplate,
-                        backgroundValidationErrors.Count == 0,
-                        backgroundValidationErrors.Count == 0,
-                        renderStatus,
-                        backgroundImageValidation.IsBlankCheckPassed,
-                        backgroundImageValidation.NonBlackPixelRatio,
-                        backgroundImageValidation.FileSizeBytes,
-                        backgroundValidationErrors.ToArray()));
-                    manifest.Add(new Phase8SceneVariantManifestItem(
-                        scene.SceneNumber,
-                        format.Format,
-                        variant.VariantNo,
-                        variant.VariantType,
                         "final",
                         NormalizePath(imagePath),
-                        NormalizePath(backgroundPath),
+                        string.Empty,
                         NormalizePath(imagePath),
                         layoutTemplate,
                         safeAreaPassed,
@@ -659,7 +647,6 @@ public sealed partial class ProductionPipelineExecutionService(
                         finalImageValidation.NonBlackPixelRatio,
                         finalImageValidation.FileSizeBytes,
                         finalValidationErrors.ToArray()));
-                    generatedFiles.Add(backgroundPath);
                     generatedFiles.Add(imagePath);
                 }
             }
@@ -667,23 +654,53 @@ public sealed partial class ProductionPipelineExecutionService(
 
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
         generatedFiles.Add(manifestPath);
-        ValidatePhase8SceneVariantOutputs(plan, manifestPath, manifest);
+        ValidatePhase8SceneVariantOutputs(plan, sceneAssetsRoot, manifestPath, manifest);
         return generatedFiles;
     }
 
-    private static void ValidatePhase8SceneVariantOutputs(EnrichedQuestionScenePlanDto plan, string manifestPath, IReadOnlyList<Phase8SceneVariantManifestItem> manifest)
+    private static void ValidatePhase8SceneVariantOutputs(EnrichedQuestionScenePlanDto plan, string sceneAssetsRoot, string manifestPath, IReadOnlyList<Phase8SceneVariantManifestItem> manifest)
     {
         if (!File.Exists(manifestPath))
             throw new InvalidOperationException("Phase 8 scene variant validation failed: scene-variant-manifest.json was not written.");
 
         var issues = new List<string>();
-        foreach (var scene in plan.Scenes.Where(scene => scene.IsRequired))
+        var expectedSceneFolders = Enumerable.Range(1, 6).Select(sceneNumber => $"scene-{sceneNumber:00}").ToArray();
+        foreach (var format in Phase8ProfessionalSlideFormats.Select(f => f.Format))
         {
+            var formatRoot = Path.Combine(sceneAssetsRoot, format);
+            var actualFolders = Directory.Exists(formatRoot)
+                ? Directory.EnumerateDirectories(formatRoot).Select(Path.GetFileName).Where(name => !string.IsNullOrWhiteSpace(name)).Cast<string>().OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray()
+                : [];
+            var duplicateFolders = actualFolders.Where(name => Regex.IsMatch(name, "^scene-\\d{3,}$", RegexOptions.IgnoreCase)).ToArray();
+            if (!actualFolders.SequenceEqual(expectedSceneFolders, StringComparer.OrdinalIgnoreCase))
+                issues.Add($"format {format} must contain exactly these 6 scene folders: {string.Join(", ", expectedSceneFolders)}; actual: {string.Join(", ", actualFolders)}");
+            if (duplicateFolders.Length > 0)
+                issues.Add($"format {format} contains unsupported scene-001 style duplicate folder(s): {string.Join(", ", duplicateFolders)}");
+        }
+
+        var backgroundOnlyFiles = Directory.Exists(sceneAssetsRoot)
+            ? Directory.EnumerateFiles(sceneAssetsRoot, "*.png", SearchOption.AllDirectories)
+                .Where(path => path.Contains($"{Path.DirectorySeparatorChar}backgrounds{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(path).Contains("background", StringComparison.OrdinalIgnoreCase))
+                .ToArray()
+            : [];
+        if (backgroundOnlyFiles.Length > 0)
+            issues.Add($"background-only images must not be persisted: {string.Join(", ", backgroundOnlyFiles.Select(NormalizePath))}");
+
+        if (manifest.Any(item => !item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase)))
+            issues.Add("scene-variant-manifest.json must reference final valid images only.");
+
+        foreach (var scene in plan.Scenes.Where(scene => scene.IsRequired).OrderBy(scene => scene.SceneNumber))
+        {
+            var expectedVariantCount = scene.VisualVariants?.Any(variant => variant.VariantType.Equals("transition_or_closing", StringComparison.OrdinalIgnoreCase)) == true ? 5 : 4;
             foreach (var format in Phase8ProfessionalSlideFormats.Select(f => f.Format))
             {
                 var renderedCount = manifest.Count(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && item.SceneNumber == scene.SceneNumber && item.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && item.SafeAreaPassed && item.OverlapCheckPassed && item.IsBlankCheckPassed && IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) && File.Exists(item.FinalImagePath));
-                if (renderedCount < 3)
-                    issues.Add($"required scene {scene.SceneNumber} format {format} has {renderedCount} rendered professional slide variant image(s), expected at least 3");
+                if (renderedCount != expectedVariantCount)
+                    issues.Add($"required scene {scene.SceneNumber} format {format} has {renderedCount} rendered professional slide variant image(s), expected exactly {expectedVariantCount}");
+                var sceneFolder = Path.Combine(sceneAssetsRoot, format, $"scene-{scene.SceneNumber:00}");
+                var pngCount = Directory.Exists(sceneFolder) ? Directory.EnumerateFiles(sceneFolder, "*.png", SearchOption.TopDirectoryOnly).Count() : 0;
+                if (pngCount != expectedVariantCount)
+                    issues.Add($"required scene {scene.SceneNumber} format {format} folder has {pngCount} png file(s), expected exactly {expectedVariantCount}");
             }
         }
 
@@ -702,8 +719,21 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string BuildProfessionalSlidePath(string sceneAssetsRoot, string format, int sceneNumber, int variantNo, string variantType)
         => Path.Combine(sceneAssetsRoot, format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}.png");
 
-    private static string BuildProfessionalSlideBackgroundPath(string sceneAssetsRoot, string format, int sceneNumber, int variantNo, string variantType)
-        => Path.Combine(sceneAssetsRoot, "backgrounds", format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}-background.png");
+    private static string BuildProfessionalSlideTemporaryBackgroundPath(string sceneAssetsRoot, string format, int sceneNumber, int variantNo, string variantType)
+        => Path.Combine(sceneAssetsRoot, ".tmp-backgrounds", format, $"scene-{sceneNumber:00}", $"scene-{sceneNumber:00}-{ResolveProfessionalSlideVariantSlug(variantNo, variantType)}-background.png");
+
+    private static void ResetPhase8SceneVariantOutputRoot(string sceneAssetsRoot)
+    {
+        foreach (var child in new[] { "long", "short", "backgrounds", ".tmp-backgrounds" })
+        {
+            var path = Path.Combine(sceneAssetsRoot, child);
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+
+        Directory.CreateDirectory(Path.Combine(sceneAssetsRoot, "long"));
+        Directory.CreateDirectory(Path.Combine(sceneAssetsRoot, "short"));
+    }
 
     private static string ResolveProfessionalSlideVariantSlug(int variantNo, string variantType)
     {
