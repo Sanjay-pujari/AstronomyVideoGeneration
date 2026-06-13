@@ -363,20 +363,14 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var safeScene = Math.Max(1, scene.SceneNumber);
         var sceneToken = $"scene-{safeScene:00}";
-        var variants = new List<SceneVisualVariantDto>
-        {
-            new(1, "wide_context", "Establish the full sky context before focusing on the answer.", 6.0, "Wide locked-off sky frame", $"Show the broader viewing context for {scene.ViewerQuestion}", "Slow drift or gentle parallax only", "Minimal labels for horizon, direction, or key object group", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-wide-context.png"),
-            new(2, "object_focus", "Focus attention on the primary visual object or relationship in this scene.", 7.0, "Medium telephoto object-centered frame", $"Center the object or relationship implied by: {scene.VisualIntent}", "Subtle push-in toward the key object", "Short object label and one supporting fact", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-object-focus.png"),
-            new(3, "educational_overlay", "Clarify the lesson with concise explanatory overlays.", 7.0, "Stable infographic-friendly composition", $"Reserve clean negative space for overlays explaining: {scene.ViewerTakeaway}", "Hold mostly static so labels remain readable", "Use the scene overlay intent as the primary annotation guide", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-educational-overlay.png"),
-            new(4, "cinematic_detail", "Add a close, atmospheric detail that supports retention without changing the scene meaning.", 5.0, "Cinematic close-up detail frame", $"Highlight a visually memorable detail from: {scene.ImagePromptIntent}", "Slow cinematic reveal or light sweep", "No more than one small caption", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-cinematic-detail.png")
-        };
-
-        if (!scene.IsRequired || scene.SceneNumber > 1)
-        {
-            variants.Add(new SceneVisualVariantDto(5, "transition_or_closing", "Provide an optional bridge into the next scene or a closing beat.", 4.0, "Transition-ready composition", "Leave visual continuity space for a dissolve, wipe, or closing title card", "Gentle fade, pan, or hold for editorial transition", "Optional next-step or closing cue only", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-transition-or-closing.png"));
-        }
-
-        return variants;
+        return
+        [
+            new(1, "wide_context", "Establish the full sky context before focusing on the answer.", 6.0, "Wide locked-off sky frame", $"WIDE FRAMING: place the main object small in the upper-right third with a broad horizon band across the lower quarter; emphasize the surrounding sky context for {scene.ViewerQuestion}", "Slow drift or gentle parallax only", "Single compact label anchored near the lower-left horizon; no stacked panel", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-wide-context.png"),
+            new(2, "object_focus", "Focus attention on the primary visual object or relationship in this scene.", 7.0, "Zoomed telephoto frame", $"ZOOMED FRAMING: enlarge the object or relationship implied by {scene.VisualIntent} and place it on the center-left focal third with the horizon mostly cropped out", "Subtle push-in toward the key object", "Short object label adjacent to the focal object plus one small fact chip on the opposite side", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-object-focus.png"),
+            new(3, "educational_overlay", "Clarify the lesson with concise explanatory overlays.", 7.0, "Stable infographic layout", $"INFOGRAPHIC LAYOUT: reserve a tall left-side explanation panel, place the sky/object diagram on the right, and use connector lines to explain {scene.ViewerTakeaway}", "Hold mostly static so labels remain readable", "Stacked headline, two bullet labels, and one tip panel inside deterministic safe areas", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-educational-overlay.png"),
+            new(4, "cinematic_detail", "Add a close, atmospheric detail that supports retention without changing the scene meaning.", 5.0, "Close-up cinematic composition", $"CLOSE-UP CINEMATIC COMPOSITION: crop tightly on a memorable detail from {scene.ImagePromptIntent}, place the object large on the lower-right third, and use dark negative space above", "Slow cinematic reveal or light sweep", "Tiny caption only in an upper-left letterbox-safe area", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-cinematic-detail.png"),
+            new(5, "transition_or_closing", "Provide a call-to-action bridge into the next scene or a closing beat.", 4.0, "CTA card composition", "CTA COMPOSITION: use a clean centered closing/title card with the celestial object as a small background accent and a prominent lower safe-area call-to-action block", "Gentle fade, pan, or hold for editorial transition", "Large CTA line, small save/share reminder, and generous negative space", "Planning metadata only; do not render during Phase 6", $"{sceneToken}-transition-or-closing.png")
+        ];
     }
 
     private static string BuildEnrichedScenePlanPath(ProductionPhaseContext context)
@@ -716,11 +710,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var baseLines = SplitOverlayIntent(scene.OverlayIntent).DefaultIfEmpty(scene.ViewerTakeaway).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
         return NormalizePhase8VariantType(variant.VariantType) switch
         {
-            "wide_context" => baseLines.Take(1).ToArray(),
-            "object_focus" => baseLines.Take(2).ToArray(),
-            "educational_overlay" => baseLines.Take(3).Append("Tip: compare the label with the sky position").Take(4).ToArray(),
-            "cinematic_detail" => baseLines.Take(1).ToArray(),
-            "transition_or_closing" => new[] { FirstNonEmpty(scene.ViewerTakeaway, "Save the date"), "Save this sky reminder" },
+            "wide_context" => baseLines.Take(1).Select(line => $"Wide context: {line}").ToArray(),
+            "object_focus" => baseLines.Take(1).Select(line => $"Object focus: {line}").Append("Zoomed view").Take(2).ToArray(),
+            "educational_overlay" => baseLines.Take(2).Prepend("How to read the sky").Append("Tip: compare the label with the sky position").Take(4).ToArray(),
+            "cinematic_detail" => new[] { $"Detail: {FirstNonEmpty(baseLines.FirstOrDefault(), scene.ViewerTakeaway)}" },
+            "transition_or_closing" => new[] { "Save this sky reminder", FirstNonEmpty(scene.ViewerTakeaway, "Step outside tonight") },
             _ => baseLines.Take(3).ToArray()
         };
     }
@@ -736,9 +730,21 @@ public sealed partial class ProductionPipelineExecutionService(
             variant.CameraStyle,
             $"phase8-variant-type:{type}",
             $"phase8-layout-template:{ResolveProfessionalSlideLayoutTemplate("long", variant.VariantType)}",
+            BuildPhase8VariantCompositionSignature(type),
             $"phase8-background-seed:{StablePhase8VariantSeed(scene.SceneNumber, variant.VariantNo, variant.VariantType)}"
         }.Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
     }
+
+    private static string BuildPhase8VariantCompositionSignature(string type)
+        => type switch
+        {
+            "wide_context" => "phase8-composition:wide framing; object upper-right third; text lower-left horizon label",
+            "object_focus" => "phase8-composition:zoomed framing; object center-left; text right-side fact chip",
+            "educational_overlay" => "phase8-composition:infographic layout; text left panel; object diagram right",
+            "cinematic_detail" => "phase8-composition:close-up cinematic; object lower-right; text tiny upper-left",
+            "transition_or_closing" => "phase8-composition:CTA composition; centered title card; text lower safe-area CTA",
+            _ => $"phase8-composition:distinct-{type}"
+        };
 
     private static IEnumerable<string> SplitOverlayIntent(string? value)
         => string.IsNullOrWhiteSpace(value)
@@ -778,11 +784,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var seed = StablePhase8VariantSeed(sceneNumber, variantNo, variantType);
         return type switch
         {
-            "wide_context" => $"wide sky landscape, broad context, minimal overlays, distant object placement, sparse star seed {seed}",
-            "object_focus" => $"radiant/object-centered composition, strong focal point, few info panels, centered crop seed {seed}",
-            "educational_overlay" => $"infographic layout with left/bottom information panel, labels, tips, dense overlay grid seed {seed}",
-            "cinematic_detail" => $"dramatic close-up/detail, minimal text, atmospheric vignette and close camera framing seed {seed}",
-            "transition_or_closing" => $"CTA/reminder/save-date closing layout, clean negative space, final card composition seed {seed}",
+            "wide_context" => $"wide framing; object small on upper-right third; horizon spans lower quarter; one lower-left label; sparse star seed {seed}",
+            "object_focus" => $"zoomed framing; object enlarged on center-left focal third; horizon cropped; right-side fact chip; telephoto crop seed {seed}",
+            "educational_overlay" => $"infographic layout; left-side explanation panel; right-side sky/object diagram; connector labels and bottom tip strip seed {seed}",
+            "cinematic_detail" => $"close-up cinematic composition; object large on lower-right third; dark negative space and tiny upper-left caption seed {seed}",
+            "transition_or_closing" => $"CTA composition; centered closing/title card; small object accent in background; prominent lower safe-area save/share reminder seed {seed}",
             _ => $"distinct variant composition and background reference seed {seed}"
         } + $"; output format {format}";
     }
