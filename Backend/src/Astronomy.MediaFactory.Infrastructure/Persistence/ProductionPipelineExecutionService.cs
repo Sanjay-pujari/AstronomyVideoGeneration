@@ -15,6 +15,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IQuestionSceneIntentEnricher sceneIntentEnricher,
     IQuestionDrivenNarrationGenerator narrationGenerator,
     IEditorialAstronomyInfographicComposer sceneEngine,
+    IAstronomyInfographicRenderer infographicRenderer,
     IHeroAssetIntelligenceEngine heroEngine,
     IThumbnailAssetIntelligenceService thumbnailEngine,
     IVideoAssemblyIntelligenceService videoAssemblyEngine,
@@ -553,9 +554,110 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(Path.Combine(context.ExecutionContext.SceneRoot!, "long"));
         ValidateSceneApprovalTextBeforeRendering(context);
         var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
+        var generatedFiles = new List<string>(response.GeneratedFiles);
+        if (context.PipelineRequest.EnableSceneVariants)
+            generatedFiles.AddRange(await RenderPhase8SceneVisualVariantsAsync(context, cancellationToken));
         var shortRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "short");
         if (!DirectoryHasPng(shortRoot)) throw new InvalidOperationException($"Short scene image validation failed: no .png files were found in '{shortRoot}'.");
-        return response.GeneratedFiles.Concat(Directory.EnumerateFiles(shortRoot, "*.png")).ToArray();
+        return generatedFiles.Concat(Directory.EnumerateFiles(shortRoot, "*.png")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private async Task<IReadOnlyList<string>> RenderPhase8SceneVisualVariantsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var enrichedPath = BuildEnrichedScenePlanPath(context);
+        RequireFile(enrichedPath, "Enriched question-driven scene plan with visual variants");
+        var plan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(await File.ReadAllTextAsync(enrichedPath, cancellationToken), JsonOptions)
+            ?? throw new InvalidOperationException("Phase 8 scene variant rendering could not parse question-driven-scene-plan.enriched.json.");
+
+        var sceneAssetsRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets");
+        var manifestPath = Path.Combine(sceneAssetsRoot, "scene-variant-manifest.json");
+        var manifest = new List<Phase8SceneVariantManifestItem>();
+        var generatedFiles = new List<string>();
+
+        foreach (var scene in plan.Scenes.OrderBy(scene => scene.SceneNumber))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var variants = scene.VisualVariants?.OrderBy(variant => variant.VariantNo).ToArray() ?? [];
+            if (scene.IsRequired && variants.Length < 3)
+                throw new InvalidOperationException($"Phase 8 scene variant validation failed: required scene {scene.SceneNumber} has {variants.Length} visual variant(s), expected at least 3.");
+
+            var specPath = Path.Combine(context.ExecutionContext.SceneRoot!, $"scene-{scene.SceneNumber:000}-infographic-spec.json");
+            RequireFile(specPath, $"Phase 8 infographic spec for scene {scene.SceneNumber}");
+            var spec = JsonSerializer.Deserialize<QuestionDrivenVisualSpec>(await File.ReadAllTextAsync(specPath, cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException($"Phase 8 scene variant rendering could not parse infographic spec for scene {scene.SceneNumber}.");
+
+            var sceneFolder = Path.Combine(sceneAssetsRoot, $"scene-{scene.SceneNumber:00}");
+            Directory.CreateDirectory(sceneFolder);
+            foreach (var variant in variants)
+            {
+                var imagePath = Path.Combine(sceneFolder, SanitizeSceneVariantFileName(variant.OutputFileNameSuggestion, scene.SceneNumber, variant.VariantNo));
+                var renderStatus = "rendered";
+                try
+                {
+                    if (context.OverwriteExisting || !File.Exists(imagePath))
+                        await infographicRenderer.RenderAsync(imagePath, spec, string.Empty, string.Empty, cancellationToken, AstronomyInfographicRenderVariant.LongForm);
+                    else
+                        renderStatus = "existing";
+                }
+                catch
+                {
+                    renderStatus = "failed";
+                    throw;
+                }
+
+                if (!File.Exists(imagePath))
+                    throw new InvalidOperationException($"Phase 8 scene variant validation failed: variant image was not created at '{NormalizePath(imagePath)}'.");
+
+                manifest.Add(new Phase8SceneVariantManifestItem(
+                    scene.SceneNumber,
+                    variant.VariantNo,
+                    variant.VariantType,
+                    NormalizePath(imagePath),
+                    variant.Purpose,
+                    variant.CameraStyle,
+                    variant.CompositionHint,
+                    variant.MotionHint,
+                    variant.OverlayHint,
+                    renderStatus));
+                generatedFiles.Add(imagePath);
+            }
+        }
+
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
+        generatedFiles.Add(manifestPath);
+        ValidatePhase8SceneVariantOutputs(plan, manifestPath, manifest);
+        return generatedFiles;
+    }
+
+    private static void ValidatePhase8SceneVariantOutputs(EnrichedQuestionScenePlanDto plan, string manifestPath, IReadOnlyList<Phase8SceneVariantManifestItem> manifest)
+    {
+        if (!File.Exists(manifestPath))
+            throw new InvalidOperationException("Phase 8 scene variant validation failed: scene-variant-manifest.json was not written.");
+
+        var issues = new List<string>();
+        foreach (var scene in plan.Scenes.Where(scene => scene.IsRequired))
+        {
+            var renderedCount = manifest.Count(item => item.SceneNumber == scene.SceneNumber && IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) && File.Exists(item.ImagePath));
+            if (renderedCount < 3)
+                issues.Add($"required scene {scene.SceneNumber} has {renderedCount} rendered variant image(s), expected at least 3");
+        }
+
+        var failed = manifest.Where(item => !IsSuccessfulSceneVariantRenderStatus(item.RenderStatus) || !File.Exists(item.ImagePath)).ToArray();
+        issues.AddRange(failed.Select(item => $"scene {item.SceneNumber} variant {item.VariantNo} renderStatus={item.RenderStatus} imagePath={item.ImagePath}"));
+        if (issues.Count > 0)
+            throw new InvalidOperationException("Phase 8 scene variant validation failed: " + string.Join("; ", issues));
+    }
+
+    private static bool IsSuccessfulSceneVariantRenderStatus(string renderStatus)
+        => renderStatus.Equals("rendered", StringComparison.OrdinalIgnoreCase) || renderStatus.Equals("existing", StringComparison.OrdinalIgnoreCase);
+
+    private static string SanitizeSceneVariantFileName(string? suggestedName, int sceneNumber, int variantNo)
+    {
+        var fallback = $"scene-{sceneNumber:00}-variant-{variantNo:00}.png";
+        var fileName = Path.GetFileName(string.IsNullOrWhiteSpace(suggestedName) ? fallback : suggestedName);
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+            fileName = fileName.Replace(invalid, '-');
+        return fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? fileName : fileName + ".png";
     }
 
     private Task<IReadOnlyList<string>> PhaseValidateLongSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -2418,4 +2520,16 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool DirectoryHasPng(string path) => Directory.Exists(path) && Directory.EnumerateFiles(path, "*.png").Any();
     private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-scene-manifest.json"));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
+
+    private sealed record Phase8SceneVariantManifestItem(
+        int SceneNumber,
+        int VariantNo,
+        string VariantType,
+        string ImagePath,
+        string Purpose,
+        string CameraStyle,
+        string CompositionHint,
+        string MotionHint,
+        string OverlayHint,
+        string RenderStatus);
 }
