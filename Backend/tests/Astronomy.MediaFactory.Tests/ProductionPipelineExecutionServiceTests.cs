@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -136,10 +137,105 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Contains("Check clouds", trimmed);
     }
 
+    [Fact]
+    public async Task Phase6PlanetGroupingDiagnostics_DetectsInjectedIntentPhrasesAcrossAllIntentFields()
+    {
+        var context = CreateContext("PLANET_GROUPING", ["ShortVideo"]);
+        await WriteEnrichedScenePlanAsync(context,
+            viewerTakeaway: "Planet grouping: show Saturn, Mars, Jupiter, and Venus in one viewing region.",
+            narrationIntent: "Explain the bright planets from the horizon upward.",
+            visualIntent: "Draw a grouping arc connecting the visible planets.",
+            imagePromptIntent: "Show a quiet western horizon with labeled planets.",
+            overlayIntent: "Saturn • Mars • Jupiter • Venus",
+            accessibilityIntent: "Guided scan path: begin at western horizon and move upward.");
+
+        var diagnostics = BuildPhase6SceneEnrichmentDiagnostics(context);
+
+        Assert.True(GetBooleanDiagnostic(diagnostics, "PlanetGroupingIntentInjected"));
+        Assert.True(GetBooleanDiagnostic(diagnostics, "GuidedScanPathInjected"));
+        Assert.Equal(6, GetIntDiagnostic(diagnostics, "EnrichedSceneIntentCount"));
+    }
+
+    [Fact]
+    public async Task Phase6PlanetGroupingDiagnostics_DoesNotApplyInjectedPhraseDetectionToOtherEventTypes()
+    {
+        var context = CreateContext("PlanetPairing", ["ShortVideo"]);
+        await WriteEnrichedScenePlanAsync(context,
+            viewerTakeaway: "Multi-planet grouping: show Saturn, Mars, Jupiter, and Venus in one viewing region.",
+            narrationIntent: "Explain the bright planets from the horizon upward.",
+            visualIntent: "Use a scan path from west to east.",
+            imagePromptIntent: "Show a quiet western horizon with labeled planets.",
+            overlayIntent: "Saturn • Mars • Jupiter • Venus",
+            accessibilityIntent: "Guided scan path: begin at western horizon and move upward.");
+
+        var diagnostics = BuildPhase6SceneEnrichmentDiagnostics(context);
+
+        Assert.False(GetBooleanDiagnostic(diagnostics, "PlanetGroupingIntentInjected"));
+        Assert.False(GetBooleanDiagnostic(diagnostics, "GuidedScanPathInjected"));
+    }
+
     private static bool IsPhaseRequired(ProductionPhaseContext context, int phaseNo)
     {
         var method = typeof(ProductionPipelineExecutionService).GetMethod("IsPhaseRequiredForRequestedOutputs", BindingFlags.NonPublic | BindingFlags.Static);
         return (bool)method!.Invoke(null, [context, phaseNo])!;
+    }
+
+    private static object BuildPhase6SceneEnrichmentDiagnostics(ProductionPhaseContext context)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildPhase6SceneEnrichmentDiagnostics", BindingFlags.NonPublic | BindingFlags.Static);
+        return method!.Invoke(null, [context])!;
+    }
+
+    private static bool GetBooleanDiagnostic(object diagnostics, string propertyName)
+        => (bool)diagnostics.GetType().GetProperty(propertyName)!.GetValue(diagnostics)!;
+
+    private static int GetIntDiagnostic(object diagnostics, string propertyName)
+        => (int)diagnostics.GetType().GetProperty(propertyName)!.GetValue(diagnostics)!;
+
+    private static async Task WriteEnrichedScenePlanAsync(
+        ProductionPhaseContext context,
+        string viewerTakeaway,
+        string narrationIntent,
+        string visualIntent,
+        string imagePromptIntent,
+        string overlayIntent,
+        string accessibilityIntent)
+    {
+        Directory.CreateDirectory(context.ExecutionContext.QuestionRoot!);
+        var plan = new EnrichedQuestionScenePlanDto(
+            "event-id",
+            context.Request.RegionId,
+            context.Request.Language,
+            "CasualSkyWatcher",
+            "Beginner",
+            [
+                new EnrichedQuestionSceneDto(
+                    1,
+                    "What",
+                    "OpeningOverview",
+                    "What should I look for?",
+                    "Look for the planets near the horizon.",
+                    "CasualSkyWatcher",
+                    "Beginner",
+                    viewerTakeaway,
+                    narrationIntent,
+                    visualIntent,
+                    imagePromptIntent,
+                    overlayIntent,
+                    accessibilityIntent,
+                    true)
+            ],
+            true,
+            DateTimeOffset.UtcNow,
+            new QuestionSceneEnrichmentDiagnostics(
+                context.ProductionEventIntelligence.EventType,
+                context.ProductionEventIntelligence.RequiredVisualObjects,
+                [],
+                [],
+                [],
+                "Test"));
+        var path = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-scene-plan.enriched.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(plan, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     private static IReadOnlyList<RequestedOutputCompletion> BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
