@@ -315,6 +315,12 @@ public sealed class AstronomyInfographicRenderer(
     private string? ResolveLocalCelestialAssetPath(string? assetKey, string objectType)
     {
         var normalized = NormalizeCelestialAssetName(FirstNonEmpty(assetKey?.Replace("Planet.", string.Empty, StringComparison.OrdinalIgnoreCase), objectType));
+        foreach (var fileName in new[] { "hero-transparent.png", "hero.png" })
+        {
+            var resolvedPath = _assetPathResolver.ResolveCelestialAssetPath(normalized, fileName);
+            if (File.Exists(resolvedPath)) return resolvedPath;
+        }
+
         foreach (var directory in EnumerateRepositoryDirectories())
         {
             foreach (var fileName in new[] { "hero-transparent.png", "hero.png" })
@@ -326,6 +332,16 @@ public sealed class AstronomyInfographicRenderer(
             }
         }
         return null;
+    }
+
+    private IEnumerable<DirectoryInfo> EnumerateRepositoryDirectories()
+    {
+        if (!_useRepositoryAssetDiscovery) yield break;
+
+        for (var directory = new DirectoryInfo(Directory.GetCurrentDirectory()); directory is not null; directory = directory.Parent)
+        {
+            yield return directory;
+        }
     }
 
     private static string NormalizeCelestialAssetName(string value)
