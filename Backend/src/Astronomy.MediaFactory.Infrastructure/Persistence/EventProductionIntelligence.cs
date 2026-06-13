@@ -418,7 +418,7 @@ public sealed class ConjunctionStrategy : MediaEventStrategyBase
         WhereRequiredIntents: [Intent("direction and altitude", "north", "south", "east", "west", "horizon", "above")],
         WhenRequiredIntents: [Intent("viewer-friendly time", "best viewing", "AM", "PM", "IST", "shortly after sunset", "peak")],
         HowRequiredIntents: [Intent("alignment finding instruction", "find", "scan", "look", "same part of the sky", "clear horizon")],
-        WhyRequiredIntents: [Intent("alignment significance", "°", "alignment", "conjunction", "visually striking", "easy to compare")],
+        WhyRequiredIntents: [Intent("alignment significance", "°", "alignment", "conjunction", "closest approach", "angular separation", "visually striking", "bright planets appearing close together", "easy to compare")],
         ActionRequiredIntents: [Intent("conjunction CTA", "save", "watch", "clear", "set a reminder", "check")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
     public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "What aligns", "Best time", "Where", "How close", "CTA"], ["Intro", "Conjunction geometry", "Local timing", "Sky direction", "Finding guide", "Why it matters", "Viewing reminder", "CTA"], ["aligned objects", "subtle orbit lines", "horizon compass", "cinematic sky"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "precise, calm, factual", ["Close Conjunction", "Tonight", "Look Up"], ["meteor shower", "radiant"], ["Do not describe unrelated planets."]);
@@ -428,7 +428,9 @@ public sealed class ConjunctionStrategy : MediaEventStrategyBase
         var objects = AllObjectsPhrase(intelligence, "the conjunction objects");
         var names = Objects(intelligence, "the first object", "the second object");
         var how = names.Length >= 2 ? $"Find {names[0]} first, then scan nearby for {names[1]} in the same part of the sky." : $"Use a clear horizon and scan {FormattedDirection(intelligence)} for {objects}.";
-        var why = intelligence.AngularSeparationDegrees.HasValue ? $"{objects} appear only {intelligence.AngularSeparationDegrees.Value:0.##}° apart, making the alignment visually striking." : $"{objects} appear close in the same part of our sky, making the bright conjunction easy to compare.";
+        var why = intelligence.AngularSeparationDegrees.HasValue
+            ? $"This conjunction is visually striking because near closest approach {objects} appear only {intelligence.AngularSeparationDegrees.Value:0.##}° apart, making the alignment easy to compare."
+            : $"This conjunction is visually striking because {objects} are bright planets appearing close together, making the alignment easy to compare.";
         return CreateSet(intelligence, context,
         [
             Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{objects} form a conjunction, an apparent alignment in {context.LocationName}’s sky.", 1),
