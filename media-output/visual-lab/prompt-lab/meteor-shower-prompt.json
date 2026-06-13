@@ -1,0 +1,8 @@
+{
+  "title": "Meteor Shower Premium Astronomy Poster Prompt",
+  "eventType": "MeteorShower",
+  "style": "PremiumAstronomyPoster",
+  "prompt": "Create an ultra-premium astronomy poster background. NASA APOD quality. National Geographic astrophotography quality. Discovery Science documentary quality. Photorealistic night sky. Bright meteor streaks. Natural atmospheric depth. Dark mountain landscape. Subtle radiant region. High dynamic range. Award-winning astrophotography. No text. No labels. No arrows. No panels. No UI. No logos. No watermark.",
+  "negativePrompt": "cartoon, vector art, flat illustration, svg style, diagram, template graphics, placeholder graphics, text, letters, numbers, captions, labels, watermark, logo, ui elements, boxes, panels, arrows",
+  "qualityTarget": "NASA_APOD"
+}
