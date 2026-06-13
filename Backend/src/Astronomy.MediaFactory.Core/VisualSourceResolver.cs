@@ -93,6 +93,7 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             : intelligence.RequiredVisualObjects ?? []);
         var eventType = FirstNonEmpty(intelligence.EventType, request.StrategyId, intelligence.StrategyId);
         var strategyId = FirstNonEmpty(request.StrategyId, intelligence.StrategyId, eventType);
+        if (IsPlanetGrouping(eventType, strategyId, intelligence.Title)) strategyId = "PlanetGrouping";
         var forbidden = NormalizeList((intelligence.ForbiddenObjectNames ?? []).Concat(intelligence.ForbiddenTerms));
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -158,10 +159,11 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
         if (IsPlanetPairingConjunctionOrGrouping(eventType, strategyId, intelligence.Title))
         {
             var objects = NormalizeList(intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects));
-            var required = NormalizeList(requiredVisualObjects.Concat(objects));
-            var objectPhrase = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? string.Join(", ", objects) : string.Join(" and ", objects);
+            var isPlanetGrouping = IsPlanetGrouping(eventType, strategyId, intelligence.Title);
+            var required = NormalizeList(requiredVisualObjects.Concat(objects).Concat(isPlanetGrouping ? new[] { "planet grouping", "guided scan path" } : Array.Empty<string>()));
+            var objectPhrase = isPlanetGrouping ? string.Join(", ", objects) : string.Join(" and ", objects);
             var textureGuidance = string.Join(" ", objects.Select(ResolvePlanetTextureGuidance));
-            var groupingGuidance = IsPlanetGrouping(eventType, strategyId, intelligence.Title)
+            var groupingGuidance = isPlanetGrouping
                 ? "Use PlanetGroupingSceneStrategy: show the complete multi-planet arrangement, a guided scan path, timing, and sky direction; do not collapse it into a generic planet scene."
                 : "Show close-pairing/conjunction geometry, timing, and sky direction; do not add unrelated planets.";
             var prompt = $"Computed astronomy scene for {objectPhrase}: render only the actual listed objects with labels matching their exact names; use real-looking planet textures, not generic colored circles. {textureGuidance} {groupingGuidance}";
@@ -169,16 +171,16 @@ public sealed class DefaultVisualSourceResolver : IVisualSourceResolver
             metadata["visualSourceType"] = (required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene).ToString();
             metadata["assetKey"] = string.Join(", ", objects.Select(o => $"Planet.{o}"));
             metadata["generatedRealisticPrompt"] = prompt;
-            metadata["sceneStrategy"] = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? "PlanetGroupingSceneStrategy" : "PlanetPairingSceneStrategy";
-            metadata["heroStrategy"] = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? "PlanetGroupingHeroStrategy" : "PlanetPairingHeroStrategy";
-            metadata["thumbnailStrategy"] = IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? "PlanetGroupingThumbnailStrategy" : "PlanetPairingThumbnailStrategy";
+            metadata["sceneStrategy"] = isPlanetGrouping ? "PlanetGroupingSceneStrategy" : "PlanetPairingSceneStrategy";
+            metadata["heroStrategy"] = isPlanetGrouping ? "PlanetGroupingHeroStrategy" : "PlanetPairingHeroStrategy";
+            metadata["thumbnailStrategy"] = isPlanetGrouping ? "PlanetGroupingThumbnailStrategy" : "PlanetPairingThumbnailStrategy";
             return new(
                 required.Count > 2 ? VisualSourceType.Hybrid : VisualSourceType.ComputedAstronomyScene,
                 required,
                 objects.Select(o => $"Planet.{o}").ToArray(),
                 prompt,
                 GenericFallbackAllowed: false,
-                NormalizeList(required.Concat(objects).Concat(IsPlanetGrouping(eventType, strategyId, intelligence.Title) ? ["real-looking planet textures", "planet grouping", "guided scan path", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
+                NormalizeList(required.Concat(objects).Concat(isPlanetGrouping ? ["real-looking planet textures", "planet grouping", "guided scan path", "labels match actual object names"] : ["real-looking planet textures", "close pairing", "labels match actual object names"])),
                 forbidden,
                 metadata,
                 PreferredAssetKind: [VisualPreferredAssetKind.ScientificTexture, VisualPreferredAssetKind.AICinematicRealistic],
