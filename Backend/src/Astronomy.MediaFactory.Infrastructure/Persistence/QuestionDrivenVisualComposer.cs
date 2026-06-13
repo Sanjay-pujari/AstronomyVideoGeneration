@@ -107,7 +107,7 @@ public sealed class QuestionDrivenVisualComposer(
         var seenSrtTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenLayoutKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var isMeteorShowerPlan = scenes.Any(scene => IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent));
-        var eventType = ResolveVisualEventType(request.ProductionContext, isMeteorShowerPlan, scenes);
+        var eventType = ResolveVisualEventType(request.ProductionContext, enrichedPlan, isMeteorShowerPlan, scenes);
         var usesLocalPlanetAssets = AllowsLocalPlanetAssets(eventType) && UsesExactLocalVenusJupiterAssets(request.ProductionContext?.ProductionEventIntelligence);
         var venusAsset = usesLocalPlanetAssets ? FindLocalAsset("venus") : null;
         var jupiterAsset = usesLocalPlanetAssets ? FindLocalAsset("jupiter") : null;
@@ -120,7 +120,7 @@ public sealed class QuestionDrivenVisualComposer(
             var numberPrefix = $"scene-{sceneNumber:000}";
             var narrationScene = narration.Scenes.FirstOrDefault(s => s.SceneNumber == sceneNumber)
                 ?? throw new ArgumentException($"Question-driven narration is missing scene {sceneNumber}.", nameof(request));
-            var sourceResolution = ResolveVisualSource(request, scene, narrationScene);
+            var sourceResolution = ResolveVisualSource(request, enrichedPlan, scene, narrationScene);
             var promptVisualIntent = $"{scene.VisualIntent} {narrationScene.SourceAnswer} {narrationScene.NarrationText} {sourceResolution.AiCinematicPrompt}";
             var promptImageIntent = $"{scene.ImagePromptIntent} {narrationScene.ViewerTakeaway} {narrationScene.CaptionText} {sourceResolution.AiCinematicPrompt}";
             var prompt = promptGenerator.GeneratePrompt(new QuestionDrivenImagePromptRequest(
@@ -132,7 +132,7 @@ public sealed class QuestionDrivenVisualComposer(
                 promptVisualIntent,
                 promptImageIntent,
                 usesLocalPlanetAssets && venusAsset is not null && jupiterAsset is not null));
-            var spec = BuildSpec(request, scene, narrationScene, prompt, eventType, usesLocalPlanetAssets, sourceResolution);
+            var spec = BuildSpec(request, enrichedPlan, scene, narrationScene, prompt, eventType, usesLocalPlanetAssets, sourceResolution);
             ValidateLocalPlanetAssetContract(spec);
             ValidateRequiredVisualObjectContract(spec, request.ProductionContext);
             ValidateVisualSourceResolutionContract(spec, sourceResolution);
@@ -301,16 +301,18 @@ public sealed class QuestionDrivenVisualComposer(
             ShortFormValidation: shortFormValidation);
     }
 
-    private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt, string eventType, bool usesLocalPlanetAssets, VisualSourceResolutionResult sourceResolution)
+    private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionScenePlanDto enrichedPlan, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt, string eventType, bool usesLocalPlanetAssets, VisualSourceResolutionResult sourceResolution)
     {
         var isMeteorShower = IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent) || IsMeteorText(narrationScene.SourceAnswer) || IsMeteorText(narrationScene.NarrationText);
         var isNamedFullMoon = IsNamedFullMoonEvent(request.ProductionContext, eventType);
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
-        var isPlanetGrouping = IsPlanetGroupingEvent(intelligence, eventType);
+        var isPlanetGrouping = IsPlanetGroupingEvent(intelligence, eventType) || IsPlanetGroupingStrategyId(enrichedPlan.Diagnostics?.StrategyId);
         var isPlanetPairing = intelligence is not null && IsPlanetPairingEvent(eventType);
-        var resolvedObjects = ResolvePairingObjects(intelligence).ToArray();
+        var resolvedObjects = ResolveSceneObjects(intelligence, enrichedPlan.Diagnostics).ToArray();
         var objectPairLabel = JoinObjectPair(resolvedObjects);
-        var requiredVisualObjects = sourceResolution.RequiredDrawableObjects.Count > 0 ? sourceResolution.RequiredDrawableObjects.ToArray() : ResolveRequiredVisualObjects(intelligence).ToArray();
+        var planetGroupingMetadata = ResolvePlanetGroupingInfographicMetadata(enrichedPlan, intelligence, isPlanetGrouping);
+        var requiredVisualObjects = planetGroupingMetadata?.RequiredVisualObjects
+            ?? (sourceResolution.RequiredDrawableObjects.Count > 0 ? sourceResolution.RequiredDrawableObjects.ToArray() : ResolveRequiredVisualObjects(intelligence).ToArray());
         var fullMoonLabel = ResolveFullMoonLabel(intelligence);
         var meteorContextText = $"{narrationScene.SourceAnswer} {narrationScene.ViewerTakeaway} {narrationScene.NarrationText} {narrationScene.CaptionText}";
         var meteorWindow = ResolveMeteorViewingWindow(request, meteorContextText);
@@ -420,10 +422,12 @@ public sealed class QuestionDrivenVisualComposer(
 
         var drawableObjects = BuildDrawableObjects(sourceResolution, isNamedFullMoon, fullMoonLabel);
         strategyValidationFacts ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (isPlanetGrouping)
+        if (planetGroupingMetadata is not null)
         {
-            strategyValidationFacts["requiredVisualObjects"] = string.Join(", ", requiredVisualObjects);
-            strategyValidationFacts["strategyId"] = "PlanetGrouping";
+            strategyValidationFacts["requiredVisualObjects"] = string.Join(", ", planetGroupingMetadata.RequiredVisualObjects);
+            strategyValidationFacts["strategyId"] = planetGroupingMetadata.StrategyId;
+            strategyValidationFacts["resolvedObjectNames"] = string.Join(", ", planetGroupingMetadata.ResolvedObjectNames);
+            strategyValidationFacts["visualMotifs"] = string.Join(", ", planetGroupingMetadata.VisualMotifs);
         }
         strategyValidationFacts["visualSourceType"] = sourceResolution.SourceType.ToString();
         strategyValidationFacts["assetKey"] = string.Join(", ", sourceResolution.ScientificAssetKeys);
@@ -444,7 +448,7 @@ public sealed class QuestionDrivenVisualComposer(
         strategyValidationFacts["validationRequiredTerms"] = string.Join(", ", sourceResolution.ValidationRequiredTerms);
         foreach (var item in sourceResolution.Metadata) strategyValidationFacts[$"resolver.{item.Key}"] = item.Value;
 
-        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects, sourceResolution);
+        return new QuestionDrivenVisualSpec(request.EventId, request.RegionId, request.Language, scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, narrationScene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, Math.Max(4, narrationScene.EstimatedDurationSeconds), prompt, overlays, layers, accessibilityCues, DateTimeOffset.UtcNow, eventType, usesLocalPlanetAssets, bestViewingWindowLocal, strategyValidationFacts, drawableObjects, requiredVisualObjects, sourceResolution, planetGroupingMetadata?.StrategyId, planetGroupingMetadata?.ResolvedObjectNames, planetGroupingMetadata?.VisualMotifs);
     }
 
 
@@ -462,10 +466,18 @@ public sealed class QuestionDrivenVisualComposer(
             || (intelligence?.StrategyId?.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase) ?? false)
             || (intelligence?.StrategyId?.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase) ?? false);
 
-    private static IEnumerable<string> ResolvePairingObjects(ProductionEventIntelligence? intelligence)
-        => intelligence is null
-            ? []
-            : intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase);
+    private static bool IsPlanetGroupingStrategyId(string? strategyId)
+        => strategyId?.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase) == true
+            || strategyId?.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static IEnumerable<string> ResolveSceneObjects(ProductionEventIntelligence? intelligence, QuestionSceneEnrichmentDiagnostics? diagnostics)
+    {
+        var sourceObjects = FirstNonEmptyList(
+            intelligence?.ResolvedObjectNames,
+            diagnostics?.PrimaryObjects?.Concat(diagnostics.SecondaryObjects ?? Array.Empty<string>()),
+            intelligence?.PrimaryObjects.Concat(intelligence.SecondaryObjects));
+        return sourceObjects.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase);
+    }
 
     private static string JoinObjectPair(IReadOnlyList<string> objects)
         => objects.Count switch
@@ -475,6 +487,39 @@ public sealed class QuestionDrivenVisualComposer(
             2 => $"{objects[0]} and {objects[1]}",
             _ => string.Join(", ", objects.Take(objects.Count - 1)) + ", and " + objects[^1]
         };
+
+    private sealed record PlanetGroupingInfographicMetadata(
+        string StrategyId,
+        IReadOnlyList<string> RequiredVisualObjects,
+        IReadOnlyList<string> ResolvedObjectNames,
+        IReadOnlyList<string> VisualMotifs);
+
+    private static PlanetGroupingInfographicMetadata? ResolvePlanetGroupingInfographicMetadata(EnrichedQuestionScenePlanDto enrichedPlan, ProductionEventIntelligence? intelligence, bool isPlanetGrouping)
+    {
+        if (!isPlanetGrouping) return null;
+
+        var strategyId = FirstNonEmpty(enrichedPlan.Diagnostics?.StrategyId, intelligence?.StrategyId, intelligence?.EventType, "PlanetGrouping");
+        var requiredVisualObjects = NormalizeMetadataList(FirstNonEmptyList(enrichedPlan.Diagnostics?.RequiredVisualObjects, intelligence?.RequiredVisualObjects));
+        var resolvedObjectNames = NormalizeMetadataList(FirstNonEmptyList(
+            intelligence?.ResolvedObjectNames,
+            enrichedPlan.Diagnostics?.PrimaryObjects?.Concat(enrichedPlan.Diagnostics.SecondaryObjects ?? Array.Empty<string>()),
+            intelligence?.PrimaryObjects.Concat(intelligence.SecondaryObjects)));
+        var visualMotifs = NormalizeMetadataList(FirstNonEmptyList(intelligence?.VisualMotifs));
+
+        return new PlanetGroupingInfographicMetadata(strategyId, requiredVisualObjects, resolvedObjectNames, visualMotifs);
+    }
+
+    private static IReadOnlyList<string> NormalizeMetadataList(IEnumerable<string> values)
+        => values.Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static IEnumerable<string> FirstNonEmptyList(params IEnumerable<string>?[] lists)
+        => lists.FirstOrDefault(list => list?.Any(value => !string.IsNullOrWhiteSpace(value)) == true) ?? Array.Empty<string>();
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 
     private static IReadOnlyList<string> BuildPlanetPairingOverlays(EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, IReadOnlyList<string> objects, string objectPairLabel)
     {
@@ -546,23 +591,26 @@ public sealed class QuestionDrivenVisualComposer(
         };
     }
 
-    private VisualSourceResolutionResult ResolveVisualSource(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene)
+    private VisualSourceResolutionResult ResolveVisualSource(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionScenePlanDto enrichedPlan, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene)
     {
         var intelligence = request.ProductionContext?.ProductionEventIntelligence
-            ?? BuildFallbackProductionEventIntelligence(request, scene, narrationScene);
-        var strategyId = request.ProductionContext?.MediaEventStrategy?.EventType
+            ?? BuildFallbackProductionEventIntelligence(request, enrichedPlan, scene, narrationScene);
+        var strategyId = enrichedPlan.Diagnostics?.StrategyId
+            ?? request.ProductionContext?.MediaEventStrategy?.EventType
             ?? request.ProductionContext?.ProductionEventIntelligence?.StrategyId
             ?? request.ProductionContext?.EventType
             ?? intelligence.EventType;
-        var required = ResolveRequiredVisualObjects(intelligence).ToArray();
+        var required = enrichedPlan.Diagnostics?.RequiredVisualObjects is { Count: > 0 } planRequired
+            ? planRequired.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : ResolveRequiredVisualObjects(intelligence).ToArray();
         return visualSourceResolver.Resolve(new VisualSourceResolutionRequest(intelligence, strategyId, scene, narrationScene, required));
     }
 
 
-    private static ProductionEventIntelligence BuildFallbackProductionEventIntelligence(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene)
+    private static ProductionEventIntelligence BuildFallbackProductionEventIntelligence(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionScenePlanDto enrichedPlan, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene)
     {
         var combined = $"{scene.SourceAnswer} {scene.VisualIntent} {scene.ImagePromptIntent} {narrationScene.NarrationText}";
-        var eventType = IsMeteorText(combined) ? "MeteorShower" : "AstronomyEvent";
+        var eventType = enrichedPlan.Diagnostics?.StrategyId ?? (IsMeteorText(combined) ? "MeteorShower" : "AstronomyEvent");
         return new ProductionEventIntelligence(
             Domain: "Astronomy",
             EventType: eventType,
@@ -574,8 +622,8 @@ public sealed class QuestionDrivenVisualComposer(
             BestViewingWindowLocal: null,
             SkyDirectionHint: null,
             VisibilityRegion: request.RegionId,
-            PrimaryObjects: [],
-            SecondaryObjects: [],
+            PrimaryObjects: enrichedPlan.Diagnostics?.PrimaryObjects ?? [],
+            SecondaryObjects: enrichedPlan.Diagnostics?.SecondaryObjects ?? [],
             ViewingQuality: null,
             MoonInterference: null,
             MoonIlluminationPercent: null,
@@ -586,7 +634,7 @@ public sealed class QuestionDrivenVisualComposer(
             QualityWarnings: [],
             ForbiddenTerms: [],
             StrategyId: eventType,
-            RequiredVisualObjects: eventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) ? ["meteor streaks", "radiant/dark sky"] : []);
+            RequiredVisualObjects: enrichedPlan.Diagnostics?.RequiredVisualObjects ?? (eventType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) ? ["meteor streaks", "radiant/dark sky"] : []));
     }
 
     private static IReadOnlyList<SceneDrawableVisualObject> BuildDrawableObjects(VisualSourceResolutionResult sourceResolution, bool isNamedFullMoon, string fullMoonLabel)
@@ -1002,12 +1050,13 @@ public sealed class QuestionDrivenVisualComposer(
     private static bool IsMeteorText(string? value)
         => !string.IsNullOrWhiteSpace(value) && (value.Contains("meteor", StringComparison.OrdinalIgnoreCase) || value.Contains("radiant", StringComparison.OrdinalIgnoreCase));
 
-    private static string ResolveVisualEventType(ProductionPipelineExecutionContext? productionContext, bool isMeteorShowerPlan, IReadOnlyList<EnrichedQuestionSceneDto> scenes)
+    private static string ResolveVisualEventType(ProductionPipelineExecutionContext? productionContext, EnrichedQuestionScenePlanDto enrichedPlan, bool isMeteorShowerPlan, IReadOnlyList<EnrichedQuestionSceneDto> scenes)
     {
         var eventType = productionContext?.EventType
             ?? productionContext?.ProductionEventIntelligence?.EventType
             ?? productionContext?.MediaEventStrategy?.EventType
-            ?? productionContext?.ProductionEventIntelligence?.StrategyId;
+            ?? productionContext?.ProductionEventIntelligence?.StrategyId
+            ?? enrichedPlan.Diagnostics?.StrategyId;
         if (!string.IsNullOrWhiteSpace(eventType)) return eventType;
         if (isMeteorShowerPlan) return "MeteorShower";
         var combined = string.Join(' ', scenes.SelectMany(scene => new[] { scene.SourceAnswer, scene.VisualIntent, scene.ImagePromptIntent }));

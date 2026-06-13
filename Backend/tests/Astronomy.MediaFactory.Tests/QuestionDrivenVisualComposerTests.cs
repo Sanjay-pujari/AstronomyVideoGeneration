@@ -240,6 +240,40 @@ public sealed class QuestionDrivenVisualComposerTests
     }
 
     [Fact]
+    public async Task GenerateQuestionDrivenVisualsAsync_PlanetGroupingPropagatesInfographicMetadata()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WritePlanetGroupingInputFilesAsync(workingDirectory);
+        var composer = CreateComposer(workingDirectory);
+
+        await composer.GenerateQuestionDrivenVisualsAsync(new QuestionDrivenVisualGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            ProductionContext: new ProductionPipelineExecutionContext(
+                UseProductionPipeline: true,
+                ContentGenerationPlanId: null,
+                AstronomyEventIntelligenceId: null,
+                SourceExternalEventId: "PLANET_GROUPING_2026",
+                IsDbApprovedPlanExecution: false,
+                EventType: "PLANET_GROUPING",
+                ProductionEventIntelligence: BuildPlanetGroupingIntelligence())), CancellationToken.None);
+
+        var specPath = Path.Combine(BuildSceneApprovalPath(workingDirectory), "scene-002-infographic-spec.json");
+        Assert.True(File.Exists(specPath));
+        using var specDocument = JsonDocument.Parse(await File.ReadAllTextAsync(specPath));
+        var spec = specDocument.RootElement;
+
+        Assert.Equal("PlanetGrouping", spec.GetProperty("strategyId").GetString());
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path" }, ReadStringArray(spec.GetProperty("requiredVisualObjects")));
+        Assert.Equal(new[] { "Saturn", "Mars", "Jupiter", "Venus" }, ReadStringArray(spec.GetProperty("resolvedObjectNames")));
+        Assert.Equal(new[] { "multi-planet grouping", "guided scan path", "realistic planet textures", "grouping arc" }, ReadStringArray(spec.GetProperty("visualMotifs")));
+    }
+
+
+    [Fact]
     public async Task GenerateEditorialAstronomyInfographicsAsync_MeteorShowerDisablesLocalPlanetAssetsInReviews()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -292,6 +326,72 @@ public sealed class QuestionDrivenVisualComposerTests
                 new AnnotationLayerRenderer()),
             new DefaultVisualSourceResolver(),
             NullLogger<QuestionDrivenVisualComposer>.Instance);
+
+    private static async Task WritePlanetGroupingInputFilesAsync(string workingDirectory)
+    {
+        var questionEngineRoot = BuildQuestionEnginePath(workingDirectory);
+        Directory.CreateDirectory(questionEngineRoot);
+        await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-answer-set.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-driven-scene-plan.enriched.json"), JsonSerializer.Serialize(BuildPlanetGroupingEnrichedPlan(), JsonOptions));
+        await File.WriteAllTextAsync(Path.Combine(questionEngineRoot, "question-driven-narration.json"), JsonSerializer.Serialize(BuildPlanetGroupingNarration(), JsonOptions));
+    }
+
+    private static EnrichedQuestionScenePlanDto BuildPlanetGroupingEnrichedPlan() => BuildEnrichedPlan() with
+    {
+        Diagnostics = new QuestionSceneEnrichmentDiagnostics(
+            "PlanetGrouping",
+            ["Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path"],
+            [],
+            [],
+            [],
+            "production-event-intelligence.json",
+            PrimaryObjects: ["Saturn", "Mars"],
+            SecondaryObjects: ["Jupiter", "Venus"])
+    };
+
+    private static QuestionDrivenNarrationDto BuildPlanetGroupingNarration() => new(
+        EventId,
+        RegionId,
+        "en",
+        [
+            BuildNarrationScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "Saturn, Mars, Jupiter, and Venus form a planet grouping.", "Saturn, Mars, Jupiter, and Venus share the sky in a guided planet grouping.", "Four-planet grouping."),
+            BuildNarrationScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Follow the guided scan path from Saturn through Mars, Jupiter, and Venus.", "Use the guided scan path to move from Saturn to Mars, Jupiter, and Venus.", "Follow the scan path."),
+            BuildNarrationScene(3, AstronomyQuestionTypes.When, "TimingGuide", "When is the best time?", "Use the local viewing window for the grouping.", "The grouping is best seen during the local viewing window.", "Use the viewing window."),
+            BuildNarrationScene(4, AstronomyQuestionTypes.How, "ObservationGuide", "How can I find it?", "Start at Saturn and scan toward Venus.", "Start at Saturn, scan through Mars and Jupiter, and finish at Venus.", "Scan Saturn to Venus."),
+            BuildNarrationScene(5, AstronomyQuestionTypes.Why, "Significance", "Why is it special?", "A multi-planet grouping puts four bright planets in one sweep.", "The grouping matters because four planets fit into one guided sweep.", "Four planets in one sweep."),
+            BuildNarrationScene(6, AstronomyQuestionTypes.Action, "ClosingAction", "What should I do now?", "Check weather and follow the guided scan path.", "If skies are clear, follow the guided scan path across the grouping.", "Check weather and scan.")
+        ],
+        54,
+        DateTimeOffset.Parse("2026-06-07T14:05:00Z"));
+
+    private static ProductionEventIntelligence BuildPlanetGroupingIntelligence() => new(
+        Domain: "Astronomy",
+        EventType: "PLANET_GROUPING",
+        Title: "Saturn, Mars, Jupiter, and Venus planet grouping",
+        ShortTitle: "Planet grouping",
+        EventDate: null,
+        PeakUtc: null,
+        LocalPeakTime: null,
+        BestViewingWindowLocal: "pre-dawn",
+        SkyDirectionHint: "eastern sky",
+        VisibilityRegion: RegionId,
+        PrimaryObjects: ["Saturn", "Mars"],
+        SecondaryObjects: ["Jupiter", "Venus"],
+        ViewingQuality: null,
+        MoonInterference: null,
+        MoonIlluminationPercent: null,
+        ScientificContext: null,
+        ViewerInstructions: [],
+        VisualMotifs: ["multi-planet grouping", "guided scan path", "realistic planet textures", "grouping arc"],
+        SceneStrategy: [],
+        QualityWarnings: [],
+        ForbiddenTerms: [],
+        StrategyId: "PlanetGrouping",
+        ResolvedObjectNames: ["Saturn", "Mars", "Jupiter", "Venus"],
+        RequiredVisualObjects: ["Saturn", "Mars", "Jupiter", "Venus", "planet grouping", "guided scan path"]);
+
+    private static string[] ReadStringArray(JsonElement element)
+        => element.EnumerateArray().Select(item => item.GetString()!).ToArray();
 
     private static async Task WriteMeteorInputFilesAsync(string workingDirectory)
     {
