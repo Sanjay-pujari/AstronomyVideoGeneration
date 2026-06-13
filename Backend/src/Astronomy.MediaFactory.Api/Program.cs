@@ -6,6 +6,7 @@ using Astronomy.SscIntelligence.Narrative;
 using Astronomy.SscIntelligence.Spatial;
 using Astronomy.SscIntelligence.Resolution;
 using Astronomy.MediaFactory.Contracts;
+using ContentType = Astronomy.MediaFactory.Contracts.ContentType;
 using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
