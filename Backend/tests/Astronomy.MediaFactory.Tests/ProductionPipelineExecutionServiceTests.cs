@@ -163,6 +163,12 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.InRange(variants.Count, 3, 5);
         Assert.Equal(["wide_context", "object_focus", "educational_overlay", "cinematic_detail", "transition_or_closing"], variants.Select(v => v.VariantType).ToArray());
         Assert.Equal(Enumerable.Range(1, variants.Count), variants.Select(v => v.VariantNo));
+        Assert.Equal(variants.Count, variants.Select(v => v.CompositionHint).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(variants, variant => variant.VariantType == "wide_context" && variant.CompositionHint.Contains("WIDE FRAMING", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(variants, variant => variant.VariantType == "object_focus" && variant.CompositionHint.Contains("ZOOMED FRAMING", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(variants, variant => variant.VariantType == "educational_overlay" && variant.CompositionHint.Contains("INFOGRAPHIC LAYOUT", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(variants, variant => variant.VariantType == "cinematic_detail" && variant.CompositionHint.Contains("CLOSE-UP CINEMATIC", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(variants, variant => variant.VariantType == "transition_or_closing" && variant.CompositionHint.Contains("CTA COMPOSITION", StringComparison.OrdinalIgnoreCase));
         Assert.All(variants, variant =>
         {
             Assert.False(string.IsNullOrWhiteSpace(variant.Purpose));
