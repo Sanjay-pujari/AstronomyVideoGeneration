@@ -144,17 +144,17 @@ public sealed class QuestionDrivenVisualComposerTests
             var key = $"scene-{sceneNumber:000}";
             Assert.True(result.SceneVariantFinalImages.LongForm.Images.ContainsKey(key));
             Assert.True(result.SceneVariantFinalImages.ShortForm.Images.ContainsKey(key));
-            Assert.Contains($"scene-approval-v3/long/{key}-final.png", result.SceneVariantFinalImages.LongForm.Images[key]);
-            Assert.Contains($"scene-approval-v3/short/{key}-final.png", result.SceneVariantFinalImages.ShortForm.Images[key]);
+            Assert.Contains($"scene-approval-v3/scene-assets/long/{key}/{key}-final.png", result.SceneVariantFinalImages.LongForm.Images[key]);
+            Assert.Contains($"scene-approval-v3/scene-assets/short/{key}/{key}-final.png", result.SceneVariantFinalImages.ShortForm.Images[key]);
         }
 
         Assert.All(result.PlannedScenes, scene =>
         {
             Assert.Contains("scene-approval-v3/", scene.PlannedOutputs.FinalImagePath);
-            Assert.DoesNotContain("scene-approval-v3/long/", scene.PlannedOutputs.FinalImagePath);
+            Assert.Contains("scene-approval-v3/scene-assets/long/", scene.PlannedOutputs.FinalImagePath);
             Assert.NotNull(scene.PlannedOutputs.PresentationVariants);
-            Assert.Contains("scene-approval-v3/long/", scene.PlannedOutputs.PresentationVariants!.LongFormFinalImagePath);
-            Assert.Contains("scene-approval-v3/short/", scene.PlannedOutputs.PresentationVariants.ShortFormFinalImagePath);
+            Assert.Contains("scene-approval-v3/scene-assets/long/", scene.PlannedOutputs.PresentationVariants!.LongFormFinalImagePath);
+            Assert.Contains("scene-approval-v3/scene-assets/short/", scene.PlannedOutputs.PresentationVariants.ShortFormFinalImagePath);
             Assert.False(string.IsNullOrWhiteSpace(scene.NarrationText));
             Assert.False(string.IsNullOrWhiteSpace(scene.CaptionText));
             Assert.True(scene.ValidationPreview.ImageSceneSpecific);
@@ -196,12 +196,15 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.InRange(result.ShortFormValidation.ShortFormReadabilityScore, 90, 100);
         Assert.InRange(result.ShortFormValidation.ShortFormReelSuitabilityScore, 90, 100);
 
-        var longRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "long");
-        var shortRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "short");
+        var longRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "scene-assets", "long");
+        var shortRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "scene-assets", "short");
         Assert.True(Directory.Exists(longRoot));
         Assert.True(Directory.Exists(shortRoot));
-        Assert.Equal(6, Directory.EnumerateFiles(longRoot, "scene-*-final.png").Count());
-        Assert.Equal(6, Directory.EnumerateFiles(shortRoot, "scene-*-final.png").Count());
+        Assert.Equal(6, Directory.EnumerateFiles(longRoot, "scene-*-final.png", SearchOption.AllDirectories).Count());
+        Assert.Equal(6, Directory.EnumerateFiles(shortRoot, "scene-*-final.png", SearchOption.AllDirectories).Count());
+
+        Assert.False(Directory.Exists(Path.Combine(BuildSceneApprovalPath(workingDirectory), "long")));
+        Assert.False(Directory.Exists(Path.Combine(BuildSceneApprovalPath(workingDirectory), "short")));
 
         var polishValidationPath = Path.Combine(shortRoot, "shortform-polish-validation.json");
         Assert.True(File.Exists(polishValidationPath));
@@ -222,8 +225,8 @@ public sealed class QuestionDrivenVisualComposerTests
         foreach (var sceneNumber in Enumerable.Range(1, 6))
         {
             var key = $"scene-{sceneNumber:000}";
-            var longPath = Path.Combine(longRoot, $"{key}-final.png");
-            var shortPath = Path.Combine(shortRoot, $"{key}-final.png");
+            var longPath = Path.Combine(longRoot, key, $"{key}-final.png");
+            var shortPath = Path.Combine(shortRoot, key, $"{key}-final.png");
             Assert.True(File.Exists(longPath));
             Assert.True(File.Exists(shortPath));
             Assert.Contains(Normalize(longPath), result.GeneratedFiles);
@@ -234,8 +237,8 @@ public sealed class QuestionDrivenVisualComposerTests
             Assert.Equal(1080, longImage.Height);
             Assert.Equal(1080, shortImage.Width);
             Assert.Equal(1920, shortImage.Height);
-            Assert.Contains($"scene-approval-v3/long/{key}-final.png", result.SceneVariantFinalImages!.LongForm.Images[key]);
-            Assert.Contains($"scene-approval-v3/short/{key}-final.png", result.SceneVariantFinalImages.ShortForm.Images[key]);
+            Assert.Contains($"scene-approval-v3/scene-assets/long/{key}/{key}-final.png", result.SceneVariantFinalImages!.LongForm.Images[key]);
+            Assert.Contains($"scene-approval-v3/scene-assets/short/{key}/{key}-final.png", result.SceneVariantFinalImages.ShortForm.Images[key]);
         }
     }
 

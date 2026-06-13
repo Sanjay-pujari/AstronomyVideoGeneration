@@ -76,8 +76,9 @@ public sealed class QuestionDrivenVisualComposer(
         var outputRoot = !string.IsNullOrWhiteSpace(request.ProductionContext?.SceneRoot)
             ? request.ProductionContext!.SceneRoot!
             : Path.Combine(questionEngineRoot, OutputDirectoryName);
-        var longOutputRoot = Path.Combine(outputRoot, "long");
-        var shortOutputRoot = Path.Combine(outputRoot, "short");
+        var sceneAssetsRoot = Path.Combine(outputRoot, "scene-assets");
+        var longOutputRoot = includeSceneApprovalVariants ? Path.Combine(sceneAssetsRoot, "long") : Path.Combine(outputRoot, "long");
+        var shortOutputRoot = includeSceneApprovalVariants ? Path.Combine(sceneAssetsRoot, "short") : Path.Combine(outputRoot, "short");
 
         var answerSetPath = Path.Combine(questionEngineRoot, QuestionAnswerSetFileName);
         var planPath = Path.Combine(questionEngineRoot, EnrichedPlanFileName);
@@ -148,9 +149,13 @@ public sealed class QuestionDrivenVisualComposer(
             var review = BuildReview(spec, srt, seenSrtTexts, seenLayoutKeys, !usesLocalPlanetAssets || venusAsset is not null, !usesLocalPlanetAssets || jupiterAsset is not null);
 
             var legacyFinalPath = Path.Combine(outputRoot, $"{numberPrefix}-final.png");
-            var longFinalPath = Path.Combine(longOutputRoot, $"{numberPrefix}-final.png");
-            var shortFinalPath = Path.Combine(shortOutputRoot, $"{numberPrefix}-final.png");
-            var finalPath = legacyFinalPath;
+            var longFinalPath = includeSceneApprovalVariants
+                ? Path.Combine(longOutputRoot, numberPrefix, $"{numberPrefix}-final.png")
+                : Path.Combine(longOutputRoot, $"{numberPrefix}-final.png");
+            var shortFinalPath = includeSceneApprovalVariants
+                ? Path.Combine(shortOutputRoot, numberPrefix, $"{numberPrefix}-final.png")
+                : Path.Combine(shortOutputRoot, $"{numberPrefix}-final.png");
+            var finalPath = includeSceneApprovalVariants ? longFinalPath : legacyFinalPath;
             if (includeSceneApprovalVariants)
             {
                 longFormFinalImages[numberPrefix] = NormalizePath(longFinalPath);
