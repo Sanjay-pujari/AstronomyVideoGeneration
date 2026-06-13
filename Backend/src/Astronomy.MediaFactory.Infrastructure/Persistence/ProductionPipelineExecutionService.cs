@@ -987,15 +987,45 @@ public sealed partial class ProductionPipelineExecutionService(
             _ => new Rgba32(255, 255, 255, 48)
         };
 
+        var blendRects = new List<Phase8BlendRect>();
+        switch (type)
+        {
+            case "wide_context":
+                blendRects.Add(new(0, (int)(height * .74f), width, Math.Max(20, height / 22), accent));
+                for (var i = 0; i < 18; i++) blendRects.Add(new(random.Next(width), random.Next(height / 2), 2 + random.Next(4), 2 + random.Next(4), new Rgba32(220, 240, 255, 135)));
+                break;
+            case "object_focus":
+                blendRects.Add(new((int)(width * .43f), (int)(height * .28f), Math.Max(90, width / 7), Math.Max(90, width / 7), accent));
+                blendRects.Add(new((int)(width * .48f), (int)(height * .18f), Math.Max(12, width / 90), Math.Max(340, height / 3), new Rgba32(255, 240, 180, 42)));
+                break;
+            case "educational_overlay":
+                blendRects.Add(new(0, format.Equals("short", StringComparison.OrdinalIgnoreCase) ? (int)(height * .69f) : 0, format.Equals("short", StringComparison.OrdinalIgnoreCase) ? width : (int)(width * .31f), format.Equals("short", StringComparison.OrdinalIgnoreCase) ? (int)(height * .21f) : height, accent));
+                for (var i = 0; i < 4; i++) blendRects.Add(new(32, 60 + i * Math.Max(54, height / 16), Math.Max(150, width / 5), 8, new Rgba32(255, 255, 255, 115)));
+                break;
+            case "cinematic_detail":
+                blendRects.Add(new(0, 0, width, Math.Max(40, height / 10), new Rgba32(0, 0, 0, 80)));
+                blendRects.Add(new(0, height - Math.Max(40, height / 10), width, Math.Max(40, height / 10), new Rgba32(0, 0, 0, 92)));
+                blendRects.Add(new((int)(width * .64f), (int)(height * .18f), Math.Max(120, width / 5), Math.Max(120, width / 5), accent));
+                break;
+            case "transition_or_closing":
+                blendRects.Add(new((int)(width * .08f), (int)(height * .18f), (int)(width * .84f), Math.Max(130, height / 5), accent));
+                blendRects.Add(new((int)(width * .18f), (int)(height * .78f), (int)(width * .64f), Math.Max(38, height / 26), new Rgba32(255, 255, 255, 82)));
+                break;
+        }
+
+        var tagX = 8 + (variant.VariantNo * 17 % Math.Max(20, width - 80));
+        var tagY = 8 + (variant.VariantNo * 23 % Math.Max(20, height - 80));
+        blendRects.Add(new(tagX, tagY, 42, 18, new Rgba32((byte)(60 + variant.VariantNo * 31), (byte)(100 + variant.VariantNo * 19), (byte)(160 + variant.VariantNo * 11), 95)));
+
         image.ProcessPixelRows(accessor =>
         {
-            void BlendRect(int x0, int y0, int w, int h, Rgba32 color)
+            foreach (var rect in blendRects)
             {
-                var x1 = Math.Clamp(x0 + w, 0, accessor.Width);
-                var y1 = Math.Clamp(y0 + h, 0, accessor.Height);
-                x0 = Math.Clamp(x0, 0, accessor.Width);
-                y0 = Math.Clamp(y0, 0, accessor.Height);
-                var alpha = color.A / 255f;
+                var x0 = Math.Clamp(rect.X, 0, accessor.Width);
+                var y0 = Math.Clamp(rect.Y, 0, accessor.Height);
+                var x1 = Math.Clamp(rect.X + rect.Width, 0, accessor.Width);
+                var y1 = Math.Clamp(rect.Y + rect.Height, 0, accessor.Height);
+                var alpha = rect.Color.A / 255f;
                 for (var y = y0; y < y1; y++)
                 {
                     var row = accessor.GetRowSpan(y);
@@ -1003,42 +1033,13 @@ public sealed partial class ProductionPipelineExecutionService(
                     {
                         var dst = row[x];
                         row[x] = new Rgba32(
-                            (byte)Math.Clamp(dst.R * (1f - alpha) + color.R * alpha, 0, 255),
-                            (byte)Math.Clamp(dst.G * (1f - alpha) + color.G * alpha, 0, 255),
-                            (byte)Math.Clamp(dst.B * (1f - alpha) + color.B * alpha, 0, 255),
+                            (byte)Math.Clamp(dst.R * (1f - alpha) + rect.Color.R * alpha, 0, 255),
+                            (byte)Math.Clamp(dst.G * (1f - alpha) + rect.Color.G * alpha, 0, 255),
+                            (byte)Math.Clamp(dst.B * (1f - alpha) + rect.Color.B * alpha, 0, 255),
                             255);
                     }
                 }
             }
-
-            switch (type)
-            {
-                case "wide_context":
-                    BlendRect(0, (int)(height * .74f), width, Math.Max(20, height / 22), accent);
-                    for (var i = 0; i < 18; i++) BlendRect(random.Next(width), random.Next(height / 2), 2 + random.Next(4), 2 + random.Next(4), new Rgba32(220, 240, 255, 135));
-                    break;
-                case "object_focus":
-                    BlendRect((int)(width * .43f), (int)(height * .28f), Math.Max(90, width / 7), Math.Max(90, width / 7), accent);
-                    BlendRect((int)(width * .48f), (int)(height * .18f), Math.Max(12, width / 90), Math.Max(340, height / 3), new Rgba32(255, 240, 180, 42));
-                    break;
-                case "educational_overlay":
-                    BlendRect(0, format.Equals("short", StringComparison.OrdinalIgnoreCase) ? (int)(height * .69f) : 0, format.Equals("short", StringComparison.OrdinalIgnoreCase) ? width : (int)(width * .31f), format.Equals("short", StringComparison.OrdinalIgnoreCase) ? (int)(height * .21f) : height, accent);
-                    for (var i = 0; i < 4; i++) BlendRect(32, 60 + i * Math.Max(54, height / 16), Math.Max(150, width / 5), 8, new Rgba32(255, 255, 255, 115));
-                    break;
-                case "cinematic_detail":
-                    BlendRect(0, 0, width, Math.Max(40, height / 10), new Rgba32(0, 0, 0, 80));
-                    BlendRect(0, height - Math.Max(40, height / 10), width, Math.Max(40, height / 10), new Rgba32(0, 0, 0, 92));
-                    BlendRect((int)(width * .64f), (int)(height * .18f), Math.Max(120, width / 5), Math.Max(120, width / 5), accent);
-                    break;
-                case "transition_or_closing":
-                    BlendRect((int)(width * .08f), (int)(height * .18f), (int)(width * .84f), Math.Max(130, height / 5), accent);
-                    BlendRect((int)(width * .18f), (int)(height * .78f), (int)(width * .64f), Math.Max(38, height / 26), new Rgba32(255, 255, 255, 82));
-                    break;
-            }
-
-            var tagX = 8 + (variant.VariantNo * 17 % Math.Max(20, width - 80));
-            var tagY = 8 + (variant.VariantNo * 23 % Math.Max(20, height - 80));
-            BlendRect(tagX, tagY, 42, 18, new Rgba32((byte)(60 + variant.VariantNo * 31), (byte)(100 + variant.VariantNo * 19), (byte)(160 + variant.VariantNo * 11), 95));
         });
 
         await image.SaveAsPngAsync(imagePath, new PngEncoder(), cancellationToken);
@@ -3106,6 +3107,8 @@ public sealed partial class ProductionPipelineExecutionService(
         string VisualDirectorPrompt,
         Phase8VisualQualityScore VisualQualityScore,
         IReadOnlyList<string> ValidationErrors);
+
+    private readonly record struct Phase8BlendRect(int X, int Y, int Width, int Height, Rgba32 Color);
 
     private sealed record Phase8ImageValidationResult(bool IsBlankCheckPassed, double NonBlackPixelRatio, long FileSizeBytes);
 
