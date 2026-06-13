@@ -668,7 +668,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var requiredObjects = (scene.RequiredVisualObjects is { Count: > 0 } ? scene.RequiredVisualObjects : intelligence.RequiredVisualObjects) ?? Array.Empty<string>();
         var eventType = FirstNonEmpty(intelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType);
         return new QuestionDrivenVisualSpec(
-            context.EventId.ToString("D"),
+            context.EventId,
             context.Request.RegionId,
             context.Request.Language,
             scene.SceneNumber,
