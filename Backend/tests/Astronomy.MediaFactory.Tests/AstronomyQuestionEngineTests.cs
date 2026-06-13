@@ -208,6 +208,50 @@ public sealed class AstronomyQuestionEngineTests
         Assert.Equal(0, await db.AstronomyQuestionAnswerSets.CountAsync());
     }
 
+
+    [Fact]
+    public async Task ValidateQuestionAnswerSetAsync_ApprovesPlanetConjunctionWhyAlignmentSignificance()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "UDAIPUR_JUPITER_VENUS_20260609",
+            eventType: "PLANET_CONJUNCTION",
+            objectName: "Jupiter",
+            metadataJson: """
+                {
+                  "direction": "west",
+                  "altitudeDegrees": 30
+                }
+                """);
+        evt.Title = "Jupiter and Venus conjunction peaks 2026-06-09 over Udaipur, Rajasthan, India";
+        evt.LocationName = "Udaipur";
+        evt.TimeZone = "Asia/Kolkata";
+        evt.PeakUtc = DateTimeOffset.Parse("2026-06-09T14:00:00Z");
+        evt.Objects.Add(new AstronomyEventObject { ObjectName = "Venus", ObjectType = "Planet", Magnitude = -4.1m });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, workingDirectory);
+        var generated = await service.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventIds: [evt.EventCode],
+            DryRun: true), CancellationToken.None);
+        var result = await service.ValidateQuestionAnswerSetAsync(new QuestionAnswerValidationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventId: evt.EventCode,
+            Language: "en"), CancellationToken.None);
+
+        var whyAnswer = generated.QuestionSets.Single().Answers.Single(a => a.QuestionType == AstronomyQuestionTypes.Why).AnswerText;
+        Assert.Contains("conjunction", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("visually striking", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("bright planets appearing close together", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("alignment", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("easy to compare", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.Score >= 90, string.Join(" | ", result.Checks.SelectMany(c => c.Issues)));
+        Assert.True(result.IsApproved, string.Join(" | ", result.Checks.SelectMany(c => c.Issues)));
+    }
+
     [Fact]
     public async Task ValidateQuestionAnswerSetAsync_RejectsInternalViewerLanguage()
     {

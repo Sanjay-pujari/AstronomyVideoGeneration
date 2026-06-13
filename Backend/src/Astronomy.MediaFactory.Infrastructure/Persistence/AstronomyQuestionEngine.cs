@@ -39,6 +39,10 @@ public sealed class AstronomyQuestionEngine(
     [
         "°",
         "angular separation",
+        "closest approach",
+        "visually striking",
+        "bright planets appearing close together",
+        "easy to compare",
         "rarity",
         "rare",
         "uncommon",
@@ -697,12 +701,12 @@ public sealed class AstronomyQuestionEngine(
         if (IsPlanetConjunction(evt.EventType))
         {
             if (separation.HasValue)
-                return $"{primaryObjects} appear only {separation.Value:0.##}° apart, creating a striking planetary pairing.";
+                return $"This conjunction is visually striking because near closest approach {primaryObjects} appear only {separation.Value:0.##}° apart, making the alignment easy to compare.";
 
             if (objectNames.Count >= 2)
-                return $"{primaryObjects} are two bright planets appearing close together, making the pairing easy to notice.";
+                return $"This conjunction is visually striking because {primaryObjects} are bright planets appearing close together, making the alignment easy to compare.";
 
-            return $"{primaryObjects} form a close planetary pairing, so the event stands out as an apparent alignment in Earth’s sky.";
+            return $"This conjunction is visually striking because {primaryObjects} form a close planetary alignment that is easy to compare in Earth’s sky.";
         }
 
         if (separation.HasValue)
