@@ -222,6 +222,9 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.DoesNotContain("look west", combined, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("7:23 PM IST", combined, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(new[] { "Hook", "ViewingAdvice", "Explanation", "Reward", "Curiosity", "CTA" }, result.Narration.Scenes.Select(scene => scene.Section));
+        Assert.DoesNotContain(result.Narration.Scenes, scene => scene.Section == "WhereToLook");
+        Assert.Equal("ViewingAdvice", result.Narration.Scenes[1].Section);
+        Assert.Equal("For the best experience, head to a dark location after 10 PM and scan the sky from east to overhead.", result.Narration.Scenes[1].NarrationText);
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Hook" && scene.NarrationText == "Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.");
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Curiosity" && scene.NarrationText == "What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.");
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Explanation" && scene.NarrationText == "This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.");
@@ -233,6 +236,44 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.True(result.Review.StoryStructurePassed);
         Assert.Equal(0, result.Review.CopiedSourceAnswers);
     }
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_ReplacesCopiedSourceAnswersBeforeReviewAndSave()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        var copiedPlan = BuildEnrichedPlan() with
+        {
+            Scenes =
+            [
+                BuildScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "Tonight, the sky is setting up one of those moments that makes you stop, look up, and stay a little longer."),
+                BuildScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Once you are outside, use the horizon as your map and let the brightest landmarks guide your eyes into the right patch of sky."),
+                BuildScene(3, AstronomyQuestionTypes.When, "TimingGuide", "When is the best time?", "The timing matters because the view changes quickly; a small window can make the difference between a faint sight and a memorable one."),
+                BuildScene(4, AstronomyQuestionTypes.How, "ObservationGuide", "How can I find it?", "Give your eyes a minute to adjust; the reward is not just spotting the event, but watching the scene slowly reveal itself."),
+                BuildScene(5, AstronomyQuestionTypes.Why, "Significance", "Why is it special?", "Here is why it is worth your attention: this is not just another dot in the sky, it is a short-lived alignment of timing, motion, and perspective."),
+                BuildScene(6, AstronomyQuestionTypes.Action, "ClosingAction", "What should I do now?", "If the sky is clear, save the viewing window, step outside, and follow for more sky events you can actually see.")
+            ]
+        };
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, copiedPlan);
+        var generator = CreateGenerator(workingDirectory);
+
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(0, result.Review.CopiedSourceAnswers);
+        Assert.All(result.Narration.Scenes, scene => Assert.NotEqual(scene.SourceAnswer.Trim(), scene.NarrationText.Trim()));
+
+        var reviewJson = await File.ReadAllTextAsync(BuildPlanPath(workingDirectory, "question-driven-narration-review.json"));
+        using var reviewDocument = JsonDocument.Parse(reviewJson);
+        Assert.True(reviewDocument.RootElement.GetProperty("requiredSectionsPresent").GetBoolean());
+        Assert.True(reviewDocument.RootElement.GetProperty("storyStructurePassed").GetBoolean());
+        Assert.Equal(0, reviewDocument.RootElement.GetProperty("copiedSourceAnswers").GetInt32());
+    }
+
 
     [Fact]
     public async Task GenerateQuestionDrivenNarrationAsync_AllowsDbApprovedProductionPlanWhenCategoryIsNotRareEventAlert()
