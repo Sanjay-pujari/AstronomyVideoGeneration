@@ -92,12 +92,18 @@ public sealed class QuestionDrivenNarrationGenerator(
                 ?? throw new InvalidOperationException("Existing question-driven narration could not be parsed.");
             var existingReview = JsonSerializer.Deserialize<QuestionDrivenNarrationReviewDto>(await File.ReadAllTextAsync(reviewPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing question-driven narration review could not be parsed.");
-            if (!File.Exists(legacyNarrationPath))
-                await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(existingNarration, JsonOptions), cancellationToken);
-            if (!File.Exists(legacyReviewPath))
-                await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(existingReview, JsonOptions), cancellationToken);
-            warnings.Add("Question-driven narration already exists; returning the existing files because overwriteExisting is false.");
-            return BuildResponse(existingNarration, existingReview, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
+            var existingValidationReview = BuildReview(existingNarration, warnings, request.ProductionContext);
+            if (existingReview.IsValid && existingValidationReview.IsValid)
+            {
+                if (!File.Exists(legacyNarrationPath))
+                    await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(existingNarration, JsonOptions), cancellationToken);
+                if (!File.Exists(legacyReviewPath))
+                    await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(existingReview, JsonOptions), cancellationToken);
+                warnings.Add("Question-driven narration already exists; returning the existing files because overwriteExisting is false.");
+                return BuildResponse(existingNarration, existingReview, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
+            }
+
+            warnings.Add("Existing question-driven narration failed current Phase 7 validation; regenerating required narration files.");
         }
 
         var inputJson = await File.ReadAllTextAsync(inputPath, cancellationToken);
@@ -221,7 +227,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             "Hook" => Line("Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.", "Reliable meteor shower tonight.", source),
             "Curiosity" => Line("What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.", "Bright, slow, colorful meteors.", source),
             "Explanation" => Line("This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.", "Debris from asteroid 3200 Phaethon.", source),
-            "ViewingAdvice" => Line($"For {region}, the best viewing window is after midnight, from 12:00 AM to 5:00 AM IST. Look east to overhead after 10 PM.", "Best after midnight; look east to overhead.", source),
+            "ViewingAdvice" => Line("For the best experience, head to a dark location after 10 PM and scan the sky from east to overhead.", "Dark location; scan east to overhead.", source),
             "Reward" => Line("With low moonlight, patient observers may catch repeated bright streaks crossing the dark sky.", "Low moonlight helps meteor watching.", source),
             "CTA" => Line("Save this sky guide, step outside after midnight, and follow for more astronomy events.", "Save this guide and follow.", source),
             _ => Line(source, ShortenCaption(source), source)
@@ -239,7 +245,8 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "positiveDurations", narration.Scenes.All(scene => scene.EstimatedDurationSeconds > 0), "estimatedDurationSeconds > 0 for every scene.");
         AddCheck(checks, "targetDuration", narration.TotalEstimatedDurationSeconds is >= 45 and <= 70, "total duration must be between 45 and 70 seconds.");
         AddCheck(checks, "noDuplicateNarration", narration.Scenes.Select(scene => Clean(scene.NarrationText)).Distinct(StringComparer.OrdinalIgnoreCase).Count() == narration.Scenes.Count, "no duplicate narration lines.");
-        AddCheck(checks, "notSourceAnswerCopies", narration.Scenes.All(scene => !string.Equals(Clean(scene.NarrationText), Clean(scene.SourceAnswer), StringComparison.OrdinalIgnoreCase)), "narrationText must not exactly copy sourceAnswer.");
+        var copiedSourceAnswers = CountCopiedSourceAnswers(narration);
+        AddCheck(checks, "notSourceAnswerCopies", copiedSourceAnswers == 0, "narrationText must not exactly copy sourceAnswer.");
         AddCheck(checks, "noInternalTerms", narration.Scenes.All(SceneHasNoInternalTerms), "narration and captions must not contain internal/debug terms.");
         AddCheck(checks, "actionLast", string.Equals(narration.Scenes.LastOrDefault()?.QuestionType, AstronomyQuestionTypes.Action, StringComparison.OrdinalIgnoreCase), "action scene is last.");
         AddCheck(checks, "whatFirst", string.Equals(narration.Scenes.FirstOrDefault()?.QuestionType, AstronomyQuestionTypes.What, StringComparison.OrdinalIgnoreCase), "what scene is first.");
@@ -267,7 +274,8 @@ public sealed class QuestionDrivenNarrationGenerator(
             DateTimeOffset.UtcNow,
             RequiredSectionsPresent: missingSections.Count == 0,
             RepetitiveSentenceOpenings: !HasVariedSentenceOpenings(narration),
-            StoryStructurePassed: missingSections.Count == 0);
+            StoryStructurePassed: missingSections.Count == 0,
+            CopiedSourceAnswers: copiedSourceAnswers);
     }
 
     private static void ValidateNarrationHasNoForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext)
@@ -296,6 +304,9 @@ public sealed class QuestionDrivenNarrationGenerator(
         }
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
+
+    private static int CountCopiedSourceAnswers(QuestionDrivenNarrationDto narration)
+        => narration.Scenes.Count(scene => string.Equals(Clean(scene.NarrationText), Clean(scene.SourceAnswer), StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<string> MissingRequiredSections(QuestionDrivenNarrationDto narration)
     {
