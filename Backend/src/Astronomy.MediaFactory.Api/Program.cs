@@ -6055,9 +6055,9 @@ app.MapPost("/api/visual-lab/compose-thumbnail", async Task<IResult> (VisualLabC
     using var backgroundImage = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
     using var image = RenderVisualLabLongFormatHeroCanvas(backgroundImage, thumbnailCanvasWidth, thumbnailCanvasHeight);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
-    var composedPath = Path.Combine(outputDirectory, "benchmark-thumbnail-conjunction-v1.png");
-    var layoutPath = Path.Combine(outputDirectory, "thumbnail-layout-v1.json");
-    var validationPath = Path.Combine(outputDirectory, "thumbnail-validation-v1.json");
+    var composedPath = Path.Combine(outputDirectory, "benchmark-thumbnail-conjunction-v2.png");
+    var layoutPath = Path.Combine(outputDirectory, "thumbnail-v2-layout.json");
+    var validationPath = Path.Combine(outputDirectory, "thumbnail-v2-validation.json");
     var spec = BuildVisualLabThumbnailSpec(request, thumbnailCanvasWidth, thumbnailCanvasHeight, composedPath, layoutPath, validationPath);
     var assetLookup = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : VisualLabPlanetAssetLookup.Empty(environment);
     var validation = ValidateVisualLabThumbnailSpec(spec, thumbnailCanvasWidth, thumbnailCanvasHeight, assetLookup);
@@ -6160,9 +6160,9 @@ static IReadOnlyList<string> ValidateVisualLabComposeThumbnailRequest(VisualLabC
     var supportedEvents = new[] { "PlanetConjunction" };
     var supportedFormats = new[] { "Thumbnail" };
     if (string.IsNullOrWhiteSpace(request.BackgroundImagePath)) errors.Add("backgroundImagePath is required.");
-    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Thumbnail Benchmark V1.");
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Thumbnail Benchmark V2.");
     if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
-    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Thumbnail for Thumbnail Benchmark V1.");
+    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Thumbnail for Thumbnail Benchmark V2.");
     if (!request.UseCelestialAssets) errors.Add("useCelestialAssets must be true for thumbnail validation.");
     return errors;
 }
@@ -6237,7 +6237,7 @@ static VisualLabThumbnailSpec BuildVisualLabThumbnailSpec(VisualLabComposeThumbn
     };
 
     return new VisualLabThumbnailSpec(
-        "VisualLabThumbnailComposerV1",
+        "VisualLabThumbnailComposerV2",
         "AzureImage2BackgroundOnly",
         request.BackgroundImagePath.Trim(),
         composedPath,
@@ -6250,7 +6250,7 @@ static VisualLabThumbnailSpec BuildVisualLabThumbnailSpec(VisualLabComposeThumbn
         width,
         height,
         safeMargin,
-        "3 PLANETS\nONE SKY",
+        "3 PLANETS\nTOGETHER",
         "TONIGHT",
         Math.Max(86, (int)Math.Round(width * 0.086)),
         Math.Max(42, (int)Math.Round(width * 0.042)),
@@ -6258,8 +6258,8 @@ static VisualLabThumbnailSpec BuildVisualLabThumbnailSpec(VisualLabComposeThumbn
         badgeBounds,
         planetCluster,
         planetSprites,
-        new[] { "date panel", "direction panel", "tips panel", "equipment panel", "labels", "educational information", "hero poster styling" },
-        "HighCtrYouTubeThumbnail",
+        new[] { "date", "tips", "labels", "callouts", "educational information", "direction marker", "hero poster styling" },
+        "HighCtrYouTubeThumbnailV2",
         DateTimeOffset.UtcNow);
 }
 
@@ -6510,8 +6510,8 @@ static VisualLabThumbnailValidation ValidateVisualLabThumbnailSpec(VisualLabThum
 
     AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses the provided AzureImage2 background output only.");
     AddCheck("thumbnailFormat", width == 1280 && height == 720 && string.Equals(spec.Format, "Thumbnail", StringComparison.OrdinalIgnoreCase), "Thumbnail benchmark uses 16:9 1280x720 output.");
-    AddCheck("notEducationalSlide", noForbiddenPanels && spec.DesignMode == "HighCtrYouTubeThumbnail", "Date, direction, tips, equipment, labels, educational information, and hero poster styling are excluded.");
-    AddCheck("headlineVisible", headlineLines.SequenceEqual(new[] { "3 PLANETS", "ONE SKY" }) && spec.HeadlineFontSize >= 86, "Large two-line CTR headline is present.");
+    AddCheck("notEducationalSlide", noForbiddenPanels && spec.DesignMode == "HighCtrYouTubeThumbnailV2", "Date, tips, labels, callouts, educational information, direction markers, and hero poster styling are excluded.");
+    AddCheck("headlineVisible", headlineLines.SequenceEqual(new[] { "3 PLANETS", "TOGETHER" }) && spec.HeadlineFontSize >= 86, "Large two-line CTR headline reads 3 PLANETS TOGETHER.");
     AddCheck("readableAtSmallSize", spec.HeadlineFontSize >= 86 && spec.BadgeFontSize >= 42 && headline.Width >= width * 0.40, "Headline and badge sizes remain readable at thumbnail preview size.");
     AddCheck("highContrast", spec.HeadlineContrastStyle == "white text, black stroke, dark gradient backing", "Headline uses white text, black stroke, and dark gradient backing for high contrast.");
     AddCheck("safeMargins", spec.SafeMargin >= 46 && RectContains(safe, headline) && RectContains(safe, badge), "Headline and badge stay inside safe margins.");
@@ -6519,7 +6519,7 @@ static VisualLabThumbnailValidation ValidateVisualLabThumbnailSpec(VisualLabThum
     AddCheck("planetAssetsMuchLargerThanHero", thumbnailSpritesLargerThanHero, $"Thumbnail planet sprites are dramatically larger than scene overlay assets; overlay maximum is {overlayMaxSpriteWidth}px.");
     AddCheck("tightPlanetGrouping", cluster.Width <= width * 0.52 && cluster.Height <= height * 0.72 && spec.PlanetSprites.All(p => RectContains(cluster, new RectangleF(p.CenterX - p.SpriteWidth / 2f, p.CenterY - p.SpriteWidth / 2f, p.SpriteWidth, p.SpriteWidth))), "Planets form a tight dramatic group.");
     AddCheck("noClipping", planetsInsideSafeArea, "Planet sprites stay within safe margins without clipping.");
-    AddCheck("oneSecondComprehension", spec.Headline == "3 PLANETS\nONE SKY" && spec.PlanetSprites.Select(p => p.Name).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "Viewer can understand the event from headline and three visible planets within one second.");
+    AddCheck("oneSecondComprehension", spec.Headline == "3 PLANETS\nTOGETHER" && spec.PlanetSprites.Select(p => p.Name).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "Viewer can understand the event from headline and three visible planets within one second.");
 
     return new VisualLabThumbnailValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, true, noForbiddenPanels, spec.Headline, spec.Badge, assetLookup.Diagnostics);
 
