@@ -697,7 +697,7 @@ public sealed class HeroAssetStoryGenerator(
         ProductionEventIntelligence? intelligence)
     {
         var pipelineRequest = request.PipelineRequest;
-        var eventTitle = FirstNonEmpty(pipelineRequest?.Title, intelligence?.Title, request.ProductionContext?.EventType, heroStory.EventTitle, selectedHook);
+        var eventTitle = FirstNonEmpty(pipelineRequest?.Title, intelligence?.Title, request.ProductionContext?.EventType, heroStory.HeroHook, selectedHook);
         var eventType = FirstNonEmpty(pipelineRequest?.EventType, intelligence?.EventType, request.ProductionContext?.EventType, heroStory.HeroStorySource.What, "AstronomyEvent");
         var primaryObjects = pipelineRequest?.PrimaryObjects?.Count > 0 == true
             ? string.Join(", ", pipelineRequest.PrimaryObjects)
@@ -726,7 +726,7 @@ public sealed class HeroAssetStoryGenerator(
             new HeroCompositionSceneBlockDto(prompt),
             new HeroCompositionTextBlockDto("EventIntelligence", directionHint),
             new HeroCompositionTextBlockDto("EventIntelligence", bestViewingWindow),
-            new HeroCompositionTextBlockDto("ContentGenerationPlan", ResolveHeroImageCta(heroStory.CallToAction)),
+            new HeroCompositionTextBlockDto("ContentGenerationPlan", ResolveHeroImageCta(heroStory.HeroAction)),
             new HeroCompositionValidationDto(true, true, true, true, true, 100));
     }
 
