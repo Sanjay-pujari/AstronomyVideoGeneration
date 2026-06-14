@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using Azure.Core;
+using Azure.Identity;
 using System.Security.Cryptography;
 using System.Text.Json;
 using SixLabors.ImageSharp;
@@ -23,6 +27,7 @@ public sealed class HeroAssetIntelligenceEngine(IHeroAssetStoryGenerator storyGe
 public sealed class HeroAssetStoryGenerator(
     IOptions<RenderingOptions> renderingOptions,
     IOptions<AzureOpenAIForImageOptions> imageOptions,
+    IHttpClientFactory httpClientFactory,
     ILogger<HeroAssetStoryGenerator> logger,
     IHeroAssetSceneSelector sceneSelector,
     IHeroCompositionEngine compositionEngine) : IHeroAssetStoryGenerator
@@ -405,23 +410,26 @@ public sealed class HeroAssetStoryGenerator(
             var promptPath = Path.Combine(heroAssetsRoot, HeroPromptFileName);
             var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
             var heroDiagnosticsStopwatch = Stopwatch.StartNew();
-            var heroImageSaveStopwatch = Stopwatch.StartNew();
             WriteHeroGenerationConfigurationDiagnostics(compositionModel, imageOptions.Value, HeroImageSpecs[0].Width, HeroImageSpecs[0].Height, promptPath, diagnosticsPath);
 
-            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken))
-                generatedFiles.Add(imagePath);
-            heroImageSaveStopwatch.Stop();
-
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var landscapePath = Path.Combine(heroAssetsRoot, HeroLandscapeFileName);
-            if (File.Exists(landscapePath))
-            {
-                File.Copy(landscapePath, heroPath, overwrite: true);
-                generatedFiles.Add(NormalizePath(heroPath));
-            }
+            var azureBackgroundPath = Path.Combine(heroAssetsRoot, "hero-azure-background.png");
+            var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, compositionModel.VisualBlock.SourceScene ?? string.Empty, azureBackgroundPath, cancellationToken);
+            if (!azureResult.ProviderSucceeded)
+                throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed: {azureResult.FailureReason}");
+
+            File.Copy(azureBackgroundPath, heroPath, overwrite: true);
+            File.Copy(azureBackgroundPath, Path.Combine(heroAssetsRoot, HeroLandscapeFileName), overwrite: true);
+            File.Copy(azureBackgroundPath, Path.Combine(heroAssetsRoot, HeroSquareFileName), overwrite: true);
+            File.Copy(azureBackgroundPath, Path.Combine(heroAssetsRoot, HeroPortraitFileName), overwrite: true);
+            generatedFiles.Add(NormalizePath(azureBackgroundPath));
+            generatedFiles.Add(NormalizePath(heroPath));
+            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroLandscapeFileName)));
+            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroSquareFileName)));
+            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroPortraitFileName)));
 
             heroDiagnosticsStopwatch.Stop();
-            await WriteHeroGenerationSummaryDiagnosticsAsync(compositionModel, imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroImageSaveStopwatch.ElapsedMilliseconds, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteHeroGenerationSummaryDiagnosticsAsync(compositionModel, imageOptions.Value, heroPath, promptPath, diagnosticsPath, azureResult, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
 
@@ -814,8 +822,8 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine("VisualStyle: WarmTwilightHero");
         Console.WriteLine($"PromptLength: {promptText.Length}");
         Console.WriteLine("HeroMode: HeroAsset");
-        Console.WriteLine("UseAzureImage2: False");
-        Console.WriteLine("UseFallbackRenderer: True");
+        Console.WriteLine($"UseAzureImage2: {IsAzureImage2Configured(options)}");
+        Console.WriteLine($"UseFallbackRenderer: {!IsAzureImage2Configured(options)}");
         Console.WriteLine();
         Console.WriteLine("=================================================");
         Console.WriteLine("PROMPT SENT TO HERO IMAGE MODEL");
@@ -825,7 +833,7 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine();
     }
 
-    private async Task WriteHeroGenerationSummaryDiagnosticsAsync(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, string imagePath, string promptPath, string diagnosticsPath, long imageSaveMs, long totalMs, CancellationToken cancellationToken)
+    private async Task WriteHeroGenerationSummaryDiagnosticsAsync(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, string imagePath, string promptPath, string diagnosticsPath, AzureImage2GenerationResult azureResult, long totalMs, CancellationToken cancellationToken)
     {
         var promptText = compositionModel.VisualBlock.SourceScene ?? string.Empty;
         Directory.CreateDirectory(Path.GetDirectoryName(promptPath) ?? ResolveWorkingDirectoryRoot());
@@ -838,13 +846,13 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine("HERO IMAGE GENERATION PATH");
         Console.WriteLine("=================================================");
         Console.WriteLine();
-        Console.WriteLine("Renderer: AstronomyVisualCompositionEngine");
-        Console.WriteLine("FallbackRendererUsed: True");
-        Console.WriteLine("ProviderCalled: False");
-        Console.WriteLine("ProviderSucceeded: False");
-        Console.WriteLine("Azure Request Time: 0 ms");
-        Console.WriteLine("Image Download Time: 0 ms");
-        Console.WriteLine($"Image Save Time: {imageSaveMs} ms");
+        Console.WriteLine("Renderer: AzureImage2");
+        Console.WriteLine("FallbackRendererUsed: False");
+        Console.WriteLine("ProviderCalled: True");
+        Console.WriteLine("ProviderSucceeded: True");
+        Console.WriteLine($"Azure Request Time: {azureResult.AzureRequestMs} ms");
+        Console.WriteLine($"Image Download Time: {azureResult.ImageDownloadMs} ms");
+        Console.WriteLine("Image Save Time: 0 ms");
         Console.WriteLine($"Total Time: {totalMs} ms");
         Console.WriteLine();
         Console.WriteLine("=================================================");
@@ -854,18 +862,88 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine("Provider: AzureOpenAIForImage");
         Console.WriteLine($"Deployment: {deployment}");
         Console.WriteLine($"Model: {deployment}");
-        Console.WriteLine("Renderer: AstronomyVisualCompositionEngine");
-        Console.WriteLine("FallbackUsed: True");
+        Console.WriteLine("Renderer: AzureImage2");
+        Console.WriteLine("FallbackUsed: False");
         Console.WriteLine($"PromptLength: {promptText.Length}");
-        Console.WriteLine("RequestMs: 0");
+        Console.WriteLine($"RequestMs: {azureResult.AzureRequestMs}");
         Console.WriteLine($"ImageHash: {imageHash}");
         Console.WriteLine($"FileSize: {fileSize}");
         Console.WriteLine($"ImagePath: {imagePath}");
         Console.WriteLine($"PromptPath: {promptPath}");
         Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
         Console.WriteLine();
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "WarmTwilightHero", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AstronomyVisualCompositionEngine", fallbackRendererUsed = true, providerCalled = false, providerSucceeded = false, azureRequestMs = 0, imageDownloadMs = 0, imageSaveMs, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = "Azure Image2 provider is not called by Phase 11 Hero; local canvas composition renderer was used." }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "WarmTwilightHero", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
+
+    private async Task<AzureImage2GenerationResult> GenerateHeroWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken)
+    {
+        EnsureAzureImage2Configured(options, "Phase 11 Hero");
+        var endpoint = options.Endpoint.TrimEnd('/');
+        var deployment = Uri.EscapeDataString(options.ImageDeployment.Trim());
+        const string apiVersion = "2024-10-21";
+        var requestUri = $"{endpoint}/openai/deployments/{deployment}/images/generations?api-version={apiVersion}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(new { prompt = promptText, n = 1, size = "1792x1024" }) };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        await AddAzureImage2AuthorizationAsync(request, options, cancellationToken);
+        Console.WriteLine($"Azure Image2 HTTP request start: POST {requestUri}");
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var response = await httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+            stopwatch.Stop();
+            Console.WriteLine($"Azure Image2 HTTP request end: {(int)response.StatusCode} {response.StatusCode} in {stopwatch.ElapsedMilliseconds} ms");
+            if (!response.IsSuccessStatusCode) return new(true, false, stopwatch.ElapsedMilliseconds, 0, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}): {payload}");
+            var downloadStopwatch = Stopwatch.StartNew();
+            var imageBytes = await ExtractAzureImage2BytesAsync(httpClientFactory.CreateClient(), payload, cancellationToken);
+            Directory.CreateDirectory(Path.GetDirectoryName(imagePath) ?? ResolveWorkingDirectoryRoot());
+            await File.WriteAllBytesAsync(imagePath, imageBytes, cancellationToken);
+            downloadStopwatch.Stop();
+            return new(true, true, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            Console.WriteLine($"Azure Image2 HTTP request end: provider exception in {stopwatch.ElapsedMilliseconds} ms: {ex.Message}");
+            return new(true, false, stopwatch.ElapsedMilliseconds, 0, ex.ToString());
+        }
+    }
+
+    private static bool IsAzureImage2Configured(AzureOpenAIForImageOptions options)
+        => !string.IsNullOrWhiteSpace(options.Endpoint) && !string.IsNullOrWhiteSpace(options.ImageDeployment) && (options.UseManagedIdentity || !string.IsNullOrWhiteSpace(options.ApiKey));
+
+    private static void EnsureAzureImage2Configured(AzureOpenAIForImageOptions options, string phaseName)
+    {
+        if (IsAzureImage2Configured(options)) return;
+        throw new InvalidOperationException($"{phaseName} requires Azure Image2 configuration; local fallback is not allowed unless Azure Image2 is explicitly disabled. Missing Endpoint, ImageDeployment, or ApiKey/managed identity.");
+    }
+
+    private static async Task AddAzureImage2AuthorizationAsync(HttpRequestMessage request, AzureOpenAIForImageOptions options, CancellationToken cancellationToken)
+    {
+        if (options.UseManagedIdentity)
+        {
+            var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions { ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId) ? null : options.ManagedIdentityClientId.Trim() });
+            var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), cancellationToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            return;
+        }
+        request.Headers.Add("api-key", options.ApiKey);
+    }
+
+    private static async Task<byte[]> ExtractAzureImage2BytesAsync(HttpClient httpClient, string payload, CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var firstImage = document.RootElement.GetProperty("data")[0];
+        if (firstImage.TryGetProperty("b64_json", out var b64Element) && !string.IsNullOrWhiteSpace(b64Element.GetString())) return Convert.FromBase64String(b64Element.GetString()!);
+        if (firstImage.TryGetProperty("url", out var urlElement) && !string.IsNullOrWhiteSpace(urlElement.GetString())) return await httpClient.GetByteArrayAsync(urlElement.GetString()!, cancellationToken);
+        throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content.");
+    }
+
+    private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
     {
