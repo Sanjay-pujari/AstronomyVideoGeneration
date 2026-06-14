@@ -5996,14 +5996,18 @@ app.MapPost("/api/visual-lab/compose-hero", async Task<IResult> (VisualLabCompos
         return Results.BadRequest(new { message = "backgroundImagePath must point to a Visual Lab AzureImage2 background output such as background-v1.png.", backgroundImagePath = backgroundPath });
     }
 
-    using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
+    const int heroCanvasWidth = 1920;
+    const int heroCanvasHeight = 1080;
+
+    using var backgroundImage = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
+    using var image = RenderVisualLabLongFormatHeroCanvas(backgroundImage, heroCanvasWidth, heroCanvasHeight);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
     var composedPath = Path.Combine(outputDirectory, "benchmark-hero-conjunction-v1.png");
     var layoutPath = Path.Combine(outputDirectory, "hero-layout-v1.json");
     var validationPath = Path.Combine(outputDirectory, "hero-validation-v1.json");
-    var spec = BuildVisualLabHeroSpec(request, image.Width, image.Height, composedPath, layoutPath, validationPath);
+    var spec = BuildVisualLabHeroSpec(request, heroCanvasWidth, heroCanvasHeight, composedPath, layoutPath, validationPath);
     var assetLookup = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : VisualLabPlanetAssetLookup.Empty(environment);
-    var validation = ValidateVisualLabHeroSpec(spec, image.Width, image.Height, assetLookup);
+    var validation = ValidateVisualLabHeroSpec(spec, heroCanvasWidth, heroCanvasHeight, assetLookup);
     if (!validation.IsValid)
     {
         foreach (var asset in assetLookup.Assets.Values) asset.Image.Dispose();
@@ -6095,6 +6099,25 @@ static IReadOnlyList<string> ValidateVisualLabComposeHeroRequest(VisualLabCompos
     if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long for Visual Lab Hero Benchmark V1.");
     if (!request.UseCelestialAssets) errors.Add("useCelestialAssets must be true for poster-quality hero validation.");
     return errors;
+}
+
+static Image<Rgba32> RenderVisualLabLongFormatHeroCanvas(Image<Rgba32> backgroundImage, int width, int height)
+{
+    var canvas = new Image<Rgba32>(width, height);
+    var scale = Math.Max(width / (double)Math.Max(backgroundImage.Width, 1), height / (double)Math.Max(backgroundImage.Height, 1));
+    var resizedWidth = Math.Max(width, (int)Math.Ceiling(backgroundImage.Width * scale));
+    var resizedHeight = Math.Max(height, (int)Math.Ceiling(backgroundImage.Height * scale));
+    using var resized = backgroundImage.Clone(ctx => ctx.Resize(new ResizeOptions
+    {
+        Size = new Size(resizedWidth, resizedHeight),
+        Mode = ResizeMode.Stretch,
+        Sampler = KnownResamplers.Bicubic
+    }));
+    var cropX = Math.Max(0, (resizedWidth - width) / 2);
+    var cropY = Math.Max(0, (resizedHeight - height) / 2);
+    using var cropped = resized.Clone(ctx => ctx.Crop(new Rectangle(cropX, cropY, width, height)));
+    canvas.Mutate(ctx => ctx.DrawImage(cropped, Point.Empty, 1f));
+    return canvas;
 }
 
 static VisualLabHeroSpec BuildVisualLabHeroSpec(VisualLabComposeHeroRequest request, int width, int height, string composedPath, string layoutPath, string validationPath)
