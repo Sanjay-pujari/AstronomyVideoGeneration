@@ -64,7 +64,8 @@ public sealed record QuestionDrivenNarrationReviewDto(
     DateTimeOffset GeneratedUtc,
     bool RequiredSectionsPresent = false,
     bool RepetitiveSentenceOpenings = true,
-    bool StoryStructurePassed = false);
+    bool StoryStructurePassed = false,
+    int CopiedSourceAnswers = 0);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,

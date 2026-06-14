@@ -56,6 +56,7 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.True(result.Review.RequiredSectionsPresent);
         Assert.False(result.Review.RepetitiveSentenceOpenings);
         Assert.True(result.Review.StoryStructurePassed);
+        Assert.Equal(0, result.Review.CopiedSourceAnswers);
         Assert.Equal(new[] { "Hook", "ViewingAdvice", "Explanation", "Reward", "Curiosity", "CTA" }, result.Narration.Scenes.Select(scene => scene.Section));
         Assert.All(result.Narration.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.SceneType)));
     }
@@ -224,12 +225,13 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Hook" && scene.NarrationText == "Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.");
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Curiosity" && scene.NarrationText == "What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.");
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Explanation" && scene.NarrationText == "This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.");
-        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "ViewingAdvice" && scene.NarrationText == "For Udaipur, the best viewing window is after midnight, from 12:00 AM to 5:00 AM IST. Look east to overhead after 10 PM.");
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "ViewingAdvice" && scene.NarrationText == "For the best experience, head to a dark location after 10 PM and scan the sky from east to overhead.");
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Reward" && scene.NarrationText == "With low moonlight, patient observers may catch repeated bright streaks crossing the dark sky.");
         Assert.Contains(result.Narration.Scenes, scene => scene.Section == "CTA" && scene.NarrationText == "Save this sky guide, step outside after midnight, and follow for more astronomy events.");
         Assert.True(result.Review.RequiredSectionsPresent);
         Assert.False(result.Review.RepetitiveSentenceOpenings);
         Assert.True(result.Review.StoryStructurePassed);
+        Assert.Equal(0, result.Review.CopiedSourceAnswers);
     }
 
     [Fact]
