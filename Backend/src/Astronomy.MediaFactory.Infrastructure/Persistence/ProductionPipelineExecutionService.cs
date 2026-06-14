@@ -1299,6 +1299,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var sceneImageRoots = context.PipelineRequest.EnableSceneVariants
             ? new[] { Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long") }
             : new[] { Path.Combine(context.ExecutionContext.SceneRoot!, "short"), Path.Combine(context.ExecutionContext.SceneRoot!, "long") };
+        if (context.PipelineRequest.EnableSceneVariants)
+            ValidatePhase10SceneAssetCoverage(context.ExecutionContext.SceneRoot!);
         var validationOutputs = context.PipelineRequest.EnableSceneVariants
             ? Array.Empty<string>()
             : [Path.Combine(currentRunValidationRoot, "production-quality-validation-before-assembly.json")];
@@ -2557,6 +2559,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase8SceneVariantDiagnostics = phaseNo == 8
             ? BuildPhase8SceneVariantDiagnostics(context, reason)
             : null;
+        var phase10SceneAssetDiagnostics = phaseNo == 10
+            ? BuildPhase10SceneAssetDiagnostics(context)
+            : null;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
             ? phase6SceneEnrichmentDiagnostics
             : null;
@@ -2612,8 +2617,13 @@ public sealed partial class ProductionPipelineExecutionService(
             phase8SceneVariantDiagnostics,
             generatedImageCount = phase8SceneVariantDiagnostics?.GeneratedImageCount,
             expectedImageCount = phase8SceneVariantDiagnostics?.ExpectedImageCount,
-            checkedPaths = phase8SceneVariantDiagnostics?.CheckedPaths,
-            selectedValidationPath = phase8SceneVariantDiagnostics?.SelectedValidationPath,
+            checkedPaths = phase10SceneAssetDiagnostics?.CheckedPaths ?? phase8SceneVariantDiagnostics?.CheckedPaths,
+            selectedValidationPath = phase10SceneAssetDiagnostics?.SelectedValidationPath ?? phase8SceneVariantDiagnostics?.SelectedValidationPath,
+            shortSceneCount = phase10SceneAssetDiagnostics?.ShortSceneCount,
+            longSceneCount = phase10SceneAssetDiagnostics?.LongSceneCount,
+            shortPngCount = phase10SceneAssetDiagnostics?.ShortPngCount,
+            longPngCount = phase10SceneAssetDiagnostics?.LongPngCount,
+            phase10SceneAssetDiagnostics,
             pngCount = phase8SceneVariantDiagnostics?.PngCount,
             sceneDirectoryCount = phase8SceneVariantDiagnostics?.SceneDirectoryCount,
             perSceneVariantHash = phase8SceneVariantDiagnostics?.PerSceneVariantHash,
@@ -2974,6 +2984,83 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.IsNullOrWhiteSpace(value)
             ? Array.Empty<string>()
             : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+    private static void ValidatePhase10SceneAssetCoverage(string sceneRoot)
+    {
+        var diagnostics = BuildPhase10SceneAssetDiagnostics(sceneRoot);
+        var errors = new List<string>();
+        ValidatePhase10SceneAssetProfile(diagnostics.ShortRoot, "short", diagnostics.ShortSceneCount, diagnostics.ShortPngCount, errors);
+        ValidatePhase10SceneAssetProfile(diagnostics.LongRoot, "long", diagnostics.LongSceneCount, diagnostics.LongPngCount, errors);
+        if (errors.Count > 0)
+            throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", errors));
+    }
+
+    private static void ValidatePhase10SceneAssetProfile(string root, string profile, int sceneCount, int pngCount, List<string> errors)
+    {
+        if (!Directory.Exists(root))
+        {
+            errors.Add($"{profile} scene asset directory was not found: {NormalizePath(root)}");
+            return;
+        }
+
+        if (sceneCount != 6)
+            errors.Add($"{profile} scene asset validation expected 6 scene directories but found {sceneCount} in {NormalizePath(root)}");
+        if (pngCount != 6)
+            errors.Add($"{profile} scene asset validation expected 6 final PNGs but found {pngCount} in {NormalizePath(root)}");
+
+        var missingFinals = Directory.EnumerateDirectories(root, "scene-*", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(directory => new
+            {
+                ExpectedFinal = Path.Combine(directory, $"{Path.GetFileName(directory)}-final.png")
+            })
+            .Where(item => !File.Exists(item.ExpectedFinal))
+            .Select(item => NormalizePath(item.ExpectedFinal))
+            .ToArray();
+        if (missingFinals.Length > 0)
+            errors.Add($"{profile} scene asset directories missing required final PNGs: {string.Join(", ", missingFinals)}");
+    }
+
+    private static Phase10SceneAssetDiagnostics BuildPhase10SceneAssetDiagnostics(ProductionPhaseContext context)
+        => BuildPhase10SceneAssetDiagnostics(context.ExecutionContext.SceneRoot!);
+
+    private static Phase10SceneAssetDiagnostics BuildPhase10SceneAssetDiagnostics(string sceneRoot)
+    {
+        var shortRoot = Path.Combine(sceneRoot, "scene-assets", "short");
+        var longRoot = Path.Combine(sceneRoot, "scene-assets", "long");
+        var checkedPaths = new[] { shortRoot, longRoot };
+        var selectedValidationPath = checkedPaths.FirstOrDefault(Directory.Exists) ?? shortRoot;
+        return new Phase10SceneAssetDiagnostics(
+            CheckedPaths: checkedPaths.Select(NormalizePath).ToArray(),
+            SelectedValidationPath: NormalizePath(selectedValidationPath),
+            ShortRoot: shortRoot,
+            LongRoot: longRoot,
+            ShortSceneCount: CountPhase10SceneDirectories(shortRoot),
+            LongSceneCount: CountPhase10SceneDirectories(longRoot),
+            ShortPngCount: CountPhase10FinalPngs(shortRoot),
+            LongPngCount: CountPhase10FinalPngs(longRoot));
+    }
+
+    private static int CountPhase10SceneDirectories(string root)
+        => Directory.Exists(root)
+            ? Directory.EnumerateDirectories(root, "scene-*", SearchOption.TopDirectoryOnly).Count()
+            : 0;
+
+    private static int CountPhase10FinalPngs(string root)
+        => Directory.Exists(root)
+            ? Directory.EnumerateDirectories(root, "scene-*", SearchOption.TopDirectoryOnly)
+                .Count(directory => File.Exists(Path.Combine(directory, $"{Path.GetFileName(directory)}-final.png")))
+            : 0;
+
+    private sealed record Phase10SceneAssetDiagnostics(
+        IReadOnlyList<string> CheckedPaths,
+        string SelectedValidationPath,
+        string ShortRoot,
+        string LongRoot,
+        int ShortSceneCount,
+        int LongSceneCount,
+        int ShortPngCount,
+        int LongPngCount);
 
     private sealed record Phase12ThumbnailDiagnostics(
         string CurrentEventLock,
