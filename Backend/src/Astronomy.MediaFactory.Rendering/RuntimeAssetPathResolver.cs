@@ -4,7 +4,21 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class RuntimeAssetPathResolver : IRuntimeAssetPathResolver
 {
-    public string BaseDirectory { get; } = NormalizeDirectory(AppContext.BaseDirectory);
+    private static readonly string[] CelestialAssetDirectoryNames = ["celestial-object", "celestial"];
+
+    public RuntimeAssetPathResolver() : this(AppContext.BaseDirectory)
+    {
+    }
+
+    public RuntimeAssetPathResolver(string baseDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(baseDirectory))
+            throw new ArgumentException("Base directory is required.", nameof(baseDirectory));
+
+        BaseDirectory = NormalizeDirectory(baseDirectory);
+    }
+
+    public string BaseDirectory { get; }
 
     public string ResolveAssetPath(string relativePath)
     {
@@ -28,14 +42,25 @@ public sealed class RuntimeAssetPathResolver : IRuntimeAssetPathResolver
         if (string.IsNullOrWhiteSpace(fileName))
             throw new ArgumentException("Celestial asset file name is required.", nameof(fileName));
 
-        return ResolveAssetPath(Path.Combine("assets", "celestial", NormalizeRelativePath(objectKey), NormalizeRelativePath(fileName)));
+        return NormalizePath(Path.Combine(GetCelestialRoot(), NormalizeRelativePath(objectKey), NormalizeRelativePath(fileName)));
     }
 
     public string GetAssetsRoot() => ResolveAssetPath("assets");
 
     public string GetFontsRoot() => ResolveAssetPath(Path.Combine("assets", "fonts"));
 
-    public string GetCelestialRoot() => ResolveAssetPath(Path.Combine("assets", "celestial"));
+    public string GetCelestialRoot()
+    {
+        var assetsRoot = GetAssetsRoot();
+        foreach (var directoryName in CelestialAssetDirectoryNames)
+        {
+            var candidate = Path.Combine(assetsRoot, directoryName);
+            if (Directory.Exists(candidate))
+                return NormalizePath(candidate);
+        }
+
+        return NormalizePath(Path.Combine(assetsRoot, CelestialAssetDirectoryNames[^1]));
+    }
 
     public bool AssetExists(string relativePath) => File.Exists(ResolveAssetPath(relativePath)) || Directory.Exists(ResolveAssetPath(relativePath));
 
