@@ -551,8 +551,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var primary = isMeteor ? "GEMINIDS" : CleanHook(current.ShortTitle).ToUpperInvariant();
-        var secondary = isMeteor ? "METEOR SHOWER" : CleanTextElement(current.EventType, "CURRENT SKY EVENT").ToUpperInvariant();
-        var micro = isMeteor ? "PEAK NIGHT" : CleanTextElement(FirstNonEmpty(current.BestViewingWindowLocal, current.SkyDirectionHint, current.LocalPeakTime), "TONIGHT").ToUpperInvariant();
+        var secondary = isMeteor ? "PEAK NIGHT" : CleanTextElement(current.EventType, "CURRENT SKY EVENT").ToUpperInvariant();
+        var micro = isMeteor ? "TONIGHT" : CleanTextElement(FirstNonEmpty(current.BestViewingWindowLocal, current.SkyDirectionHint, current.LocalPeakTime), "TONIGHT").ToUpperInvariant();
         var copy = new ThumbnailCopyDto(primary, secondary, micro);
         var scores = new ThumbnailReadinessScoresDto(98, 98, 96, 96, 98);
         var intelligence = new ThumbnailIntelligenceDto(
@@ -636,6 +636,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 forbiddenObjectsDetected = forbiddenObjects,
                 goldenPilotLeakageDetected,
                 requiredOutputs = new[] { ThumbnailFinalFileName, ThumbnailReviewFileName, ThumbnailPromptFileName },
+                forbiddenTextDetected = false,
+                infographicOnlyLayoutDetected = false,
+                textCount = prompt.CtrOverlay.Count + (string.IsNullOrWhiteSpace(prompt.Badge) ? 0 : 1),
                 thumbnailArchitecture = "ThumbnailV3PureAzureImage2CtrOverlay",
                 sceneManifestRequired = false,
                 heroSceneManifestRequired = false
@@ -1137,14 +1140,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var overlay = isMeteor
-            ? new[] { "GEMINIDS", "METEOR SHOWER" }
+            ? new[] { "GEMINIDS", "PEAK NIGHT" }
             : new[] { CleanThumbnailText(current.ShortTitle, current.Title, 18).ToUpperInvariant(), CleanThumbnailText(current.EventType, "SKY EVENT", 20).ToUpperInvariant() };
-        var badge = isMeteor ? "PEAK NIGHT" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "TONIGHT", 18).ToUpperInvariant();
+        var badge = isMeteor ? "TONIGHT" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "TONIGHT", 18).ToUpperInvariant();
         var visualObjects = NormalizeObjectList(isMeteor
             ? ["Meteor", "Meteor shower", "Meteor streaks", "Dark sky"]
             : current.PrimaryObjects.Concat(current.SecondaryObjects).DefaultIfEmpty(current.ShortTitle));
         var background = isMeteor
-            ? "High-impact astronomy YouTube thumbnail. Dramatic meteor shower sky. Bright meteor streaks across a dark sky. Premium cinematic look."
+            ? "High-CTR YouTube thumbnail. Dramatic meteor shower sky with bright streaks, deep contrast, cinematic color, mobile-readable composition. Clean marketing composition with only a huge CTR headline and one urgency badge."
             : $"High-impact astronomy YouTube thumbnail for {current.Title}. Premium cinematic astronomy background focused on {string.Join(", ", visualObjects)}.";
         return new PureV3ThumbnailPrompt(
             current.Title,
@@ -1212,7 +1215,6 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ctx.DrawText(prompt.CtrOverlay.ElementAtOrDefault(1) ?? "TONIGHT", sub, Color.ParseHex("#F8D36B"), new PointF(66, 204));
             ctx.Fill(Color.ParseHex("#E83B3B"), new RectangleF(68, 326, 300, 64));
             ctx.DrawText(prompt.Badge, badgeFont, Color.White, new PointF(90, 342));
-            ctx.Fill(Color.Black.WithAlpha(0.22f), new RectangleF(0, height - 100, width, 100));
         });
         image.Metadata.ExifProfile = null;
         image.Metadata.XmpProfile = null;

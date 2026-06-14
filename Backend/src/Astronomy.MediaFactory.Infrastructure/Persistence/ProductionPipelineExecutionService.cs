@@ -1349,10 +1349,35 @@ public sealed partial class ProductionPipelineExecutionService(
         CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "portrait.png"), outputs);
         if (!ThumbnailsExist(context.OutputRoot))
             throw new InvalidOperationException("Thumbnail generation failed contract validation: landscape.png, square.png, and portrait.png are required.");
+        ValidateCtrThumbnailV3Contract(context.ExecutionContext.ThumbnailRoot!);
         outputs.Add(thumbnailSceneManifestPath);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+
+    private static void ValidateCtrThumbnailV3Contract(string thumbnailRoot)
+    {
+        var finalPath = Path.Combine(thumbnailRoot, "thumbnail-final.png");
+        var reviewPath = Path.Combine(thumbnailRoot, "thumbnail-review.json");
+        var errors = new List<string>();
+        if (!File.Exists(finalPath)) errors.Add($"thumbnail-final.png is required at '{NormalizePath(finalPath)}'.");
+        if (!File.Exists(reviewPath)) errors.Add($"thumbnail-review.json is required at '{NormalizePath(reviewPath)}'.");
+
+        if (File.Exists(reviewPath))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(reviewPath));
+            var root = doc.RootElement;
+            if (root.TryGetProperty("forbiddenObjectsDetected", out var forbidden) && forbidden.ValueKind == JsonValueKind.Array && forbidden.GetArrayLength() > 0)
+                errors.Add("thumbnail-review.json reports forbidden objects detected.");
+            if (root.TryGetProperty("infographicOnlyLayoutDetected", out var infographic) && infographic.ValueKind == JsonValueKind.True)
+                errors.Add("thumbnail-review.json reports an infographic-only layout.");
+            if (root.TryGetProperty("textCount", out var textCount) && textCount.TryGetInt32(out var count) && count > 3)
+                errors.Add($"Thumbnail V3 text count must be <= 3; actual={count}.");
+        }
+
+        if (errors.Count > 0)
+            throw new InvalidOperationException("Thumbnail generation failed CTR style validation: " + string.Join("; ", errors));
+    }
 
 
     private static async Task<IReadOnlyList<string>> ValidateAndMaterializeHeroContractAsync(ProductionPhaseContext context, HeroAssetGenerationResponse response, CancellationToken cancellationToken)
@@ -1379,10 +1404,55 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var compositionModelPath = Path.Combine(heroRoot, "hero-composition-model.json");
         ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, compositionModelPath, reviewPath]);
+        ValidateCinematicHeroVisualStyle(compositionModelPath, layoutValidationPath);
 
         outputs.AddRange(requiredFiles);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
+
+    private static void ValidateCinematicHeroVisualStyle(string compositionModelPath, string layoutValidationPath)
+    {
+        var errors = new List<string>();
+        if (File.Exists(compositionModelPath))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(compositionModelPath));
+            var root = doc.RootElement;
+            var visibleText = string.Join(" ", new[]
+            {
+                ReadNestedString(root, "directionBlock", "text"),
+                ReadNestedString(root, "timingBlock", "text"),
+                ReadNestedString(root, "ctaBlock", "text")
+            }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            if (!string.IsNullOrWhiteSpace(visibleText))
+                errors.Add("Hero V3 must use only a minimal title overlay; direction, timing, and CTA text blocks must be empty.");
+        }
+
+        if (File.Exists(layoutValidationPath))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
+            if (doc.RootElement.TryGetProperty("renderedBlocks", out var blocks) && blocks.ValueKind == JsonValueKind.Array)
+            {
+                var renderedBlocks = blocks.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+                var forbiddenBlocks = renderedBlocks.Where(block => block.Contains("Timing", StringComparison.OrdinalIgnoreCase)
+                    || block.Contains("Direction", StringComparison.OrdinalIgnoreCase)
+                    || block.Contains("CTA", StringComparison.OrdinalIgnoreCase)
+                    || block.Contains("Panel", StringComparison.OrdinalIgnoreCase)
+                    || block.Contains("Bar", StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (forbiddenBlocks.Length > 0)
+                    errors.Add("Hero V3 layout contains forbidden informational blocks: " + string.Join(", ", forbiddenBlocks));
+                if (renderedBlocks.Length > 2)
+                    errors.Add($"Hero V3 layout must use no more than 2 text/visual blocks; actual={renderedBlocks.Length}.");
+            }
+        }
+
+        if (errors.Count > 0)
+            throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", errors));
+    }
+
+    private static string ReadNestedString(JsonElement root, string objectName, string propertyName)
+        => root.TryGetProperty(objectName, out var obj) && obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString() ?? string.Empty
+            : string.Empty;
 
     private static async Task ValidateHeroSceneManifestContractAsync(ProductionPhaseContext context, string sceneManifestPath, CancellationToken cancellationToken)
     {
