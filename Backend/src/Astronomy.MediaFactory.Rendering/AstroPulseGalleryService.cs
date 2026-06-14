@@ -2,9 +2,11 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Rendering;
 
