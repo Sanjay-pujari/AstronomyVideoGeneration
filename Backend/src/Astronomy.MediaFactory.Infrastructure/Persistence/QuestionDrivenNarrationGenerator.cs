@@ -90,8 +90,14 @@ public sealed class QuestionDrivenNarrationGenerator(
                 ?? throw new InvalidOperationException("Existing question-driven narration could not be parsed.");
             var existingReview = JsonSerializer.Deserialize<QuestionDrivenNarrationReviewDto>(await File.ReadAllTextAsync(reviewPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing question-driven narration review could not be parsed.");
+            var legacyNarrationPath = BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext);
+            var legacyReviewPath = BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext);
+            if (!File.Exists(legacyNarrationPath))
+                await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(existingNarration, JsonOptions), cancellationToken);
+            if (!File.Exists(legacyReviewPath))
+                await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(existingReview, JsonOptions), cancellationToken);
             warnings.Add("Question-driven narration already exists; returning the existing files because overwriteExisting is false.");
-            return BuildResponse(existingNarration, existingReview, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/')], warnings);
+            return BuildResponse(existingNarration, existingReview, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
         }
 
         var inputJson = await File.ReadAllTextAsync(inputPath, cancellationToken);
@@ -114,10 +120,12 @@ public sealed class QuestionDrivenNarrationGenerator(
         Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
         await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext), JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext), JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
+        var legacyNarrationPath = BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext);
+        var legacyReviewPath = BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext);
+        await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
 
-        return BuildResponse(narration, review, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/')], warnings);
+        return BuildResponse(narration, review, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
     }
 
     private static QuestionDrivenNarrationResponse BuildResponse(
