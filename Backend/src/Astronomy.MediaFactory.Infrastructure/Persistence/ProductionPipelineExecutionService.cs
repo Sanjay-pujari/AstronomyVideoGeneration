@@ -68,9 +68,6 @@ public sealed partial class ProductionPipelineExecutionService(
         var phaseResults = new List<ProductionPhaseResult>();
         var deletedFilesDueToOverwrite = new List<string>();
 
-        if (request.OverwriteExisting && startPhaseNo <= 1)
-            ClearProductionOutputRoot(outputRoot);
-
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
@@ -2738,6 +2735,10 @@ public sealed partial class ProductionPipelineExecutionService(
             durationMs = result.DurationMs,
             sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!),
             sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)),
+            cleanupScope = BuildCleanupScopeDiagnostics(context),
+            deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
+            preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context),
+            executedPhaseNumbers = status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>(),
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             filesGeneratedThisRun = outputFiles,
             inputFiles,
@@ -3323,7 +3324,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhaseNo = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhaseNo = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), executedPhaseNumbers = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray(), skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhaseNo = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhaseNo = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), executedPhaseNumbers = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray(), skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
@@ -3431,10 +3432,68 @@ public sealed partial class ProductionPipelineExecutionService(
         if (deleteStartPhaseNo <= 13 && deleteEndPhaseNo >= 13)
             DeleteProductionSubtree(Path.Combine(context.OutputRoot, "gallery"), deletedFiles);
 
-        var firstValidationToDelete = Math.Max(deleteStartPhaseNo, 7);
+        if (deleteStartPhaseNo <= 15 && deleteEndPhaseNo >= 14)
+            DeleteProductionSubtree(context.ExecutionContext.NarrationRoot!, deletedFiles);
+
+        if (deleteStartPhaseNo <= 17 && deleteEndPhaseNo >= 16)
+            DeleteProductionSubtree(context.ExecutionContext.TtsRoot!, deletedFiles);
+
+        if (deleteStartPhaseNo <= 19 && deleteEndPhaseNo >= 18)
+            DeleteProductionSubtree(context.ExecutionContext.VideoAssemblyRoot!, deletedFiles);
+
+        var firstValidationToDelete = Math.Max(deleteStartPhaseNo, 1);
         var lastValidationToDelete = Math.Min(deleteEndPhaseNo, 20);
         for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
+    }
+
+    private static object BuildCleanupScopeDiagnostics(ProductionPhaseContext context)
+    {
+        var deleteStartPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
+            ? context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo
+            : context.StartPhaseNo;
+        var deleteEndPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
+            ? context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo
+            : context.EndPhaseNo;
+
+        return new
+        {
+            phaseRange = $"{deleteStartPhaseNo}-{deleteEndPhaseNo}",
+            phaseNumbers = Enumerable.Range(deleteStartPhaseNo, deleteEndPhaseNo - deleteStartPhaseNo + 1).ToArray(),
+            ownedOutputRoots = ResolvePhaseOwnedOutputRoots(context, deleteStartPhaseNo, deleteEndPhaseNo).Select(NormalizePath).ToArray(),
+            validationFiles = Enumerable.Range(deleteStartPhaseNo, deleteEndPhaseNo - deleteStartPhaseNo + 1)
+                .Select(phaseNo => NormalizePath(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json")))
+                .ToArray()
+        };
+    }
+
+    private static IReadOnlyList<string> ResolvePhaseOwnedOutputRoots(ProductionPhaseContext context, int startPhaseNo, int endPhaseNo)
+    {
+        var roots = new List<string>();
+        if (startPhaseNo <= 9 && endPhaseNo >= 8) roots.Add(context.ExecutionContext.SceneRoot!);
+        if (startPhaseNo <= 11 && endPhaseNo >= 11) roots.Add(context.ExecutionContext.HeroRoot!);
+        if (startPhaseNo <= 12 && endPhaseNo >= 12) roots.Add(context.ExecutionContext.ThumbnailRoot!);
+        if (startPhaseNo <= 13 && endPhaseNo >= 13) roots.Add(Path.Combine(context.OutputRoot, "gallery"));
+        if (startPhaseNo <= 15 && endPhaseNo >= 14) roots.Add(context.ExecutionContext.NarrationRoot!);
+        if (startPhaseNo <= 17 && endPhaseNo >= 16) roots.Add(context.ExecutionContext.TtsRoot!);
+        if (startPhaseNo <= 19 && endPhaseNo >= 18) roots.Add(context.ExecutionContext.VideoAssemblyRoot!);
+        return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildPreservedValidationFilesDiagnostics(ProductionPhaseContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.ExecutionContext.ValidationRoot) || !Directory.Exists(context.ExecutionContext.ValidationRoot)) return Array.Empty<string>();
+        return Directory.EnumerateFiles(context.ExecutionContext.ValidationRoot, "phase-??-validation.json")
+            .Where(path => !TryParsePhaseValidationNumber(path, out var phaseNo) || phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(NormalizePath)
+            .ToArray();
+    }
+
+    private static bool TryParsePhaseValidationNumber(string path, out int phaseNo)
+    {
+        var match = Regex.Match(Path.GetFileName(path), @"^phase-(\d{2})-validation\.json$", RegexOptions.IgnoreCase);
+        return int.TryParse(match.Success ? match.Groups[1].Value : string.Empty, NumberStyles.None, CultureInfo.InvariantCulture, out phaseNo);
     }
 
     private static void DeleteFileIfExists(string path, List<string>? deletedFiles = null)
