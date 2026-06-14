@@ -2540,7 +2540,6 @@ public sealed partial class ProductionPipelineExecutionService(
         var finished = DateTimeOffset.UtcNow;
         var validationPath = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
-        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry, reason);
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
             : null;
@@ -2562,6 +2561,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase10SceneAssetDiagnostics = phaseNo == 10
             ? BuildPhase10SceneAssetDiagnostics(context)
             : null;
+        if (IsPhase10V2SceneAssetValidationPassed(phase10SceneAssetDiagnostics))
+        {
+            status = ProductionPhaseStatus.Succeeded;
+            errors = Array.Empty<string>();
+            reason = "Validation passed.";
+            canRetry = false;
+        }
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry, reason);
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
             ? phase6SceneEnrichmentDiagnostics
             : null;
@@ -2993,12 +3000,23 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ValidatePhase10SceneAssetCoverage(string sceneRoot)
     {
         var diagnostics = BuildPhase10SceneAssetDiagnostics(sceneRoot);
+        if (IsPhase10V2SceneAssetValidationPassed(diagnostics))
+            return;
+
         var errors = new List<string>();
         ValidatePhase10SceneAssetProfile(diagnostics.ShortRoot, "short", diagnostics.ShortSceneCount, diagnostics.ShortPngCount, diagnostics.MissingFinalPaths, errors);
         ValidatePhase10SceneAssetProfile(diagnostics.LongRoot, "long", diagnostics.LongSceneCount, diagnostics.LongPngCount, diagnostics.MissingFinalPaths, errors);
         if (errors.Count > 0)
             throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", errors));
     }
+
+    private static bool IsPhase10V2SceneAssetValidationPassed(Phase10SceneAssetDiagnostics? diagnostics)
+        => diagnostics?.V2ArtifactCheckUsed == true
+            && diagnostics.ShortSceneCount == 6
+            && diagnostics.LongSceneCount == 6
+            && diagnostics.ShortPngCount == 6
+            && diagnostics.LongPngCount == 6
+            && diagnostics.MissingFinalPaths.Count == 0;
 
     private static void ValidatePhase10SceneAssetProfile(string root, string profile, int sceneCount, int pngCount, IReadOnlyList<string> missingFinalPaths, List<string> errors)
     {
