@@ -447,7 +447,7 @@ public sealed class ContentPlanProductionExecutionService(
             10 => [3, 5, 6, 7, 8, 9],
             11 => [10],
             12 => [10, 11],
-            13 => [12],
+            13 => [],
             >= 14 => [13],
             _ => []
         };

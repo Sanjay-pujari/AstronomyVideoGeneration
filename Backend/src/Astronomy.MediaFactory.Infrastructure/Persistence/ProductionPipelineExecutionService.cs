@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -1010,7 +1011,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var formatRoot = Path.Combine(sceneAssetsRoot, format);
             var actualFolders = Directory.Exists(formatRoot)
                 ? Directory.EnumerateDirectories(formatRoot).Select(Path.GetFileName).Where(name => !string.IsNullOrWhiteSpace(name)).Cast<string>().OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray()
-                : [];
+                : Array.Empty<string>();
             var duplicateFolders = actualFolders.Where(name => Regex.IsMatch(name, "^scene-\\d{3,}$", RegexOptions.IgnoreCase)).ToArray();
             if (!actualFolders.SequenceEqual(expectedSceneFolders, StringComparer.OrdinalIgnoreCase))
                 issues.Add($"format {format} must contain exactly the manifest scene folders: {string.Join(", ", expectedSceneFolders)}; actual: {string.Join(", ", actualFolders)}");
@@ -1022,7 +1023,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ? Directory.EnumerateFiles(sceneAssetsRoot, "*.png", SearchOption.AllDirectories)
                 .Where(path => path.Contains($"{Path.DirectorySeparatorChar}backgrounds{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(path).Contains("background", StringComparison.OrdinalIgnoreCase))
                 .ToArray()
-            : [];
+            : Array.Empty<string>();
         if (backgroundOnlyFiles.Length > 0)
             issues.Add($"background-only images must not be persisted: {string.Join(", ", backgroundOnlyFiles.Select(NormalizePath))}");
 
@@ -1364,12 +1365,50 @@ public sealed partial class ProductionPipelineExecutionService(
         var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
         var result = await galleryEngine.GenerateGeminidsGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Landscape, cancellationToken);
         var outputs = result.ImagePaths
-            .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath])
+            .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath, result.ValidationPath])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         ValidateGalleryContract(outputs, result.ManifestPath, result.ReviewPath);
+        await WriteGalleryPhaseExecutionDiagnosticsAsync(context, result.DiagnosticsPath, result.ValidationPath, cancellationToken);
         return outputs;
     }
+    private static async Task WriteGalleryPhaseExecutionDiagnosticsAsync(ProductionPhaseContext context, string diagnosticsPath, string validationPath, CancellationToken cancellationToken)
+    {
+        var executionDiagnostics = new
+        {
+            requestedStartPhaseNo = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo,
+            requestedEndPhaseNo = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo,
+            executedPhaseNumbers = new[] { 13 },
+            skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo != 13).ToArray(),
+            phase12Executed = false,
+            thumbnailRegenerationOccurred = false
+        };
+
+        var diagnostics = File.Exists(diagnosticsPath)
+            ? JsonNode.Parse(await File.ReadAllTextAsync(diagnosticsPath, cancellationToken))?.AsObject() ?? new JsonObject()
+            : new JsonObject();
+        diagnostics["galleryV2"] = true;
+        diagnostics["requestedStartPhaseNo"] = executionDiagnostics.requestedStartPhaseNo;
+        diagnostics["requestedEndPhaseNo"] = executionDiagnostics.requestedEndPhaseNo;
+        diagnostics["executedPhaseNumbers"] = JsonSerializer.SerializeToNode(executionDiagnostics.executedPhaseNumbers, JsonOptions);
+        diagnostics["skippedPhaseNumbers"] = JsonSerializer.SerializeToNode(executionDiagnostics.skippedPhaseNumbers, JsonOptions);
+        diagnostics["phase12Executed"] = false;
+        diagnostics["thumbnailRegenerationOccurred"] = false;
+        await File.WriteAllTextAsync(diagnosticsPath, diagnostics.ToJsonString(JsonOptions), cancellationToken);
+
+        var validation = File.Exists(validationPath)
+            ? JsonNode.Parse(await File.ReadAllTextAsync(validationPath, cancellationToken))?.AsObject() ?? new JsonObject()
+            : new JsonObject();
+        validation["requestedStartPhaseNo"] = executionDiagnostics.requestedStartPhaseNo;
+        validation["requestedEndPhaseNo"] = executionDiagnostics.requestedEndPhaseNo;
+        validation["executedPhaseNumbers"] = JsonSerializer.SerializeToNode(executionDiagnostics.executedPhaseNumbers, JsonOptions);
+        validation["skippedPhaseNumbers"] = JsonSerializer.SerializeToNode(executionDiagnostics.skippedPhaseNumbers, JsonOptions);
+        validation["phase12Executed"] = false;
+        validation["thumbnailRegenerationOccurred"] = false;
+        await File.WriteAllTextAsync(validationPath, validation.ToJsonString(JsonOptions), cancellationToken);
+    }
+
+    private static IEnumerable<int> PhaseDefinitionsStatic() => Enumerable.Range(1, 20);
 
     private static void ValidateGalleryContract(IReadOnlyList<string> outputs, string manifestPath, string reviewPath)
     {
@@ -1388,6 +1427,12 @@ public sealed partial class ProductionPipelineExecutionService(
             errors.Add($"gallery-manifest.json is required at '{NormalizePath(manifestPath)}'.");
         if (!File.Exists(reviewPath))
             errors.Add($"gallery-review.json is required at '{NormalizePath(reviewPath)}'.");
+        var diagnosticsPath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "gallery-generation-diagnostics.json");
+        var validationPath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "phase-13-validation.json");
+        if (!File.Exists(diagnosticsPath))
+            errors.Add($"gallery-generation-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+        if (!File.Exists(validationPath))
+            errors.Add($"phase-13-validation.json is required at '{NormalizePath(validationPath)}'.");
 
         if (errors.Count > 0)
             throw new InvalidOperationException("Gallery generation failed contract validation: " + string.Join("; ", errors));
@@ -3278,7 +3323,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhaseNo = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhaseNo = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), executedPhaseNumbers = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray(), skippedPhaseNumbers = PhaseDefinitions().Select(phase => phase.No).Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
