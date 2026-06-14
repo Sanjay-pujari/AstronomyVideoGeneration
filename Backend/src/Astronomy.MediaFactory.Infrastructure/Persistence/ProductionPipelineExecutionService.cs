@@ -332,11 +332,18 @@ public sealed partial class ProductionPipelineExecutionService(
         RequireFile(BuildEnrichedScenePlanPath(context), "Enriched question-driven scene plan");
         var narrationRequest = BuildQuestionDrivenNarrationRequest(context);
         ValidatePhase7NarrationRequest(narrationRequest, context);
-        var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(narrationRequest, cancellationToken);
-        var outputs = new List<string>(response.GeneratedFiles);
+        var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(narrationRequest, cancellationToken)
+            ?? throw new InvalidOperationException("Phase 7 narration generation returned a null response.");
+        if (response.Narration is null)
+            throw new InvalidOperationException("Phase 7 narration generation returned a null narration object.");
+        if (response.Review is null)
+            throw new InvalidOperationException("Phase 7 narration generation returned a null narration review object.");
+
         var narrationPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json");
         var reviewPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json");
+        await PersistPhase7NarrationFilesAsync(response, narrationPath, reviewPath, cancellationToken);
         ValidatePhase7NarrationFilesGenerated(response, narrationPath, reviewPath);
+        var outputs = new List<string>(response.GeneratedFiles ?? Array.Empty<string>());
         outputs.Add(narrationPath);
         outputs.Add(reviewPath);
         Directory.CreateDirectory(context.ExecutionContext.SceneRoot!);
@@ -345,8 +352,20 @@ public sealed partial class ProductionPipelineExecutionService(
         return outputs;
     }
 
+    private static async Task PersistPhase7NarrationFilesAsync(QuestionDrivenNarrationResponse response, string narrationPath, string reviewPath, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
+        await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(response.Narration, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(response.Review, JsonOptions), cancellationToken);
+    }
+
     private static void ValidatePhase7NarrationFilesGenerated(QuestionDrivenNarrationResponse response, string narrationPath, string reviewPath)
     {
+        if (response.Narration is null)
+            throw new InvalidOperationException("Phase 7 narration generation returned a null narration object.");
+        if (response.Review is null)
+            throw new InvalidOperationException("Phase 7 narration generation returned a null narration review object.");
+
         var missing = new List<string>();
         if (!File.Exists(narrationPath)) missing.Add(Path.GetFileName(narrationPath));
         if (!File.Exists(reviewPath)) missing.Add(Path.GetFileName(reviewPath));
@@ -535,7 +554,11 @@ public sealed partial class ProductionPipelineExecutionService(
             LanguagePresent: !string.IsNullOrWhiteSpace(request.Language),
             EventType: FirstNonEmpty(request.EventType, context.ProductionEventIntelligence.EventType, context.Request.EventType),
             StrategyId: FirstNonEmpty(request.StrategyId, context.ProductionEventIntelligence.StrategyId, context.MediaEventStrategy.EventType),
-            SourceOfEventId: request.SourceOfEventId);
+            SourceOfEventId: request.SourceOfEventId,
+            NarrationGenerated: File.Exists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json")),
+            NarrationPath: Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json").Replace('\\', '/'),
+            ReviewPath: Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json").Replace('\\', '/'),
+            WordCount: CountPhase7NarrationWords(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json")));
 
     private static (Guid? EventId, string Source) ResolveEventIdSource(ProductionPhaseContext context)
     {
@@ -560,7 +583,43 @@ public sealed partial class ProductionPipelineExecutionService(
         bool LanguagePresent,
         string? EventType,
         string? StrategyId,
-        string? SourceOfEventId);
+        string? SourceOfEventId,
+        bool NarrationGenerated,
+        string NarrationPath,
+        string ReviewPath,
+        int WordCount);
+
+    private static int CountPhase7NarrationWords(string narrationPath)
+    {
+        if (!File.Exists(narrationPath)) return 0;
+        using var document = JsonDocument.Parse(File.ReadAllText(narrationPath));
+        return CountNarrationWords(document.RootElement);
+    }
+
+    private static int CountNarrationWords(JsonElement element)
+    {
+        var count = 0;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Name.Equals("narrationText", StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.String)
+                    count += CountWords(property.Value.GetString());
+                else
+                    count += CountNarrationWords(property.Value);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                count += CountNarrationWords(item);
+        }
+
+        return count;
+    }
+
+    private static int CountWords(string? text)
+        => string.IsNullOrWhiteSpace(text) ? 0 : Regex.Matches(text, @"[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*").Count;
 
     private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
