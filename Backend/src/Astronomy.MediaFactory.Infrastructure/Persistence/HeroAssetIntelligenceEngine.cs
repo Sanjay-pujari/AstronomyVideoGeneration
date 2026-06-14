@@ -796,7 +796,7 @@ public sealed class HeroAssetStoryGenerator(
 
     private static void WriteHeroGenerationConfigurationDiagnostics(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, int width, int height, string promptPath, string diagnosticsPath)
     {
-        var promptText = compositionModel.SceneBlock.Prompt ?? string.Empty;
+        var promptText = compositionModel.VisualBlock.SourceScene ?? string.Empty;
         var endpoint = options.Endpoint?.Trim() ?? string.Empty;
         var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
         Console.WriteLine("=================================================");
@@ -825,9 +825,9 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine();
     }
 
-    private static async Task WriteHeroGenerationSummaryDiagnosticsAsync(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, string imagePath, string promptPath, string diagnosticsPath, long imageSaveMs, long totalMs, CancellationToken cancellationToken)
+    private async Task WriteHeroGenerationSummaryDiagnosticsAsync(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, string imagePath, string promptPath, string diagnosticsPath, long imageSaveMs, long totalMs, CancellationToken cancellationToken)
     {
-        var promptText = compositionModel.SceneBlock.Prompt ?? string.Empty;
+        var promptText = compositionModel.VisualBlock.SourceScene ?? string.Empty;
         Directory.CreateDirectory(Path.GetDirectoryName(promptPath) ?? ResolveWorkingDirectoryRoot());
         await File.WriteAllTextAsync(promptPath, promptText, cancellationToken);
         var imageHash = File.Exists(imagePath) ? await ComputeSha256Async(imagePath, cancellationToken) : string.Empty;
