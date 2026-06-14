@@ -5944,9 +5944,10 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
 
     using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
-    var composedPath = Path.Combine(outputDirectory, "benchmark-conjunction-overlay-v1.png");
-    var specPath = Path.Combine(outputDirectory, "overlay-layout.json");
-    var validationPath = Path.Combine(outputDirectory, "overlay-validation.json");
+    var isComputedPositionMode = string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase);
+    var composedPath = Path.Combine(outputDirectory, isComputedPositionMode ? "benchmark-conjunction-overlay-v2.png" : "benchmark-conjunction-overlay-v1.png");
+    var specPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-layout-v2.json" : "overlay-layout.json");
+    var validationPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-validation-v2.json" : "overlay-validation.json");
     var spec = BuildVisualLabOverlaySpec(request, image.Width, image.Height, composedPath, specPath, validationPath);
     var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height);
     if (!validation.IsValid)
@@ -6006,6 +6007,22 @@ static IReadOnlyList<string> ValidateVisualLabComposeOverlayRequest(VisualLabCom
             if (!request.Facts.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)) errors.Add($"facts.{key} is required.");
         }
     }
+
+    if (!string.IsNullOrWhiteSpace(request.PositionMode) && !string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase)) errors.Add("positionMode must be Computed when supplied.");
+    if (string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase))
+    {
+        if (request.Objects is null || request.Objects.Count == 0) errors.Add("objects are required when positionMode is Computed.");
+        else
+        {
+            foreach (var item in request.Objects)
+            {
+                if (string.IsNullOrWhiteSpace(item.Name)) errors.Add("objects[].name is required.");
+                if (item.XPercent is < 0 or > 100) errors.Add($"objects[{item.Name}].xPercent must be between 0 and 100.");
+                if (item.YPercent is < 0 or > 100) errors.Add($"objects[{item.Name}].yPercent must be between 0 and 100.");
+                if (item.BrightnessRank < 1) errors.Add($"objects[{item.Name}].brightnessRank must be 1 or greater.");
+            }
+        }
+    }
     return errors;
 }
 
@@ -6034,12 +6051,15 @@ static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayReq
         $"Begin observing {Fact("bestTime", "30 minutes after sunset").ToLowerInvariant()}.",
         Fact("equipment", "No telescope required").Replace("needed", "required", StringComparison.OrdinalIgnoreCase) + "."
     };
-    var callouts = new[]
-    {
-        new VisualLabOverlayCallout("Venus", (int)Math.Round(width * 0.63), (int)Math.Round(height * 0.43), (int)Math.Round(width * 0.70), (int)Math.Round(height * 0.33)),
-        new VisualLabOverlayCallout("Jupiter", (int)Math.Round(width * 0.75), (int)Math.Round(height * 0.35), (int)Math.Round(width * 0.81), (int)Math.Round(height * 0.25)),
-        new VisualLabOverlayCallout("Mercury", (int)Math.Round(width * 0.55), (int)Math.Round(height * 0.58), (int)Math.Round(width * 0.64), (int)Math.Round(height * 0.53))
-    };
+    var positionMode = string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase) ? "Computed" : "Default";
+    var callouts = positionMode == "Computed" && request.Objects is not null
+        ? BuildVisualLabComputedCallouts(request.Objects, width, height, safeMargin, header, panel, tips)
+        : new[]
+        {
+            new VisualLabOverlayCallout("Venus", (int)Math.Round(width * 0.63), (int)Math.Round(height * 0.43), (int)Math.Round(width * 0.70), (int)Math.Round(height * 0.33), 180, 48, 14, 1, "large", "bright white"),
+            new VisualLabOverlayCallout("Jupiter", (int)Math.Round(width * 0.75), (int)Math.Round(height * 0.35), (int)Math.Round(width * 0.81), (int)Math.Round(height * 0.25), 180, 48, 10, 2, "medium", "soft white"),
+            new VisualLabOverlayCallout("Mercury", (int)Math.Round(width * 0.55), (int)Math.Round(height * 0.58), (int)Math.Round(width * 0.64), (int)Math.Round(height * 0.53), 180, 48, 7, 3, "small", "warm white")
+        };
 
     return new VisualLabOverlaySpec(
         "VisualLabDeterministicOverlayComposer",
@@ -6052,6 +6072,8 @@ static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayReq
         request.Title.Trim(),
         request.Layout.Trim(),
         request.Format.Trim(),
+        positionMode,
+        positionMode == "Computed" ? "Computed" : "DeterministicDefault",
         width,
         height,
         safeMargin,
@@ -6065,6 +6087,60 @@ static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayReq
         tipsText,
         callouts,
         DateTimeOffset.UtcNow);
+}
+
+static IReadOnlyList<VisualLabOverlayCallout> BuildVisualLabComputedCallouts(IReadOnlyList<VisualLabOverlayObjectPosition> objects, int width, int height, int safeMargin, VisualLabOverlayRect header, VisualLabOverlayRect panel, VisualLabOverlayRect tips)
+{
+    var ordered = objects.OrderBy(o => o.BrightnessRank).ThenBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+    var safe = new RectangleF(safeMargin, safeMargin, width - safeMargin * 2, height - safeMargin * 2);
+    var reserved = new[] { ToRectangleF(header), ToRectangleF(panel), ToRectangleF(tips) };
+    var placed = new List<VisualLabOverlayRect>();
+    var result = new List<VisualLabOverlayCallout>();
+    foreach (var obj in ordered)
+    {
+        var anchorX = (int)Math.Round(width * obj.XPercent / 100.0);
+        var anchorY = (int)Math.Round(height * obj.YPercent / 100.0);
+        var labelWidth = Math.Max(180, obj.Name.Length * 22 + 54);
+        var labelHeight = 52;
+        var candidates = new[]
+        {
+            new PointF(anchorX + 72, anchorY - 66),
+            new PointF(anchorX + 72, anchorY + 26),
+            new PointF(anchorX - labelWidth - 72, anchorY - 66),
+            new PointF(anchorX - labelWidth - 72, anchorY + 26),
+            new PointF(width - safeMargin - labelWidth, anchorY - 26),
+            new PointF(safeMargin, anchorY - 26)
+        };
+        var chosen = candidates.Select(p => ClampVisualLabLabel(p, labelWidth, labelHeight, safe)).FirstOrDefault(p =>
+        {
+            var rect = new RectangleF(p.X - 18, p.Y - 10, labelWidth, labelHeight);
+            return placed.All(existing => !RectIntersects(ToRectangleF(existing), rect)) && reserved.All(existing => !RectIntersects(existing, rect));
+        });
+        if (chosen == default) chosen = ClampVisualLabLabel(candidates[0], labelWidth, labelHeight, safe);
+        var bounds = new VisualLabOverlayRect((int)Math.Round(chosen.X - 18), (int)Math.Round(chosen.Y - 10), labelWidth, labelHeight);
+        placed.Add(bounds);
+        result.Add(new VisualLabOverlayCallout(obj.Name.Trim(), anchorX, anchorY, (int)Math.Round(chosen.X), (int)Math.Round(chosen.Y), labelWidth, labelHeight, GetVisualLabMarkerRadius(obj), obj.BrightnessRank, obj.VisualSize ?? string.Empty, obj.ColorHint ?? string.Empty));
+    }
+
+    return result.OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase).ToArray();
+}
+
+static PointF ClampVisualLabLabel(PointF point, int labelWidth, int labelHeight, RectangleF safe)
+    => new(Math.Clamp(point.X, safe.Left + 18, safe.Right - labelWidth + 18), Math.Clamp(point.Y, safe.Top + 10, safe.Bottom - labelHeight + 10));
+
+static int GetVisualLabMarkerRadius(VisualLabOverlayObjectPosition obj)
+{
+    if (string.Equals(obj.Name, "Venus", StringComparison.OrdinalIgnoreCase)) return 14;
+    if (string.Equals(obj.Name, "Jupiter", StringComparison.OrdinalIgnoreCase)) return 10;
+    if (string.Equals(obj.Name, "Mercury", StringComparison.OrdinalIgnoreCase)) return 7;
+    return Math.Max(6, 15 - obj.BrightnessRank * 2);
+}
+
+static Color GetVisualLabObjectColor(string? colorHint)
+{
+    if (colorHint?.Contains("warm", StringComparison.OrdinalIgnoreCase) == true) return Color.ParseHex("#FFE6B0");
+    if (colorHint?.Contains("soft", StringComparison.OrdinalIgnoreCase) == true) return Color.ParseHex("#F2F7FF");
+    return Color.White;
 }
 
 static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlaySpec spec, int width, int height)
@@ -6081,8 +6157,18 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
     AddCheck("readableFontSize", spec.TitleFontSize >= 40 && spec.LabelFontSize >= 24 && spec.BodyFontSize >= 24, "Title, label, and body fonts meet readable size minimums.");
     AddCheck("safeMargins", spec.SafeMargin >= 48, "Safe margin is at least 48 px.");
     AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses provided AzureImage2 background output only.");
+    var labelBoxes = spec.PlanetCallouts.Select(c => c.LabelBounds).ToArray();
+    var labelBoxPairs = labelBoxes.SelectMany((box, i) => labelBoxes.Skip(i + 1).Select(other => (box, other))).ToArray();
+    var labelBoxesInsideSafeArea = labelBoxes.All(box => RectContains(safe, ToRectangleF(box)));
+    var labelsDoNotOverlap = labelBoxPairs.All(pair => !RectIntersects(ToRectangleF(pair.box), ToRectangleF(pair.other)));
+    AddCheck("overlay-position-source", string.Equals(spec.OverlayPositionSource, "Computed", StringComparison.OrdinalIgnoreCase) || string.Equals(spec.OverlayPositionSource, "DeterministicDefault", StringComparison.OrdinalIgnoreCase), $"Overlay position source is {spec.OverlayPositionSource}.");
+    AddCheck("objectCount", spec.PlanetCallouts.Count == 3, $"Object count is {spec.PlanetCallouts.Count}.");
+    AddCheck("objectPixelCoordinates", spec.PlanetCallouts.All(c => c.AnchorX >= 0 && c.AnchorX <= width && c.AnchorY >= 0 && c.AnchorY <= height), "Object pixel coordinates are within the image.");
+    AddCheck("labelBoundingBoxes", labelBoxes.All(box => box.Width > 0 && box.Height > 0), "Label bounding boxes were computed for every object.");
+    AddCheck("overlapResult", labelsDoNotOverlap, labelsDoNotOverlap ? "Label boxes do not overlap." : "One or more label boxes overlap.");
+    AddCheck("safeAreaResult", labelBoxesInsideSafeArea && spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), labelBoxesInsideSafeArea ? "Labels and anchors are inside safe margins." : "One or more labels or anchors are outside safe margins.");
     AddCheck("planetCallouts", spec.PlanetCallouts.Count == 3 && spec.PlanetCallouts.Select(c => c.Label).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "Planet conjunction labels are present exactly once.");
-    AddCheck("calloutsNoClipping", spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.LabelX, c.LabelY, 190, 44)) && RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), "Planet callout anchors and labels are inside safe margins.");
+    AddCheck("calloutsNoClipping", labelBoxesInsideSafeArea && spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), "Planet callout anchors and labels are inside safe margins.");
 
     return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks);
 
@@ -6118,11 +6204,15 @@ static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySp
     {
         var anchor = new PointF(callout.AnchorX, callout.AnchorY);
         var label = new PointF(callout.LabelX, callout.LabelY);
-        ctx.Fill(Color.White.WithAlpha(0.94f), new EllipsePolygon(anchor.X, anchor.Y, 7));
-        ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.9f), 3, new EllipsePolygon(anchor.X, anchor.Y, 15));
+        var markerColor = GetVisualLabObjectColor(callout.ColorHint);
+        var radius = callout.MarkerRadius;
+        ctx.Fill(markerColor.WithAlpha(0.18f), new EllipsePolygon(anchor.X, anchor.Y, radius * 3.2f));
+        ctx.Fill(markerColor.WithAlpha(0.42f), new EllipsePolygon(anchor.X, anchor.Y, radius * 1.8f));
+        ctx.Fill(markerColor.WithAlpha(0.98f), new EllipsePolygon(anchor.X, anchor.Y, radius));
+        ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.9f), 3, new EllipsePolygon(anchor.X, anchor.Y, radius * 2.1f));
         ctx.DrawLine(Color.ParseHex("#DDF7FF").WithAlpha(0.82f), 3, anchor, new PointF(label.X - 12, label.Y + 19));
-        ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.78f), new RectangleF(label.X - 18, label.Y - 10, 180, 48));
-        ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.86f), 2, new RectangleF(label.X - 18, label.Y - 10, 180, 48));
+        ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.78f), ToRectangleF(callout.LabelBounds));
+        ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.86f), 2, ToRectangleF(callout.LabelBounds));
         DrawText(ctx, callout.Label, labelFont, Color.White, label);
     }
 
@@ -9685,7 +9775,9 @@ public sealed record VisualLabComposeOverlayRequest(
     string Title,
     string Layout,
     string Format,
-    Dictionary<string, string>? Facts);
+    Dictionary<string, string>? Facts,
+    string? PositionMode,
+    IReadOnlyList<VisualLabOverlayObjectPosition>? Objects);
 
 public sealed record VisualLabOverlaySpec(
     string Composer,
@@ -9698,6 +9790,8 @@ public sealed record VisualLabOverlaySpec(
     string Title,
     string Layout,
     string Format,
+    string PositionMode,
+    string OverlayPositionSource,
     int Width,
     int Height,
     int SafeMargin,
@@ -9714,7 +9808,11 @@ public sealed record VisualLabOverlaySpec(
 
 public sealed record VisualLabOverlayRect(int X, int Y, int Width, int Height);
 public sealed record VisualLabOverlayTextItem(string Label, string Value, int LabelFontSize, int BodyFontSize);
-public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int AnchorY, int LabelX, int LabelY);
+public sealed record VisualLabOverlayObjectPosition(string Name, double XPercent, double YPercent, int BrightnessRank, string? VisualSize, string? ColorHint);
+public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int AnchorY, int LabelX, int LabelY, int LabelWidth, int LabelHeight, int MarkerRadius, int BrightnessRank, string VisualSize, string ColorHint)
+{
+    public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
+}
 public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks);
 public sealed record VisualLabOverlayValidationCheck(string Name, bool Passed, string Message);
 
