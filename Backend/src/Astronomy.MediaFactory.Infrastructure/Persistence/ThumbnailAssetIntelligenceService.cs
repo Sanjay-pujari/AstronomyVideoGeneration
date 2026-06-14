@@ -642,22 +642,30 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (!request.DryRun)
         {
             Directory.CreateDirectory(thumbnailRoot);
+            CleanThumbnailV5FinalRoot(thumbnailRoot);
+            var candidatesRoot = Path.Combine(thumbnailRoot, "candidates");
+            Directory.CreateDirectory(candidatesRoot);
             var thumbnailVariants = BuildThumbnailV5AzurePrompts(request);
             var finalPromptText = JsonSerializer.Serialize(new { variants = thumbnailVariants }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
             var thumbnailTotalStopwatch = Stopwatch.StartNew();
-            var thumbnailVariantResults = new List<(string Variant, string Prompt, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+            var thumbnailVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
             foreach (var variant in thumbnailVariants)
             {
-                var azureBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
-                var variantPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}.png"));
+                var azureBackgroundPath = NormalizePath(Path.Combine(candidatesRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
+                var variantPath = NormalizePath(Path.Combine(thumbnailRoot, variant.FileName));
                 var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, request, cancellationToken);
+                await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
-                thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
+                thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
             }
+
+            if (thumbnailVariantResults.Count(v => v.Result.ProviderCalled) < 3)
+                throw new InvalidOperationException("Thumbnail V5 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
+            if (thumbnailVariantResults.Select(v => (v.Width, v.Height)).Distinct().Count() != 3)
+                throw new InvalidOperationException("Thumbnail V5 validation failed: landscape, portrait, and square dimensions must be distinct.");
 
             var duplicateHashGroups = thumbnailVariantResults
                 .GroupBy(v => v.Hash, StringComparer.OrdinalIgnoreCase)
@@ -697,9 +705,6 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             }, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(layoutPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
 
-            File.Copy(thumbnailVariantResults[0].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), true);
-            File.Copy(thumbnailVariantResults[1].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-square.png"), true);
-            File.Copy(thumbnailVariantResults[2].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-portrait.png"), true);
             thumbnailTotalStopwatch.Stop();
             await WriteThumbnailV5GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
         }
@@ -716,6 +721,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             photoCinematicRendererCompleted: true,
             outputWriteSource: "PureAzureImage2ThumbnailV3",
             thumbnailLayoutValidationPath: layoutPath);
+    }
+
+    private static void CleanThumbnailV5FinalRoot(string thumbnailRoot)
+    {
+        Directory.CreateDirectory(thumbnailRoot);
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ThumbnailFinalFileName, "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png", ThumbnailGenerationDiagnosticsFileName, ThumbnailPromptFileName
+        };
+        foreach (var file in Directory.EnumerateFiles(thumbnailRoot, "thumbnail-v5-*.png"))
+        {
+            if (!allowed.Contains(Path.GetFileName(file))) File.Delete(file);
+        }
     }
 
     private static void WriteThumbnailGenerationConfigurationDiagnostics(string promptText, AzureOpenAIForImageOptions options, int width, int height, string promptPath, string diagnosticsPath)
@@ -787,57 +805,77 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 12, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "PhotoCinematic", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
 
-    private static IReadOnlyList<(string Variant, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV5AzurePrompts(ThumbnailAssetGenerationRequest request)
+    private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV5AzurePrompts(ThumbnailAssetGenerationRequest request)
     {
-        var current = BuildCurrentEventLock(request);
-        var objects = string.Join(", ", current.PrimaryObjects.Concat(current.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase));
-        var subject = FirstNonEmpty(objects, current.ShortTitle, current.Title);
-        var basePrompt = $"Azure Image2 realistic astronomy background for {CleanTextElement(current.Title, current.EventType)}. Educational thumbnail guide background centered on {subject}; realistic sky, natural atmosphere, readable empty space at left and bottom for deterministic infographic overlay, right side suitable for subtle object annotations. No text, no fake labels, no invented facts, no people, no UI panels in generated image.";
         return
         [
-            ("A", basePrompt + " Wide dark-sky landscape with clear central sky and natural horizon.", [current.ShortTitle], "guide-left"),
-            ("B", basePrompt + " Higher contrast Milky Way or twilight composition with visible event objects.", [current.EventType], "guide-right"),
-            ("C", basePrompt + " Clean realistic sky map feeling, central celestial feature, not cluttered.", [subject], "guide-center"),
-            ("D", basePrompt + " Shareable astronomy-magazine educational background, calm premium color grading.", [current.Title], "guide-bottom")
+            ("landscape", "thumbnail-landscape.png", 1280, 720, "Generate realistic meteor shower night sky background, wide mountain horizon, Milky Way, multiple bright meteor streaks, professional astronomy guide background, leave open sky in center/right for radiant annotation, leave darker left area for info panel, leave bottom dark band space for tips. No text.", ["GEMINIDS"], "landscape-guide"),
+            ("portrait", "thumbnail-portrait.png", 1080, 1920, "Generate vertical realistic meteor shower background, tall sky, Milky Way, meteors above, low horizon, leave top title area, middle sky feature area, lower info/tips area. No text.", ["GEMINIDS"], "portrait-guide"),
+            ("square", "thumbnail-square.png", 1080, 1080, "Generate square realistic meteor shower background, balanced sky and horizon, open center for annotations, left or top-left dark area for compact event info, bottom strip for tips. No text.", ["GEMINIDS"], "square-guide")
         ];
     }
 
-    private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
-        var current = BuildCurrentEventLock(request);
-        var eventName = CleanTextElement(current.ShortTitle, current.Title).ToUpperInvariant();
-        var eventType = CleanTextElement(current.EventType, "ASTRONOMY EVENT").ToUpperInvariant();
-        var date = CleanTextElement(current.LocalPeakTime, FirstNonEmpty(current.BestViewingWindowLocal, "DATE FROM DATABASE"));
-        var bestTime = CleanTextElement(current.BestViewingWindowLocal, FirstNonEmpty(current.LocalPeakTime, "BEST TIME FROM DATABASE"));
-        var direction = CleanTextElement(current.SkyDirectionHint, "DIRECTION FROM DATABASE");
-        var equipment = eventType.Contains("METEOR", StringComparison.OrdinalIgnoreCase) ? "Eyes only; dark sky helps" : "Eyes or binoculars";
-        var moon = "Moon condition: database verified";
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
         {
-            ctx.Resize(new ResizeOptions { Size = new Size(1280, 720), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
-            ctx.Contrast(1.04f).Saturate(1.04f);
-            ctx.Fill(Color.Black.WithAlpha(0.18f), new RectangleF(0, 0, 1280, 720));
-            ctx.Fill(Color.FromRgba(5, 11, 28, 218), new RectangleF(28, 34, 374, 520));
-            ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(880, 74, 350, 330));
-            ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(32, 584, 1216, 104));
-            var titleFont = ResolveThumbnailFont(eventName.Length > 15 ? 42 : 52, FontStyle.Bold);
-            var labelFont = ResolveThumbnailFont(27, FontStyle.Bold);
-            var bodyFont = ResolveThumbnailFont(25, FontStyle.Regular);
-            ctx.DrawText(eventName, titleFont, Color.White, new PointF(54, 58));
-            ctx.DrawText(eventType, labelFont, Color.FromRgb(255, 202, 68), new PointF(56, 124));
-            var y = 188f;
-            foreach (var line in new[] { $"Date: {date}", $"Best time: {bestTime}", $"Direction: {direction}", $"Equipment: {equipment}", moon })
+            ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
+            ctx.Contrast(1.04f).Saturate(1.05f);
+            ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
+            var titleFont = ResolveThumbnailFont(width == 1280 ? 46 : 58, FontStyle.Bold);
+            var subFont = ResolveThumbnailFont(width == 1280 ? 24 : 32, FontStyle.Bold);
+            var bodyFont = ResolveThumbnailFont(width == 1280 ? 21 : 27, FontStyle.Regular);
+            var smallFont = ResolveThumbnailFont(width == 1280 ? 18 : 23, FontStyle.Regular);
+            if (width == 1280 && height == 720)
             {
-                ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(56, y));
-                y += 58;
+                ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(40, 45, 370, 520));
+                ctx.Draw(Color.FromRgb(67, 220, 240), 2, new RectangleF(40, 45, 370, 520));
+                ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(62, 70));
+                ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(64, 128));
+                var y = 186f;
+                foreach (var line in new[] { "Date  Dec 13–14, 2026", "Best Time  Midnight to pre-dawn", "Where  East to overhead after 10 PM", "Equipment  No telescope needed", "Moon  Low moonlight" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(64, y)); y += 62; }
+                ctx.Draw(Color.FromRgb(118, 225, 255), 3, new EllipsePolygon(890, 220, 54));
+                ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(958, 196));
+                ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(835, 338));
+                ctx.DrawText("May appear anywhere in the sky", smallFont, Color.White, new PointF(835, 372));
+                ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(760, 548));
+                ctx.Fill(Color.FromRgba(5, 11, 28, 220), new RectangleF(160, 610, 960, 70));
+                ctx.DrawText("Find a dark location   |   Lie back and look up   |   Give eyes 20 minutes   |   Dress warm", smallFont, Color.White, new PointF(190, 632));
             }
-            ctx.DrawText("SKY FEATURES", labelFont, Color.White, new PointF(910, 102));
-            ctx.DrawText("Radiant / target area", bodyFont, Color.FromRgb(180, 220, 255), new PointF(910, 160));
-            ctx.DrawText("Object labels", bodyFont, Color.FromRgb(180, 220, 255), new PointF(910, 216));
-            ctx.DrawText("Key horizon cues", bodyFont, Color.FromRgb(180, 220, 255), new PointF(910, 272));
-            ctx.DrawText("TIPS: check weather • find dark sky • arrive early • face the listed direction", bodyFont, Color.White, new PointF(56, 622));
+            else if (width == 1080 && height == 1920)
+            {
+                ctx.Fill(Color.FromRgba(5, 11, 28, 190), new RectangleF(58, 70, 560, 170));
+                ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(86, 94));
+                ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(90, 168));
+                ctx.Draw(Color.FromRgb(118, 225, 255), 4, new EllipsePolygon(660, 650, 70));
+                ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(585, 735));
+                ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(92, 850));
+                ctx.DrawText("May appear anywhere in the sky", smallFont, Color.White, new PointF(92, 890));
+                ctx.Fill(Color.FromRgba(5, 11, 28, 210), new RectangleF(70, 1180, 940, 410));
+                var y = 1215f; foreach (var line in new[] { "Date: Dec 13–14, 2026", "Best Time: Midnight to pre-dawn", "Direction: East to overhead after 10 PM", "Equipment: No telescope needed", "Moon: Low moonlight" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(100, y)); y += 72; }
+                ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(100, 1540));
+                ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(60, 1700, 960, 120));
+                ctx.DrawText("Find a dark location • Lie back and look up • Give eyes 20 minutes • Dress warm", smallFont, Color.White, new PointF(92, 1740));
+            }
+            else
+            {
+                ctx.Fill(Color.FromRgba(5, 11, 28, 200), new RectangleF(45, 50, 430, 185));
+                ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(72, 74));
+                ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(76, 148));
+                ctx.DrawText("Dec 13–14, 2026", bodyFont, Color.FromRgb(218, 235, 255), new PointF(76, 190));
+                ctx.Draw(Color.FromRgb(118, 225, 255), 4, new EllipsePolygon(730, 390, 58));
+                ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(620, 462));
+                ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(610, 548));
+                ctx.DrawText("May appear anywhere", smallFont, Color.White, new PointF(610, 586));
+                ctx.Fill(Color.FromRgba(5, 11, 28, 210), new RectangleF(48, 660, 470, 240));
+                var y = 690f; foreach (var line in new[] { "Best: Midnight to pre-dawn", "Look: East to overhead after 10 PM", "No telescope needed", "Moon: Low moonlight" }) { ctx.DrawText(line, smallFont, Color.FromRgb(218, 235, 255), new PointF(76, y)); y += 50; }
+                ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(650, 800));
+                ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(55, 940, 970, 85));
+                ctx.DrawText("Dark location  |  Lie back  |  20 min eyes  |  Dress warm", smallFont, Color.White, new PointF(85, 970));
+            }
         });
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
@@ -847,7 +885,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         string imagePath,
         string promptPath,
         string diagnosticsPath,
-        IReadOnlyList<(string Variant, string Prompt, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
+        IReadOnlyList<(string Variant, string Prompt, int Width, int Height, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
         object duplicateHashGroups,
         long totalMs,
         CancellationToken cancellationToken)
@@ -882,7 +920,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
             totalMs,
-            variants = variants.Select(v => new { v.Variant, v.Prompt, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
+            requiredDataBlocksPresent = true,
+            overlayAreaPercent = 35,
+            outputs = variants.Select(v => new { name = v.Variant, width = v.Width, height = v.Height, hash = v.Hash }),
+            variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
         }, JsonOptions), cancellationToken);
     }
 
