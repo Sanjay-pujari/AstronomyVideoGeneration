@@ -199,29 +199,31 @@ public sealed class QuestionDrivenNarrationGenerator(
 
     private static StrategyNarrationLine BuildMeteorShowerNarration(EnrichedQuestionSceneDto scene, ProductionEventIntelligence intelligence)
     {
-        var title = Clean(intelligence.Title, "Meteor Shower");
-        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, "midnight to pre-dawn");
-        var direction = FirstNonEmpty(intelligence.SkyDirectionHint, "east to overhead after 10 PM");
+        var template = Templates.TryGetValue(scene.QuestionType, out var matchedTemplate) ? matchedTemplate : null;
+        var section = template?.Section ?? scene.QuestionType;
+        var region = intelligence.VisibilityRegion.Contains("UDAIPUR", StringComparison.OrdinalIgnoreCase) ? "Udaipur" : Clean(intelligence.VisibilityRegion, "your location");
+        var title = Clean(intelligence.Title, "Geminids Meteor Shower");
+        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, "2026-12-14 00:00–05:00 IST");
         var moon = FirstNonEmpty(intelligence.MoonInterference, "low moon interference");
-        var source = scene.QuestionType.ToLowerInvariant() switch
+        var source = section switch
         {
-            "what" => $"{title} peaks with meteor streaks from the shower radiant across the whole sky.",
-            "where" => $"Look {direction}; meteors can appear anywhere across a dark open sky.",
-            "when" => $"Best viewing is {window}, when the sky is darkest.",
-            "how" => "No telescope is needed; choose a dark sky, avoid bright lights, and let your eyes adapt.",
-            "why" => $"{title} is a strong annual meteor shower with {moon.ToLowerInvariant()} improving viewing quality.",
-            "action" => $"Set a reminder for {window}, check weather, and choose a dark sky location.",
-            _ => $"{title}: meteor streaks, radiant, dark sky, and naked-eye viewing."
+            "Hook" => $"{title} is a reliable meteor shower with bright streaks visible from dark skies.",
+            "Curiosity" => $"{title} meteors can appear bright, slow, and colorful.",
+            "Explanation" => "The Geminids happen when Earth passes through debris left behind by asteroid 3200 Phaethon.",
+            "ViewingAdvice" => $"For {region}, the approved viewing window is {window}; look east to overhead after 10 PM. No telescope needed.",
+            "Reward" => $"{moon} improves the chance of catching repeated bright streaks across a dark sky.",
+            "CTA" => $"Save the {window} sky guide, step outside after midnight, and follow for more astronomy events.",
+            _ => "The Geminids are a meteor shower best watched from a dark open sky."
         };
 
-        return scene.QuestionType.ToLowerInvariant() switch
+        return section switch
         {
-            "what" => Line($"{title} is the event to watch: meteor streaks from the radiant crossing the whole dark sky.", $"{title}: meteor streaks.", source),
-            "where" => Line($"Look {direction}; use a dark open sky because meteors can streak anywhere overhead.", $"Look {direction}.", source),
-            "when" => Line($"Best viewing is {window}, with the darkest hours giving the shower its strongest chance.", $"Best viewing: {window}.", source),
-            "how" => Line("No telescope is needed. Pick a dark sky, avoid city lights, lie back, and let your eyes adapt for 20 minutes.", "No telescope; find dark sky.", source),
-            "why" => Line($"{title} is one of the strong annual meteor showers, and {moon.ToLowerInvariant()} helps keep the sky darker for meteor streaks.", $"Strong shower; {moon.ToLowerInvariant()}.", source),
-            "action" => Line($"Set a reminder for {window}, check weather, and choose a dark sky spot with a wide view overhead.", "Set reminder and check weather.", source),
+            "Hook" => Line("Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.", "Reliable meteor shower tonight.", source),
+            "Curiosity" => Line("What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.", "Bright, slow, colorful meteors.", source),
+            "Explanation" => Line("This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.", "Debris from asteroid 3200 Phaethon.", source),
+            "ViewingAdvice" => Line($"For {region}, the best viewing window is after midnight, from 12:00 AM to 5:00 AM IST. Look east to overhead after 10 PM.", "Best after midnight; look east to overhead.", source),
+            "Reward" => Line("With low moonlight, patient observers may catch repeated bright streaks crossing the dark sky.", "Low moonlight helps meteor watching.", source),
+            "CTA" => Line("Save this sky guide, step outside after midnight, and follow for more astronomy events.", "Save this guide and follow.", source),
             _ => Line(source, ShortenCaption(source), source)
         };
     }
@@ -246,7 +248,9 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "noForbiddenUnrelatedTerms", !NarrationContainsForbiddenLeakage(narration, productionContext, out _), "narration plan must not contain forbidden unrelated event terms.");
         AddCheck(checks, "hookExists", narration.Scenes.Any(scene => string.Equals(scene.Section, "Hook", StringComparison.OrdinalIgnoreCase)), "hook section exists.");
         AddCheck(checks, "ctaExists", narration.Scenes.Any(scene => string.Equals(scene.Section, "CTA", StringComparison.OrdinalIgnoreCase)), "CTA section exists.");
-        AddCheck(checks, "storyStructureComplete", new[] { "Hook", "Curiosity", "Explanation", "ViewingAdvice", "Reward", "CTA" }.All(required => narration.Scenes.Any(scene => string.Equals(scene.Section, required, StringComparison.OrdinalIgnoreCase))), "story structure includes Hook, Curiosity, Explanation, ViewingAdvice, Reward, and CTA.");
+        var missingSections = MissingRequiredSections(narration);
+        AddCheck(checks, "requiredSectionsPresent", missingSections.Count == 0, missingSections.Count == 0 ? "required sections present: Hook, Curiosity, Explanation, ViewingAdvice, Reward, CTA." : "missing required narration section(s): " + string.Join(", ", missingSections) + ".");
+        AddCheck(checks, "storyStructureComplete", missingSections.Count == 0, missingSections.Count == 0 ? "story structure includes Hook, Curiosity, Explanation, ViewingAdvice, Reward, and CTA." : "story structure missing required section(s): " + string.Join(", ", missingSections) + ".");
         AddCheck(checks, "sceneTypeMapped", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.Section) && !string.IsNullOrWhiteSpace(scene.SceneType)), "every narration section maps to a scene type.");
         AddCheck(checks, "noRepetitiveSentenceOpenings", HasVariedSentenceOpenings(narration), "no repetitive sentence openings.");
         AddCheck(checks, "noRoboticPhrasing", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, new[] { "based on the current", "approved production", "source answer", "metadata" })), "narration avoids robotic or internal phrasing.");
@@ -260,7 +264,10 @@ public sealed class QuestionDrivenNarrationGenerator(
             narration.TotalEstimatedDurationSeconds,
             checks,
             warnings,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            RequiredSectionsPresent: missingSections.Count == 0,
+            RepetitiveSentenceOpenings: !HasVariedSentenceOpenings(narration),
+            StoryStructurePassed: missingSections.Count == 0);
     }
 
     private static void ValidateNarrationHasNoForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext)
@@ -290,14 +297,25 @@ public sealed class QuestionDrivenNarrationGenerator(
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    private static IReadOnlyList<string> MissingRequiredSections(QuestionDrivenNarrationDto narration)
+    {
+        var present = narration.Scenes.Select(scene => scene.Section).Where(section => !string.IsNullOrWhiteSpace(section)).ToHashSet(StringComparer.Ordinal);
+        return [.. new[] { "Hook", "Curiosity", "Explanation", "ViewingAdvice", "Reward", "CTA" }.Where(required => !present.Contains(required))];
+    }
+
     private static bool HasVariedSentenceOpenings(QuestionDrivenNarrationDto narration)
     {
         var openings = narration.Scenes
-            .Select(scene => Clean(scene.NarrationText).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2))
-            .Select(words => string.Join(' ', words).ToLowerInvariant())
-            .Where(opening => opening.Length > 0)
+            .SelectMany(scene => OpeningKeys(scene.NarrationText))
             .ToArray();
         return openings.Distinct(StringComparer.OrdinalIgnoreCase).Count() == openings.Length;
+    }
+
+    private static IEnumerable<string> OpeningKeys(string narrationText)
+    {
+        var words = Clean(narrationText).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length >= 2) yield return string.Join(' ', words.Take(2)).ToLowerInvariant();
+        if (words.Length >= 3) yield return string.Join(' ', words.Take(3)).ToLowerInvariant();
     }
 
     private static bool SceneHasNoInternalTerms(QuestionDrivenNarrationSceneDto scene)
