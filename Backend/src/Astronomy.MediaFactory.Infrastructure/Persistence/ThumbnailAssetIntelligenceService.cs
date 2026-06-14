@@ -573,7 +573,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             "High",
             isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : "A timely astronomy event with direct click-through text.",
             BuildPureV3VisualFocus(current),
-            "Thumbnail V3 pure Azure Image2-style cinematic background with CTR overlay.",
+            "Thumbnail V5 Azure Image2 realistic astronomy background with deterministic educational guide overlay.",
             "PureAzureImage2Prompt",
             "none",
             ["scene image selection", "approved scene assets", "hero-scene-manifest.json", "thumbnail-scene-manifest.json"],
@@ -601,11 +601,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName));
         var layoutPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
         var diagnosticsPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName));
-        var outputFiles = new[] { finalPath, reviewPath, promptPath, validationPath, layoutPath }
-            .Concat(BuildThumbnailV4AzurePrompts().SelectMany(variant => new[]
+        var outputFiles = new[] { finalPath, NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), reviewPath, promptPath, validationPath, layoutPath }
+            .Concat(BuildThumbnailV5AzurePrompts(request).SelectMany(variant => new[]
             {
-                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}-azure-background.png")),
-                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}.png"))
+                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png")),
+                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}.png"))
             }))
             .ToArray();
         var validation = new ThumbnailLayoutValidationDto(
@@ -642,19 +642,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (!request.DryRun)
         {
             Directory.CreateDirectory(thumbnailRoot);
-            var thumbnailVariants = BuildThumbnailV4AzurePrompts();
+            var thumbnailVariants = BuildThumbnailV5AzurePrompts(request);
             var finalPromptText = JsonSerializer.Serialize(new { variants = thumbnailVariants }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
             var thumbnailTotalStopwatch = Stopwatch.StartNew();
             var thumbnailVariantResults = new List<(string Variant, string Prompt, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
             foreach (var variant in thumbnailVariants)
             {
-                var azureBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
-                var variantPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}.png"));
+                var azureBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
+                var variantPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}.png"));
                 var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteThumbnailV4OverlayAsync(azureBackgroundPath, variantPath, variant.TextLines, variant.Layout, cancellationToken);
+                await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, request, cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
                 thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
             }
@@ -665,9 +665,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 .Select(group => new { imageHash = group.Key, variants = group.Select(v => v.Variant).ToArray() })
                 .ToArray();
             if (duplicateHashGroups.Length > 0)
-                throw new InvalidOperationException("Thumbnail V4 variant validation failed: duplicate image hashes detected.");
+                throw new InvalidOperationException("Thumbnail V5 variant validation failed: duplicate image hashes detected.");
             if (thumbnailVariantResults.Select(v => v.TextLayout).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
-                throw new InvalidOperationException("Thumbnail V4 variant validation failed: all variants use the same text layout.");
+                throw new InvalidOperationException("Thumbnail V5 variant validation failed: all variants use the same text layout.");
 
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
             await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
@@ -701,7 +701,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             File.Copy(thumbnailVariantResults[1].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-square.png"), true);
             File.Copy(thumbnailVariantResults[2].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-portrait.png"), true);
             thumbnailTotalStopwatch.Stop();
-            await WriteThumbnailV4GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteThumbnailV5GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
         }
 
         return BuildImageGenerationResponse(
@@ -710,7 +710,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validation,
             requestedRenderer: "PureAzureImage2ThumbnailV3",
             actualRendererUsed: "PureAzureImage2ThumbnailV3",
-            rendererSelectionReason: "Thumbnail V3 uses ProductionPipelineRequest event intelligence to build a pure Azure Image2-style prompt with CTR text overlay and no scene or hero manifest dependency.",
+            rendererSelectionReason: "Thumbnail V5 uses ProductionPipelineRequest event intelligence to build an Azure Image2 realistic astronomy background, then applies deterministic mini astronomy guide overlays with event facts, direction, best time, sky features, and tips.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: true,
             photoCinematicRendererCompleted: true,
@@ -787,49 +787,61 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 12, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "PhotoCinematic", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
 
-    private static IReadOnlyList<(string Variant, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV4AzurePrompts() =>
-    [
-        ("A", "Extreme meteor storm sky, high contrast, large headline space left. YouTube thumbnail background only, no text, no people, no panels.", ["GEMINIDS", "PEAK NIGHT", "TONIGHT"], "left-stack"),
-        ("B", "Bright fireball meteor close-up crossing Milky Way, dramatic YouTube style. High contrast cinematic background only, no text, no people.", ["METEOR SHOWER", "TONIGHT"], "bottom-slam"),
-        ("C", "Person-free mountain valley under meteor shower, cinematic suspense, bold title area. Background only, no text, no people.", ["DON'T MISS", "GEMINIDS"], "top-left-angle"),
-        ("D", "Many meteors raining over dark landscape, urgent peak-night mood. YouTube CTR background only, no text, no people.", ["100+ METEORS?", "TONIGHT"], "right-block"),
-        ("E", "Deep space starfield with explosive Geminid streaks, high CTR composition. Background only, no text, no panels.", ["GEMINIDS", "DEC 13–14"], "center-burst"),
-        ("F", "Blue-orange cinematic sky, meteor shower over horizon, mobile-readable layout. Background only, no text, no people.", ["LOOK UP TONIGHT", "GEMINIDS"], "mobile-bottom")
-    ];
-
-    private static async Task WriteThumbnailV4OverlayAsync(string backgroundPath, string outputPath, IReadOnlyList<string> lines, string layout, CancellationToken cancellationToken)
+    private static IReadOnlyList<(string Variant, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV5AzurePrompts(ThumbnailAssetGenerationRequest request)
     {
+        var current = BuildCurrentEventLock(request);
+        var objects = string.Join(", ", current.PrimaryObjects.Concat(current.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase));
+        var subject = FirstNonEmpty(objects, current.ShortTitle, current.Title);
+        var basePrompt = $"Azure Image2 realistic astronomy background for {CleanTextElement(current.Title, current.EventType)}. Educational thumbnail guide background centered on {subject}; realistic sky, natural atmosphere, readable empty space at left and bottom for deterministic infographic overlay, right side suitable for subtle object annotations. No text, no fake labels, no invented facts, no people, no UI panels in generated image.";
+        return
+        [
+            ("A", basePrompt + " Wide dark-sky landscape with clear central sky and natural horizon.", [current.ShortTitle], "guide-left"),
+            ("B", basePrompt + " Higher contrast Milky Way or twilight composition with visible event objects.", [current.EventType], "guide-right"),
+            ("C", basePrompt + " Clean realistic sky map feeling, central celestial feature, not cluttered.", [subject], "guide-center"),
+            ("D", basePrompt + " Shareable astronomy-magazine educational background, calm premium color grading.", [current.Title], "guide-bottom")
+        ];
+    }
+
+    private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var current = BuildCurrentEventLock(request);
+        var eventName = CleanTextElement(current.ShortTitle, current.Title).ToUpperInvariant();
+        var eventType = CleanTextElement(current.EventType, "ASTRONOMY EVENT").ToUpperInvariant();
+        var date = CleanTextElement(current.LocalPeakTime, FirstNonEmpty(current.BestViewingWindowLocal, "DATE FROM DATABASE"));
+        var bestTime = CleanTextElement(current.BestViewingWindowLocal, FirstNonEmpty(current.LocalPeakTime, "BEST TIME FROM DATABASE"));
+        var direction = CleanTextElement(current.SkyDirectionHint, "DIRECTION FROM DATABASE");
+        var equipment = eventType.Contains("METEOR", StringComparison.OrdinalIgnoreCase) ? "Eyes only; dark sky helps" : "Eyes or binoculars";
+        var moon = "Moon condition: database verified";
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size(1280, 720), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
-            ctx.Contrast(1.08f).Saturate(1.10f);
-            ctx.Fill(Color.Black.WithAlpha(0.20f), new RectangleF(0, 0, 1280, 720));
-            var title = ResolveThumbnailFont(lines[0].Length > 12 ? 62 : 82, FontStyle.Bold);
-            var second = ResolveThumbnailFont(lines.Count > 1 && lines[1].Length > 10 ? 58 : 72, FontStyle.Bold);
-            var third = ResolveThumbnailFont(54, FontStyle.Bold);
-            var (x, y, alignRight) = layout switch
+            ctx.Contrast(1.04f).Saturate(1.04f);
+            ctx.Fill(Color.Black.WithAlpha(0.18f), new RectangleF(0, 0, 1280, 720));
+            ctx.Fill(Color.FromRgba(5, 11, 28, 218), new RectangleF(28, 34, 374, 520));
+            ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(880, 74, 350, 330));
+            ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(32, 584, 1216, 104));
+            var titleFont = ResolveThumbnailFont(eventName.Length > 15 ? 42 : 52, FontStyle.Bold);
+            var labelFont = ResolveThumbnailFont(27, FontStyle.Bold);
+            var bodyFont = ResolveThumbnailFont(25, FontStyle.Regular);
+            ctx.DrawText(eventName, titleFont, Color.White, new PointF(54, 58));
+            ctx.DrawText(eventType, labelFont, Color.FromRgb(255, 202, 68), new PointF(56, 124));
+            var y = 188f;
+            foreach (var line in new[] { $"Date: {date}", $"Best time: {bestTime}", $"Direction: {direction}", $"Equipment: {equipment}", moon })
             {
-                "bottom-slam" => (70f, 430f, false),
-                "top-left-angle" => (74f, 58f, false),
-                "right-block" => (690f, 250f, true),
-                "center-burst" => (365f, 250f, false),
-                "mobile-bottom" => (110f, 470f, false),
-                _ => (72f, 190f, false)
-            };
-            var backdropWidth = alignRight ? 520f : 660f;
-            ctx.Fill(Color.Black.WithAlpha(0.42f), new RectangleF(alignRight ? 660 : x - 24, y - 22, backdropWidth, lines.Count * 86 + 44));
-            for (var i = 0; i < lines.Count; i++)
-            {
-                var font = i == 0 ? title : i == 1 ? second : third;
-                var color = i == lines.Count - 1 ? Color.FromRgb(255, 202, 68) : Color.White;
-                ctx.DrawText(lines[i], font, color, new PointF(x, y + i * 84));
+                ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(56, y));
+                y += 58;
             }
+            ctx.DrawText("SKY FEATURES", labelFont, Color.White, new PointF(910, 102));
+            ctx.DrawText("Radiant / target area", bodyFont, Color.FromRgb(180, 220, 255), new PointF(910, 160));
+            ctx.DrawText("Object labels", bodyFont, Color.FromRgb(180, 220, 255), new PointF(910, 216));
+            ctx.DrawText("Key horizon cues", bodyFont, Color.FromRgb(180, 220, 255), new PointF(910, 272));
+            ctx.DrawText("TIPS: check weather • find dark sky • arrive early • face the listed direction", bodyFont, Color.White, new PointF(56, 622));
         });
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
-    private static async Task WriteThumbnailV4GenerationSummaryDiagnosticsAsync(
+    private static async Task WriteThumbnailV5GenerationSummaryDiagnosticsAsync(
         string promptText,
         AzureOpenAIForImageOptions options,
         string imagePath,
@@ -852,14 +864,20 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             endpoint,
             apiVersion = "2024-10-21",
             region = ResolveRegion(endpoint),
-            renderer = "AzureImage2ThumbnailV4Variants",
+            renderer = "AzureImage2ThumbnailV5Variants",
             fallbackRendererUsed = false,
             finalPromptText = promptText,
             variantCount = variants.Count,
             azureCallsCount = variants.Count(v => v.Result.ProviderCalled),
             uniqueImageHashes = uniqueHashes,
+            selectedVariant = variants.First().Variant,
             selectedThumbnailVariant = variants.First().Variant,
             duplicateHashGroups,
+            winningImageHash = variants.First().Hash,
+            winningPrompt = variants.First().Prompt,
+            providerCalled = variants.Any(v => v.Result.ProviderCalled),
+            providerSucceeded = variants.All(v => v.Result.ProviderSucceeded),
+            azureRequestMs = variants.Sum(v => v.Result.AzureRequestMs),
             imageHash = variants.First().Hash,
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
