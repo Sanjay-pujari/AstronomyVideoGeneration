@@ -5948,15 +5948,18 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
     var composedPath = Path.Combine(outputDirectory, request.UseCelestialAssets ? "benchmark-conjunction-overlay-v4.png" : isComputedPositionMode ? "benchmark-conjunction-overlay-v3.png" : "benchmark-conjunction-overlay-v1.png");
     var specPath = Path.Combine(outputDirectory, request.UseCelestialAssets ? "overlay-layout-v4.json" : isComputedPositionMode ? "overlay-layout-v3.json" : "overlay-layout.json");
     var validationPath = Path.Combine(outputDirectory, request.UseCelestialAssets ? "overlay-validation-v4.json" : isComputedPositionMode ? "overlay-validation-v3.json" : "overlay-validation.json");
+    var renderDebugPath = Path.Combine(outputDirectory, "overlay-render-debug.json");
     var spec = BuildVisualLabOverlaySpec(request, image.Width, image.Height, composedPath, specPath, validationPath);
     var assetLookup = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : VisualLabPlanetAssetLookup.Empty(environment);
     var planetAssets = assetLookup.Assets;
     var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height, assetLookup);
+    var renderDebug = BuildVisualLabOverlayRenderDebug(assetLookup, validation);
     if (!validation.IsValid)
     {
         foreach (var asset in planetAssets.Values) asset.Dispose();
         await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
-        return Results.BadRequest(new { message = "Visual lab overlay validation failed.", validationPath, validation });
+        await WriteVisualLabDebugJsonAsync(renderDebugPath, renderDebug, ct);
+        return Results.BadRequest(new { message = "Visual lab overlay validation failed.", validationPath, overlayRenderDebugPath = renderDebugPath, validation });
     }
 
     image.Mutate(ctx => DrawVisualLabOverlay(ctx, spec, planetAssets));
@@ -5964,8 +5967,9 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
     await image.SaveAsPngAsync(composedPath, new PngEncoder(), ct);
     await WriteVisualLabDebugJsonAsync(specPath, spec, ct);
     await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+    await WriteVisualLabDebugJsonAsync(renderDebugPath, renderDebug, ct);
 
-    return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, overlaySpecPath = specPath, overlayValidationPath = validationPath, validation });
+    return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, overlaySpecPath = specPath, overlayValidationPath = validationPath, overlayRenderDebugPath = renderDebugPath, validation });
 }).Accepts<VisualLabComposeOverlayRequest>("application/json");
 
 app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
@@ -6204,12 +6208,14 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
         && jupiterSpriteWidth is >= 90 and <= 110
         && venusSpriteWidth is >= 75 and <= 95
         && mercurySpriteWidth is >= 50 and <= 65;
-    var fallbackDotsUsed = !spec.UseCelestialAssets || !assetFilesFound || !jupiterRendered || !venusRendered || !mercuryRendered;
+    var spritesDrawn = spec.UseCelestialAssets && assetFilesFound && jupiterRendered && venusRendered && mercuryRendered;
+    var fallbackDotsUsed = !spritesDrawn;
     AddCheck("celestialAssets", spec.UseCelestialAssets && assetFilesFound, spec.UseCelestialAssets ? "Celestial PNG assets were found for every requested planet." : "Celestial asset rendering must be enabled for Conjunction Overlay V4 validation.");
+    AddCheck("spritesDrawn", spritesDrawn, "Jupiter, Venus, and Mercury hero-transparent.png sprites are drawn as PNG bitmaps.");
     AddCheck("celestialAssetRendering", spec.UseCelestialAssets && jupiterRendered && venusRendered && mercuryRendered && !fallbackDotsUsed, "Jupiter, Venus, and Mercury render from celestial PNG assets with no fallback dots.");
     AddCheck("celestialAssetsVisible", celestialAssetsVisible, $"Celestial sprites render at V4 visible widths: Jupiter {jupiterSpriteWidth}px, Venus {venusSpriteWidth}px, Mercury {mercurySpriteWidth}px.");
 
-    return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, jupiterRendered, venusRendered, mercuryRendered, fallbackDotsUsed, celestialAssetsVisible, jupiterSpriteWidth, venusSpriteWidth, mercurySpriteWidth, assetLookup?.Diagnostics);
+    return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, jupiterRendered, venusRendered, mercuryRendered, spritesDrawn, fallbackDotsUsed, celestialAssetsVisible, jupiterSpriteWidth, venusSpriteWidth, mercurySpriteWidth, assetLookup?.Diagnostics);
 
     void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
 }
@@ -6244,9 +6250,13 @@ static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySp
 
     foreach (var callout in spec.PlanetCallouts)
     {
+        DrawVisualLabPlanetMarker(ctx, callout, new PointF(callout.AnchorX, callout.AnchorY), spec.UseCelestialAssets, planetAssets);
+    }
+
+    foreach (var callout in spec.PlanetCallouts)
+    {
         var anchor = new PointF(callout.AnchorX, callout.AnchorY);
         var label = new PointF(callout.LabelX, callout.LabelY);
-        DrawVisualLabPlanetMarker(ctx, callout, anchor, spec.UseCelestialAssets, planetAssets);
         ctx.DrawLine(Color.ParseHex("#DDF7FF").WithAlpha(0.75f), 2, anchor, new PointF(label.X - 12, label.Y + 19));
         ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.84f), ToRectangleF(callout.LabelBounds));
         ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.88f), 2, ToRectangleF(callout.LabelBounds));
@@ -6325,6 +6335,16 @@ static IReadOnlyList<string> BuildVisualLabCelestialAssetCandidates(IWebHostEnvi
         Path.Combine(environment.ContentRootPath, "assets", "celestial", normalizedName, "hero-transparent.png")
     };
 
+static VisualLabOverlayRenderDebug BuildVisualLabOverlayRenderDebug(VisualLabPlanetAssetLookup assetLookup, VisualLabOverlayValidation validation)
+    => new(
+        assetLookup.Diagnostics.ResolvedPathByObject.GetValueOrDefault("jupiter"),
+        assetLookup.Diagnostics.ResolvedPathByObject.GetValueOrDefault("venus"),
+        assetLookup.Diagnostics.ResolvedPathByObject.GetValueOrDefault("mercury"),
+        GetVisualLabCelestialAssetSpriteWidth("Jupiter"),
+        GetVisualLabCelestialAssetSpriteWidth("Venus"),
+        GetVisualLabCelestialAssetSpriteWidth("Mercury"),
+        new VisualLabOverlayRenderDebugValidation(validation.CelestialAssetsVisible, validation.SpritesDrawn, validation.FallbackDotsUsed));
+
 static string NormalizeVisualLabCelestialObjectName(string value)
     => Regex.Replace(value.Trim().ToLowerInvariant(), " +", "-");
 
@@ -6338,13 +6358,6 @@ static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOver
         var aspectRatio = asset.Height > 0 ? asset.Width / (float)asset.Height : 1f;
         var spriteHeight = Math.Max(1, (int)Math.Round(spriteWidth / Math.Max(aspectRatio, 0.01f)));
         var bounds = new Rectangle((int)Math.Round(anchor.X - spriteWidth / 2f), (int)Math.Round(anchor.Y - spriteHeight / 2f), spriteWidth, spriteHeight);
-        if (string.Equals(callout.Label, "Venus", StringComparison.OrdinalIgnoreCase))
-        {
-            var glow = Math.Max(spriteWidth, spriteHeight) * 0.72f;
-            ctx.Fill(Color.ParseHex("#FFF3B0").WithAlpha(0.18f), new EllipsePolygon(anchor.X, anchor.Y, glow));
-            ctx.Fill(Color.ParseHex("#FFFFFF").WithAlpha(0.10f), new EllipsePolygon(anchor.X, anchor.Y, glow * 0.58f));
-        }
-
         ctx.DrawImage(asset, bounds, 1f);
         return;
     }
@@ -6370,9 +6383,9 @@ static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOver
 
 static int GetVisualLabCelestialAssetSpriteWidth(string objectName)
 {
-    if (string.Equals(objectName, "Jupiter", StringComparison.OrdinalIgnoreCase)) return 100;
-    if (string.Equals(objectName, "Venus", StringComparison.OrdinalIgnoreCase)) return 86;
-    if (string.Equals(objectName, "Mercury", StringComparison.OrdinalIgnoreCase)) return 58;
+    if (string.Equals(objectName, "Jupiter", StringComparison.OrdinalIgnoreCase)) return 96;
+    if (string.Equals(objectName, "Venus", StringComparison.OrdinalIgnoreCase)) return 84;
+    if (string.Equals(objectName, "Mercury", StringComparison.OrdinalIgnoreCase)) return 60;
     return 48;
 }
 
@@ -9989,7 +10002,7 @@ public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int Anch
 {
     public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
 }
-public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets = false, bool AssetFilesFound = true, bool JupiterRendered = false, bool VenusRendered = false, bool MercuryRendered = false, bool FallbackDotsUsed = false, bool CelestialAssetsVisible = false, int JupiterSpriteWidth = 0, int VenusSpriteWidth = 0, int MercurySpriteWidth = 0, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
+public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets = false, bool AssetFilesFound = true, bool JupiterRendered = false, bool VenusRendered = false, bool MercuryRendered = false, bool SpritesDrawn = false, bool FallbackDotsUsed = false, bool CelestialAssetsVisible = false, int JupiterSpriteWidth = 0, int VenusSpriteWidth = 0, int MercurySpriteWidth = 0, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
 public sealed record VisualLabPlanetAssetLookup(IReadOnlyDictionary<string, Image<Rgba32>> Assets, VisualLabPlanetAssetDiagnostics Diagnostics)
 {
     public static VisualLabPlanetAssetLookup Empty(IWebHostEnvironment environment)
@@ -10002,6 +10015,15 @@ public sealed record VisualLabPlanetAssetDiagnostics(
     IReadOnlyDictionary<string, IReadOnlyList<string>> CandidatePathsByObject,
     IReadOnlyDictionary<string, string?> ResolvedPathByObject,
     IReadOnlyList<string> MissingAssets);
+public sealed record VisualLabOverlayRenderDebug(
+    string? JupiterAssetPath,
+    string? VenusAssetPath,
+    string? MercuryAssetPath,
+    int JupiterRenderWidth,
+    int VenusRenderWidth,
+    int MercuryRenderWidth,
+    VisualLabOverlayRenderDebugValidation Validation);
+public sealed record VisualLabOverlayRenderDebugValidation(bool CelestialAssetsVisible, bool SpritesDrawn, bool FallbackDotsUsed);
 public sealed record VisualLabOverlayValidationCheck(string Name, bool Passed, string Message);
 
 public sealed record VisualLabGenerateRequest(
