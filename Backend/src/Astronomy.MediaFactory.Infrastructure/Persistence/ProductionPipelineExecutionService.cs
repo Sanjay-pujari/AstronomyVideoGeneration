@@ -374,7 +374,14 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Phase 7 narration generation did not persist required output file(s): " + string.Join(", ", missing) + ".");
 
         if (!response.IsValid)
-            throw new InvalidOperationException("Phase 7 narration generation failed validation: " + string.Join(" | ", response.Warnings));
+        {
+            var validationMessages = (response.Warnings ?? [])
+                .Concat(response.Review.Checks.Where(check => !check.Passed).Select(check => check.Message))
+                .Where(message => !string.IsNullOrWhiteSpace(message))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            throw new InvalidOperationException("Phase 7 narration generation failed validation: " + string.Join(" | ", validationMessages));
+        }
     }
 
     private static async Task<int> AddPhase6SceneVisualVariantsAsync(string enrichedPath, CancellationToken cancellationToken)

@@ -61,7 +61,10 @@ public sealed record QuestionDrivenNarrationReviewDto(
     int TotalEstimatedDurationSeconds,
     IReadOnlyList<QuestionDrivenNarrationReviewCheckDto> Checks,
     IReadOnlyList<string> Warnings,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    bool RequiredSectionsPresent = false,
+    bool RepetitiveSentenceOpenings = true,
+    bool StoryStructurePassed = false);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,

@@ -50,8 +50,13 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.Equal(result.Narration.Scenes.Count, result.Narration.Scenes.Select(scene => scene.NarrationText).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Contains(result.Review.Checks, check => check.Name == "hookExists" && check.Passed);
         Assert.Contains(result.Review.Checks, check => check.Name == "ctaExists" && check.Passed);
+        Assert.Contains(result.Review.Checks, check => check.Name == "requiredSectionsPresent" && check.Passed);
         Assert.Contains(result.Review.Checks, check => check.Name == "storyStructureComplete" && check.Passed);
         Assert.Contains(result.Review.Checks, check => check.Name == "sceneTypeMapped" && check.Passed);
+        Assert.True(result.Review.RequiredSectionsPresent);
+        Assert.False(result.Review.RepetitiveSentenceOpenings);
+        Assert.True(result.Review.StoryStructurePassed);
+        Assert.Equal(new[] { "Hook", "ViewingAdvice", "Explanation", "Reward", "Curiosity", "CTA" }, result.Narration.Scenes.Select(scene => scene.Section));
         Assert.All(result.Narration.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.SceneType)));
     }
 
@@ -215,6 +220,16 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.DoesNotContain("after sunset", combined, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("look west", combined, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("7:23 PM IST", combined, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(new[] { "Hook", "ViewingAdvice", "Explanation", "Reward", "Curiosity", "CTA" }, result.Narration.Scenes.Select(scene => scene.Section));
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Hook" && scene.NarrationText == "Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.");
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Curiosity" && scene.NarrationText == "What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.");
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Explanation" && scene.NarrationText == "This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.");
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "ViewingAdvice" && scene.NarrationText == "For Udaipur, the best viewing window is after midnight, from 12:00 AM to 5:00 AM IST. Look east to overhead after 10 PM.");
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "Reward" && scene.NarrationText == "With low moonlight, patient observers may catch repeated bright streaks crossing the dark sky.");
+        Assert.Contains(result.Narration.Scenes, scene => scene.Section == "CTA" && scene.NarrationText == "Save this sky guide, step outside after midnight, and follow for more astronomy events.");
+        Assert.True(result.Review.RequiredSectionsPresent);
+        Assert.False(result.Review.RepetitiveSentenceOpenings);
+        Assert.True(result.Review.StoryStructurePassed);
     }
 
     [Fact]
