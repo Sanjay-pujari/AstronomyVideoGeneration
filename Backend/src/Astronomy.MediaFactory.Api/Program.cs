@@ -5945,18 +5945,18 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
     using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
     var isComputedPositionMode = string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase);
-    var composedPath = Path.Combine(outputDirectory, isComputedPositionMode ? "benchmark-conjunction-overlay-v3.png" : "benchmark-conjunction-overlay-v1.png");
-    var specPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-layout-v3.json" : "overlay-layout.json");
-    var validationPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-validation-v3.json" : "overlay-validation.json");
+    var composedPath = Path.Combine(outputDirectory, request.UseCelestialAssets ? "benchmark-conjunction-overlay-v4.png" : isComputedPositionMode ? "benchmark-conjunction-overlay-v3.png" : "benchmark-conjunction-overlay-v1.png");
+    var specPath = Path.Combine(outputDirectory, request.UseCelestialAssets ? "overlay-layout-v4.json" : isComputedPositionMode ? "overlay-layout-v3.json" : "overlay-layout.json");
+    var validationPath = Path.Combine(outputDirectory, request.UseCelestialAssets ? "overlay-validation-v4.json" : isComputedPositionMode ? "overlay-validation-v3.json" : "overlay-validation.json");
     var spec = BuildVisualLabOverlaySpec(request, image.Width, image.Height, composedPath, specPath, validationPath);
-    var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height);
+    var planetAssets = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : new Dictionary<string, Image<Rgba32>>(StringComparer.OrdinalIgnoreCase);
+    var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height, planetAssets);
     if (!validation.IsValid)
     {
         await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
         return Results.BadRequest(new { message = "Visual lab overlay validation failed.", validationPath, validation });
     }
 
-    var planetAssets = await LoadVisualLabPlanetAssetsAsync(environment, ct);
     image.Mutate(ctx => DrawVisualLabOverlay(ctx, spec, planetAssets));
     foreach (var asset in planetAssets.Values) asset.Dispose();
     await image.SaveAsPngAsync(composedPath, new PngEncoder(), ct);
@@ -6074,6 +6074,7 @@ static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayReq
         request.Title.Trim(),
         request.Layout.Trim(),
         request.Format.Trim(),
+        request.UseCelestialAssets,
         positionMode,
         positionMode == "Computed" ? "Computed" : "DeterministicDefault",
         width,
@@ -6152,7 +6153,7 @@ static Color GetVisualLabObjectColor(string? colorHint)
     return Color.White;
 }
 
-static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlaySpec spec, int width, int height)
+static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlaySpec spec, int width, int height, IReadOnlyDictionary<string, Image<Rgba32>>? planetAssets = null)
 {
     var checks = new List<VisualLabOverlayValidationCheck>();
     var safe = new RectangleF(spec.SafeMargin, spec.SafeMargin, width - spec.SafeMargin * 2, height - spec.SafeMargin * 2);
@@ -6185,7 +6186,15 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
     AddCheck("allRequestedObjectsLabelled", spec.PlanetCallouts.Select(c => c.Label).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "All requested objects are labelled.");
     AddCheck("calloutsNoClipping", labelBoxesInsideSafeArea && spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), "Planet callout anchors and labels are inside safe margins.");
 
-    return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks);
+    var requiredAssets = new[] { "jupiter", "venus", "mercury" };
+    var assetFilesFound = !spec.UseCelestialAssets || (planetAssets is not null && requiredAssets.All(planetAssets.ContainsKey));
+    var jupiterRendered = spec.UseCelestialAssets && planetAssets?.ContainsKey("jupiter") == true;
+    var venusRendered = spec.UseCelestialAssets && planetAssets?.ContainsKey("venus") == true;
+    var mercuryRendered = spec.UseCelestialAssets && planetAssets?.ContainsKey("mercury") == true;
+    var fallbackDotsUsed = spec.UseCelestialAssets && (!jupiterRendered || !venusRendered || !mercuryRendered);
+    AddCheck("celestialAssets", !spec.UseCelestialAssets || assetFilesFound, spec.UseCelestialAssets ? "Celestial PNG assets were found for every requested planet." : "Celestial asset rendering is disabled; fallback markers are allowed.");
+
+    return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, jupiterRendered, venusRendered, mercuryRendered, fallbackDotsUsed);
 
     void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
 }
@@ -6222,7 +6231,7 @@ static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySp
     {
         var anchor = new PointF(callout.AnchorX, callout.AnchorY);
         var label = new PointF(callout.LabelX, callout.LabelY);
-        DrawVisualLabPlanetMarker(ctx, callout, anchor, planetAssets);
+        DrawVisualLabPlanetMarker(ctx, callout, anchor, spec.UseCelestialAssets, planetAssets);
         ctx.DrawLine(Color.ParseHex("#DDF7FF").WithAlpha(0.75f), 2, anchor, new PointF(label.X - 12, label.Y + 19));
         ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.84f), ToRectangleF(callout.LabelBounds));
         ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.88f), 2, ToRectangleF(callout.LabelBounds));
@@ -6272,13 +6281,13 @@ static async Task<Dictionary<string, Image<Rgba32>>> LoadVisualLabPlanetAssetsAs
     return result;
 }
 
-static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOverlayCallout callout, PointF anchor, IReadOnlyDictionary<string, Image<Rgba32>> planetAssets)
+static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOverlayCallout callout, PointF anchor, bool useCelestialAssets, IReadOnlyDictionary<string, Image<Rgba32>> planetAssets)
 {
     var key = callout.Label.ToLowerInvariant();
     var radius = callout.MarkerRadius;
-    if (planetAssets.TryGetValue(key, out var asset))
+    if (useCelestialAssets && planetAssets.TryGetValue(key, out var asset))
     {
-        var size = radius * 4;
+        var size = GetVisualLabCelestialAssetSpriteSize(callout);
         ctx.DrawImage(asset, new Rectangle((int)(anchor.X - size / 2f), (int)(anchor.Y - size / 2f), size, size), 1f);
         return;
     }
@@ -6300,6 +6309,14 @@ static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOver
     {
         ctx.Draw(Color.ParseHex("#D8874C").WithAlpha(0.82f), 2, new EllipsePolygon(anchor.X, anchor.Y, radius * 1.1f));
     }
+}
+
+static int GetVisualLabCelestialAssetSpriteSize(VisualLabOverlayCallout callout)
+{
+    if (string.Equals(callout.Label, "Jupiter", StringComparison.OrdinalIgnoreCase)) return 86;
+    if (string.Equals(callout.Label, "Venus", StringComparison.OrdinalIgnoreCase)) return 68;
+    if (string.Equals(callout.Label, "Mercury", StringComparison.OrdinalIgnoreCase)) return 42;
+    return Math.Max(callout.MarkerRadius * 4, 32);
 }
 
 static void DrawVisualLabInfoIcon(IImageProcessingContext ctx, string icon, PointF center)
@@ -9877,7 +9894,8 @@ public sealed record VisualLabComposeOverlayRequest(
     string Format,
     Dictionary<string, string>? Facts,
     string? PositionMode,
-    IReadOnlyList<VisualLabOverlayObjectPosition>? Objects);
+    IReadOnlyList<VisualLabOverlayObjectPosition>? Objects,
+    bool UseCelestialAssets = false);
 
 public sealed record VisualLabOverlaySpec(
     string Composer,
@@ -9890,6 +9908,7 @@ public sealed record VisualLabOverlaySpec(
     string Title,
     string Layout,
     string Format,
+    bool UseCelestialAssets,
     string PositionMode,
     string OverlayPositionSource,
     int Width,
@@ -9913,7 +9932,7 @@ public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int Anch
 {
     public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
 }
-public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks);
+public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets = false, bool AssetFilesFound = true, bool JupiterRendered = false, bool VenusRendered = false, bool MercuryRendered = false, bool FallbackDotsUsed = false);
 public sealed record VisualLabOverlayValidationCheck(string Name, bool Passed, string Message);
 
 public sealed record VisualLabGenerateRequest(
