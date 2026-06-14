@@ -104,7 +104,8 @@ public sealed class AstroPulseGalleryService : IAstroPulseGalleryService
 
     private static void DrawOverlay(IImageProcessingContext ctx, AstroPulseGalleryAspect a, GalleryTopic topic)
     {
-        var font = SystemFonts.Families.FirstOrDefault(f => f.Name.Contains("DejaVu", StringComparison.OrdinalIgnoreCase)) ?? SystemFonts.Families.First();
+        var font = SystemFonts.Families.FirstOrDefault(f => f.Name.Contains("DejaVu", StringComparison.OrdinalIgnoreCase));
+        if (font.Name is null) font = SystemFonts.Families.First();
         var title = font.CreateFont(Math.Clamp(a.Width / 18f, 42, 92), FontStyle.Bold);
         var body = font.CreateFont(Math.Clamp(a.Width / 34f, 26, 46), FontStyle.Regular);
         var pad = a.Width * .055f; var panelH = a.Height * .30f;
