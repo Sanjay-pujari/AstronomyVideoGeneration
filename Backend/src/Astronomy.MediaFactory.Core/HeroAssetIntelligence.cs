@@ -15,7 +15,8 @@ public sealed class HeroAssetStoryGenerationRequest
         bool DryRun = true,
         bool OverwriteExisting = false,
         HeroAssetGenerationPhase Phase = HeroAssetGenerationPhase.HookSelection,
-        ProductionPipelineExecutionContext? ProductionContext = null)
+        ProductionPipelineExecutionContext? ProductionContext = null,
+        ContentPlanProductionPipelineRequest? PipelineRequest = null)
     {
         this.EventId = EventId;
         this.RegionId = RegionId;
@@ -24,6 +25,7 @@ public sealed class HeroAssetStoryGenerationRequest
         this.OverwriteExisting = OverwriteExisting;
         this.Phase = Phase.ToString();
         this.ProductionContext = ProductionContext;
+        this.PipelineRequest = PipelineRequest;
     }
 
     public string EventId { get; set; } = string.Empty;
@@ -39,6 +41,8 @@ public sealed class HeroAssetStoryGenerationRequest
     public string Phase { get; set; } = HeroAssetGenerationPhase.HookSelection.ToString();
 
     public ProductionPipelineExecutionContext? ProductionContext { get; set; }
+
+    public ContentPlanProductionPipelineRequest? PipelineRequest { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
