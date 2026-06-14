@@ -522,7 +522,7 @@ public sealed class HeroAssetStoryGenerator(
         var variants = HeroImageSpecs
             .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
             .ToArray();
-        var renderedBlocks = new[] { "Hook", "Visual", "Timing", "Direction", "CTA" };
+        var renderedBlocks = new[] { "Title", "Visual" };
         var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
         var textOverlapDetected = variants.Any(variant => variant.TextOverlapDetected);
         var objectsVisible = variants.All(variant => variant.ObjectsVisible);
@@ -570,7 +570,7 @@ public sealed class HeroAssetStoryGenerator(
     private static HeroVariantLayoutValidationDto BuildHeroVariantLayoutValidation(HeroImageSpec spec, HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
     {
         var (marginX, marginY) = ResolveHeroSafeMargins(spec.Width, spec.Height);
-        var renderedBlocks = new[] { "Hook", "Visual", "Timing", "Direction", "CTA" };
+        var renderedBlocks = new[] { "Title", "Visual" };
         var duplicateBlocksDetected = renderedBlocks.GroupBy(block => block, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1);
         var boxes = BuildHeroTextBoxes(spec, marginX, marginY, compositionModel);
         var overlapWarnings = new List<string>();
@@ -612,15 +612,12 @@ public sealed class HeroAssetStoryGenerator(
         var subtitleText = BuildHeroSubtitle(spec.Width, spec.Height);
         var boxes = new List<(string Name, RectangleF Bounds)>
         {
-            ("Hook", BuildHeroTextBox(spec, "Hook"))
+            ("Title", BuildHeroTextBox(spec, "Hook"))
         };
 
         if (!string.IsNullOrWhiteSpace(subtitleText))
             boxes.Add(("Subtitle", BuildHeroTextBox(spec, "Subtitle")));
 
-        boxes.Add(("Timing", BuildHeroTextBox(spec, "Timing")));
-        boxes.Add(("Direction", BuildHeroTextBox(spec, "Direction")));
-        boxes.Add(("CTA", BuildHeroTextBox(spec, "CTA")));
         return boxes;
     }
 
@@ -704,30 +701,32 @@ public sealed class HeroAssetStoryGenerator(
             : intelligence?.PrimaryObjects?.Count > 0 == true
                 ? string.Join(", ", intelligence.PrimaryObjects)
                 : FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, "primary sky target");
-        var visibilityScore = pipelineRequest?.VisibilityScore?.ToString("0.##") ?? string.Empty;
-        var audienceInterestScore = pipelineRequest?.AudienceInterestScore?.ToString("0.##") ?? string.Empty;
-        var bestViewingWindow = FirstNonEmpty(pipelineRequest?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, intelligence?.BestViewingWindowLocal, heroStory.HeroStorySource.When, "best local viewing window");
-        var directionHint = FirstNonEmpty(pipelineRequest?.SkyDirectionHint, intelligence?.SkyDirectionHint, heroStory.HeroStorySource.Where, "western sky");
-        var prompt = string.Join(" | ", new[]
-        {
-            "Azure Image2 hero prompt",
-            $"EventTitle: {eventTitle}",
-            $"EventType: {eventType}",
-            $"PrimaryObjects: {primaryObjects}",
-            string.IsNullOrWhiteSpace(visibilityScore) ? null : $"VisibilityScore: {visibilityScore}",
-            string.IsNullOrWhiteSpace(audienceInterestScore) ? null : $"AudienceInterestScore: {audienceInterestScore}",
-            $"BestViewingWindow: {bestViewingWindow}",
-            $"DirectionHint: {directionHint}",
-            "cinematic astronomy image, no scene collage, no source scene PNG dependency"
-        }.Where(part => !string.IsNullOrWhiteSpace(part)));
+        var titleOverlay = BuildCinematicHeroTitleOverlay(eventTitle, eventType, selectedHook);
+        var prompt = BuildCinematicHeroBackgroundPrompt(eventTitle, eventType, primaryObjects);
 
         return new HeroCompositionModelDto(
-            new HeroCompositionHookBlockDto(selectedHook),
+            new HeroCompositionHookBlockDto(titleOverlay),
             new HeroCompositionSceneBlockDto(prompt),
-            new HeroCompositionTextBlockDto("EventIntelligence", directionHint),
-            new HeroCompositionTextBlockDto("EventIntelligence", bestViewingWindow),
-            new HeroCompositionTextBlockDto("ContentGenerationPlan", ResolveHeroImageCta(heroStory.HeroAction)),
-            new HeroCompositionValidationDto(true, true, true, true, true, 100));
+            new HeroCompositionTextBlockDto("none", string.Empty),
+            new HeroCompositionTextBlockDto("none", string.Empty),
+            new HeroCompositionTextBlockDto("none", string.Empty),
+            new HeroCompositionValidationDto(true, true, false, false, false, 100));
+    }
+
+    private static string BuildCinematicHeroTitleOverlay(string eventTitle, string eventType, string selectedHook)
+    {
+        if (IsMeteorEventType(eventType) || eventTitle.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
+            return "GEMINIDS\nMETEOR SHOWER PEAK";
+
+        return Clean(FirstNonEmpty(selectedHook, eventTitle)).ToUpperInvariant();
+    }
+
+    private static string BuildCinematicHeroBackgroundPrompt(string eventTitle, string eventType, string primaryObjects)
+    {
+        if (IsMeteorEventType(eventType) || eventTitle.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
+            return "Azure Image2 cinematic background | premium cinematic meteor shower sky | dark mountain or open landscape horizon | bright meteor streaks across a realistic starry sky | subtle Geminids radiant feeling | NASA documentary poster and Netflix science documentary quality | clean image-only background reserved for minimal title overlay";
+
+        return $"Azure Image2 cinematic background | premium emotional astronomy documentary poster for {eventTitle} | primary sky focus: {primaryObjects} | realistic night sky, dramatic atmosphere | clean image-only background reserved for minimal title overlay";
     }
 
     private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
@@ -766,11 +765,11 @@ public sealed class HeroAssetStoryGenerator(
             string.Empty,
             planetAssets,
             mood: "WarmTwilightHero",
-            westMarkerLabel: FormatHeroDirection(compositionModel.DirectionBlock.Text),
+            westMarkerLabel: string.Empty,
             starDensity: height > width ? 620 : 455,
             showReferenceOverlays: false,
             referenceStars: [],
-            labels: BuildHeroVariantLabels(compositionModel, variant, width, height),
+            labels: [],
             backgroundImagePath: null,
             compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
@@ -1407,35 +1406,35 @@ public sealed class HeroAssetStoryGenerator(
                 "1280x720",
                 "YouTube",
                 new HeroLayoutBlueprintDto(
-                    $"Top-left: {selectedHook}",
-                    $"Center: {visualFocus}",
-                    "Bottom-right: West marker",
-                    "Twilight")),
+                    $"Minimal title overlay: {selectedHook}",
+                    $"Cinematic background: {visualFocus}",
+                    "No supporting text block",
+                    "Premium documentary poster")),
             new(
                 "Square",
                 "1080x1080",
                 "Facebook/Instagram",
                 new HeroLayoutBlueprintDto(
-                    $"Top: {selectedHook}",
-                    $"Center: {visualFocus}",
-                    "Bottom: Best viewing time",
-                    "Twilight")),
+                    $"Minimal title overlay: {selectedHook}",
+                    $"Cinematic background: {visualFocus}",
+                    "No supporting text block",
+                    "Premium documentary poster")),
             new(
                 "Portrait",
                 "1080x1920",
                 "Stories/Reels/Shorts",
                 new HeroLayoutBlueprintDto(
-                    $"Top: {selectedHook}",
-                    $"Center: {visualFocus}",
-                    "Bottom: Viewing direction",
-                    "Twilight"))
+                    $"Minimal title overlay: {selectedHook}",
+                    $"Cinematic background: {visualFocus}",
+                    "No supporting text block",
+                    "Premium documentary poster"))
         ];
     }
 
     private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants, HeroAssetStoryDto heroStory)
         => new(
             "Wonder",
-            "AstronomyPoster",
+            "CinematicDocumentaryPoster",
             Clean(heroStory.HeroVisualFocus),
             Clean(heroStory.HeroMessage),
             platformVariants);
