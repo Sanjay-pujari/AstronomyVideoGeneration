@@ -517,6 +517,61 @@ public sealed class ProductionPipelineExecutionServiceTests
         }
     }
 
+    [Fact]
+    public void OverwriteCleanup_Phase13Only_PreservesEarlierValidationAndOtherOutputRoots()
+    {
+        var baseContext = CreateContext("MeteorShower", ["Gallery"]);
+        var deleted = new List<string>();
+        var context = baseContext with
+        {
+            StartPhaseNo = 13,
+            EndPhaseNo = 13,
+            OverwriteExisting = true,
+            DeletedFilesDueToOverwrite = deleted,
+            PipelineRequest = baseContext.PipelineRequest with { StartPhaseNo = 13, EndPhaseNo = 13, OverwriteExisting = true }
+        };
+
+        Directory.CreateDirectory(context.ExecutionContext.ValidationRoot!);
+        Directory.CreateDirectory(Path.Combine(context.OutputRoot, "gallery"));
+        Directory.CreateDirectory(context.ExecutionContext.HeroRoot!);
+        Directory.CreateDirectory(context.ExecutionContext.ThumbnailRoot!);
+        Directory.CreateDirectory(context.ExecutionContext.QuestionRoot!);
+        Directory.CreateDirectory(context.ExecutionContext.SceneRoot!);
+        Directory.CreateDirectory(context.ExecutionContext.NarrationRoot!);
+        Directory.CreateDirectory(context.ExecutionContext.TtsRoot!);
+        Directory.CreateDirectory(context.ExecutionContext.VideoAssemblyRoot!);
+
+        for (var phaseNo = 1; phaseNo <= 13; phaseNo++)
+            File.WriteAllText(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), "{}");
+        File.WriteAllText(Path.Combine(context.OutputRoot, "gallery", "gallery-01.png"), "gallery");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.HeroRoot!, "hero-final.png"), "hero");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail.png"), "thumbnail");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-answer-set.json"), "questions");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.SceneRoot!, "scene.png"), "scene");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.NarrationRoot!, "narration.txt"), "narration");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.TtsRoot!, "narration.mp3"), "tts");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "final-video-short.mp4"), "video");
+
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ClearPhaseRangeOutputsForOverwrite", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        method!.Invoke(null, [context]);
+
+        for (var phaseNo = 1; phaseNo <= 12; phaseNo++)
+            Assert.True(File.Exists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json")), $"phase {phaseNo} validation should be preserved");
+
+        Assert.False(File.Exists(Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-13-validation.json")));
+        Assert.False(Directory.Exists(Path.Combine(context.OutputRoot, "gallery")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.HeroRoot!, "hero-final.png")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail.png")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-answer-set.json")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.SceneRoot!, "scene.png")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.NarrationRoot!, "narration.txt")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.TtsRoot!, "narration.mp3")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "final-video-short.mp4")));
+        Assert.DoesNotContain(deleted, path => path.Contains("phase-12-validation.json", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(deleted, path => path.Contains("phase-13-validation.json", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null, bool enableSceneVariants = false)
     {
         var planId = Guid.NewGuid();
