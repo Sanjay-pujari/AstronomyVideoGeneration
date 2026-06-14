@@ -903,7 +903,7 @@ public sealed class HeroAssetStoryGenerator(
         ("D", "Minimal elegant NASA-style poster background, meteor radiant visible, large empty title space, cinematic realism. Sparse premium Geminids meteor shower sky, no text, no panels, no equipment.")
     ];
 
-    private static async Task WriteHeroV4OverlayAsync(string backgroundPath, string outputPath, CancellationToken cancellationToken)
+    private async Task WriteHeroV4OverlayAsync(string backgroundPath, string outputPath, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
