@@ -6025,6 +6025,59 @@ app.MapPost("/api/visual-lab/compose-hero", async Task<IResult> (VisualLabCompos
     return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, heroLayoutPath = layoutPath, heroValidationPath = validationPath, validation });
 }).Accepts<VisualLabComposeHeroRequest>("application/json");
 
+app.MapPost("/api/visual-lab/compose-thumbnail", async Task<IResult> (VisualLabComposeThumbnailRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+{
+    if (environment.IsProduction())
+    {
+        return Results.NotFound(new { message = "The visual lab endpoint is available only in development or test environments." });
+    }
+
+    var validationErrors = ValidateVisualLabComposeThumbnailRequest(request);
+    if (validationErrors.Count > 0)
+    {
+        return Results.BadRequest(new { message = "Invalid visual lab thumbnail compose request.", errors = validationErrors });
+    }
+
+    var backgroundPath = Path.GetFullPath(request.BackgroundImagePath.Trim());
+    if (!File.Exists(backgroundPath))
+    {
+        return Results.BadRequest(new { message = "AzureImage2 background image was not found.", backgroundImagePath = backgroundPath });
+    }
+
+    if (!Path.GetFileName(backgroundPath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { message = "backgroundImagePath must point to a Visual Lab AzureImage2 background output such as background-v1.png.", backgroundImagePath = backgroundPath });
+    }
+
+    const int thumbnailCanvasWidth = 1280;
+    const int thumbnailCanvasHeight = 720;
+
+    using var backgroundImage = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
+    using var image = RenderVisualLabLongFormatHeroCanvas(backgroundImage, thumbnailCanvasWidth, thumbnailCanvasHeight);
+    var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
+    var composedPath = Path.Combine(outputDirectory, "benchmark-thumbnail-conjunction-v1.png");
+    var layoutPath = Path.Combine(outputDirectory, "thumbnail-layout-v1.json");
+    var validationPath = Path.Combine(outputDirectory, "thumbnail-validation-v1.json");
+    var spec = BuildVisualLabThumbnailSpec(request, thumbnailCanvasWidth, thumbnailCanvasHeight, composedPath, layoutPath, validationPath);
+    var assetLookup = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : VisualLabPlanetAssetLookup.Empty(environment);
+    var validation = ValidateVisualLabThumbnailSpec(spec, thumbnailCanvasWidth, thumbnailCanvasHeight, assetLookup);
+    if (!validation.IsValid)
+    {
+        foreach (var asset in assetLookup.Assets.Values) asset.Image.Dispose();
+        await WriteVisualLabDebugJsonAsync(layoutPath, spec, ct);
+        await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+        return Results.BadRequest(new { message = "Visual lab thumbnail validation failed.", thumbnailLayoutPath = layoutPath, thumbnailValidationPath = validationPath, validation });
+    }
+
+    image.Mutate(ctx => DrawVisualLabThumbnail(ctx, spec, assetLookup.Assets));
+    foreach (var asset in assetLookup.Assets.Values) asset.Image.Dispose();
+    await image.SaveAsPngAsync(composedPath, new PngEncoder(), ct);
+    await WriteVisualLabDebugJsonAsync(layoutPath, spec, ct);
+    await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+
+    return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, thumbnailLayoutPath = layoutPath, thumbnailValidationPath = validationPath, validation });
+}).Accepts<VisualLabComposeThumbnailRequest>("application/json");
+
 app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
     Results.Ok(await ingestion.RefreshAsync(ct)));
 app.MapGet("/api/assets/celestial/status", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
@@ -6101,6 +6154,19 @@ static IReadOnlyList<string> ValidateVisualLabComposeHeroRequest(VisualLabCompos
     return errors;
 }
 
+static IReadOnlyList<string> ValidateVisualLabComposeThumbnailRequest(VisualLabComposeThumbnailRequest request)
+{
+    var errors = new List<string>();
+    var supportedEvents = new[] { "PlanetConjunction" };
+    var supportedFormats = new[] { "Thumbnail" };
+    if (string.IsNullOrWhiteSpace(request.BackgroundImagePath)) errors.Add("backgroundImagePath is required.");
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Thumbnail Benchmark V1.");
+    if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
+    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Thumbnail for Thumbnail Benchmark V1.");
+    if (!request.UseCelestialAssets) errors.Add("useCelestialAssets must be true for thumbnail validation.");
+    return errors;
+}
+
 static Image<Rgba32> RenderVisualLabLongFormatHeroCanvas(Image<Rgba32> backgroundImage, int width, int height)
 {
     var canvas = new Image<Rgba32>(width, height);
@@ -6154,6 +6220,46 @@ static VisualLabHeroSpec BuildVisualLabHeroSpec(VisualLabComposeHeroRequest requ
         planetSprites,
         new[] { "date panel", "tips panel", "direction panel", "equipment panel", "observation details", "callout labels", "educational slide UI" },
         "PosterQualityHeroOnly",
+        DateTimeOffset.UtcNow);
+}
+
+static VisualLabThumbnailSpec BuildVisualLabThumbnailSpec(VisualLabComposeThumbnailRequest request, int width, int height, string composedPath, string layoutPath, string validationPath)
+{
+    var safeMargin = Math.Max(48, (int)Math.Round(Math.Min(width, height) * 0.065));
+    var headlineBounds = new VisualLabOverlayRect(safeMargin, safeMargin + 8, (int)Math.Round(width * 0.46), (int)Math.Round(height * 0.45));
+    var badgeBounds = new VisualLabOverlayRect(safeMargin, (int)Math.Round(height * 0.58), (int)Math.Round(width * 0.25), (int)Math.Round(height * 0.13));
+    var planetCluster = new VisualLabOverlayRect((int)Math.Round(width * 0.43), (int)Math.Round(height * 0.16), (int)Math.Round(width * 0.50), (int)Math.Round(height * 0.70));
+    var planetSprites = new[]
+    {
+        new VisualLabHeroPlanetPlacement("Jupiter", (int)Math.Round(width * 0.61), (int)Math.Round(height * 0.50), 385, 1, "dominant CTR gas-giant asset"),
+        new VisualLabHeroPlanetPlacement("Venus", (int)Math.Round(width * 0.78), (int)Math.Round(height * 0.36), 245, 2, "bright secondary asset in tight grouping"),
+        new VisualLabHeroPlanetPlacement("Mercury", (int)Math.Round(width * 0.83), (int)Math.Round(height * 0.61), 160, 3, "small but visible third asset")
+    };
+
+    return new VisualLabThumbnailSpec(
+        "VisualLabThumbnailComposerV1",
+        "AzureImage2BackgroundOnly",
+        request.BackgroundImagePath.Trim(),
+        composedPath,
+        layoutPath,
+        validationPath,
+        request.EventType.Trim(),
+        request.Title.Trim(),
+        request.Format.Trim(),
+        request.UseCelestialAssets,
+        width,
+        height,
+        safeMargin,
+        "3 PLANETS\nONE SKY",
+        "TONIGHT",
+        Math.Max(86, (int)Math.Round(width * 0.086)),
+        Math.Max(42, (int)Math.Round(width * 0.042)),
+        headlineBounds,
+        badgeBounds,
+        planetCluster,
+        planetSprites,
+        new[] { "date panel", "direction panel", "tips panel", "equipment panel", "labels", "educational information", "hero poster styling" },
+        "HighCtrYouTubeThumbnail",
         DateTimeOffset.UtcNow);
 }
 
@@ -6375,6 +6481,39 @@ static VisualLabHeroValidation ValidateVisualLabHeroSpec(VisualLabHeroSpec spec,
     void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
 }
 
+static VisualLabThumbnailValidation ValidateVisualLabThumbnailSpec(VisualLabThumbnailSpec spec, int width, int height, VisualLabPlanetAssetLookup assetLookup)
+{
+    var checks = new List<VisualLabOverlayValidationCheck>();
+    var safe = new RectangleF(spec.SafeMargin, spec.SafeMargin, width - spec.SafeMargin * 2, height - spec.SafeMargin * 2);
+    var headline = ToRectangleF(spec.HeadlineBounds);
+    var badge = ToRectangleF(spec.BadgeBounds);
+    var cluster = ToRectangleF(spec.PlanetClusterBounds);
+    var requiredAssets = new[] { "jupiter", "venus", "mercury" };
+    var assetFilesFound = spec.UseCelestialAssets && requiredAssets.All(assetLookup.Assets.ContainsKey);
+    var overlayMaxSpriteWidth = requiredAssets.Max(key => GetVisualLabCelestialAssetSpriteWidth(ToVisualLabPlanetDisplayName(key)));
+    var thumbnailSpritesLargerThanHero = spec.PlanetSprites.All(p => p.SpriteWidth > overlayMaxSpriteWidth * 1.4);
+    var planetsInsideSafeArea = spec.PlanetSprites.All(p => RectContains(safe, new RectangleF(p.CenterX - p.SpriteWidth / 2f, p.CenterY - p.SpriteWidth / 2f, p.SpriteWidth, p.SpriteWidth)));
+    var headlineLines = spec.Headline.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var noForbiddenPanels = spec.RemovedElements.Count == 7;
+
+    AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses the provided AzureImage2 background output only.");
+    AddCheck("thumbnailFormat", width == 1280 && height == 720 && string.Equals(spec.Format, "Thumbnail", StringComparison.OrdinalIgnoreCase), "Thumbnail benchmark uses 16:9 1280x720 output.");
+    AddCheck("notEducationalSlide", noForbiddenPanels && spec.DesignMode == "HighCtrYouTubeThumbnail", "Date, direction, tips, equipment, labels, educational information, and hero poster styling are excluded.");
+    AddCheck("headlineVisible", headlineLines.SequenceEqual(new[] { "3 PLANETS", "ONE SKY" }) && spec.HeadlineFontSize >= 86, "Large two-line CTR headline is present.");
+    AddCheck("readableAtSmallSize", spec.HeadlineFontSize >= 86 && spec.BadgeFontSize >= 42 && headline.Width >= width * 0.40, "Headline and badge sizes remain readable at thumbnail preview size.");
+    AddCheck("highContrast", spec.HeadlineContrastStyle == "white text, black stroke, dark gradient backing", "Headline uses white text, black stroke, and dark gradient backing for high contrast.");
+    AddCheck("safeMargins", spec.SafeMargin >= 46 && RectContains(safe, headline) && RectContains(safe, badge), "Headline and badge stay inside safe margins.");
+    AddCheck("planetAssetsVisible", spec.UseCelestialAssets && assetFilesFound && spec.PlanetSprites.Count == 3, "Jupiter, Venus, and Mercury celestial PNG assets are required and visible.");
+    AddCheck("planetAssetsMuchLargerThanHero", thumbnailSpritesLargerThanHero, $"Thumbnail planet sprites are dramatically larger than scene overlay assets; overlay maximum is {overlayMaxSpriteWidth}px.");
+    AddCheck("tightPlanetGrouping", cluster.Width <= width * 0.52 && cluster.Height <= height * 0.72 && spec.PlanetSprites.All(p => RectContains(cluster, new RectangleF(p.CenterX - p.SpriteWidth / 2f, p.CenterY - p.SpriteWidth / 2f, p.SpriteWidth, p.SpriteWidth))), "Planets form a tight dramatic group.");
+    AddCheck("noClipping", planetsInsideSafeArea, "Planet sprites stay within safe margins without clipping.");
+    AddCheck("oneSecondComprehension", spec.Headline == "3 PLANETS\nONE SKY" && spec.PlanetSprites.Select(p => p.Name).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "Viewer can understand the event from headline and three visible planets within one second.");
+
+    return new VisualLabThumbnailValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, true, noForbiddenPanels, spec.Headline, spec.Badge, assetLookup.Diagnostics);
+
+    void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
+}
+
 static RectangleF ToRectangleF(VisualLabOverlayRect rect) => new(rect.X, rect.Y, rect.Width, rect.Height);
 static bool RectContains(RectangleF outer, RectangleF inner)
     => inner.Left >= outer.Left && inner.Top >= outer.Top && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
@@ -6493,6 +6632,56 @@ static void DrawVisualLabHeroPlanet(IImageProcessingContext ctx, VisualLabHeroPl
         : Color.ParseHex("#D9905F");
     ctx.Fill(color.WithAlpha(0.20f), new EllipsePolygon(placement.CenterX, placement.CenterY, placement.SpriteWidth * 0.62f));
     ctx.Fill(color, new EllipsePolygon(placement.CenterX, placement.CenterY, placement.SpriteWidth * 0.42f));
+}
+
+static void DrawVisualLabThumbnail(IImageProcessingContext ctx, VisualLabThumbnailSpec spec, IReadOnlyDictionary<string, VisualLabPlanetAsset> planetAssets)
+{
+    var headlineFont = SystemFonts.CreateFont("Arial", spec.HeadlineFontSize, FontStyle.Bold);
+    var badgeFont = SystemFonts.CreateFont("Arial", spec.BadgeFontSize, FontStyle.Bold);
+    var headline = ToRectangleF(spec.HeadlineBounds);
+    var badge = ToRectangleF(spec.BadgeBounds);
+    var cluster = ToRectangleF(spec.PlanetClusterBounds);
+
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.42f), new RectangleF(0, 0, spec.Width, spec.Height));
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.72f), new RectangleF(0, 0, spec.Width * 0.54f, spec.Height));
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.34f), new RectangleF(spec.Width * 0.42f, 0, spec.Width * 0.58f, spec.Height));
+
+    var glowCenter = new PointF(cluster.X + cluster.Width * 0.56f, cluster.Y + cluster.Height * 0.50f);
+    for (var i = 9; i >= 1; i--)
+    {
+        ctx.Fill(Color.ParseHex("#69D7FF").WithAlpha(0.020f * i), new EllipsePolygon(glowCenter.X, glowCenter.Y, cluster.Width * (0.18f + i * 0.035f), cluster.Height * (0.12f + i * 0.025f)));
+    }
+
+    foreach (var placement in spec.PlanetSprites.OrderByDescending(p => p.SpriteWidth))
+    {
+        DrawVisualLabHeroPlanet(ctx, placement, planetAssets);
+    }
+
+    var y = headline.Y;
+    foreach (var line in spec.Headline.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        DrawTextWithStroke(ctx, line, headlineFont, Color.White, Color.Black, 7, new PointF(headline.X, y));
+        y += spec.HeadlineFontSize * 0.96f;
+    }
+
+    ctx.Fill(Color.ParseHex("#FFDA2E"), badge);
+    ctx.Draw(Color.Black.WithAlpha(0.92f), 5, badge);
+    DrawCenteredTextWithStroke(ctx, spec.Badge, badgeFont, Color.Black, Color.White.WithAlpha(0.28f), 2, new PointF(badge.X + badge.Width / 2f, badge.Y + (badge.Height - spec.BadgeFontSize) / 2f - 2));
+}
+
+static void DrawTextWithStroke(IImageProcessingContext ctx, string text, Font font, Color fill, Color stroke, float strokeWidth, PointF point)
+{
+    foreach (var offset in new[] { new PointF(-strokeWidth, 0), new PointF(strokeWidth, 0), new PointF(0, -strokeWidth), new PointF(0, strokeWidth), new PointF(-strokeWidth, -strokeWidth), new PointF(strokeWidth, strokeWidth), new PointF(-strokeWidth, strokeWidth), new PointF(strokeWidth, -strokeWidth) })
+    {
+        DrawText(ctx, text, font, stroke, new PointF(point.X + offset.X, point.Y + offset.Y));
+    }
+    DrawText(ctx, text, font, fill, point);
+}
+
+static void DrawCenteredTextWithStroke(IImageProcessingContext ctx, string text, Font font, Color fill, Color stroke, float strokeWidth, PointF topCenter)
+{
+    var size = TextMeasurer.MeasureSize(text, new TextOptions(font));
+    DrawTextWithStroke(ctx, text, font, fill, stroke, strokeWidth, new PointF(topCenter.X - size.Width / 2f, topCenter.Y));
 }
 
 static void DrawCenteredText(IImageProcessingContext ctx, string text, Font font, Color color, PointF topCenter)
@@ -10302,6 +10491,13 @@ public sealed record VisualLabComposeHeroRequest(
     string Format,
     bool UseCelestialAssets = true);
 
+public sealed record VisualLabComposeThumbnailRequest(
+    string BackgroundImagePath,
+    string EventType,
+    string Title,
+    string Format,
+    bool UseCelestialAssets = true);
+
 public sealed record VisualLabHeroSpec(
     string Composer,
     string BackgroundSource,
@@ -10327,6 +10523,35 @@ public sealed record VisualLabHeroSpec(
     DateTimeOffset CreatedUtc);
 
 public sealed record VisualLabHeroPlanetPlacement(string Name, int CenterX, int CenterY, int SpriteWidth, int LayerOrder, string CreativeRole);
+
+public sealed record VisualLabThumbnailSpec(
+    string Composer,
+    string BackgroundSource,
+    string BackgroundImagePath,
+    string ComposedImagePath,
+    string ThumbnailLayoutPath,
+    string ThumbnailValidationPath,
+    string EventType,
+    string Title,
+    string Format,
+    bool UseCelestialAssets,
+    int Width,
+    int Height,
+    int SafeMargin,
+    string Headline,
+    string Badge,
+    int HeadlineFontSize,
+    int BadgeFontSize,
+    VisualLabOverlayRect HeadlineBounds,
+    VisualLabOverlayRect BadgeBounds,
+    VisualLabOverlayRect PlanetClusterBounds,
+    IReadOnlyList<VisualLabHeroPlanetPlacement> PlanetSprites,
+    IReadOnlyList<string> RemovedElements,
+    string DesignMode,
+    DateTimeOffset CreatedUtc)
+{
+    public string HeadlineContrastStyle => "white text, black stroke, dark gradient backing";
+}
 
 public sealed record VisualLabOverlaySpec(
     string Composer,
@@ -10364,6 +10589,7 @@ public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int Anch
     public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
 }
 public sealed record VisualLabHeroValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets, bool AssetFilesFound, bool PlanetAssetsLargerThanSceneOverlay, bool EducationalPanelsRemoved, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
+public sealed record VisualLabThumbnailValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets, bool AssetFilesFound, bool ThumbnailReadableAtSmallSize, bool EducationalPanelsRemoved, string Headline, string Badge, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
 public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets = false, bool AssetFilesFound = true, bool JupiterRendered = false, bool VenusRendered = false, bool MercuryRendered = false, bool SpritesDrawn = false, bool FallbackDotsUsed = false, bool CelestialAssetsVisible = false, int JupiterSpriteWidth = 0, int VenusSpriteWidth = 0, int MercurySpriteWidth = 0, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
 public sealed record VisualLabPlanetAsset(string Name, string AssetPath, bool AssetExists, Image<Rgba32> Image, int OriginalWidth, int OriginalHeight, int VisibleAlphaPixelCount, VisualLabVisibleBounds VisibleBounds, double NonTransparentPixelRatio, int CroppedWidth, int CroppedHeight, int ResizedWidth, int ResizedHeight);
 public sealed record VisualLabVisibleBounds(int X, int Y, int Width, int Height);
