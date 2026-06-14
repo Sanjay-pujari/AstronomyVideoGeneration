@@ -657,7 +657,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, cancellationToken);
+                await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, ResolveWorkingDirectoryRoot(), cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
                 thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
             }
@@ -815,7 +815,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ];
     }
 
-    private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
@@ -875,7 +875,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ctx.DrawText("Dark location  |  Lie back  |  20 min eyes  |  Dress warm", smallFont, Color.White, new PointF(85, 970));
             }
         });
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? workingDirectoryRoot);
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
