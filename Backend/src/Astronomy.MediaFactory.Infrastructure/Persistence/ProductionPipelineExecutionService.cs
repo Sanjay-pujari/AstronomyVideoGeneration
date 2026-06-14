@@ -2623,6 +2623,11 @@ public sealed partial class ProductionPipelineExecutionService(
             longSceneCount = phase10SceneAssetDiagnostics?.LongSceneCount,
             shortPngCount = phase10SceneAssetDiagnostics?.ShortPngCount,
             longPngCount = phase10SceneAssetDiagnostics?.LongPngCount,
+            legacyArtifactCheckUsed = phase10SceneAssetDiagnostics?.LegacyArtifactCheckUsed,
+            v2ArtifactCheckUsed = phase10SceneAssetDiagnostics?.V2ArtifactCheckUsed,
+            validatedShortFinalPaths = phase10SceneAssetDiagnostics?.ValidatedShortFinalPaths,
+            validatedLongFinalPaths = phase10SceneAssetDiagnostics?.ValidatedLongFinalPaths,
+            missingFinalPaths = phase10SceneAssetDiagnostics?.MissingFinalPaths,
             phase10SceneAssetDiagnostics,
             pngCount = phase8SceneVariantDiagnostics?.PngCount,
             sceneDirectoryCount = phase8SceneVariantDiagnostics?.SceneDirectoryCount,
@@ -2989,13 +2994,13 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var diagnostics = BuildPhase10SceneAssetDiagnostics(sceneRoot);
         var errors = new List<string>();
-        ValidatePhase10SceneAssetProfile(diagnostics.ShortRoot, "short", diagnostics.ShortSceneCount, diagnostics.ShortPngCount, errors);
-        ValidatePhase10SceneAssetProfile(diagnostics.LongRoot, "long", diagnostics.LongSceneCount, diagnostics.LongPngCount, errors);
+        ValidatePhase10SceneAssetProfile(diagnostics.ShortRoot, "short", diagnostics.ShortSceneCount, diagnostics.ShortPngCount, diagnostics.MissingFinalPaths, errors);
+        ValidatePhase10SceneAssetProfile(diagnostics.LongRoot, "long", diagnostics.LongSceneCount, diagnostics.LongPngCount, diagnostics.MissingFinalPaths, errors);
         if (errors.Count > 0)
             throw new InvalidOperationException("Scene asset validation failed: " + string.Join("; ", errors));
     }
 
-    private static void ValidatePhase10SceneAssetProfile(string root, string profile, int sceneCount, int pngCount, List<string> errors)
+    private static void ValidatePhase10SceneAssetProfile(string root, string profile, int sceneCount, int pngCount, IReadOnlyList<string> missingFinalPaths, List<string> errors)
     {
         if (!Directory.Exists(root))
         {
@@ -3008,14 +3013,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (pngCount != 6)
             errors.Add($"{profile} scene asset validation expected 6 final PNGs but found {pngCount} in {NormalizePath(root)}");
 
-        var missingFinals = Directory.EnumerateDirectories(root, "scene-*", SearchOption.TopDirectoryOnly)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(directory => new
-            {
-                ExpectedFinal = Path.Combine(directory, $"{Path.GetFileName(directory)}-final.png")
-            })
-            .Where(item => !File.Exists(item.ExpectedFinal))
-            .Select(item => NormalizePath(item.ExpectedFinal))
+        var normalizedRoot = NormalizePath(root).TrimEnd('/');
+        var missingFinals = missingFinalPaths
+            .Where(path => path.StartsWith(normalizedRoot + "/", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (missingFinals.Length > 0)
             errors.Add($"{profile} scene asset directories missing required final PNGs: {string.Join(", ", missingFinals)}");
@@ -3030,6 +3030,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var longRoot = Path.Combine(sceneRoot, "scene-assets", "long");
         var checkedPaths = new[] { shortRoot, longRoot };
         var selectedValidationPath = checkedPaths.FirstOrDefault(Directory.Exists) ?? shortRoot;
+        var validatedShortFinalPaths = BuildPhase10ExpectedFinalPaths(shortRoot);
+        var validatedLongFinalPaths = BuildPhase10ExpectedFinalPaths(longRoot);
+        var missingFinalPaths = validatedShortFinalPaths
+            .Concat(validatedLongFinalPaths)
+            .Where(path => !File.Exists(path))
+            .Select(NormalizePath)
+            .ToArray();
         return new Phase10SceneAssetDiagnostics(
             CheckedPaths: checkedPaths.Select(NormalizePath).ToArray(),
             SelectedValidationPath: NormalizePath(selectedValidationPath),
@@ -3038,8 +3045,19 @@ public sealed partial class ProductionPipelineExecutionService(
             ShortSceneCount: CountPhase10SceneDirectories(shortRoot),
             LongSceneCount: CountPhase10SceneDirectories(longRoot),
             ShortPngCount: CountPhase10FinalPngs(shortRoot),
-            LongPngCount: CountPhase10FinalPngs(longRoot));
+            LongPngCount: CountPhase10FinalPngs(longRoot),
+            LegacyArtifactCheckUsed: false,
+            V2ArtifactCheckUsed: true,
+            ValidatedShortFinalPaths: validatedShortFinalPaths.Select(NormalizePath).ToArray(),
+            ValidatedLongFinalPaths: validatedLongFinalPaths.Select(NormalizePath).ToArray(),
+            MissingFinalPaths: missingFinalPaths);
     }
+
+    private static IReadOnlyList<string> BuildPhase10ExpectedFinalPaths(string root)
+        => Enumerable.Range(1, 6)
+            .Select(sceneNumber => $"scene-{sceneNumber:000}")
+            .Select(sceneId => Path.Combine(root, sceneId, $"{sceneId}-final.png"))
+            .ToArray();
 
     private static int CountPhase10SceneDirectories(string root)
         => Directory.Exists(root)
@@ -3060,7 +3078,12 @@ public sealed partial class ProductionPipelineExecutionService(
         int ShortSceneCount,
         int LongSceneCount,
         int ShortPngCount,
-        int LongPngCount);
+        int LongPngCount,
+        bool LegacyArtifactCheckUsed,
+        bool V2ArtifactCheckUsed,
+        IReadOnlyList<string> ValidatedShortFinalPaths,
+        IReadOnlyList<string> ValidatedLongFinalPaths,
+        IReadOnlyList<string> MissingFinalPaths);
 
     private sealed record Phase12ThumbnailDiagnostics(
         string CurrentEventLock,
