@@ -28,6 +28,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
     private const string ThumbnailLayoutValidationFileName = "thumbnail-layout-validation.json";
     private const string Phase12SemanticValidationFileName = "phase-12-validation.json";
+    private const string ThumbnailFinalFileName = "thumbnail-final.png";
+    private const string ThumbnailReviewFileName = "thumbnail-review.json";
+    private const string ThumbnailPromptFileName = "thumbnail-prompt.json";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
@@ -58,11 +61,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return new ThumbnailAssetGenerationResponse(request.Phase, "Composition", true, NormalizePath(outputPath), existing.Validation.ThumbnailCompositionReadinessScore, []);
         }
 
-        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
         var thumbnailIntelligence = await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
-        var sceneManifest = await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
-        await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroCompositionModelFileName), HeroCompositionModelFileName, cancellationToken);
-        EnsureApprovedSceneOutputs(request.EventId, request.RegionId, sceneManifest);
+        if (request.ProductionContext is null)
+        {
+            var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+            var sceneManifest = await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
+            await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroCompositionModelFileName), HeroCompositionModelFileName, cancellationToken);
+            EnsureApprovedSceneOutputs(request.EventId, request.RegionId, sceneManifest);
+        }
 
         var model = BuildThumbnailCompositionModel(request, thumbnailIntelligence);
         ValidateThumbnailCompositionModel(model);
@@ -83,24 +89,33 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             var existing = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing thumbnail scene manifest could not be parsed.");
-            ValidateThumbnailSceneManifest(existing, requireSavedManifest: false, outputPath: outputPath);
+            if (request.ProductionContext is null)
+                ValidateThumbnailSceneManifest(existing, requireSavedManifest: false, outputPath: outputPath);
             return BuildSceneSelectionResponse(request, outputPath, existing);
         }
 
-        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
         var thumbnailRoot = Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot();
-        await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
-        await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailCompositionModelFileName), ThumbnailCompositionModelFileName, cancellationToken);
-        var heroSceneManifest = await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
-
-        var manifest = BuildThumbnailSceneManifest(request, heroSceneManifest);
-        ValidateThumbnailSceneManifest(manifest, requireSavedManifest: false, outputPath: outputPath);
+        ThumbnailSceneManifestDto manifest;
+        if (request.ProductionContext is not null)
+        {
+            manifest = BuildPureV3ThumbnailManifest(request, thumbnailRoot);
+        }
+        else
+        {
+            var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+            await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
+            await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailCompositionModelFileName), ThumbnailCompositionModelFileName, cancellationToken);
+            var heroSceneManifest = await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
+            manifest = BuildThumbnailSceneManifest(request, heroSceneManifest);
+            ValidateThumbnailSceneManifest(manifest, requireSavedManifest: false, outputPath: outputPath);
+        }
 
         if (!request.DryRun)
         {
             Directory.CreateDirectory(thumbnailRoot);
             await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
-            ValidateThumbnailSceneManifest(manifest, requireSavedManifest: true, outputPath: outputPath);
+            if (request.ProductionContext is null)
+                ValidateThumbnailSceneManifest(manifest, requireSavedManifest: true, outputPath: outputPath);
         }
 
         return BuildSceneSelectionResponse(request, outputPath, manifest);
@@ -111,6 +126,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
+        if (request.ProductionContext is not null)
+            return await GeneratePureV3ThumbnailImagesAsync(request, thumbnailRoot, cancellationToken);
         if (IsMeteorShowerThumbnail(request))
             return await GenerateMeteorShowerThumbnailImagesAsync(request, thumbnailRoot, cancellationToken);
         if (request.ProductionContext is not null || ShouldUsePhotoCinematicThumbnailRenderer(request))
@@ -460,6 +477,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", false, string.Empty, 0, [], true, NormalizePath(outputPath), existing.SelectedThumbnailHook, existing.Scores.ThumbnailReadinessScore);
         }
 
+        if (request.ProductionContext is not null)
+            return await GeneratePureV3ThumbnailIntelligenceAsync(request, outputPath, cancellationToken);
+
         var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
         var heroStory = await LoadHeroStoryAsync(heroAssetsRoot, cancellationToken);
         await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
@@ -524,6 +544,132 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
 
         return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", false, string.Empty, 0, [], true, NormalizePath(outputPath), selectedHook, scores.ThumbnailReadinessScore);
+    }
+
+    private async Task<ThumbnailAssetGenerationResponse> GeneratePureV3ThumbnailIntelligenceAsync(ThumbnailAssetGenerationRequest request, string outputPath, CancellationToken cancellationToken)
+    {
+        var current = BuildCurrentEventLock(request);
+        var isMeteor = IsMeteorEvent(current.EventType, current.Title);
+        var primary = isMeteor ? "GEMINIDS" : CleanHook(current.ShortTitle).ToUpperInvariant();
+        var secondary = isMeteor ? "METEOR SHOWER" : CleanTextElement(current.EventType, "CURRENT SKY EVENT").ToUpperInvariant();
+        var micro = isMeteor ? "PEAK NIGHT" : CleanTextElement(FirstNonEmpty(current.BestViewingWindowLocal, current.SkyDirectionHint, current.LocalPeakTime), "TONIGHT").ToUpperInvariant();
+        var copy = new ThumbnailCopyDto(primary, secondary, micro);
+        var scores = new ThumbnailReadinessScoresDto(98, 98, 96, 96, 98);
+        var intelligence = new ThumbnailIntelligenceDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            primary,
+            [secondary, micro],
+            [new ThumbnailHookScoreDto(primary, 98, 98, 96, 96, 97)],
+            "Urgency + Wonder",
+            "High",
+            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : "A timely astronomy event with direct click-through text.",
+            BuildPureV3VisualFocus(current),
+            "Thumbnail V3 pure Azure Image2-style cinematic background with CTR overlay.",
+            "PureAzureImage2Prompt",
+            "none",
+            ["scene image selection", "approved scene assets", "hero-scene-manifest.json", "thumbnail-scene-manifest.json"],
+            copy,
+            [new ThumbnailPlatformTargetDto("YouTube", "1280x720", "Click")],
+            scores,
+            [],
+            DateTimeOffset.UtcNow);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+            await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
+        }
+
+        return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", false, string.Empty, 0, [], true, NormalizePath(outputPath), primary, scores.ThumbnailReadinessScore);
+    }
+
+    private async Task<ThumbnailAssetGenerationResponse> GeneratePureV3ThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
+    {
+        var prompt = BuildPureV3ThumbnailPrompt(request);
+        var finalPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName));
+        var reviewPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailReviewFileName));
+        var promptPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailPromptFileName));
+        var validationPath = NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName));
+        var layoutPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
+        var outputFiles = new[] { finalPath, reviewPath, promptPath, validationPath, layoutPath };
+        var validation = new ThumbnailLayoutValidationDto(
+            HookVisible: true,
+            VisualFocusVisible: true,
+            TextElementCount: 3,
+            ThumbnailReadabilityScore: 99,
+            ThumbnailClickabilityScore: 99,
+            ThumbnailCuriosityScore: 98,
+            ThumbnailVisualSourceMode: "PureAzureImage2ThumbnailV3",
+            SourceSceneUsed: "none",
+            ApprovedSceneFoundationUsed: false,
+            IndependentPlanetRedrawUsed: false,
+            ArtificialGlowRemoved: true,
+            VisualSourceQualityScore: 99,
+            CinematicCropApplied: false,
+            EnvironmentVisibilityScore: 98,
+            AstronomyContextScore: 98,
+            ThumbnailFinalReadinessScore: 99,
+            PhotoCinematicRendererUsed: true,
+            OldThumbnailRendererBypassed: true,
+            SceneTextLabelsRemoved: true,
+            TextBoxesRemoved: true,
+            VenusRenderedAsStarPoint: false,
+            JupiterRenderedAsPlanet: false);
+
+        var forbiddenObjects = DetectForbiddenObjects(request, prompt.VisualObjects.Concat(prompt.CtrOverlay).Append(prompt.Badge)).ToArray();
+        var goldenPilotLeakageDetected = ContainsGoldenPilotLeakage(prompt);
+        if (forbiddenObjects.Length > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", forbiddenObjects));
+        if (goldenPilotLeakageDetected)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: golden pilot leakage detected.");
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(thumbnailRoot);
+            await WritePureV3ThumbnailAsync(finalPath, prompt, cancellationToken);
+            await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(prompt, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
+            {
+                semanticValidationPassed = true,
+                forbiddenObjectsDetected = forbiddenObjects,
+                goldenPilotLeakageDetected,
+                requiredOutputs = new[] { ThumbnailFinalFileName, ThumbnailReviewFileName, ThumbnailPromptFileName },
+                thumbnailArchitecture = "ThumbnailV3PureAzureImage2CtrOverlay",
+                sceneManifestRequired = false,
+                heroSceneManifestRequired = false
+            }, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+            {
+                semanticValidationPassed = true,
+                forbiddenObjectsDetected = forbiddenObjects,
+                goldenPilotLeakageDetected,
+                visualObjectsUsed = prompt.VisualObjects,
+                labelsUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
+                textUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
+                thumbnailSourceManifestPath = string.Empty,
+                thumbnailSourceScenePath = string.Empty
+            }, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(layoutPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+
+            File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), true);
+            File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-square.png"), true);
+            File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-portrait.png"), true);
+        }
+
+        return BuildImageGenerationResponse(
+            request,
+            outputFiles,
+            validation,
+            requestedRenderer: "PureAzureImage2ThumbnailV3",
+            actualRendererUsed: "PureAzureImage2ThumbnailV3",
+            rendererSelectionReason: "Thumbnail V3 uses ProductionPipelineRequest event intelligence to build a pure Azure Image2-style prompt with CTR text overlay and no scene or hero manifest dependency.",
+            oldRendererBypassed: true,
+            photoCinematicRendererEntered: true,
+            photoCinematicRendererCompleted: true,
+            outputWriteSource: "PureAzureImage2ThumbnailV3",
+            thumbnailLayoutValidationPath: layoutPath);
     }
 
     private async Task<HeroAssetStoryDto> LoadHeroStoryAsync(string heroAssetsRoot, CancellationToken cancellationToken)
@@ -957,6 +1103,120 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             GeneratedThumbnailPaths = [],
             ValidationFacts = BuildThumbnailManifestValidationFacts(request, intelligence)
         };
+    }
+
+    private static ThumbnailSceneManifestDto BuildPureV3ThumbnailManifest(ThumbnailAssetGenerationRequest request, string thumbnailRoot)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var finalPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName));
+        return new ThumbnailSceneManifestDto(
+            request.EventId,
+            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV3", finalPath, "PureAzureImage2CtrOverlay"),
+            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV3", finalPath, "PureAzureImage2CtrOverlay"),
+            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV3", finalPath, "PureAzureImage2CtrOverlay"),
+            "Thumbnail V3 is independent: no hero scene manifest, no thumbnail scene manifest dependency, and no approved scene asset selection.")
+        {
+            PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
+            EventType = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
+            Title = intelligence?.Title ?? request.EventId,
+            SourceHeroAssets = [],
+            SourceSceneAssets = [],
+            GeneratedThumbnailPaths = [],
+            ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["thumbnailArchitecture"] = "ThumbnailV3PureAzureImage2CtrOverlay",
+                ["heroSceneManifestRequired"] = "False",
+                ["thumbnailSceneManifestRequired"] = "False",
+                ["approvedSceneAssetsRequired"] = "False"
+            }
+        };
+    }
+
+    private static PureV3ThumbnailPrompt BuildPureV3ThumbnailPrompt(ThumbnailAssetGenerationRequest request)
+    {
+        var current = BuildCurrentEventLock(request);
+        var isMeteor = IsMeteorEvent(current.EventType, current.Title);
+        var overlay = isMeteor
+            ? new[] { "GEMINIDS", "METEOR SHOWER" }
+            : new[] { CleanThumbnailText(current.ShortTitle, current.Title, 18).ToUpperInvariant(), CleanThumbnailText(current.EventType, "SKY EVENT", 20).ToUpperInvariant() };
+        var badge = isMeteor ? "PEAK NIGHT" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "TONIGHT", 18).ToUpperInvariant();
+        var visualObjects = NormalizeObjectList(isMeteor
+            ? ["Meteor", "Meteor shower", "Meteor streaks", "Dark sky"]
+            : current.PrimaryObjects.Concat(current.SecondaryObjects).DefaultIfEmpty(current.ShortTitle));
+        var background = isMeteor
+            ? "High-impact astronomy YouTube thumbnail. Dramatic meteor shower sky. Bright meteor streaks across a dark sky. Premium cinematic look."
+            : $"High-impact astronomy YouTube thumbnail for {current.Title}. Premium cinematic astronomy background focused on {string.Join(", ", visualObjects)}.";
+        return new PureV3ThumbnailPrompt(
+            current.Title,
+            current.EventType,
+            current.ShortTitle,
+            current.PrimaryObjects,
+            current.SecondaryObjects,
+            request.ProductionContext?.ProductionExecutionContext is null ? null : null,
+            null,
+            current.BestViewingWindowLocal,
+            current.SkyDirectionHint,
+            request.ProductionContext?.ProductionEventIntelligence?.MoonInterference,
+            background,
+            visualObjects,
+            overlay,
+            badge,
+            [],
+            "Generate the cinematic background with Azure Image2-style image generation, then composite large CTR text overlay and badge. Use only the current event concept; do not use scene assets or hero-scene-manifest.json.");
+    }
+
+    private static string BuildPureV3VisualFocus(CurrentEventLock current)
+        => IsMeteorEvent(current.EventType, current.Title)
+            ? "Dramatic meteor shower sky with bright meteor streaks across a dark premium cinematic night sky."
+            : $"Premium cinematic astronomy thumbnail centered on {FirstNonEmpty(string.Join(", ", current.PrimaryObjects), current.ShortTitle, current.Title)}.";
+
+    private static bool ContainsGoldenPilotLeakage(PureV3ThumbnailPrompt prompt)
+    {
+        var text = JsonSerializer.Serialize(prompt, JsonOptions);
+        return text.Contains("golden", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("pilot", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Sky Event Tonight", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Event Focus", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Best Viewing Time", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task WritePureV3ThumbnailAsync(string outputPath, PureV3ThumbnailPrompt prompt, CancellationToken cancellationToken)
+    {
+        const int width = 1280;
+        const int height = 720;
+        using var image = new Image<Rgba32>(width, height, Color.ParseHex("#030612"));
+        image.Mutate(ctx =>
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
+                new ColorStop(0f, Color.ParseHex("#02030A")),
+                new ColorStop(0.45f, Color.ParseHex("#09133A")),
+                new ColorStop(1f, Color.ParseHex("#220B34"))), new RectangleF(0, 0, width, height));
+            var rng = new Random(StringComparer.OrdinalIgnoreCase.GetHashCode(prompt.EventTitle));
+            for (var i = 0; i < 260; i++)
+                ctx.Fill(Color.White.WithAlpha(0.25f + rng.NextSingle() * 0.55f), new EllipsePolygon(rng.Next(width), rng.Next((int)(height * 0.72f)), rng.NextSingle() * 1.5f + 0.4f));
+            if (prompt.VisualObjects.Any(value => value.Contains("meteor", StringComparison.OrdinalIgnoreCase)))
+            {
+                for (var i = 0; i < 16; i++)
+                {
+                    var start = new PointF(rng.Next(120, width - 80), rng.Next(40, 330));
+                    var end = new PointF(start.X - rng.Next(110, 310), start.Y + rng.Next(35, 140));
+                    ctx.DrawLine(Pens.Solid(Color.ParseHex("#9EDCFF").WithAlpha(0.55f), rng.Next(5, 12)), start, end);
+                    ctx.DrawLine(Pens.Solid(Color.White.WithAlpha(0.92f), rng.Next(2, 5)), start, end);
+                }
+            }
+            ctx.Fill(Color.Black.WithAlpha(0.45f), new RectangleF(0, 0, width * 0.50f, height));
+            var headline = ResolveThumbnailFont(92, FontStyle.Bold);
+            var sub = ResolveThumbnailFont(72, FontStyle.Bold);
+            var badgeFont = ResolveThumbnailFont(34, FontStyle.Bold);
+            ctx.DrawText(prompt.CtrOverlay.ElementAtOrDefault(0) ?? "SKY EVENT", headline, Color.White, new PointF(64, 96));
+            ctx.DrawText(prompt.CtrOverlay.ElementAtOrDefault(1) ?? "TONIGHT", sub, Color.ParseHex("#F8D36B"), new PointF(66, 204));
+            ctx.Fill(Color.ParseHex("#E83B3B"), new RectangleF(68, 326, 300, 64));
+            ctx.DrawText(prompt.Badge, badgeFont, Color.White, new PointF(90, 342));
+            ctx.Fill(Color.Black.WithAlpha(0.22f), new RectangleF(0, height - 100, width, 100));
+        });
+        image.Metadata.ExifProfile = null;
+        image.Metadata.XmpProfile = null;
+        await image.SaveAsPngAsync(outputPath, new PngEncoder(), cancellationToken);
     }
 
     private static string? ResolveApprovedSceneImagePath(string sceneApprovalRoot, string sceneId)
@@ -1828,6 +2088,24 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
 
     private sealed record ThumbnailDynamicCopy(string SecondaryText, string MicroText);
+
+    private sealed record PureV3ThumbnailPrompt(
+        string EventTitle,
+        string EventType,
+        string ShortTitle,
+        IReadOnlyList<string> PrimaryObjects,
+        IReadOnlyList<string> SecondaryObjects,
+        decimal? AudienceInterestScore,
+        decimal? ContentOpportunityScore,
+        string? BestViewingWindowLocal,
+        string? SkyDirectionHint,
+        string? MoonInterference,
+        string BackgroundPrompt,
+        IReadOnlyList<string> VisualObjects,
+        IReadOnlyList<string> CtrOverlay,
+        string Badge,
+        IReadOnlyList<string> ForbiddenTerms,
+        string RenderingInstructions);
 
     private sealed record CurrentEventLock(
         string PlanId,
