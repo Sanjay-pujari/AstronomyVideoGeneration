@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
@@ -13,7 +15,7 @@ using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions> renderingOptions, IVisualSourceResolver visualSourceResolver) : IThumbnailAssetIntelligenceService
+public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions> renderingOptions, IOptions<AzureOpenAIForImageOptions> imageOptions, IVisualSourceResolver visualSourceResolver) : IThumbnailAssetIntelligenceService
 {
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string ThumbnailAssetsDirectoryName = "thumbnail-assets";
@@ -31,6 +33,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailFinalFileName = "thumbnail-final.png";
     private const string ThumbnailReviewFileName = "thumbnail-review.json";
     private const string ThumbnailPromptFileName = "thumbnail-prompt.json";
+    private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
@@ -593,6 +596,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var promptPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailPromptFileName));
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName));
         var layoutPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
+        var diagnosticsPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName));
         var outputFiles = new[] { finalPath, reviewPath, promptPath, validationPath, layoutPath };
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
@@ -628,8 +632,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (!request.DryRun)
         {
             Directory.CreateDirectory(thumbnailRoot);
+            var finalPromptText = JsonSerializer.Serialize(prompt, JsonOptions);
+            WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
+            var thumbnailTotalStopwatch = Stopwatch.StartNew();
+            var thumbnailSaveStopwatch = Stopwatch.StartNew();
             await WritePureV3ThumbnailAsync(finalPath, prompt, cancellationToken);
-            await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(prompt, JsonOptions), cancellationToken);
+            thumbnailSaveStopwatch.Stop();
+            await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
             {
                 semanticValidationPassed = true,
@@ -659,11 +668,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), true);
             File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-square.png"), true);
             File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-portrait.png"), true);
+            thumbnailTotalStopwatch.Stop();
+            await WriteThumbnailGenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailSaveStopwatch.ElapsedMilliseconds, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
         }
 
         return BuildImageGenerationResponse(
             request,
-            outputFiles,
+            outputFiles.Append(diagnosticsPath).ToArray(),
             validation,
             requestedRenderer: "PureAzureImage2ThumbnailV3",
             actualRendererUsed: "PureAzureImage2ThumbnailV3",
@@ -673,6 +684,90 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             photoCinematicRendererCompleted: true,
             outputWriteSource: "PureAzureImage2ThumbnailV3",
             thumbnailLayoutValidationPath: layoutPath);
+    }
+
+    private static void WriteThumbnailGenerationConfigurationDiagnostics(string promptText, AzureOpenAIForImageOptions options, int width, int height, string promptPath, string diagnosticsPath)
+    {
+        var endpoint = options.Endpoint?.Trim() ?? string.Empty;
+        var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
+        Console.WriteLine("=================================================");
+        Console.WriteLine("THUMBNAIL IMAGE GENERATION CONFIGURATION");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine("Provider: AzureOpenAIForImage");
+        Console.WriteLine($"Deployment: {deployment}");
+        Console.WriteLine($"Model: {deployment}");
+        Console.WriteLine($"Endpoint: {endpoint}");
+        Console.WriteLine("ApiVersion: 2024-10-21");
+        Console.WriteLine($"Region: {ResolveRegion(endpoint)}");
+        Console.WriteLine($"ImageWidth: {width}");
+        Console.WriteLine($"ImageHeight: {height}");
+        Console.WriteLine("VisualStyle: PhotoCinematic");
+        Console.WriteLine($"PromptLength: {promptText.Length}");
+        Console.WriteLine("ThumbnailMode: PureAzureImage2ThumbnailV3");
+        Console.WriteLine("UseAzureImage2: False");
+        Console.WriteLine("UseFallbackRenderer: True");
+        Console.WriteLine();
+        Console.WriteLine("=================================================");
+        Console.WriteLine("PROMPT SENT TO THUMBNAIL IMAGE MODEL");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine(promptText);
+        Console.WriteLine();
+    }
+
+    private static async Task WriteThumbnailGenerationSummaryDiagnosticsAsync(string promptText, AzureOpenAIForImageOptions options, string imagePath, string promptPath, string diagnosticsPath, long imageSaveMs, long totalMs, CancellationToken cancellationToken)
+    {
+        var imageHash = File.Exists(imagePath) ? await ComputeSha256Async(imagePath, cancellationToken) : string.Empty;
+        var fileSize = File.Exists(imagePath) ? new FileInfo(imagePath).Length : 0;
+        var endpoint = options.Endpoint?.Trim() ?? string.Empty;
+        var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
+        Console.WriteLine("=================================================");
+        Console.WriteLine("THUMBNAIL IMAGE GENERATION PATH");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine("Renderer: PureAzureImage2ThumbnailV3LocalRenderer");
+        Console.WriteLine("FallbackRendererUsed: True");
+        Console.WriteLine("ProviderCalled: False");
+        Console.WriteLine("ProviderSucceeded: False");
+        Console.WriteLine("Azure Request Time: 0 ms");
+        Console.WriteLine("Image Download Time: 0 ms");
+        Console.WriteLine($"Image Save Time: {imageSaveMs} ms");
+        Console.WriteLine($"Total Time: {totalMs} ms");
+        Console.WriteLine();
+        Console.WriteLine("=================================================");
+        Console.WriteLine("THUMBNAIL IMAGE GENERATION SUMMARY");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine("Provider: AzureOpenAIForImage");
+        Console.WriteLine($"Deployment: {deployment}");
+        Console.WriteLine($"Model: {deployment}");
+        Console.WriteLine("Renderer: PureAzureImage2ThumbnailV3LocalRenderer");
+        Console.WriteLine("FallbackUsed: True");
+        Console.WriteLine($"PromptLength: {promptText.Length}");
+        Console.WriteLine("RequestMs: 0");
+        Console.WriteLine($"ImageHash: {imageHash}");
+        Console.WriteLine($"FileSize: {fileSize}");
+        Console.WriteLine($"ImagePath: {imagePath}");
+        Console.WriteLine($"PromptPath: {promptPath}");
+        Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
+        Console.WriteLine();
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 12, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "PhotoCinematic", finalPromptText = promptText, promptLength = promptText.Length, renderer = "PureAzureImage2ThumbnailV3LocalRenderer", fallbackRendererUsed = true, providerCalled = false, providerSucceeded = false, azureRequestMs = 0, imageDownloadMs = 0, imageSaveMs, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = "Azure Image2 provider is not called by Phase 12 Thumbnail; local renderer/compositor was used." }, JsonOptions), cancellationToken);
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string ResolveRegion(string endpoint)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)) return string.Empty;
+        var host = uri.Host;
+        var marker = ".openai.azure.com";
+        return host.EndsWith(marker, StringComparison.OrdinalIgnoreCase) ? host[..^marker.Length] : host;
     }
 
     private async Task<HeroAssetStoryDto> LoadHeroStoryAsync(string heroAssetsRoot, CancellationToken cancellationToken)

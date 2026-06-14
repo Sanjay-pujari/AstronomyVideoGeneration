@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using SixLabors.ImageSharp;
 using Astronomy.MediaFactory.Contracts;
@@ -20,6 +22,7 @@ public sealed class HeroAssetIntelligenceEngine(IHeroAssetStoryGenerator storyGe
 
 public sealed class HeroAssetStoryGenerator(
     IOptions<RenderingOptions> renderingOptions,
+    IOptions<AzureOpenAIForImageOptions> imageOptions,
     ILogger<HeroAssetStoryGenerator> logger,
     IHeroAssetSceneSelector sceneSelector,
     IHeroCompositionEngine compositionEngine) : IHeroAssetStoryGenerator
@@ -36,6 +39,8 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
     private const string HeroCompositionModelFileName = "hero-composition-model.json";
     private const string HeroLayoutValidationFileName = "hero-layout-validation.json";
+    private const string HeroPromptFileName = "hero-prompt.txt";
+    private const string HeroGenerationDiagnosticsFileName = "hero-generation-diagnostics.json";
     private const string HeroFileName = "hero-final.png";
     private const string HeroLandscapeFileName = "hero-landscape.png";
     private const string HeroSquareFileName = "hero-square.png";
@@ -397,8 +402,15 @@ public sealed class HeroAssetStoryGenerator(
                 throw new InvalidOperationException($"Hero layout validation was not generated at '{NormalizePath(layoutValidationPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(layoutValidationPath));
 
+            var promptPath = Path.Combine(heroAssetsRoot, HeroPromptFileName);
+            var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
+            var heroDiagnosticsStopwatch = Stopwatch.StartNew();
+            var heroImageSaveStopwatch = Stopwatch.StartNew();
+            WriteHeroGenerationConfigurationDiagnostics(compositionModel, imageOptions.Value, HeroImageSpecs[0].Width, HeroImageSpecs[0].Height, promptPath, diagnosticsPath);
+
             foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken))
                 generatedFiles.Add(imagePath);
+            heroImageSaveStopwatch.Stop();
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
             var landscapePath = Path.Combine(heroAssetsRoot, HeroLandscapeFileName);
@@ -407,6 +419,11 @@ public sealed class HeroAssetStoryGenerator(
                 File.Copy(landscapePath, heroPath, overwrite: true);
                 generatedFiles.Add(NormalizePath(heroPath));
             }
+
+            heroDiagnosticsStopwatch.Stop();
+            await WriteHeroGenerationSummaryDiagnosticsAsync(compositionModel, imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroImageSaveStopwatch.ElapsedMilliseconds, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
+            generatedFiles.Add(NormalizePath(promptPath));
+            generatedFiles.Add(NormalizePath(diagnosticsPath));
 
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
@@ -776,6 +793,94 @@ public sealed class HeroAssetStoryGenerator(
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
     }
 
+
+    private static void WriteHeroGenerationConfigurationDiagnostics(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, int width, int height, string promptPath, string diagnosticsPath)
+    {
+        var promptText = compositionModel.SceneBlock.Prompt ?? string.Empty;
+        var endpoint = options.Endpoint?.Trim() ?? string.Empty;
+        var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
+        Console.WriteLine("=================================================");
+        Console.WriteLine("HERO IMAGE GENERATION CONFIGURATION");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine("Provider: AzureOpenAIForImage");
+        Console.WriteLine($"Deployment: {deployment}");
+        Console.WriteLine($"Model: {deployment}");
+        Console.WriteLine($"Endpoint: {endpoint}");
+        Console.WriteLine("ApiVersion: 2024-10-21");
+        Console.WriteLine($"Region: {ResolveRegion(endpoint)}");
+        Console.WriteLine($"ImageWidth: {width}");
+        Console.WriteLine($"ImageHeight: {height}");
+        Console.WriteLine("VisualStyle: WarmTwilightHero");
+        Console.WriteLine($"PromptLength: {promptText.Length}");
+        Console.WriteLine("HeroMode: HeroAsset");
+        Console.WriteLine("UseAzureImage2: False");
+        Console.WriteLine("UseFallbackRenderer: True");
+        Console.WriteLine();
+        Console.WriteLine("=================================================");
+        Console.WriteLine("PROMPT SENT TO HERO IMAGE MODEL");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine(promptText);
+        Console.WriteLine();
+    }
+
+    private static async Task WriteHeroGenerationSummaryDiagnosticsAsync(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, string imagePath, string promptPath, string diagnosticsPath, long imageSaveMs, long totalMs, CancellationToken cancellationToken)
+    {
+        var promptText = compositionModel.SceneBlock.Prompt ?? string.Empty;
+        Directory.CreateDirectory(Path.GetDirectoryName(promptPath) ?? ResolveWorkingDirectoryRoot());
+        await File.WriteAllTextAsync(promptPath, promptText, cancellationToken);
+        var imageHash = File.Exists(imagePath) ? await ComputeSha256Async(imagePath, cancellationToken) : string.Empty;
+        var fileSize = File.Exists(imagePath) ? new FileInfo(imagePath).Length : 0;
+        var endpoint = options.Endpoint?.Trim() ?? string.Empty;
+        var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
+        Console.WriteLine("=================================================");
+        Console.WriteLine("HERO IMAGE GENERATION PATH");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine("Renderer: AstronomyVisualCompositionEngine");
+        Console.WriteLine("FallbackRendererUsed: True");
+        Console.WriteLine("ProviderCalled: False");
+        Console.WriteLine("ProviderSucceeded: False");
+        Console.WriteLine("Azure Request Time: 0 ms");
+        Console.WriteLine("Image Download Time: 0 ms");
+        Console.WriteLine($"Image Save Time: {imageSaveMs} ms");
+        Console.WriteLine($"Total Time: {totalMs} ms");
+        Console.WriteLine();
+        Console.WriteLine("=================================================");
+        Console.WriteLine("HERO IMAGE GENERATION SUMMARY");
+        Console.WriteLine("=================================================");
+        Console.WriteLine();
+        Console.WriteLine("Provider: AzureOpenAIForImage");
+        Console.WriteLine($"Deployment: {deployment}");
+        Console.WriteLine($"Model: {deployment}");
+        Console.WriteLine("Renderer: AstronomyVisualCompositionEngine");
+        Console.WriteLine("FallbackUsed: True");
+        Console.WriteLine($"PromptLength: {promptText.Length}");
+        Console.WriteLine("RequestMs: 0");
+        Console.WriteLine($"ImageHash: {imageHash}");
+        Console.WriteLine($"FileSize: {fileSize}");
+        Console.WriteLine($"ImagePath: {imagePath}");
+        Console.WriteLine($"PromptPath: {promptPath}");
+        Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
+        Console.WriteLine();
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "WarmTwilightHero", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AstronomyVisualCompositionEngine", fallbackRendererUsed = true, providerCalled = false, providerSucceeded = false, azureRequestMs = 0, imageDownloadMs = 0, imageSaveMs, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = "Azure Image2 provider is not called by Phase 11 Hero; local canvas composition renderer was used." }, JsonOptions), cancellationToken);
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string ResolveRegion(string endpoint)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)) return string.Empty;
+        var host = uri.Host;
+        var marker = ".openai.azure.com";
+        return host.EndsWith(marker, StringComparison.OrdinalIgnoreCase) ? host[..^marker.Length] : host;
+    }
 
     private static string? ResolveHeroBackgroundImagePath(HeroSceneManifestDto sceneManifest)
     {
