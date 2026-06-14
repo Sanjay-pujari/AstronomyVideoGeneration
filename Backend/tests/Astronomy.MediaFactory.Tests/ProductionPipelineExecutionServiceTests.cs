@@ -101,6 +101,17 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Equal(6, diagnosticsType.GetProperty("LongSceneCount")!.GetValue(diagnostics));
         Assert.Equal(6, diagnosticsType.GetProperty("ShortPngCount")!.GetValue(diagnostics));
         Assert.Equal(6, diagnosticsType.GetProperty("LongPngCount")!.GetValue(diagnostics));
+        Assert.Equal(false, diagnosticsType.GetProperty("LegacyArtifactCheckUsed")!.GetValue(diagnostics));
+        Assert.Equal(true, diagnosticsType.GetProperty("V2ArtifactCheckUsed")!.GetValue(diagnostics));
+
+        var validatedShortFinalPaths = Assert.IsAssignableFrom<IReadOnlyList<string>>(diagnosticsType.GetProperty("ValidatedShortFinalPaths")!.GetValue(diagnostics));
+        var validatedLongFinalPaths = Assert.IsAssignableFrom<IReadOnlyList<string>>(diagnosticsType.GetProperty("ValidatedLongFinalPaths")!.GetValue(diagnostics));
+        var missingFinalPaths = Assert.IsAssignableFrom<IReadOnlyList<string>>(diagnosticsType.GetProperty("MissingFinalPaths")!.GetValue(diagnostics));
+        Assert.Equal(6, validatedShortFinalPaths.Count);
+        Assert.Equal(6, validatedLongFinalPaths.Count);
+        Assert.Empty(missingFinalPaths);
+        Assert.Contains("scene-assets/short/scene-001/scene-001-final.png", validatedShortFinalPaths[0]);
+        Assert.Contains("scene-assets/long/scene-001/scene-001-final.png", validatedLongFinalPaths[0]);
     }
 
     [Fact]
@@ -116,6 +127,21 @@ public sealed class ProductionPipelineExecutionServiceTests
         var inner = Assert.IsType<InvalidOperationException>(exception.InnerException);
         Assert.Contains("long scene asset validation expected 6 final PNGs but found 5", inner.Message);
         Assert.Contains("scene-003-final.png", inner.Message);
+    }
+
+    [Fact]
+    public void Phase10SceneAssetValidation_PassesWithV2FinalPngsAndNoLegacyFlatArtifacts()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "astro-phase10-scene-assets", Guid.NewGuid().ToString("N"), "scene-approval-v3");
+        WritePhase10SceneAssets(root, "short", 6);
+        WritePhase10SceneAssets(root, "long", 6);
+
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase10SceneAssetCoverage", BindingFlags.NonPublic | BindingFlags.Static);
+        var exception = Record.Exception(() => method!.Invoke(null, [root]));
+
+        Assert.Null(exception);
+        Assert.False(File.Exists(Path.Combine(root, "short", "scene-001-final.png")));
+        Assert.False(File.Exists(Path.Combine(root, "long", "scene-001-final.png")));
     }
 
 
