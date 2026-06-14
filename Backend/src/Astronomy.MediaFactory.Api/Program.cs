@@ -5972,6 +5972,55 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
     return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, overlaySpecPath = specPath, overlayValidationPath = validationPath, overlayRenderDebugPath = renderDebugPath, validation });
 }).Accepts<VisualLabComposeOverlayRequest>("application/json");
 
+app.MapPost("/api/visual-lab/compose-hero", async Task<IResult> (VisualLabComposeHeroRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+{
+    if (environment.IsProduction())
+    {
+        return Results.NotFound(new { message = "The visual lab endpoint is available only in development or test environments." });
+    }
+
+    var validationErrors = ValidateVisualLabComposeHeroRequest(request);
+    if (validationErrors.Count > 0)
+    {
+        return Results.BadRequest(new { message = "Invalid visual lab hero compose request.", errors = validationErrors });
+    }
+
+    var backgroundPath = Path.GetFullPath(request.BackgroundImagePath.Trim());
+    if (!File.Exists(backgroundPath))
+    {
+        return Results.BadRequest(new { message = "AzureImage2 background image was not found.", backgroundImagePath = backgroundPath });
+    }
+
+    if (!Path.GetFileName(backgroundPath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { message = "backgroundImagePath must point to a Visual Lab AzureImage2 background output such as background-v1.png.", backgroundImagePath = backgroundPath });
+    }
+
+    using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
+    var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
+    var composedPath = Path.Combine(outputDirectory, "benchmark-hero-conjunction-v1.png");
+    var layoutPath = Path.Combine(outputDirectory, "hero-layout-v1.json");
+    var validationPath = Path.Combine(outputDirectory, "hero-validation-v1.json");
+    var spec = BuildVisualLabHeroSpec(request, image.Width, image.Height, composedPath, layoutPath, validationPath);
+    var assetLookup = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : VisualLabPlanetAssetLookup.Empty(environment);
+    var validation = ValidateVisualLabHeroSpec(spec, image.Width, image.Height, assetLookup);
+    if (!validation.IsValid)
+    {
+        foreach (var asset in assetLookup.Assets.Values) asset.Image.Dispose();
+        await WriteVisualLabDebugJsonAsync(layoutPath, spec, ct);
+        await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+        return Results.BadRequest(new { message = "Visual lab hero validation failed.", heroLayoutPath = layoutPath, heroValidationPath = validationPath, validation });
+    }
+
+    image.Mutate(ctx => DrawVisualLabHero(ctx, spec, assetLookup.Assets));
+    foreach (var asset in assetLookup.Assets.Values) asset.Image.Dispose();
+    await image.SaveAsPngAsync(composedPath, new PngEncoder(), ct);
+    await WriteVisualLabDebugJsonAsync(layoutPath, spec, ct);
+    await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
+
+    return Results.Ok(new { outputDirectory, backgroundImagePath = backgroundPath, composedPath, heroLayoutPath = layoutPath, heroValidationPath = validationPath, validation });
+}).Accepts<VisualLabComposeHeroRequest>("application/json");
+
 app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
     Results.Ok(await ingestion.RefreshAsync(ct)));
 app.MapGet("/api/assets/celestial/status", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
@@ -6032,6 +6081,57 @@ static IReadOnlyList<string> ValidateVisualLabComposeOverlayRequest(VisualLabCom
         }
     }
     return errors;
+}
+
+static IReadOnlyList<string> ValidateVisualLabComposeHeroRequest(VisualLabComposeHeroRequest request)
+{
+    var errors = new List<string>();
+    var supportedEvents = new[] { "PlanetConjunction" };
+    var supportedFormats = new[] { "Long" };
+    if (string.IsNullOrWhiteSpace(request.BackgroundImagePath)) errors.Add("backgroundImagePath is required.");
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Visual Lab Hero Benchmark V1.");
+    if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
+    if (string.IsNullOrWhiteSpace(request.Subtitle)) errors.Add("subtitle is required.");
+    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long for Visual Lab Hero Benchmark V1.");
+    if (!request.UseCelestialAssets) errors.Add("useCelestialAssets must be true for poster-quality hero validation.");
+    return errors;
+}
+
+static VisualLabHeroSpec BuildVisualLabHeroSpec(VisualLabComposeHeroRequest request, int width, int height, string composedPath, string layoutPath, string validationPath)
+{
+    var safeMargin = Math.Max(64, (int)Math.Round(Math.Min(width, height) * 0.07));
+    var titleBand = new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.19));
+    var heroScene = new VisualLabOverlayRect((int)Math.Round(width * 0.16), (int)Math.Round(height * 0.28), (int)Math.Round(width * 0.68), (int)Math.Round(height * 0.55));
+    var planetSprites = new[]
+    {
+        new VisualLabHeroPlanetPlacement("Jupiter", (int)Math.Round(width * 0.37), (int)Math.Round(height * 0.55), 315, 1, "largest warm gas-giant hero asset"),
+        new VisualLabHeroPlanetPlacement("Venus", (int)Math.Round(width * 0.56), (int)Math.Round(height * 0.46), 245, 2, "brilliant bright inner-planet hero asset"),
+        new VisualLabHeroPlanetPlacement("Mercury", (int)Math.Round(width * 0.68), (int)Math.Round(height * 0.59), 170, 3, "small but visible warm hero asset")
+    };
+
+    return new VisualLabHeroSpec(
+        "VisualLabHeroComposerV1",
+        "AzureImage2BackgroundOnly",
+        request.BackgroundImagePath.Trim(),
+        composedPath,
+        layoutPath,
+        validationPath,
+        request.EventType.Trim(),
+        request.Title.Trim(),
+        request.Subtitle.Trim(),
+        request.Format.Trim(),
+        request.UseCelestialAssets,
+        width,
+        height,
+        safeMargin,
+        Math.Max(62, (int)Math.Round(width * 0.046)),
+        Math.Max(34, (int)Math.Round(width * 0.025)),
+        titleBand,
+        heroScene,
+        planetSprites,
+        new[] { "date panel", "tips panel", "direction panel", "equipment panel", "observation details", "callout labels", "educational slide UI" },
+        "PosterQualityHeroOnly",
+        DateTimeOffset.UtcNow);
 }
 
 static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayRequest request, int width, int height, string composedPath, string specPath, string validationPath)
@@ -6223,6 +6323,35 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
     void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
 }
 
+static VisualLabHeroValidation ValidateVisualLabHeroSpec(VisualLabHeroSpec spec, int width, int height, VisualLabPlanetAssetLookup assetLookup)
+{
+    var checks = new List<VisualLabOverlayValidationCheck>();
+    var safe = new RectangleF(spec.SafeMargin, spec.SafeMargin, width - spec.SafeMargin * 2, height - spec.SafeMargin * 2);
+    var titleBand = ToRectangleF(spec.TitleBand);
+    var heroScene = ToRectangleF(spec.HeroScene);
+    var requiredAssets = new[] { "jupiter", "venus", "mercury" };
+    var assetFilesFound = spec.UseCelestialAssets && requiredAssets.All(assetLookup.Assets.ContainsKey);
+    var noEducationalPanels = spec.RemovedEducationalElements.Count == 7;
+    var overlayMaxSpriteWidth = requiredAssets.Max(key => GetVisualLabCelestialAssetSpriteWidth(ToVisualLabPlanetDisplayName(key)));
+    var heroSpritesLargerThanOverlay = spec.PlanetSprites.All(p => p.SpriteWidth > overlayMaxSpriteWidth);
+    var planetsInsideHeroScene = spec.PlanetSprites.All(p => RectContains(heroScene, new RectangleF(p.CenterX - p.SpriteWidth / 2f, p.CenterY - p.SpriteWidth / 2f, p.SpriteWidth, p.SpriteWidth)));
+
+    AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses the provided AzureImage2 background output only.");
+    AddCheck("longFormat", width == 1920 && height == 1080 && string.Equals(spec.Format, "Long", StringComparison.OrdinalIgnoreCase), "Hero benchmark uses Long 1920x1080 format.");
+    AddCheck("notEducationalSlide", noEducationalPanels && spec.DesignMode == "PosterQualityHeroOnly", "Date, tips, direction, equipment, observation-detail, callout-label, and educational UI panels are excluded.");
+    AddCheck("titleAndSubtitleOnly", !string.IsNullOrWhiteSpace(spec.Title) && !string.IsNullOrWhiteSpace(spec.Subtitle), "Only the title and subtitle text hierarchy is retained.");
+    AddCheck("titleBandSafe", RectContains(safe, titleBand), "Top title band is inside safe margins.");
+    AddCheck("heroSceneCentered", RectContains(safe, heroScene) && heroScene.Left > spec.SafeMargin && heroScene.Right < width - spec.SafeMargin, "Large conjunction scene is centered with poster margins.");
+    AddCheck("planetAssetsRequired", spec.UseCelestialAssets && assetFilesFound, "Celestial PNG assets are present for Jupiter, Venus, and Mercury.");
+    AddCheck("planetAssetsLargerThanSceneOverlay", heroSpritesLargerThanOverlay, $"Hero planet sprite widths exceed Scene Overlay maximum width of {overlayMaxSpriteWidth}px.");
+    AddCheck("planetAssetsInsideHeroScene", planetsInsideHeroScene, "Large planet assets sit within the central conjunction scene.");
+    AddCheck("posterQualityComposition", spec.TitleFontSize >= 62 && spec.SubtitleFontSize >= 34 && spec.PlanetSprites.Count == 3, "Composition targets premium NASA poster / National Geographic cover scale.");
+
+    return new VisualLabHeroValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, heroSpritesLargerThanOverlay, noEducationalPanels, assetLookup.Diagnostics);
+
+    void AddCheck(string name, bool passed, string message) => checks.Add(new VisualLabOverlayValidationCheck(name, passed, message));
+}
+
 static RectangleF ToRectangleF(VisualLabOverlayRect rect) => new(rect.X, rect.Y, rect.Width, rect.Height);
 static bool RectContains(RectangleF outer, RectangleF inner)
     => inner.Left >= outer.Left && inner.Top >= outer.Top && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
@@ -6293,6 +6422,60 @@ static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySp
     DrawText(ctx, "Jupiter, Venus and Mercury", titleFont, Color.White, new PointF(header.X + 34, header.Y + 24));
     DrawText(ctx, "PLANET CONJUNCTION • VISUAL OBSERVING GUIDE", subtitleFont, Color.ParseHex("#FFE08A"), new PointF(header.X + 38, header.Y + 24 + spec.TitleFontSize + 10));
     DrawText(ctx, "near the western horizon", smallFont, Color.ParseHex("#DDF7FF"), new PointF(header.X + 40, header.Bottom - 34));
+}
+
+static void DrawVisualLabHero(IImageProcessingContext ctx, VisualLabHeroSpec spec, IReadOnlyDictionary<string, VisualLabPlanetAsset> planetAssets)
+{
+    var titleFont = SystemFonts.CreateFont("Arial", spec.TitleFontSize, FontStyle.Bold);
+    var subtitleFont = SystemFonts.CreateFont("Arial", spec.SubtitleFontSize, FontStyle.Regular);
+    var titleBand = ToRectangleF(spec.TitleBand);
+    var heroScene = ToRectangleF(spec.HeroScene);
+
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.30f), new RectangleF(0, 0, spec.Width, spec.Height));
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.38f), new RectangleF(0, 0, spec.Width, (float)(spec.Height * 0.30)));
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.34f), new RectangleF(0, (float)(spec.Height * 0.76), spec.Width, (float)(spec.Height * 0.24)));
+
+    var glowCenter = new PointF(spec.Width * 0.52f, spec.Height * 0.55f);
+    for (var i = 8; i >= 1; i--)
+    {
+        ctx.Fill(Color.ParseHex("#6FC9FF").WithAlpha(0.018f * i), new EllipsePolygon(glowCenter.X, glowCenter.Y, heroScene.Width * (0.20f + i * 0.05f), heroScene.Height * (0.09f + i * 0.025f)));
+    }
+
+    foreach (var placement in spec.PlanetSprites.OrderByDescending(p => p.SpriteWidth))
+    {
+        DrawVisualLabHeroPlanet(ctx, placement, planetAssets);
+    }
+
+    var title = spec.Title.ToUpperInvariant().Replace(", ", " • ", StringComparison.Ordinal);
+    DrawCenteredText(ctx, title, titleFont, Color.White, new PointF(titleBand.X + titleBand.Width / 2f, titleBand.Y + 10));
+    DrawCenteredText(ctx, spec.Subtitle, subtitleFont, Color.ParseHex("#FFE08A"), new PointF(titleBand.X + titleBand.Width / 2f, titleBand.Y + spec.TitleFontSize + 26));
+    ctx.DrawLine(Color.ParseHex("#FFE08A").WithAlpha(0.72f), 3, new PointF(spec.Width * 0.34f, titleBand.Y + spec.TitleFontSize + spec.SubtitleFontSize + 52), new PointF(spec.Width * 0.66f, titleBand.Y + spec.TitleFontSize + spec.SubtitleFontSize + 52));
+}
+
+static void DrawVisualLabHeroPlanet(IImageProcessingContext ctx, VisualLabHeroPlanetPlacement placement, IReadOnlyDictionary<string, VisualLabPlanetAsset> planetAssets)
+{
+    var key = NormalizeVisualLabCelestialObjectName(placement.Name);
+    if (planetAssets.TryGetValue(key, out var asset))
+    {
+        var height = Math.Max(1, (int)Math.Round(placement.SpriteWidth * (asset.ResizedHeight / (double)Math.Max(asset.ResizedWidth, 1))));
+        using var resized = asset.Image.Clone(x => x.Resize(placement.SpriteWidth, height));
+        var drawPoint = new Point((int)Math.Round(placement.CenterX - placement.SpriteWidth / 2.0), (int)Math.Round(placement.CenterY - height / 2.0));
+        ctx.Fill(Color.White.WithAlpha(0.09f), new EllipsePolygon(placement.CenterX, placement.CenterY, placement.SpriteWidth * 0.72f, height * 0.54f));
+        ctx.DrawImage(resized, drawPoint, 1f);
+        return;
+    }
+
+    var color = string.Equals(placement.Name, "Jupiter", StringComparison.OrdinalIgnoreCase) ? Color.ParseHex("#F3B36C")
+        : string.Equals(placement.Name, "Venus", StringComparison.OrdinalIgnoreCase) ? Color.ParseHex("#FFF2B7")
+        : Color.ParseHex("#D9905F");
+    ctx.Fill(color.WithAlpha(0.20f), new EllipsePolygon(placement.CenterX, placement.CenterY, placement.SpriteWidth * 0.62f));
+    ctx.Fill(color, new EllipsePolygon(placement.CenterX, placement.CenterY, placement.SpriteWidth * 0.42f));
+}
+
+static void DrawCenteredText(IImageProcessingContext ctx, string text, Font font, Color color, PointF topCenter)
+{
+    var size = TextMeasurer.MeasureSize(text, new TextOptions(font));
+    DrawText(ctx, text, font, color, new PointF(topCenter.X - size.Width / 2f, topCenter.Y));
 }
 
 
@@ -10088,6 +10271,40 @@ public sealed record VisualLabComposeOverlayRequest(
     IReadOnlyList<VisualLabOverlayObjectPosition>? Objects,
     bool UseCelestialAssets = false);
 
+public sealed record VisualLabComposeHeroRequest(
+    string BackgroundImagePath,
+    string EventType,
+    string Title,
+    string Subtitle,
+    string Format,
+    bool UseCelestialAssets = true);
+
+public sealed record VisualLabHeroSpec(
+    string Composer,
+    string BackgroundSource,
+    string BackgroundImagePath,
+    string ComposedImagePath,
+    string HeroLayoutPath,
+    string HeroValidationPath,
+    string EventType,
+    string Title,
+    string Subtitle,
+    string Format,
+    bool UseCelestialAssets,
+    int Width,
+    int Height,
+    int SafeMargin,
+    int TitleFontSize,
+    int SubtitleFontSize,
+    VisualLabOverlayRect TitleBand,
+    VisualLabOverlayRect HeroScene,
+    IReadOnlyList<VisualLabHeroPlanetPlacement> PlanetSprites,
+    IReadOnlyList<string> RemovedEducationalElements,
+    string DesignMode,
+    DateTimeOffset CreatedUtc);
+
+public sealed record VisualLabHeroPlanetPlacement(string Name, int CenterX, int CenterY, int SpriteWidth, int LayerOrder, string CreativeRole);
+
 public sealed record VisualLabOverlaySpec(
     string Composer,
     string BackgroundSource,
@@ -10123,6 +10340,7 @@ public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int Anch
 {
     public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
 }
+public sealed record VisualLabHeroValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets, bool AssetFilesFound, bool PlanetAssetsLargerThanSceneOverlay, bool EducationalPanelsRemoved, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
 public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets = false, bool AssetFilesFound = true, bool JupiterRendered = false, bool VenusRendered = false, bool MercuryRendered = false, bool SpritesDrawn = false, bool FallbackDotsUsed = false, bool CelestialAssetsVisible = false, int JupiterSpriteWidth = 0, int VenusSpriteWidth = 0, int MercurySpriteWidth = 0, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
 public sealed record VisualLabPlanetAsset(string Name, string AssetPath, bool AssetExists, Image<Rgba32> Image, int OriginalWidth, int OriginalHeight, int VisibleAlphaPixelCount, VisualLabVisibleBounds VisibleBounds, double NonTransparentPixelRatio, int CroppedWidth, int CroppedHeight, int ResizedWidth, int ResizedHeight);
 public sealed record VisualLabVisibleBounds(int X, int Y, int Width, int Height);
