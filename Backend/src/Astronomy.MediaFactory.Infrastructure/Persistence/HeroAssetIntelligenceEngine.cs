@@ -899,7 +899,7 @@ public sealed class HeroAssetStoryGenerator(
     {
         var eventTitle = CleanHeroPromptText(FirstNonEmpty(intelligence?.Title, heroStory.HeroHook, selectedHook, "astronomy sky event"));
         var eventType = CleanHeroPromptText(FirstNonEmpty(intelligence?.EventType, heroStory.HeroMessage, "astronomy event"));
-        var objectText = CleanHeroPromptText(string.Join(", ", intelligence?.PrimaryObjects?.Concat(intelligence.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase) ?? heroStory.PrimaryObjects));
+        var objectText = CleanHeroPromptText(ResolveHeroPromptObjectText(heroStory, intelligence));
         var basePrompt = $"Azure Image2 cinematic astronomy artwork for {eventTitle}, {eventType}, featuring {objectText}. Emotional premium poster, Netflix science documentary poster, NASA campaign poster, National Geographic astronomy cover, Discovery documentary artwork, realistic sky, deep atmosphere, premium color grading. Image-only background; no text, no date panel, no time panel, no direction panel, no equipment, no tips, no callout labels, no infographic blocks, no visual annotations.";
         return
         [
@@ -908,6 +908,21 @@ public sealed class HeroAssetStoryGenerator(
             ("C", basePrompt + " Dark mountain or natural horizon foreground, realistic Milky Way or star field, premium campaign poster mood."),
             ("D", basePrompt + " Minimal elegant NASA-style composition, sparse dramatic sky, refined documentary key art.")
         ];
+    }
+
+
+    private static string ResolveHeroPromptObjectText(HeroAssetStoryDto heroStory, ProductionEventIntelligence? intelligence)
+    {
+        var intelligenceObjects = intelligence?.PrimaryObjects
+            .Concat(intelligence.SecondaryObjects)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (intelligenceObjects?.Length > 0)
+            return string.Join(", ", intelligenceObjects);
+
+        return FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, heroStory.HeroMessage, "astronomy sky target");
     }
 
     private async Task WriteHeroV5OverlayAsync(string backgroundPath, string outputPath, HeroAssetStoryDto heroStory, string selectedHook, CancellationToken cancellationToken)
