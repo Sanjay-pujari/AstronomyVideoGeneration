@@ -48,7 +48,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
     private const string HeroCompositionModelFileName = "hero-composition-model.json";
     private const string HeroLayoutValidationFileName = "hero-layout-validation.json";
-    private const string HeroPromptFileName = "hero-prompt.txt";
+    private const string HeroPromptFileName = "hero-prompt.json";
     private const string HeroGenerationDiagnosticsFileName = "hero-generation-diagnostics.json";
     private const string HeroFileName = "hero-final.png";
     private const string HeroLandscapeFileName = "hero-landscape.png";
@@ -418,37 +418,38 @@ public sealed class HeroAssetStoryGenerator(
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
             var heroVariants = BuildHeroV5AzurePrompts(heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence);
-            var heroVariantResults = new List<(string Variant, string Prompt, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+            CleanHeroV5FinalRoot(heroAssetsRoot);
+            var candidatesRoot = Path.Combine(heroAssetsRoot, "candidates");
+            Directory.CreateDirectory(candidatesRoot);
+            var heroVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
             foreach (var variant in heroVariants)
             {
-                var azureBackgroundPath = Path.Combine(heroAssetsRoot, $"hero-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png");
-                var variantPath = Path.Combine(heroAssetsRoot, $"hero-v5-{variant.Variant.ToLowerInvariant()}.png");
+                var azureBackgroundPath = Path.Combine(candidatesRoot, $"hero-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png");
+                var variantPath = Path.Combine(heroAssetsRoot, variant.FileName);
                 var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteHeroV5OverlayAsync(azureBackgroundPath, variantPath, heroStory, selectedHook, cancellationToken);
+                await WriteHeroV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
-                heroVariantResults.Add((variant.Variant, variant.Prompt, azureBackgroundPath, variantPath, azureResult, hash));
+                heroVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, azureBackgroundPath, variantPath, azureResult, hash));
                 generatedFiles.Add(NormalizePath(azureBackgroundPath));
                 generatedFiles.Add(NormalizePath(variantPath));
             }
 
+            if (heroVariantResults.Count(v => v.Result.ProviderCalled) < 3)
+                throw new InvalidOperationException("Hero V5 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
+            if (heroVariantResults.Select(v => (v.Width, v.Height)).Distinct().Count() != 3)
+                throw new InvalidOperationException("Hero V5 validation failed: landscape, portrait, and square dimensions must be distinct.");
             var uniqueHeroHashes = heroVariantResults.Select(result => result.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (uniqueHeroHashes.Length != heroVariants.Count)
                 throw new InvalidOperationException($"Hero V5 variant validation failed: expected {heroVariants.Count} unique image hashes but found {uniqueHeroHashes.Length}.");
 
             var selectedHero = heroVariantResults[0];
             File.Copy(selectedHero.ImagePath, heroPath, overwrite: true);
-            File.Copy(heroVariantResults[0].ImagePath, Path.Combine(heroAssetsRoot, HeroLandscapeFileName), overwrite: true);
-            File.Copy(heroVariantResults[1].ImagePath, Path.Combine(heroAssetsRoot, HeroSquareFileName), overwrite: true);
-            File.Copy(heroVariantResults[2].ImagePath, Path.Combine(heroAssetsRoot, HeroPortraitFileName), overwrite: true);
             generatedFiles.Add(NormalizePath(heroPath));
-            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroLandscapeFileName)));
-            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroSquareFileName)));
-            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroPortraitFileName)));
 
             heroDiagnosticsStopwatch.Stop();
-            await File.WriteAllTextAsync(promptPath, string.Join(Environment.NewLine + Environment.NewLine, heroVariants.Select(v => $"Variant {v.Variant}: {v.Prompt}")), cancellationToken);
+            await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
             await WriteHeroV5GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
@@ -556,6 +557,19 @@ public sealed class HeroAssetStoryGenerator(
             var path = Path.Combine(heroAssetsRoot, fileName);
             if (File.Exists(path))
                 File.Delete(path);
+        }
+    }
+
+    private static void CleanHeroV5FinalRoot(string heroAssetsRoot)
+    {
+        Directory.CreateDirectory(heroAssetsRoot);
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            HeroFileName, HeroLandscapeFileName, HeroPortraitFileName, HeroSquareFileName, HeroGenerationDiagnosticsFileName, HeroPromptFileName
+        };
+        foreach (var file in Directory.EnumerateFiles(heroAssetsRoot, "hero-v5-*.png").Concat(Directory.EnumerateFiles(heroAssetsRoot, "*.txt")))
+        {
+            if (!allowed.Contains(Path.GetFileName(file))) File.Delete(file);
         }
     }
 
@@ -895,18 +909,13 @@ public sealed class HeroAssetStoryGenerator(
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1920, imageHeight = 1080, visualStyle = "HeroV5CinematicPoster", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
 
-    private static IReadOnlyList<(string Variant, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
+    private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
     {
-        var eventTitle = CleanHeroPromptText(FirstNonEmpty(intelligence?.Title, heroStory.HeroHook, selectedHook, "astronomy sky event"));
-        var eventType = CleanHeroPromptText(FirstNonEmpty(intelligence?.EventType, heroStory.HeroMessage, "astronomy event"));
-        var objectText = CleanHeroPromptText(ResolveHeroPromptObjectText(heroStory, intelligence));
-        var basePrompt = $"Azure Image2 cinematic astronomy artwork for {eventTitle}, {eventType}, featuring {objectText}. Emotional premium poster, Netflix science documentary poster, NASA campaign poster, National Geographic astronomy cover, Discovery documentary artwork, realistic sky, deep atmosphere, premium color grading. Image-only background; no text, no date panel, no time panel, no direction panel, no equipment, no tips, no callout labels, no infographic blocks, no visual annotations.";
         return
         [
-            ("A", basePrompt + " Wide heroic landscape silhouette with dramatic sky scale and generous clean negative space for a small title."),
-            ("B", basePrompt + " Close dramatic celestial focus with atmospheric twilight depth and cinematic contrast."),
-            ("C", basePrompt + " Dark mountain or natural horizon foreground, realistic Milky Way or star field, premium campaign poster mood."),
-            ("D", basePrompt + " Minimal elegant NASA-style composition, sparse dramatic sky, refined documentary key art.")
+            ("landscape", HeroLandscapeFileName, 1920, 1080, "Wide cinematic meteor shower sky over a dark mountain horizon, Milky Way visible, multiple realistic Geminid meteor streaks, deep blue-black sky, subtle warm horizon glow, premium documentary poster composition, large clean negative space for title on left or lower third, photorealistic, National Geographic quality, no text."),
+            ("portrait", HeroPortraitFileName, 1080, 1920, "Vertical cinematic meteor shower poster, tall star-filled sky, radiant feeling overhead, mountains low at bottom, dramatic bright meteor streaks leading upward, premium astronomy campaign artwork, large clean negative space in upper or middle area for title, photorealistic, no text."),
+            ("square", HeroSquareFileName, 1080, 1080, "Balanced cinematic meteor shower scene, central Milky Way and bright meteors, dark mountain silhouette at bottom, premium astronomy poster, clean negative space for title, photorealistic, no text.")
         ];
     }
 
@@ -925,20 +934,21 @@ public sealed class HeroAssetStoryGenerator(
         return FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, heroStory.HeroMessage, "astronomy sky target");
     }
 
-    private async Task WriteHeroV5OverlayAsync(string backgroundPath, string outputPath, HeroAssetStoryDto heroStory, string selectedHook, CancellationToken cancellationToken)
+    private async Task WriteHeroV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
         {
-            ctx.Resize(new ResizeOptions { Size = new Size(1920, 1080), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
-            ctx.Fill(Color.Black.WithAlpha(0.16f), new RectangleF(0, 0, 1920, 1080));
-            var title = CleanHeroPosterLine(FirstNonEmpty(selectedHook, heroStory.HeroHook, DefaultHeroHook)).ToUpperInvariant();
-            var subtitle = CleanHeroPosterLine(FirstNonEmpty(heroStory.HeroMessage, heroStory.HeroVisualFocus, string.Empty)).ToUpperInvariant();
-            var titleFont = ResolveHeroFont(title.Length > 18 ? 94 : 122, FontStyle.Bold);
-            var subtitleFont = ResolveHeroFont(subtitle.Length > 28 ? 48 : 62, FontStyle.Bold);
-            ctx.DrawText(title, titleFont, Color.White, new PointF(120, 760));
-            if (!string.IsNullOrWhiteSpace(subtitle))
-                ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(126, 900));
+            ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
+            ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
+            var title = "GEMINIDS";
+            var subtitle = "METEOR SHOWER PEAK";
+            var titleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 88 : width == height ? 70 : 96, FontStyle.Bold);
+            var subtitleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 42 : width == height ? 32 : 44, FontStyle.Bold);
+            var x = width == 1080 && height == 1920 ? 76 : width == height ? 62 : 110;
+            var y = width == 1080 && height == 1920 ? 250 : width == height ? 720 : 760;
+            ctx.DrawText(title, titleFont, Color.White, new PointF(x, y));
+            ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(x + 4, y + (width == height ? 82 : 112)));
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
@@ -972,7 +982,7 @@ public sealed class HeroAssetStoryGenerator(
         string imagePath,
         string promptPath,
         string diagnosticsPath,
-        IReadOnlyList<(string Variant, string Prompt, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
+        IReadOnlyList<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
         long totalMs,
         CancellationToken cancellationToken)
     {
@@ -1004,7 +1014,7 @@ public sealed class HeroAssetStoryGenerator(
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
             totalMs,
-            variants = variants.Select(v => new { v.Variant, v.Prompt, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
+            outputs = variants.Select(v => new { name = v.Variant, width = v.Width, height = v.Height, hash = v.Hash }), variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
         }, JsonOptions), cancellationToken);
     }
 
