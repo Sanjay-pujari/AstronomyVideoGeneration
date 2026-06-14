@@ -625,6 +625,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastMetadataBuilder, WeeklySkyForecastMetadataBuilder>();
         services.AddScoped<IWeeklySkyForecastPreparationOrchestrator, WeeklySkyForecastPreparationOrchestrator>();
         services.AddScoped<IWeeklySkyForecastSceneRenderingOrchestrator, WeeklySkyForecastSceneRenderingOrchestrator>();
+        services.AddScoped<IAstroPulseGalleryService, AstroPulseGalleryService>();
         services.AddScoped<IWeeklySkyForecastTimelineCompositionOrchestrator, WeeklySkyForecastTimelineCompositionOrchestrator>();
         services.AddScoped<IWeeklySkyForecastFinalMediaOrchestrator, WeeklySkyForecastFinalMediaOrchestrator>();
         services.AddScoped<IWeeklySkyForecastVisualAssetGenerationService, WeeklySkyForecastVisualAssetGenerationService>();
