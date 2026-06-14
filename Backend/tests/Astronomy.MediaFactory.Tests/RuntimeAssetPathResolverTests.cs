@@ -41,6 +41,35 @@ public sealed class RuntimeAssetPathResolverTests
         Assert.DoesNotContain("Backend/src", heroPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Fact]
+    public void ResolveCelestialAssetPath_UsesExistingCelestialObjectDirectoryWhenPresent()
+    {
+        var baseDirectory = Path.Combine(Path.GetTempPath(), $"runtime-assets-{Guid.NewGuid():N}");
+        var resolver = new RuntimeAssetPathResolver(baseDirectory);
+        var celestialObjectRoot = Path.Combine(baseDirectory, "assets", "celestial-object");
+        Directory.CreateDirectory(celestialObjectRoot);
+
+        var heroPath = resolver.ResolveCelestialAssetPath("jupiter", "hero-transparent.png");
+
+        Assert.Equal(Path.Combine(celestialObjectRoot, "jupiter", "hero-transparent.png"), heroPath);
+        Assert.Equal(celestialObjectRoot, resolver.GetCelestialRoot());
+    }
+
+    [Fact]
+    public void ResolveCelestialAssetPath_FallsBackToExistingCelestialDirectory()
+    {
+        var baseDirectory = Path.Combine(Path.GetTempPath(), $"runtime-assets-{Guid.NewGuid():N}");
+        var resolver = new RuntimeAssetPathResolver(baseDirectory);
+        var celestialRoot = Path.Combine(baseDirectory, "assets", "celestial");
+        Directory.CreateDirectory(celestialRoot);
+
+        var heroPath = resolver.ResolveCelestialAssetPath("venus", "hero-transparent.png");
+
+        Assert.Equal(Path.Combine(celestialRoot, "venus", "hero-transparent.png"), heroPath);
+        Assert.Equal(celestialRoot, resolver.GetCelestialRoot());
+    }
+
     [Fact]
     public async Task ExtractPack_RelativeDefaultsWriteToRuntimeAssetsFolder()
     {
