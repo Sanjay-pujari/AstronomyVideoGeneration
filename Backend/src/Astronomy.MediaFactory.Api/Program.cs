@@ -5944,8 +5944,8 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
 
     using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
-    var composedPath = Path.Combine(outputDirectory, "benchmark-composed-v1.png");
-    var specPath = Path.Combine(outputDirectory, "overlay-spec.json");
+    var composedPath = Path.Combine(outputDirectory, "benchmark-conjunction-overlay-v1.png");
+    var specPath = Path.Combine(outputDirectory, "overlay-layout.json");
     var validationPath = Path.Combine(outputDirectory, "overlay-validation.json");
     var spec = BuildVisualLabOverlaySpec(request, image.Width, image.Height, composedPath, specPath, validationPath);
     var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height);
@@ -5990,41 +5990,56 @@ static IReadOnlyList<string> ValidateVisualLabBackgroundRequest(VisualLabBackgro
 static IReadOnlyList<string> ValidateVisualLabComposeOverlayRequest(VisualLabComposeOverlayRequest request)
 {
     var errors = new List<string>();
-    var supportedEvents = new[] { "MeteorShower", "PlanetConjunction", "BlueMoon", "PlanetParade", "LunarEclipse", "SolarEclipse" };
+    var supportedEvents = new[] { "PlanetConjunction" };
     var supportedLayouts = new[] { "EducationalOverlay" };
-    var supportedFormats = new[] { "Long", "Short" };
+    var supportedFormats = new[] { "Long" };
     if (string.IsNullOrWhiteSpace(request.BackgroundImagePath)) errors.Add("backgroundImagePath is required.");
-    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add($"eventType must be one of: {string.Join(", ", supportedEvents)}.");
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Visual Lab Experiment #1.");
     if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
     if (string.IsNullOrWhiteSpace(request.Layout) || !supportedLayouts.Contains(request.Layout, StringComparer.OrdinalIgnoreCase)) errors.Add("layout must be EducationalOverlay.");
-    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long or Short.");
+    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long for Visual Lab Experiment #1.");
     if (request.Facts is null || request.Facts.Count == 0) errors.Add("facts are required.");
+    else
+    {
+        foreach (var key in new[] { "date", "bestTime", "direction", "primaryObjects", "equipment" })
+        {
+            if (!request.Facts.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)) errors.Add($"facts.{key} is required.");
+        }
+    }
     return errors;
 }
 
 static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayRequest request, int width, int height, string composedPath, string specPath, string validationPath)
 {
-    var isLong = width >= height;
-    var safeMargin = Math.Max(48, (int)Math.Round(Math.Min(width, height) * 0.05));
-    var panel = isLong
-        ? new VisualLabOverlayRect(safeMargin, safeMargin, (int)Math.Round(width * 0.32), height - safeMargin * 2 - 120)
-        : new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.48));
-    var tips = new VisualLabOverlayRect(safeMargin, height - safeMargin - 104, width - safeMargin * 2, 104);
-    var titleFont = isLong ? 46 : 42;
-    var labelFont = isLong ? 26 : 25;
-    var bodyFont = isLong ? 28 : 26;
+    var safeMargin = Math.Max(56, (int)Math.Round(Math.Min(width, height) * 0.055));
+    var header = new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.15));
+    var panel = new VisualLabOverlayRect(safeMargin, header.Y + header.Height + 24, (int)Math.Round(width * 0.30), height - safeMargin * 2 - header.Height - 24 - 126);
+    var tips = new VisualLabOverlayRect(safeMargin, height - safeMargin - 110, width - safeMargin * 2, 110);
+    var titleFont = Math.Max(46, (int)Math.Round(width * 0.043));
+    var labelFont = Math.Max(24, (int)Math.Round(width * 0.020));
+    var bodyFont = Math.Max(27, (int)Math.Round(width * 0.022));
     var facts = request.Facts ?? new Dictionary<string, string>();
     string Fact(string key, string fallback = "") => facts.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : fallback;
     var rows = new[]
     {
         new VisualLabOverlayTextItem("Date", Fact("date"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Peak night", Fact("peakNight"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Best time", Fact("bestTime"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Look", Fact("direction"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Moon", Fact("moonCondition"), labelFont, bodyFont)
+        new VisualLabOverlayTextItem("Best Viewing Time", Fact("bestTime"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Direction", Fact("direction"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Objects Visible", Fact("primaryObjects"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("Equipment", Fact("equipment"), labelFont, bodyFont)
     }.Where(x => !string.IsNullOrWhiteSpace(x.Value)).ToArray();
-    var tipsText = new[] { Fact("equipment", "No telescope needed"), Fact("shortDescription", "Watch from a dark location with a wide open sky.") }
-        .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+    var tipsText = new[]
+    {
+        $"Find an unobstructed {Fact("direction", "western horizon").ToLowerInvariant()}.",
+        $"Begin observing {Fact("bestTime", "30 minutes after sunset").ToLowerInvariant()}.",
+        Fact("equipment", "No telescope required").Replace("needed", "required", StringComparison.OrdinalIgnoreCase) + "."
+    };
+    var callouts = new[]
+    {
+        new VisualLabOverlayCallout("Venus", (int)Math.Round(width * 0.63), (int)Math.Round(height * 0.43), (int)Math.Round(width * 0.70), (int)Math.Round(height * 0.33)),
+        new VisualLabOverlayCallout("Jupiter", (int)Math.Round(width * 0.75), (int)Math.Round(height * 0.35), (int)Math.Round(width * 0.81), (int)Math.Round(height * 0.25)),
+        new VisualLabOverlayCallout("Mercury", (int)Math.Round(width * 0.55), (int)Math.Round(height * 0.58), (int)Math.Round(width * 0.64), (int)Math.Round(height * 0.53))
+    };
 
     return new VisualLabOverlaySpec(
         "VisualLabDeterministicOverlayComposer",
@@ -6043,10 +6058,12 @@ static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayReq
         titleFont,
         labelFont,
         bodyFont,
+        header,
         panel,
         tips,
         rows,
         tipsText,
+        callouts,
         DateTimeOffset.UtcNow);
 }
 
@@ -6054,14 +6071,18 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
 {
     var checks = new List<VisualLabOverlayValidationCheck>();
     var safe = new RectangleF(spec.SafeMargin, spec.SafeMargin, width - spec.SafeMargin * 2, height - spec.SafeMargin * 2);
+    var header = ToRectangleF(spec.Header);
     var panel = ToRectangleF(spec.LeftInfoPanel);
     var tips = ToRectangleF(spec.BottomTipsBar);
-    AddCheck("noOverlap", !RectIntersects(panel, tips), "Left info panel and bottom tips bar do not overlap.");
+    AddCheck("noOverlap", !RectIntersects(header, panel) && !RectIntersects(header, tips) && !RectIntersects(panel, tips), "Header, left info panel, and bottom tips bar do not overlap.");
+    AddCheck("headerNoClipping", RectContains(safe, header), "Header is inside safe margins.");
     AddCheck("leftPanelNoClipping", RectContains(safe, panel), "Left info panel is inside safe margins.");
     AddCheck("tipsBarNoClipping", RectContains(safe, tips), "Bottom tips bar is inside safe margins.");
     AddCheck("readableFontSize", spec.TitleFontSize >= 40 && spec.LabelFontSize >= 24 && spec.BodyFontSize >= 24, "Title, label, and body fonts meet readable size minimums.");
     AddCheck("safeMargins", spec.SafeMargin >= 48, "Safe margin is at least 48 px.");
     AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses provided AzureImage2 background output only.");
+    AddCheck("planetCallouts", spec.PlanetCallouts.Count == 3 && spec.PlanetCallouts.Select(c => c.Label).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "Planet conjunction labels are present exactly once.");
+    AddCheck("calloutsNoClipping", spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.LabelX, c.LabelY, 190, 44)) && RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), "Planet callout anchors and labels are inside safe margins.");
 
     return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks);
 
@@ -6079,20 +6100,36 @@ static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySp
     var titleFont = SystemFonts.CreateFont("Arial", spec.TitleFontSize, FontStyle.Bold);
     var labelFont = SystemFonts.CreateFont("Arial", spec.LabelFontSize, FontStyle.Bold);
     var bodyFont = SystemFonts.CreateFont("Arial", spec.BodyFontSize, FontStyle.Regular);
+    var header = ToRectangleF(spec.Header);
     var panel = ToRectangleF(spec.LeftInfoPanel);
     var tips = ToRectangleF(spec.BottomTipsBar);
 
+    ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.66f), header);
+    ctx.Draw(Color.ParseHex("#FFFFFF").WithAlpha(0.22f), 2, header);
     ctx.Fill(Color.ParseHex("#031126").WithAlpha(0.84f), panel);
     ctx.Draw(Color.ParseHex("#65D8FF").WithAlpha(0.85f), 3, panel);
     ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.78f), tips);
     ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.78f), 3, tips);
 
+    DrawWrappedText(ctx, spec.Title, titleFont, Color.White, new RectangleF(header.X + 34, header.Y + 28, header.Width - 68, header.Height - 48), spec.TitleFontSize + 10);
+    DrawText(ctx, "PLANET CONJUNCTION  •  VISUAL OBSERVING GUIDE", labelFont, Color.ParseHex("#FFE08A"), new PointF(header.X + 36, header.Bottom - 46));
+
+    foreach (var callout in spec.PlanetCallouts)
+    {
+        var anchor = new PointF(callout.AnchorX, callout.AnchorY);
+        var label = new PointF(callout.LabelX, callout.LabelY);
+        ctx.Fill(Color.White.WithAlpha(0.94f), new EllipsePolygon(anchor.X, anchor.Y, 7));
+        ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.9f), 3, new EllipsePolygon(anchor.X, anchor.Y, 15));
+        ctx.DrawLine(Color.ParseHex("#DDF7FF").WithAlpha(0.82f), 3, anchor, new PointF(label.X - 12, label.Y + 19));
+        ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.78f), new RectangleF(label.X - 18, label.Y - 10, 180, 48));
+        ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.86f), 2, new RectangleF(label.X - 18, label.Y - 10, 180, 48));
+        DrawText(ctx, callout.Label, labelFont, Color.White, label);
+    }
+
     var x = panel.X + 30;
     var y = panel.Y + 28;
-    DrawWrappedText(ctx, spec.Title, titleFont, Color.White, new RectangleF(x, y, panel.Width - 60, 126), spec.TitleFontSize + 8);
-    y += 142;
-    DrawText(ctx, SplitCamel(spec.EventType).ToUpperInvariant(), labelFont, Color.ParseHex("#FFE08A"), new PointF(x, y));
-    y += 52;
+    DrawText(ctx, "OBSERVING DETAILS", labelFont, Color.ParseHex("#FFE08A"), new PointF(x, y));
+    y += 58;
 
     foreach (var row in spec.FactRows)
     {
@@ -9667,14 +9704,17 @@ public sealed record VisualLabOverlaySpec(
     int TitleFontSize,
     int LabelFontSize,
     int BodyFontSize,
+    VisualLabOverlayRect Header,
     VisualLabOverlayRect LeftInfoPanel,
     VisualLabOverlayRect BottomTipsBar,
     IReadOnlyList<VisualLabOverlayTextItem> FactRows,
     IReadOnlyList<string> Tips,
+    IReadOnlyList<VisualLabOverlayCallout> PlanetCallouts,
     DateTimeOffset CreatedUtc);
 
 public sealed record VisualLabOverlayRect(int X, int Y, int Width, int Height);
 public sealed record VisualLabOverlayTextItem(string Label, string Value, int LabelFontSize, int BodyFontSize);
+public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int AnchorY, int LabelX, int LabelY);
 public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks);
 public sealed record VisualLabOverlayValidationCheck(string Name, bool Passed, string Message);
 
