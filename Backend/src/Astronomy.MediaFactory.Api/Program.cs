@@ -5945,9 +5945,9 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
     using var image = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
     var isComputedPositionMode = string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase);
-    var composedPath = Path.Combine(outputDirectory, isComputedPositionMode ? "benchmark-conjunction-overlay-v2.png" : "benchmark-conjunction-overlay-v1.png");
-    var specPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-layout-v2.json" : "overlay-layout.json");
-    var validationPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-validation-v2.json" : "overlay-validation.json");
+    var composedPath = Path.Combine(outputDirectory, isComputedPositionMode ? "benchmark-conjunction-overlay-v3.png" : "benchmark-conjunction-overlay-v1.png");
+    var specPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-layout-v3.json" : "overlay-layout.json");
+    var validationPath = Path.Combine(outputDirectory, isComputedPositionMode ? "overlay-validation-v3.json" : "overlay-validation.json");
     var spec = BuildVisualLabOverlaySpec(request, image.Width, image.Height, composedPath, specPath, validationPath);
     var validation = ValidateVisualLabOverlaySpec(spec, image.Width, image.Height);
     if (!validation.IsValid)
@@ -5956,7 +5956,9 @@ app.MapPost("/api/visual-lab/compose-overlay", async Task<IResult> (VisualLabCom
         return Results.BadRequest(new { message = "Visual lab overlay validation failed.", validationPath, validation });
     }
 
-    image.Mutate(ctx => DrawVisualLabOverlay(ctx, spec));
+    var planetAssets = await LoadVisualLabPlanetAssetsAsync(environment, ct);
+    image.Mutate(ctx => DrawVisualLabOverlay(ctx, spec, planetAssets));
+    foreach (var asset in planetAssets.Values) asset.Dispose();
     await image.SaveAsPngAsync(composedPath, new PngEncoder(), ct);
     await WriteVisualLabDebugJsonAsync(specPath, spec, ct);
     await WriteVisualLabDebugJsonAsync(validationPath, validation, ct);
@@ -6029,36 +6031,36 @@ static IReadOnlyList<string> ValidateVisualLabComposeOverlayRequest(VisualLabCom
 static VisualLabOverlaySpec BuildVisualLabOverlaySpec(VisualLabComposeOverlayRequest request, int width, int height, string composedPath, string specPath, string validationPath)
 {
     var safeMargin = Math.Max(56, (int)Math.Round(Math.Min(width, height) * 0.055));
-    var header = new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.15));
-    var panel = new VisualLabOverlayRect(safeMargin, header.Y + header.Height + 24, (int)Math.Round(width * 0.30), height - safeMargin * 2 - header.Height - 24 - 126);
-    var tips = new VisualLabOverlayRect(safeMargin, height - safeMargin - 110, width - safeMargin * 2, 110);
-    var titleFont = Math.Max(46, (int)Math.Round(width * 0.043));
-    var labelFont = Math.Max(24, (int)Math.Round(width * 0.020));
-    var bodyFont = Math.Max(27, (int)Math.Round(width * 0.022));
+    var header = new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.17));
+    var panel = new VisualLabOverlayRect(safeMargin, header.Y + header.Height + 24, (int)Math.Round(width * 0.32), height - safeMargin * 2 - header.Height - 24 - 134);
+    var tips = new VisualLabOverlayRect(safeMargin, height - safeMargin - 118, width - safeMargin * 2, 118);
+    var titleFont = Math.Max(54, (int)Math.Round(width * 0.047));
+    var labelFont = Math.Max(24, (int)Math.Round(width * 0.018));
+    var bodyFont = Math.Max(25, (int)Math.Round(width * 0.020));
     var facts = request.Facts ?? new Dictionary<string, string>();
     string Fact(string key, string fallback = "") => facts.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : fallback;
     var rows = new[]
     {
-        new VisualLabOverlayTextItem("Date", Fact("date"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Best Viewing Time", Fact("bestTime"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Direction", Fact("direction"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Objects Visible", Fact("primaryObjects"), labelFont, bodyFont),
-        new VisualLabOverlayTextItem("Equipment", Fact("equipment"), labelFont, bodyFont)
+        new VisualLabOverlayTextItem("calendar", "Date", Fact("date"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("clock", "Best Viewing Time", Fact("bestTime"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("compass", "Direction", Fact("direction"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("planet", "Objects Visible", Fact("primaryObjects"), labelFont, bodyFont),
+        new VisualLabOverlayTextItem("telescope", "Equipment", Fact("equipment"), labelFont, bodyFont)
     }.Where(x => !string.IsNullOrWhiteSpace(x.Value)).ToArray();
     var tipsText = new[]
     {
-        $"Find an unobstructed {Fact("direction", "western horizon").ToLowerInvariant()}.",
-        $"Begin observing {Fact("bestTime", "30 minutes after sunset").ToLowerInvariant()}.",
-        Fact("equipment", "No telescope required").Replace("needed", "required", StringComparison.OrdinalIgnoreCase) + "."
+        "Find an unobstructed western horizon.",
+        "Begin observing 30 minutes after sunset.",
+        "No telescope required."
     };
     var positionMode = string.Equals(request.PositionMode, "Computed", StringComparison.OrdinalIgnoreCase) ? "Computed" : "Default";
     var callouts = positionMode == "Computed" && request.Objects is not null
         ? BuildVisualLabComputedCallouts(request.Objects, width, height, safeMargin, header, panel, tips)
         : new[]
         {
-            new VisualLabOverlayCallout("Venus", (int)Math.Round(width * 0.63), (int)Math.Round(height * 0.43), (int)Math.Round(width * 0.70), (int)Math.Round(height * 0.33), 180, 48, 14, 1, "large", "bright white"),
-            new VisualLabOverlayCallout("Jupiter", (int)Math.Round(width * 0.75), (int)Math.Round(height * 0.35), (int)Math.Round(width * 0.81), (int)Math.Round(height * 0.25), 180, 48, 10, 2, "medium", "soft white"),
-            new VisualLabOverlayCallout("Mercury", (int)Math.Round(width * 0.55), (int)Math.Round(height * 0.58), (int)Math.Round(width * 0.64), (int)Math.Round(height * 0.53), 180, 48, 7, 3, "small", "warm white")
+            new VisualLabOverlayCallout("Venus", (int)Math.Round(width * 0.63), (int)Math.Round(height * 0.43), (int)Math.Round(width * 0.70), (int)Math.Round(height * 0.33), 180, 48, 14, 1, "large", "bright white", null),
+            new VisualLabOverlayCallout("Jupiter", (int)Math.Round(width * 0.75), (int)Math.Round(height * 0.35), (int)Math.Round(width * 0.81), (int)Math.Round(height * 0.25), 180, 48, 10, 2, "medium", "soft white", null),
+            new VisualLabOverlayCallout("Mercury", (int)Math.Round(width * 0.55), (int)Math.Round(height * 0.58), (int)Math.Round(width * 0.64), (int)Math.Round(height * 0.53), 180, 48, 7, 3, "small", "warm white", null)
         };
 
     return new VisualLabOverlaySpec(
@@ -6101,7 +6103,7 @@ static IReadOnlyList<VisualLabOverlayCallout> BuildVisualLabComputedCallouts(IRe
         var anchorX = (int)Math.Round(width * obj.XPercent / 100.0);
         var anchorY = (int)Math.Round(height * obj.YPercent / 100.0);
         var labelWidth = Math.Max(180, obj.Name.Length * 22 + 54);
-        var labelHeight = 52;
+        var labelHeight = GetVisualLabAltitudeLine(obj.Name, objects) is null ? 52 : 76;
         var candidates = new[]
         {
             new PointF(anchorX + 72, anchorY - 66),
@@ -6119,7 +6121,7 @@ static IReadOnlyList<VisualLabOverlayCallout> BuildVisualLabComputedCallouts(IRe
         if (chosen == default) chosen = ClampVisualLabLabel(candidates[0], labelWidth, labelHeight, safe);
         var bounds = new VisualLabOverlayRect((int)Math.Round(chosen.X - 18), (int)Math.Round(chosen.Y - 10), labelWidth, labelHeight);
         placed.Add(bounds);
-        result.Add(new VisualLabOverlayCallout(obj.Name.Trim(), anchorX, anchorY, (int)Math.Round(chosen.X), (int)Math.Round(chosen.Y), labelWidth, labelHeight, GetVisualLabMarkerRadius(obj), obj.BrightnessRank, obj.VisualSize ?? string.Empty, obj.ColorHint ?? string.Empty));
+        result.Add(new VisualLabOverlayCallout(obj.Name.Trim(), anchorX, anchorY, (int)Math.Round(chosen.X), (int)Math.Round(chosen.Y), labelWidth, labelHeight, GetVisualLabMarkerRadius(obj), obj.BrightnessRank, obj.VisualSize ?? string.Empty, obj.ColorHint ?? string.Empty, GetVisualLabAltitudeLine(obj.Name, objects)));
     }
 
     return result.OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -6134,6 +6136,13 @@ static int GetVisualLabMarkerRadius(VisualLabOverlayObjectPosition obj)
     if (string.Equals(obj.Name, "Jupiter", StringComparison.OrdinalIgnoreCase)) return 10;
     if (string.Equals(obj.Name, "Mercury", StringComparison.OrdinalIgnoreCase)) return 7;
     return Math.Max(6, 15 - obj.BrightnessRank * 2);
+}
+
+static string? GetVisualLabAltitudeLine(string objectName, IReadOnlyList<VisualLabOverlayObjectPosition> objects)
+{
+    var obj = objects.FirstOrDefault(o => string.Equals(o.Name, objectName, StringComparison.OrdinalIgnoreCase));
+    var supplied = new[] { obj?.VisualSize, obj?.ColorHint }.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v) && v.Contains('°', StringComparison.Ordinal));
+    return string.IsNullOrWhiteSpace(supplied) ? null : supplied.Trim();
 }
 
 static Color GetVisualLabObjectColor(string? colorHint)
@@ -6168,6 +6177,12 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
     AddCheck("overlapResult", labelsDoNotOverlap, labelsDoNotOverlap ? "Label boxes do not overlap." : "One or more label boxes overlap.");
     AddCheck("safeAreaResult", labelBoxesInsideSafeArea && spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), labelBoxesInsideSafeArea ? "Labels and anchors are inside safe margins." : "One or more labels or anchors are outside safe margins.");
     AddCheck("planetCallouts", spec.PlanetCallouts.Count == 3 && spec.PlanetCallouts.Select(c => c.Label).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "Planet conjunction labels are present exactly once.");
+    AddCheck("noTextOverlap", !RectIntersects(header, panel) && !RectIntersects(header, tips) && !RectIntersects(panel, tips) && labelsDoNotOverlap, "No text-bearing overlay regions overlap.");
+    AddCheck("titleInsideSafeArea", RectContains(safe, header), "Title hierarchy is inside the safe area.");
+    AddCheck("labelsInsideSafeArea", labelBoxesInsideSafeArea, "Planet labels are inside the safe area.");
+    AddCheck("bottomTipsReadable", RectContains(safe, tips) && spec.Tips.Count == 3 && spec.Tips.All(t => !string.IsNullOrWhiteSpace(t)), "Bottom tips bar contains three readable tips.");
+    AddCheck("planetMarkersVisible", spec.PlanetCallouts.All(c => c.MarkerRadius >= 7), "Planet markers meet the minimum visible radius.");
+    AddCheck("allRequestedObjectsLabelled", spec.PlanetCallouts.Select(c => c.Label).OrderBy(x => x).SequenceEqual(new[] { "Jupiter", "Mercury", "Venus" }), "All requested objects are labelled.");
     AddCheck("calloutsNoClipping", labelBoxesInsideSafeArea && spec.PlanetCallouts.All(c => RectContains(safe, new RectangleF(c.AnchorX, c.AnchorY, 1, 1))), "Planet callout anchors and labels are inside safe margins.");
 
     return new VisualLabOverlayValidation(checks.All(c => c.Passed), width, height, checks);
@@ -6181,57 +6196,142 @@ static bool RectContains(RectangleF outer, RectangleF inner)
 static bool RectIntersects(RectangleF a, RectangleF b)
     => a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
 
-static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySpec spec)
+static void DrawVisualLabOverlay(IImageProcessingContext ctx, VisualLabOverlaySpec spec, IReadOnlyDictionary<string, Image<Rgba32>> planetAssets)
 {
     var titleFont = SystemFonts.CreateFont("Arial", spec.TitleFontSize, FontStyle.Bold);
+    var subtitleFont = SystemFonts.CreateFont("Arial", spec.LabelFontSize, FontStyle.Bold);
     var labelFont = SystemFonts.CreateFont("Arial", spec.LabelFontSize, FontStyle.Bold);
+    var smallFont = SystemFonts.CreateFont("Arial", Math.Max(18, spec.LabelFontSize - 5), FontStyle.Regular);
     var bodyFont = SystemFonts.CreateFont("Arial", spec.BodyFontSize, FontStyle.Regular);
     var header = ToRectangleF(spec.Header);
     var panel = ToRectangleF(spec.LeftInfoPanel);
     var tips = ToRectangleF(spec.BottomTipsBar);
 
-    ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.66f), header);
-    ctx.Draw(Color.ParseHex("#FFFFFF").WithAlpha(0.22f), 2, header);
-    ctx.Fill(Color.ParseHex("#031126").WithAlpha(0.84f), panel);
+    ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.58f), header);
+    ctx.Draw(Color.ParseHex("#FFFFFF").WithAlpha(0.18f), 2, header);
+    ctx.Fill(Color.ParseHex("#031126").WithAlpha(0.86f), panel);
     ctx.Draw(Color.ParseHex("#65D8FF").WithAlpha(0.85f), 3, panel);
-    ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.78f), tips);
-    ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.78f), 3, tips);
+    ctx.Fill(Color.ParseHex("#020713").WithAlpha(0.82f), tips);
+    ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.82f), 3, tips);
 
-    DrawWrappedText(ctx, spec.Title, titleFont, Color.White, new RectangleF(header.X + 34, header.Y + 28, header.Width - 68, header.Height - 48), spec.TitleFontSize + 10);
-    DrawText(ctx, "PLANET CONJUNCTION  •  VISUAL OBSERVING GUIDE", labelFont, Color.ParseHex("#FFE08A"), new PointF(header.X + 36, header.Bottom - 46));
+    DrawText(ctx, "Jupiter, Venus and Mercury", titleFont, Color.White, new PointF(header.X + 34, header.Y + 24));
+    DrawText(ctx, "PLANET CONJUNCTION • VISUAL OBSERVING GUIDE", subtitleFont, Color.ParseHex("#FFE08A"), new PointF(header.X + 38, header.Y + 24 + spec.TitleFontSize + 10));
+    DrawText(ctx, "near the western horizon", smallFont, Color.ParseHex("#DDF7FF"), new PointF(header.X + 40, header.Bottom - 34));
 
     foreach (var callout in spec.PlanetCallouts)
     {
         var anchor = new PointF(callout.AnchorX, callout.AnchorY);
         var label = new PointF(callout.LabelX, callout.LabelY);
-        var markerColor = GetVisualLabObjectColor(callout.ColorHint);
-        var radius = callout.MarkerRadius;
-        ctx.Fill(markerColor.WithAlpha(0.18f), new EllipsePolygon(anchor.X, anchor.Y, radius * 3.2f));
-        ctx.Fill(markerColor.WithAlpha(0.42f), new EllipsePolygon(anchor.X, anchor.Y, radius * 1.8f));
-        ctx.Fill(markerColor.WithAlpha(0.98f), new EllipsePolygon(anchor.X, anchor.Y, radius));
-        ctx.Draw(Color.ParseHex("#FFE08A").WithAlpha(0.9f), 3, new EllipsePolygon(anchor.X, anchor.Y, radius * 2.1f));
-        ctx.DrawLine(Color.ParseHex("#DDF7FF").WithAlpha(0.82f), 3, anchor, new PointF(label.X - 12, label.Y + 19));
-        ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.78f), ToRectangleF(callout.LabelBounds));
-        ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.86f), 2, ToRectangleF(callout.LabelBounds));
+        DrawVisualLabPlanetMarker(ctx, callout, anchor, planetAssets);
+        ctx.DrawLine(Color.ParseHex("#DDF7FF").WithAlpha(0.75f), 2, anchor, new PointF(label.X - 12, label.Y + 19));
+        ctx.Fill(Color.ParseHex("#021229").WithAlpha(0.84f), ToRectangleF(callout.LabelBounds));
+        ctx.Draw(Color.ParseHex("#8EEBFF").WithAlpha(0.88f), 2, ToRectangleF(callout.LabelBounds));
         DrawText(ctx, callout.Label, labelFont, Color.White, label);
+        if (!string.IsNullOrWhiteSpace(callout.AltitudeLine)) DrawText(ctx, callout.AltitudeLine, smallFont, Color.ParseHex("#FFE08A"), new PointF(label.X, label.Y + 28));
     }
+
+    var westX = spec.Width * 0.77f;
+    var westY = spec.Height - spec.SafeMargin - 170;
+    ctx.DrawLine(Color.ParseHex("#FFE08A"), 4, new PointF(westX, westY), new PointF(westX, westY + 44));
+    ctx.DrawLine(Color.ParseHex("#FFE08A"), 4, new PointF(westX - 15, westY + 34), new PointF(westX, westY + 55));
+    ctx.DrawLine(Color.ParseHex("#FFE08A"), 4, new PointF(westX + 15, westY + 34), new PointF(westX, westY + 55));
+    ctx.DrawLine(Color.ParseHex("#FFE08A"), 4, new PointF(westX - 15, westY + 34), new PointF(westX + 15, westY + 34));
+    DrawText(ctx, "WEST", labelFont, Color.ParseHex("#FFE08A"), new PointF(westX - 34, westY + 62));
 
     var x = panel.X + 30;
     var y = panel.Y + 28;
     DrawText(ctx, "OBSERVING DETAILS", labelFont, Color.ParseHex("#FFE08A"), new PointF(x, y));
     y += 58;
-
     foreach (var row in spec.FactRows)
     {
-        DrawText(ctx, row.Label.ToUpperInvariant(), labelFont, Color.ParseHex("#8EEBFF"), new PointF(x, y));
-        DrawWrappedText(ctx, row.Value, bodyFont, Color.White, new RectangleF(x, y + 31, panel.Width - 60, 64), spec.BodyFontSize + 8);
+        DrawVisualLabInfoIcon(ctx, row.Icon, new PointF(x + 18, y + 22));
+        DrawText(ctx, row.Label.ToUpperInvariant(), labelFont, Color.ParseHex("#8EEBFF"), new PointF(x + 54, y));
+        DrawWrappedText(ctx, row.Value, bodyFont, Color.White, new RectangleF(x + 54, y + 31, panel.Width - 86, 64), spec.BodyFontSize + 8);
         y += 92;
     }
 
-    var tipX = tips.X + 30;
-    DrawText(ctx, "VIEWING TIPS", labelFont, Color.ParseHex("#FFE08A"), new PointF(tipX, tips.Y + 24));
-    var tipText = string.Join("  •  ", spec.Tips);
-    DrawWrappedText(ctx, tipText, bodyFont, Color.White, new RectangleF(tipX + 230, tips.Y + 22, tips.Width - 260, tips.Height - 36), spec.BodyFontSize + 8);
+    var tipWidth = tips.Width / 3f;
+    for (var i = 0; i < spec.Tips.Count; i++)
+    {
+        var tipLeft = tips.X + i * tipWidth + 28;
+        DrawVisualLabInfoIcon(ctx, i == 0 ? "compass" : i == 1 ? "clock" : "telescope", new PointF(tipLeft + 20, tips.Y + 55));
+        DrawWrappedText(ctx, spec.Tips[i], bodyFont, Color.White, new RectangleF(tipLeft + 58, tips.Y + 30, tipWidth - 90, tips.Height - 42), spec.BodyFontSize + 7);
+    }
+}
+
+
+static async Task<Dictionary<string, Image<Rgba32>>> LoadVisualLabPlanetAssetsAsync(IWebHostEnvironment environment, CancellationToken ct)
+{
+    var result = new Dictionary<string, Image<Rgba32>>(StringComparer.OrdinalIgnoreCase);
+    var roots = new[] { environment.ContentRootPath, Directory.GetCurrentDirectory() }.Distinct(StringComparer.OrdinalIgnoreCase);
+    foreach (var name in new[] { "jupiter", "venus", "mercury" })
+    {
+        var path = roots.Select(root => Path.Combine(root, "assets", "celestial", $"{name}.png")).FirstOrDefault(File.Exists);
+        if (path is not null) result[name] = await Image.LoadAsync<Rgba32>(path, ct);
+    }
+    return result;
+}
+
+static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOverlayCallout callout, PointF anchor, IReadOnlyDictionary<string, Image<Rgba32>> planetAssets)
+{
+    var key = callout.Label.ToLowerInvariant();
+    var radius = callout.MarkerRadius;
+    if (planetAssets.TryGetValue(key, out var asset))
+    {
+        var size = radius * 4;
+        ctx.DrawImage(asset, new Rectangle((int)(anchor.X - size / 2f), (int)(anchor.Y - size / 2f), size, size), 1f);
+        return;
+    }
+
+    var color = GetVisualLabObjectColor(callout.ColorHint);
+    ctx.Fill(color.WithAlpha(0.16f), new EllipsePolygon(anchor.X, anchor.Y, radius * 3.4f));
+    ctx.Fill(color.WithAlpha(0.38f), new EllipsePolygon(anchor.X, anchor.Y, radius * 2.0f));
+    ctx.Fill(color.WithAlpha(0.98f), new EllipsePolygon(anchor.X, anchor.Y, radius));
+    if (string.Equals(callout.Label, "Jupiter", StringComparison.OrdinalIgnoreCase))
+    {
+        ctx.DrawLine(Color.ParseHex("#D49A62").WithAlpha(0.95f), 3, new PointF(anchor.X - radius, anchor.Y - 3), new PointF(anchor.X + radius, anchor.Y - 3));
+        ctx.DrawLine(Color.ParseHex("#F7D9A3").WithAlpha(0.95f), 2, new PointF(anchor.X - radius, anchor.Y + 4), new PointF(anchor.X + radius, anchor.Y + 4));
+    }
+    else if (string.Equals(callout.Label, "Venus", StringComparison.OrdinalIgnoreCase))
+    {
+        ctx.Fill(Color.ParseHex("#FFF5B8").WithAlpha(0.55f), new EllipsePolygon(anchor.X - radius * 0.22f, anchor.Y - radius * 0.24f, radius * 0.52f));
+    }
+    else if (string.Equals(callout.Label, "Mercury", StringComparison.OrdinalIgnoreCase))
+    {
+        ctx.Draw(Color.ParseHex("#D8874C").WithAlpha(0.82f), 2, new EllipsePolygon(anchor.X, anchor.Y, radius * 1.1f));
+    }
+}
+
+static void DrawVisualLabInfoIcon(IImageProcessingContext ctx, string icon, PointF center)
+{
+    var c = Color.ParseHex("#FFE08A");
+    ctx.Fill(Color.ParseHex("#071A35").WithAlpha(0.90f), new EllipsePolygon(center.X, center.Y, 18));
+    ctx.Draw(c.WithAlpha(0.95f), 2, new EllipsePolygon(center.X, center.Y, 18));
+    if (icon == "clock")
+    {
+        ctx.DrawLine(c, 2, center, new PointF(center.X, center.Y - 10));
+        ctx.DrawLine(c, 2, center, new PointF(center.X + 8, center.Y + 5));
+    }
+    else if (icon == "compass")
+    {
+        ctx.DrawLine(c, 3, new PointF(center.X - 9, center.Y + 8), new PointF(center.X + 9, center.Y - 8));
+    }
+    else if (icon == "planet")
+    {
+        ctx.Fill(c, new EllipsePolygon(center.X, center.Y, 6));
+        ctx.Draw(c, 2, new EllipsePolygon(center.X, center.Y, 12, 5));
+    }
+    else if (icon == "telescope")
+    {
+        ctx.DrawLine(c, 4, new PointF(center.X - 10, center.Y - 4), new PointF(center.X + 10, center.Y - 9));
+        ctx.DrawLine(c, 2, new PointF(center.X, center.Y), new PointF(center.X - 8, center.Y + 12));
+        ctx.DrawLine(c, 2, new PointF(center.X, center.Y), new PointF(center.X + 8, center.Y + 12));
+    }
+    else
+    {
+        ctx.Draw(c, 2, new RectangleF(center.X - 9, center.Y - 10, 18, 19));
+        ctx.DrawLine(c, 2, new PointF(center.X - 9, center.Y - 3), new PointF(center.X + 9, center.Y - 3));
+    }
 }
 
 static void DrawWrappedText(IImageProcessingContext ctx, string text, Font font, Color color, RectangleF bounds, float lineHeight)
@@ -9807,9 +9907,9 @@ public sealed record VisualLabOverlaySpec(
     DateTimeOffset CreatedUtc);
 
 public sealed record VisualLabOverlayRect(int X, int Y, int Width, int Height);
-public sealed record VisualLabOverlayTextItem(string Label, string Value, int LabelFontSize, int BodyFontSize);
+public sealed record VisualLabOverlayTextItem(string Icon, string Label, string Value, int LabelFontSize, int BodyFontSize);
 public sealed record VisualLabOverlayObjectPosition(string Name, double XPercent, double YPercent, int BrightnessRank, string? VisualSize, string? ColorHint);
-public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int AnchorY, int LabelX, int LabelY, int LabelWidth, int LabelHeight, int MarkerRadius, int BrightnessRank, string VisualSize, string ColorHint)
+public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int AnchorY, int LabelX, int LabelY, int LabelWidth, int LabelHeight, int MarkerRadius, int BrightnessRank, string VisualSize, string ColorHint, string? AltitudeLine)
 {
     public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
 }
