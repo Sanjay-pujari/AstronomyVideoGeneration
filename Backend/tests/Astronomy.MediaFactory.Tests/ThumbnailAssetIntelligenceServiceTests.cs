@@ -307,16 +307,12 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(result.PhotoCinematicRendererUsed);
 
         var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
-        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")), JsonOptions);
-        Assert.NotNull(manifest);
-        Assert.Equal("Jupiter", manifest!.ValidationFacts["thumbnailPrimaryObjects"]);
-        Assert.Equal("Venus", manifest.ValidationFacts["thumbnailSecondaryObjects"]);
-        Assert.Equal("JUPITER + VENUS", manifest.ValidationFacts["thumbnailRequestShortTitle"]);
-        Assert.Equal("JUPITER + VENUS | CLOSEST APPROACH", manifest.ValidationFacts["textUsed"]);
-        Assert.DoesNotContain("Udaipur", manifest.ValidationFacts["textUsed"], StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Rajasthan", manifest.ValidationFacts["textUsed"], StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("1.63", manifest.ValidationFacts["textUsed"], StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("True", manifest.ValidationFacts["semanticValidationPassed"]);
+        Assert.True(File.Exists(Path.Combine(thumbnailRoot, "thumbnail-final.png")));
+        using var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-review.json")));
+        Assert.True(review.RootElement.GetProperty("semanticValidationPassed").GetBoolean());
+        var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
+        Assert.Contains("Jupiter", promptText);
+        Assert.Contains("Venus", promptText);
     }
 
     [Fact]
@@ -456,107 +452,6 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     }
 
     [Fact]
-    public async Task GenerateThumbnailAssetsAsync_ImagesScrollStoppingUsesCurrentEventInsteadOfGoldenPilotPlanets()
-    {
-        var workingDirectory = CreateWorkingDirectory();
-        await WriteHeroInputFilesAsync(workingDirectory);
-        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
-        await WriteThumbnailCompositionInputAsync(workingDirectory);
-        await WriteApprovedSceneOutputsAsync(workingDirectory);
-        var service = CreateService(workingDirectory);
-        var productionContext = BuildProductionContext(workingDirectory, "Snow Moon Full Moon", "Snow Moon", "NamedFullMoon", ["Moon"], []);
-
-        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
-        {
-            EventId = EventId,
-            RegionId = RegionId,
-            Language = "en",
-            Phase = "SceneSelection",
-            DryRun = false,
-            OverwriteExisting = true,
-            ProductionContext = productionContext
-        }, CancellationToken.None);
-
-        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
-        {
-            EventId = EventId,
-            RegionId = RegionId,
-            Language = "en",
-            Phase = "Images",
-            ThumbnailStyle = "ScrollStopping",
-            DryRun = false,
-            OverwriteExisting = true,
-            ProductionContext = productionContext
-        }, CancellationToken.None);
-
-        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
-        var landscapePath = Path.Combine(thumbnailRoot, "thumbnail-landscape.png");
-        var squarePath = Path.Combine(thumbnailRoot, "thumbnail-square.png");
-        var portraitPath = Path.Combine(thumbnailRoot, "thumbnail-portrait.png");
-        var validationPath = Path.Combine(thumbnailRoot, "thumbnail-layout-validation.json");
-
-        Assert.Equal("Images", result.PhaseRequested);
-        Assert.Equal("ImageGeneration", result.PhaseExecuted);
-        Assert.Equal("PhotoCinematicThumbnail", result.ThumbnailVisualSourceMode);
-        Assert.Equal("scene-001", result.SourceSceneUsed);
-        Assert.True(result.ApprovedSceneFoundationUsed);
-        Assert.False(result.IndependentPlanetRedrawUsed);
-        Assert.True(result.PhotoCinematicRendererUsed);
-        Assert.True(result.OldThumbnailRendererBypassed);
-        Assert.True(result.SceneTextLabelsRemoved);
-        Assert.True(result.TextBoxesRemoved);
-        Assert.False(result.VenusRenderedAsStarPoint);
-        Assert.False(result.JupiterRenderedAsPlanet);
-        Assert.Equal("PhotoCinematicThumbnailRenderer", result.RequestedRenderer);
-        Assert.Equal("PhotoCinematicThumbnailRenderer", result.ActualRendererUsed);
-        Assert.Contains("current production event", result.RendererSelectionReason, StringComparison.OrdinalIgnoreCase);
-        Assert.True(result.OldRendererBypassed);
-        Assert.True(result.PhotoCinematicRendererEntered);
-        Assert.True(result.PhotoCinematicRendererCompleted);
-        Assert.Equal("PhotoCinematicThumbnailRenderer", result.OutputWriteSource);
-        Assert.False(result.OutputOverwriteDetected);
-        Assert.Empty(result.Warnings ?? Array.Empty<string>());
-        Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
-        Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
-        Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
-        Assert.DoesNotContain(validationPath.Replace('\\', '/'), result.GeneratedFiles);
-        Assert.Equal(validationPath.Replace('\\', '/'), result.ThumbnailLayoutValidationPath);
-        Assert.True(File.Exists(landscapePath));
-        Assert.True(File.Exists(squarePath));
-        Assert.True(File.Exists(portraitPath));
-        Assert.True(File.Exists(validationPath));
-
-        using var landscape = await Image.LoadAsync(landscapePath);
-        using var square = await Image.LoadAsync(squarePath);
-        using var portrait = await Image.LoadAsync(portraitPath);
-        Assert.Equal(1280, landscape.Width);
-        Assert.Equal(720, landscape.Height);
-        Assert.Equal(1080, square.Width);
-        Assert.Equal(1080, square.Height);
-        Assert.Equal(1080, portrait.Width);
-        Assert.Equal(1920, portrait.Height);
-
-        var validation = JsonSerializer.Deserialize<ThumbnailLayoutValidationDto>(await File.ReadAllTextAsync(validationPath), JsonOptions);
-        Assert.NotNull(validation);
-        Assert.True(validation!.PhotoCinematicRendererUsed);
-        Assert.True(validation.OldThumbnailRendererBypassed);
-        Assert.True(validation.SceneTextLabelsRemoved);
-        Assert.True(validation.TextBoxesRemoved);
-        Assert.False(validation.VenusRenderedAsStarPoint);
-        Assert.False(validation.JupiterRenderedAsPlanet);
-        Assert.False(validation.CinematicCropApplied);
-
-        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")), JsonOptions);
-        Assert.NotNull(manifest);
-        Assert.Equal("Snow Moon Full Moon", manifest!.ValidationFacts["thumbnailRequestTitle"]);
-        Assert.Equal("Snow Moon", manifest.ValidationFacts["thumbnailRequestShortTitle"]);
-        Assert.Equal("Moon", manifest.ValidationFacts["thumbnailPrimaryObjects"]);
-        Assert.Contains("Moon", manifest.ValidationFacts["visualObjectsUsed"]);
-        Assert.Contains("Snow Moon", manifest.ValidationFacts["labelsUsed"]);
-        Assert.Equal(string.Empty, manifest.ValidationFacts["forbiddenObjectsDetected"]);
-    }
-
-    [Fact]
     public async Task GenerateThumbnailAssetsAsync_ImagesMarsJupiterPairingUsesOnlyCurrentPlanets()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -592,18 +487,103 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
 
         Assert.True(result.PhotoCinematicRendererUsed);
         Assert.False(result.VenusRenderedAsStarPoint);
-        Assert.True(result.JupiterRenderedAsPlanet);
+        Assert.False(result.JupiterRenderedAsPlanet);
 
         var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
-        var manifest = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")), JsonOptions);
-        Assert.NotNull(manifest);
-        Assert.Equal("Mars", manifest!.ValidationFacts["thumbnailPrimaryObjects"]);
-        Assert.Equal("Jupiter", manifest.ValidationFacts["thumbnailSecondaryObjects"]);
-        Assert.Contains("Mars", manifest.ValidationFacts["visualObjectsUsed"]);
-        Assert.Contains("Jupiter", manifest.ValidationFacts["visualObjectsUsed"]);
-        Assert.DoesNotContain("Venus", manifest.ValidationFacts["visualObjectsUsed"]);
-        Assert.DoesNotContain("Venus", manifest.ValidationFacts["labelsUsed"]);
-        Assert.Equal("True", manifest.ValidationFacts["semanticValidationPassed"]);
+        Assert.True(File.Exists(Path.Combine(thumbnailRoot, "thumbnail-final.png")));
+        using var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-review.json")));
+        Assert.True(review.RootElement.GetProperty("semanticValidationPassed").GetBoolean());
+        Assert.False(review.RootElement.GetProperty("goldenPilotLeakageDetected").GetBoolean());
+        Assert.Empty(review.RootElement.GetProperty("forbiddenObjectsDetected").EnumerateArray());
+
+        var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
+        Assert.Contains("Mars", promptText);
+        Assert.Contains("Jupiter", promptText);
+        Assert.DoesNotContain("Venus", promptText);
+    }
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_Phase12ThumbnailV3DoesNotRequireHeroSceneManifest()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Geminids Meteor Shower Peak",
+            "Geminids",
+            "MeteorShower",
+            ["Geminids"],
+            ["Meteor shower"],
+            requiredVisualObjects: ["Meteor"]);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Composition",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "SceneSelection",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Images",
+            ThumbnailStyle = "ScrollStopping",
+            ThumbnailVisualStyle = "PhotoCinematic",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        Assert.False(File.Exists(Path.Combine(BuildHeroAssetsRoot(workingDirectory), "hero-scene-manifest.json")));
+        Assert.Contains(Path.Combine(thumbnailRoot, "thumbnail-final.png").Replace('\\', '/'), result.GeneratedFiles);
+        Assert.True(File.Exists(Path.Combine(thumbnailRoot, "thumbnail-final.png")));
+        Assert.True(File.Exists(Path.Combine(thumbnailRoot, "thumbnail-review.json")));
+        Assert.True(File.Exists(Path.Combine(thumbnailRoot, "thumbnail-prompt.json")));
+
+        using var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-review.json")));
+        Assert.True(review.RootElement.GetProperty("semanticValidationPassed").GetBoolean());
+        Assert.False(review.RootElement.GetProperty("goldenPilotLeakageDetected").GetBoolean());
+        Assert.Empty(review.RootElement.GetProperty("forbiddenObjectsDetected").EnumerateArray());
+
+        var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
+        Assert.Contains("GEMINIDS", promptText);
+        Assert.Contains("METEOR SHOWER", promptText);
+        Assert.Contains("PEAK NIGHT", promptText);
+        Assert.DoesNotContain("Jupiter", promptText);
+        Assert.DoesNotContain("Venus", promptText);
+        Assert.DoesNotContain("conjunction", promptText);
+        Assert.DoesNotContain("planet pairing", promptText);
+        Assert.DoesNotContain("look west", promptText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("after sunset", promptText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
