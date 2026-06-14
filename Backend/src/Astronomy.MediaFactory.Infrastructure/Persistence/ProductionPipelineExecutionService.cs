@@ -1327,7 +1327,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var response = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, HeroAssetGenerationPhase.Full, context.ExecutionContext), cancellationToken);
+        var response = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, HeroAssetGenerationPhase.Full, context.ExecutionContext, context.Request), cancellationToken);
         return await ValidateAndMaterializeHeroContractAsync(context, response, cancellationToken);
     }
 
@@ -1362,23 +1362,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var storyPath = Path.Combine(heroRoot, "hero-asset-story.json");
         var blueprintPath = Path.Combine(heroRoot, "hero-asset-blueprint.json");
         var layoutValidationPath = Path.Combine(heroRoot, "hero-layout-validation.json");
-        var sceneManifestPath = Path.Combine(heroRoot, "hero-scene-manifest.json");
-        var heroLandscapePath = Path.Combine(heroRoot, "hero-landscape.png");
-        var heroPath = Path.Combine(heroRoot, "hero.png");
+        var heroPath = Path.Combine(heroRoot, "hero-final.png");
+        var reviewPath = Path.Combine(heroRoot, "hero-review.json");
 
         if (!response.IsValid)
             throw new InvalidOperationException("Hero generation failed contract validation: " + string.Join("; ", response.Warnings.DefaultIfEmpty("hero engine returned IsValid=false")));
 
-        CopyFile(heroLandscapePath, heroPath, outputs);
-
-        var requiredFiles = new[]
-        {
-            storyPath,
-            blueprintPath,
-            layoutValidationPath,
-            sceneManifestPath,
-            heroPath
-        };
+        var requiredFiles = new[] { heroPath, reviewPath };
         var missing = requiredFiles.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0)
             throw new InvalidOperationException("Hero generation failed contract validation: required hero files are missing: " + string.Join(", ", missing));
@@ -1387,9 +1377,8 @@ public sealed partial class ProductionPipelineExecutionService(
         if (heroInfo.Length <= 0)
             throw new InvalidOperationException($"Hero generation failed contract validation: image file is empty: {NormalizePath(heroPath)}.");
 
-        await ValidateHeroSceneManifestContractAsync(context, sceneManifestPath, cancellationToken);
         var compositionModelPath = Path.Combine(heroRoot, "hero-composition-model.json");
-        ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, sceneManifestPath, compositionModelPath]);
+        ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, compositionModelPath, reviewPath]);
 
         outputs.AddRange(requiredFiles);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -3308,8 +3297,10 @@ public sealed partial class ProductionPipelineExecutionService(
         CopyFile(Path.Combine(eventRoot, "question-engine", "question-answer-set.json"), Path.Combine(outputRoot, "question-engine", "questions.json"), copied);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "short"), Path.Combine(outputRoot, "scene-approval-v3", "short"), copied, renameFinalScenes: true);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "long"), Path.Combine(outputRoot, "scene-approval-v3", "long"), copied, renameFinalScenes: true);
-        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero.png"), copied);
-        CopyFile(Path.Combine(eventRoot, "hero", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-final.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-review.json"), Path.Combine(outputRoot, "hero", "hero-review.json"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero", "hero-final.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero", "hero-review.json"), Path.Combine(outputRoot, "hero", "hero-review.json"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-landscape.png"), Path.Combine(outputRoot, "thumbnails", "landscape.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-square.png"), Path.Combine(outputRoot, "thumbnails", "square.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-portrait.png"), Path.Combine(outputRoot, "thumbnails", "portrait.png"), copied);
@@ -3432,7 +3423,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record SceneImageValidationPath(IReadOnlyList<string> CheckedPaths, string SelectedPath);
 
-    private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-scene-manifest.json"));
+    private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero-final.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-review.json"));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
 
     private sealed record Phase8SceneVariantManifestItem(
