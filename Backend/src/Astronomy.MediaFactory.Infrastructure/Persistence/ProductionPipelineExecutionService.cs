@@ -646,11 +646,9 @@ public sealed partial class ProductionPipelineExecutionService(
             var response = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, context.ExecutionContext), cancellationToken);
             generatedFiles.AddRange(response.GeneratedFiles);
         }
-        var phase8ValidationRoot = context.PipelineRequest.EnableSceneVariants
-            ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long")
-            : Path.Combine(context.ExecutionContext.SceneRoot!, "short");
-        if (!DirectoryHasPngRecursive(phase8ValidationRoot)) throw new InvalidOperationException($"Scene image validation failed: no .png files were found in '{phase8ValidationRoot}'.");
-        return generatedFiles.Concat(Directory.EnumerateFiles(phase8ValidationRoot, "*.png", SearchOption.AllDirectories)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var phase8Validation = ResolveSceneImageValidationPath(context.ExecutionContext.SceneRoot!, "short", preferSceneAssets: true);
+        ValidateSceneImageDirectoryCoverage(phase8Validation.SelectedPath, "Scene image validation");
+        return generatedFiles.Concat(Directory.EnumerateFiles(phase8Validation.SelectedPath, "*.png", SearchOption.AllDirectories)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> RenderPhase8SceneVisualVariantsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -1278,11 +1276,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private Task<IReadOnlyList<string>> PhaseValidateLongSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var longRoot = context.PipelineRequest.EnableSceneVariants
-            ? Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "long")
-            : Path.Combine(context.ExecutionContext.SceneRoot!, "long");
-        if (!DirectoryHasPngRecursive(longRoot)) throw new InvalidOperationException($"Long scene image validation failed: no .png files were found in '{longRoot}'.");
-        return Task.FromResult<IReadOnlyList<string>>(Directory.EnumerateFiles(longRoot, "*.png", SearchOption.AllDirectories).ToArray());
+        var longValidation = ResolveSceneImageValidationPath(context.ExecutionContext.SceneRoot!, "long", preferSceneAssets: true);
+        ValidateSceneImageDirectoryCoverage(longValidation.SelectedPath, "Long scene image validation");
+        return Task.FromResult<IReadOnlyList<string>>(Directory.EnumerateFiles(longValidation.SelectedPath, "*.png", SearchOption.AllDirectories).ToArray());
     }
 
     private async Task<IReadOnlyList<string>> PhaseValidateSceneAssetsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -2616,6 +2612,10 @@ public sealed partial class ProductionPipelineExecutionService(
             phase8SceneVariantDiagnostics,
             generatedImageCount = phase8SceneVariantDiagnostics?.GeneratedImageCount,
             expectedImageCount = phase8SceneVariantDiagnostics?.ExpectedImageCount,
+            checkedPaths = phase8SceneVariantDiagnostics?.CheckedPaths,
+            selectedValidationPath = phase8SceneVariantDiagnostics?.SelectedValidationPath,
+            pngCount = phase8SceneVariantDiagnostics?.PngCount,
+            sceneDirectoryCount = phase8SceneVariantDiagnostics?.SceneDirectoryCount,
             perSceneVariantHash = phase8SceneVariantDiagnostics?.PerSceneVariantHash,
             duplicateHashGroups = phase8SceneVariantDiagnostics?.DuplicateHashGroups,
             sceneVariantManifestPath = phase8SceneVariantDiagnostics?.ManifestPath,
@@ -2691,9 +2691,18 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
-        var plan = TryReadEnrichedScenePlan(BuildEnrichedScenePlanPath(context));
-        var expectedImageCount = plan?.Scenes.Sum(scene => (scene.VisualVariants?.Count ?? 0) * Phase8ProfessionalSlideFormats.Length) ?? 0;
-        var generatedImageCount = manifest.Count(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase) && File.Exists(item.FinalImagePath));
+        var phase8Validation = ResolveSceneImageValidationPath(context.ExecutionContext.SceneRoot!, "short", preferSceneAssets: true);
+        var sceneAssetsShortRoot = Path.Combine(context.ExecutionContext.SceneRoot!, "scene-assets", "short");
+        var expectedImageCount = Directory.Exists(sceneAssetsShortRoot)
+            ? Directory.EnumerateFiles(sceneAssetsShortRoot, "*.png", SearchOption.AllDirectories).Count()
+            : 0;
+        var pngCount = Directory.Exists(phase8Validation.SelectedPath)
+            ? Directory.EnumerateFiles(phase8Validation.SelectedPath, "*.png", SearchOption.AllDirectories).Count()
+            : 0;
+        var sceneDirectoryCount = Directory.Exists(phase8Validation.SelectedPath)
+            ? Directory.EnumerateDirectories(phase8Validation.SelectedPath, "scene-*", SearchOption.TopDirectoryOnly).Count()
+            : 0;
+        var generatedImageCount = pngCount;
         var perSceneVariantHash = manifest
             .Where(item => item.ImageRole.Equals("final", StringComparison.OrdinalIgnoreCase))
             .OrderBy(item => item.SceneNumber).ThenBy(item => item.Format).ThenBy(item => item.VariantNo)
@@ -2712,7 +2721,11 @@ public sealed partial class ProductionPipelineExecutionService(
             perSceneVariantHash,
             duplicateHashGroups,
             File.Exists(manifestPath) ? NormalizePath(manifestPath) : string.Empty,
-            failureReason);
+            failureReason,
+            phase8Validation.CheckedPaths,
+            NormalizePath(phase8Validation.SelectedPath),
+            pngCount,
+            sceneDirectoryCount);
     }
 
     private sealed record Phase8SceneVariantDiagnostics(
@@ -2721,7 +2734,11 @@ public sealed partial class ProductionPipelineExecutionService(
         IReadOnlyList<Phase8SceneVariantHashDiagnostic> PerSceneVariantHash,
         IReadOnlyList<Phase8DuplicateHashGroupDiagnostic> DuplicateHashGroups,
         string ManifestPath,
-        string FailureReason);
+        string FailureReason,
+        IReadOnlyList<string> CheckedPaths,
+        string SelectedValidationPath,
+        int PngCount,
+        int SceneDirectoryCount);
 
     private sealed record Phase8SceneVariantHashDiagnostic(int SceneNumber, string Format, int VariantNo, string VariantType, string VisualHash, string FinalImagePath);
 
@@ -3259,6 +3276,34 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string Sanitize(string value) => string.Join("-", (value ?? "unknown").Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
     private static bool DirectoryHasPng(string path) => Directory.Exists(path) && Directory.EnumerateFiles(path, "*.png").Any();
     private static bool DirectoryHasPngRecursive(string path) => Directory.Exists(path) && Directory.EnumerateFiles(path, "*.png", SearchOption.AllDirectories).Any();
+    private static SceneImageValidationPath ResolveSceneImageValidationPath(string sceneRoot, string profile, bool preferSceneAssets)
+    {
+        var checkedPaths = preferSceneAssets
+            ? new[] { Path.Combine(sceneRoot, "scene-assets", profile), Path.Combine(sceneRoot, profile) }
+            : new[] { Path.Combine(sceneRoot, profile), Path.Combine(sceneRoot, "scene-assets", profile) };
+        var selectedPath = checkedPaths.FirstOrDefault(DirectoryHasPngRecursive) ?? checkedPaths[0];
+        return new SceneImageValidationPath(checkedPaths.Select(NormalizePath).ToArray(), selectedPath);
+    }
+
+    private static void ValidateSceneImageDirectoryCoverage(string validationRoot, string validationLabel)
+    {
+        var pngCount = Directory.Exists(validationRoot)
+            ? Directory.EnumerateFiles(validationRoot, "*.png", SearchOption.AllDirectories).Count()
+            : 0;
+        if (pngCount == 0)
+            throw new InvalidOperationException($"{validationLabel} failed: no .png files were found in '{validationRoot}'.");
+
+        var sceneDirectories = Directory.EnumerateDirectories(validationRoot, "scene-*", SearchOption.TopDirectoryOnly).ToArray();
+        var missingSceneDirectories = sceneDirectories
+            .Where(directory => !Directory.EnumerateFiles(directory, "*.png", SearchOption.AllDirectories).Any())
+            .Select(NormalizePath)
+            .ToArray();
+        if (missingSceneDirectories.Length > 0)
+            throw new InvalidOperationException($"{validationLabel} failed: scene directories missing .png files: {string.Join(", ", missingSceneDirectories)}.");
+    }
+
+    private sealed record SceneImageValidationPath(IReadOnlyList<string> CheckedPaths, string SelectedPath);
+
     private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-scene-manifest.json"));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
 
