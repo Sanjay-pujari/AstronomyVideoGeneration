@@ -6211,6 +6211,10 @@ static VisualLabOverlayValidation ValidateVisualLabOverlaySpec(VisualLabOverlayS
         && !fallbackDotsUsed;
     AddCheck("celestialAssets", spec.UseCelestialAssets && assetFilesFound, spec.UseCelestialAssets ? "Celestial PNG assets were found for every requested planet." : "Celestial asset rendering must be enabled for Conjunction Overlay V4 validation.");
     AddCheck("spritesDrawn", spritesDrawn, "Jupiter, Venus, and Mercury hero-transparent.png sprites are drawn as PNG bitmaps.");
+    AddCheck("noGreyCircleDrawn", !spec.UseCelestialAssets || !spritesDrawn || !fallbackDotsUsed, "Celestial asset mode does not draw grey circle planet markers.");
+    AddCheck("bitmapDrawn", !spec.UseCelestialAssets || spritesDrawn, "Celestial asset mode draws every planet marker with ImageSharp.DrawImage.");
+    AddCheck("visibleAlphaPixels", !spec.UseCelestialAssets || new[] { "jupiter", "venus", "mercury" }.All(key => planetAssets?.TryGetValue(key, out var asset) == true && asset.VisibleAlphaPixelCount > 0), "Every celestial PNG contains visible alpha pixels after alpha > 10 trimming.");
+    AddCheck("noFallbackDots", !spec.UseCelestialAssets || !fallbackDotsUsed, "Celestial asset mode rejects fallback dots.");
     AddCheck("celestialAssetRendering", spec.UseCelestialAssets && jupiterRendered && venusRendered && mercuryRendered && !fallbackDotsUsed, "Jupiter, Venus, and Mercury render from celestial PNG assets with no fallback dots.");
     AddCheck("celestialAssetsVisible", celestialAssetsVisible, $"Celestial sprites render at V4 visible widths: Jupiter {jupiterSpriteWidth}px, Venus {venusSpriteWidth}px, Mercury {mercurySpriteWidth}px.");
 
@@ -6312,7 +6316,7 @@ static async Task<VisualLabPlanetAssetLookup> LoadVisualLabPlanetAssetsAsync(IWe
             continue;
         }
 
-        using var original = await Image.LoadAsync<Rgba32>(resolvedPath, ct);
+        using var original = Image.Load<Rgba32>(resolvedPath);
         var alphaBounds = GetVisualLabVisibleAlphaBounds(original);
         if (alphaBounds is null)
         {
@@ -6320,18 +6324,26 @@ static async Task<VisualLabPlanetAssetLookup> LoadVisualLabPlanetAssetsAsync(IWe
             continue;
         }
 
-        var cropped = original.Clone(ctx => ctx.Crop(alphaBounds.Value));
-        var nonTransparentPixelRatio = CountVisualLabVisibleAlphaPixels(original) / (double)(original.Width * original.Height);
+        using var cropped = original.Clone(ctx => ctx.Crop(alphaBounds.Value));
+        var visibleAlphaPixelCount = CountVisualLabVisibleAlphaPixels(original);
+        var nonTransparentPixelRatio = visibleAlphaPixelCount / (double)(original.Width * original.Height);
+        var resizedWidth = GetVisualLabCelestialAssetSpriteWidth(objectName);
+        var resizedHeight = Math.Max(1, (int)Math.Round(resizedWidth * (cropped.Height / (double)Math.Max(cropped.Width, 1))));
+        var resized = cropped.Clone(ctx => ctx.Resize(resizedWidth, resizedHeight));
         assets[normalizedName] = new VisualLabPlanetAsset(
             ToVisualLabPlanetDisplayName(normalizedName),
             resolvedPath,
-            cropped,
+            true,
+            resized,
             original.Width,
             original.Height,
+            visibleAlphaPixelCount,
             new VisualLabVisibleBounds(alphaBounds.Value.X, alphaBounds.Value.Y, alphaBounds.Value.Width, alphaBounds.Value.Height),
             nonTransparentPixelRatio,
             cropped.Width,
-            cropped.Height);
+            cropped.Height,
+            resized.Width,
+            resized.Height);
     }
 
     var diagnostics = new VisualLabPlanetAssetDiagnostics(
@@ -6393,10 +6405,12 @@ static bool IsVisualLabPlanetAssetRenderable(IReadOnlyDictionary<string, VisualL
         && !string.IsNullOrWhiteSpace(asset.AssetPath)
         && asset.VisibleBounds.Width > 0
         && asset.VisibleBounds.Height > 0
+        && asset.VisibleAlphaPixelCount > 0
         && asset.CroppedWidth > 0
         && asset.CroppedHeight > 0
-        && requiredMinimumWidth > 0
-        && GetVisualLabCelestialAssetSpriteWidth(asset.Name) >= requiredMinimumWidth;
+        && asset.ResizedWidth >= requiredMinimumWidth
+        && asset.ResizedHeight > 0
+        && requiredMinimumWidth > 0;
 
 static string ToVisualLabPlanetDisplayName(string normalizedName)
     => normalizedName switch
@@ -6429,30 +6443,29 @@ static VisualLabOverlayRenderDebug BuildVisualLabOverlayRenderDebug(VisualLabOve
 static VisualLabOverlayRenderDebugObject BuildVisualLabOverlayRenderDebugObject(VisualLabOverlayCallout callout, IReadOnlyDictionary<string, VisualLabPlanetAsset> assets)
 {
     var key = NormalizeVisualLabCelestialObjectName(callout.Label);
-    var drawWidth = GetVisualLabCelestialAssetSpriteWidth(callout.Label);
     if (!assets.TryGetValue(key, out var asset))
     {
-        return new VisualLabOverlayRenderDebugObject(callout.Label, null, 0, 0, null, 0, 0, 0, 0, 0, drawWidth, 0, 1.0, false);
+        return new VisualLabOverlayRenderDebugObject(callout.Label, null, false, 0, 0, 0, null, 0, 0, 0, 0, 0, 0, "ImageSharp.DrawImage", false, false);
     }
 
-    var aspectRatio = asset.Image.Height > 0 ? asset.Image.Width / (double)asset.Image.Height : 1.0;
-    var drawHeight = Math.Max(1, (int)Math.Round(drawWidth / Math.Max(aspectRatio, 0.01)));
-    var drawX = (int)Math.Round(callout.AnchorX - drawWidth / 2.0);
-    var drawY = (int)Math.Round(callout.AnchorY - drawHeight / 2.0);
+    var drawX = (int)Math.Round(callout.AnchorX - asset.ResizedWidth / 2.0);
+    var drawY = (int)Math.Round(callout.AnchorY - asset.ResizedHeight / 2.0);
     return new VisualLabOverlayRenderDebugObject(
         asset.Name,
         asset.AssetPath,
+        asset.AssetExists,
         asset.OriginalWidth,
         asset.OriginalHeight,
+        asset.VisibleAlphaPixelCount,
         asset.VisibleBounds,
-        asset.NonTransparentPixelRatio,
         asset.CroppedWidth,
         asset.CroppedHeight,
+        asset.ResizedWidth,
+        asset.ResizedHeight,
         drawX,
         drawY,
-        drawWidth,
-        drawHeight,
-        1.0,
+        "ImageSharp.DrawImage",
+        false,
         true);
 }
 
@@ -6465,12 +6478,8 @@ static void DrawVisualLabPlanetMarker(IImageProcessingContext ctx, VisualLabOver
     var radius = callout.MarkerRadius;
     if (useCelestialAssets && planetAssets.TryGetValue(key, out var asset))
     {
-        var spriteWidth = GetVisualLabCelestialAssetSpriteWidth(callout.Label);
-        var aspectRatio = asset.Image.Height > 0 ? asset.Image.Width / (float)asset.Image.Height : 1f;
-        var spriteHeight = Math.Max(1, (int)Math.Round(spriteWidth / Math.Max(aspectRatio, 0.01f)));
-        var bounds = new Rectangle((int)Math.Round(anchor.X - spriteWidth / 2f), (int)Math.Round(anchor.Y - spriteHeight / 2f), spriteWidth, spriteHeight);
-        ctx.Fill(Color.White.WithAlpha(0.18f), new EllipsePolygon(anchor.X, anchor.Y, Math.Max(spriteWidth, spriteHeight) * 0.72f));
-        ctx.DrawImage(asset.Image, bounds, 1f);
+        var drawPoint = new Point((int)Math.Round(anchor.X - asset.ResizedWidth / 2f), (int)Math.Round(anchor.Y - asset.ResizedHeight / 2f));
+        ctx.DrawImage(asset.Image, drawPoint, 1f);
         return;
     }
 
@@ -10115,7 +10124,7 @@ public sealed record VisualLabOverlayCallout(string Label, int AnchorX, int Anch
     public VisualLabOverlayRect LabelBounds => new(LabelX - 18, LabelY - 10, LabelWidth, LabelHeight);
 }
 public sealed record VisualLabOverlayValidation(bool IsValid, int Width, int Height, IReadOnlyList<VisualLabOverlayValidationCheck> Checks, bool UseCelestialAssets = false, bool AssetFilesFound = true, bool JupiterRendered = false, bool VenusRendered = false, bool MercuryRendered = false, bool SpritesDrawn = false, bool FallbackDotsUsed = false, bool CelestialAssetsVisible = false, int JupiterSpriteWidth = 0, int VenusSpriteWidth = 0, int MercurySpriteWidth = 0, VisualLabPlanetAssetDiagnostics? AssetDiagnostics = null);
-public sealed record VisualLabPlanetAsset(string Name, string AssetPath, Image<Rgba32> Image, int OriginalWidth, int OriginalHeight, VisualLabVisibleBounds VisibleBounds, double NonTransparentPixelRatio, int CroppedWidth, int CroppedHeight);
+public sealed record VisualLabPlanetAsset(string Name, string AssetPath, bool AssetExists, Image<Rgba32> Image, int OriginalWidth, int OriginalHeight, int VisibleAlphaPixelCount, VisualLabVisibleBounds VisibleBounds, double NonTransparentPixelRatio, int CroppedWidth, int CroppedHeight, int ResizedWidth, int ResizedHeight);
 public sealed record VisualLabVisibleBounds(int X, int Y, int Width, int Height);
 public sealed record VisualLabPlanetAssetLookup(IReadOnlyDictionary<string, VisualLabPlanetAsset> Assets, VisualLabPlanetAssetDiagnostics Diagnostics)
 {
@@ -10132,7 +10141,7 @@ public sealed record VisualLabPlanetAssetDiagnostics(
 public sealed record VisualLabOverlayRenderDebug(
     IReadOnlyList<VisualLabOverlayRenderDebugObject> Objects,
     VisualLabOverlayRenderDebugValidation Validation);
-public sealed record VisualLabOverlayRenderDebugObject(string Name, string? AssetPath, int OriginalWidth, int OriginalHeight, VisualLabVisibleBounds? VisibleBounds, double NonTransparentPixelRatio, int CroppedWidth, int CroppedHeight, int DrawX, int DrawY, int DrawWidth, int DrawHeight, double DrawOpacity, bool Rendered);
+public sealed record VisualLabOverlayRenderDebugObject(string Name, string? AssetPath, bool AssetExists, int OriginalWidth, int OriginalHeight, int VisibleAlphaPixelCount, VisualLabVisibleBounds? VisibleBounds, int CroppedWidth, int CroppedHeight, int ResizedWidth, int ResizedHeight, int DrawX, int DrawY, string DrawMethod, bool GreyCircleDrawn, bool BitmapDrawn);
 public sealed record VisualLabOverlayRenderDebugValidation(bool CelestialAssetsVisible, bool SpritesDrawn, bool FallbackDotsUsed);
 public sealed record VisualLabOverlayValidationCheck(string Name, bool Passed, string Message);
 
