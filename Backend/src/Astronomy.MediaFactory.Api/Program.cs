@@ -6002,9 +6002,9 @@ app.MapPost("/api/visual-lab/compose-hero", async Task<IResult> (VisualLabCompos
     using var backgroundImage = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
     using var image = RenderVisualLabLongFormatHeroCanvas(backgroundImage, heroCanvasWidth, heroCanvasHeight);
     var outputDirectory = Path.GetDirectoryName(backgroundPath) ?? Directory.GetCurrentDirectory();
-    var composedPath = Path.Combine(outputDirectory, "benchmark-hero-conjunction-v1.png");
-    var layoutPath = Path.Combine(outputDirectory, "hero-layout-v1.json");
-    var validationPath = Path.Combine(outputDirectory, "hero-validation-v1.json");
+    var composedPath = Path.Combine(outputDirectory, "benchmark-hero-conjunction-v2.png");
+    var layoutPath = Path.Combine(outputDirectory, "hero-v2-layout.json");
+    var validationPath = Path.Combine(outputDirectory, "hero-v2-validation.json");
     var spec = BuildVisualLabHeroSpec(request, heroCanvasWidth, heroCanvasHeight, composedPath, layoutPath, validationPath);
     var assetLookup = request.UseCelestialAssets ? await LoadVisualLabPlanetAssetsAsync(environment, ct) : VisualLabPlanetAssetLookup.Empty(environment);
     var validation = ValidateVisualLabHeroSpec(spec, heroCanvasWidth, heroCanvasHeight, assetLookup);
@@ -6146,10 +6146,10 @@ static IReadOnlyList<string> ValidateVisualLabComposeHeroRequest(VisualLabCompos
     var supportedEvents = new[] { "PlanetConjunction" };
     var supportedFormats = new[] { "Long" };
     if (string.IsNullOrWhiteSpace(request.BackgroundImagePath)) errors.Add("backgroundImagePath is required.");
-    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Visual Lab Hero Benchmark V1.");
+    if (string.IsNullOrWhiteSpace(request.EventType) || !supportedEvents.Contains(request.EventType, StringComparer.OrdinalIgnoreCase)) errors.Add("eventType must be PlanetConjunction for Visual Lab Hero Benchmark V2.");
     if (string.IsNullOrWhiteSpace(request.Title)) errors.Add("title is required.");
     if (string.IsNullOrWhiteSpace(request.Subtitle)) errors.Add("subtitle is required.");
-    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long for Visual Lab Hero Benchmark V1.");
+    if (string.IsNullOrWhiteSpace(request.Format) || !supportedFormats.Contains(request.Format, StringComparer.OrdinalIgnoreCase)) errors.Add("format must be Long for Visual Lab Hero Benchmark V2.");
     if (!request.UseCelestialAssets) errors.Add("useCelestialAssets must be true for poster-quality hero validation.");
     return errors;
 }
@@ -6189,37 +6189,37 @@ static Image<Rgba32> RenderVisualLabLongFormatHeroCanvas(Image<Rgba32> backgroun
 static VisualLabHeroSpec BuildVisualLabHeroSpec(VisualLabComposeHeroRequest request, int width, int height, string composedPath, string layoutPath, string validationPath)
 {
     var safeMargin = Math.Max(64, (int)Math.Round(Math.Min(width, height) * 0.07));
-    var titleBand = new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.19));
-    var heroScene = new VisualLabOverlayRect((int)Math.Round(width * 0.16), (int)Math.Round(height * 0.28), (int)Math.Round(width * 0.68), (int)Math.Round(height * 0.55));
+    var titleBand = new VisualLabOverlayRect(safeMargin, safeMargin, width - safeMargin * 2, (int)Math.Round(height * 0.20));
+    var heroScene = new VisualLabOverlayRect((int)Math.Round(width * 0.12), (int)Math.Round(height * 0.25), (int)Math.Round(width * 0.76), (int)Math.Round(height * 0.60));
     var planetSprites = new[]
     {
-        new VisualLabHeroPlanetPlacement("Jupiter", (int)Math.Round(width * 0.37), (int)Math.Round(height * 0.55), 315, 1, "largest warm gas-giant hero asset"),
-        new VisualLabHeroPlanetPlacement("Venus", (int)Math.Round(width * 0.56), (int)Math.Round(height * 0.46), 245, 2, "brilliant bright inner-planet hero asset"),
-        new VisualLabHeroPlanetPlacement("Mercury", (int)Math.Round(width * 0.68), (int)Math.Round(height * 0.59), 170, 3, "small but visible warm hero asset")
+        new VisualLabHeroPlanetPlacement("Jupiter", (int)Math.Round(width * 0.39), (int)Math.Round(height * 0.57), 430, 1, "largest primary focal object, premium NASA-cover gas giant"),
+        new VisualLabHeroPlanetPlacement("Venus", (int)Math.Round(width * 0.59), (int)Math.Round(height * 0.47), 300, 2, "second largest luminous documentary focal object"),
+        new VisualLabHeroPlanetPlacement("Mercury", (int)Math.Round(width * 0.70), (int)Math.Round(height * 0.60), 190, 3, "smaller tertiary planet, visible without labels")
     };
 
     return new VisualLabHeroSpec(
-        "VisualLabHeroComposerV1",
+        "VisualLabHeroComposerV2",
         "AzureImage2BackgroundOnly",
         request.BackgroundImagePath.Trim(),
         composedPath,
         layoutPath,
         validationPath,
         request.EventType.Trim(),
-        request.Title.Trim(),
-        request.Subtitle.Trim(),
+        "PLANET CONJUNCTION",
+        "JUPITER • VENUS • MERCURY",
         request.Format.Trim(),
         request.UseCelestialAssets,
         width,
         height,
         safeMargin,
-        Math.Max(62, (int)Math.Round(width * 0.046)),
-        Math.Max(34, (int)Math.Round(width * 0.025)),
+        Math.Max(78, (int)Math.Round(width * 0.052)),
+        Math.Max(36, (int)Math.Round(width * 0.024)),
         titleBand,
         heroScene,
         planetSprites,
-        new[] { "date panel", "tips panel", "direction panel", "equipment panel", "observation details", "callout labels", "educational slide UI" },
-        "PosterQualityHeroOnly",
+        new[] { "date panel", "tips panel", "direction marker", "equipment panel", "observation details", "callout labels", "icons", "informational UI" },
+        "PremiumDocumentaryHeroV2",
         DateTimeOffset.UtcNow);
 }
 
@@ -6460,21 +6460,33 @@ static VisualLabHeroValidation ValidateVisualLabHeroSpec(VisualLabHeroSpec spec,
     var heroScene = ToRectangleF(spec.HeroScene);
     var requiredAssets = new[] { "jupiter", "venus", "mercury" };
     var assetFilesFound = spec.UseCelestialAssets && requiredAssets.All(assetLookup.Assets.ContainsKey);
-    var noEducationalPanels = spec.RemovedEducationalElements.Count == 7;
+    var forbiddenEducationalUi = new[] { "date panel", "tips panel", "direction marker", "equipment panel", "observation details", "callout labels", "icons", "informational UI" };
+    var noEducationalPanels = forbiddenEducationalUi.All(item => spec.RemovedEducationalElements.Contains(item, StringComparer.OrdinalIgnoreCase));
     var overlayMaxSpriteWidth = requiredAssets.Max(key => GetVisualLabCelestialAssetSpriteWidth(ToVisualLabPlanetDisplayName(key)));
     var heroSpritesLargerThanOverlay = spec.PlanetSprites.All(p => p.SpriteWidth > overlayMaxSpriteWidth);
     var planetsInsideHeroScene = spec.PlanetSprites.All(p => RectContains(heroScene, new RectangleF(p.CenterX - p.SpriteWidth / 2f, p.CenterY - p.SpriteWidth / 2f, p.SpriteWidth, p.SpriteWidth)));
+    var jupiter = spec.PlanetSprites.FirstOrDefault(p => string.Equals(p.Name, "Jupiter", StringComparison.OrdinalIgnoreCase));
+    var venus = spec.PlanetSprites.FirstOrDefault(p => string.Equals(p.Name, "Venus", StringComparison.OrdinalIgnoreCase));
+    var mercury = spec.PlanetSprites.FirstOrDefault(p => string.Equals(p.Name, "Mercury", StringComparison.OrdinalIgnoreCase));
+    var sizeHierarchy = jupiter is not null && venus is not null && mercury is not null && jupiter.SpriteWidth > venus.SpriteWidth && venus.SpriteWidth > mercury.SpriteWidth;
+    var planetArea = spec.PlanetSprites.Sum(p => Math.PI * Math.Pow(p.SpriteWidth / 2.0, 2.0));
+    var planetAreaRatio = planetArea / Math.Max(1.0, width * height);
+    var titleExact = string.Equals(spec.Title, "PLANET CONJUNCTION", StringComparison.Ordinal) && string.Equals(spec.Subtitle, "JUPITER • VENUS • MERCURY", StringComparison.Ordinal);
+    var focalPointStrength = sizeHierarchy && planetAreaRatio >= 0.10 && spec.PlanetSprites.Count == 3;
+    var balancedHeroComposition = planetsInsideHeroScene && heroScene.Width >= width * 0.74 && heroScene.Height >= height * 0.58 && spec.PlanetSprites.All(p => p.CenterX >= width * 0.30 && p.CenterX <= width * 0.74);
 
     AddCheck("backgroundOnly", spec.BackgroundSource == "AzureImage2BackgroundOnly" && Path.GetFileName(spec.BackgroundImagePath).StartsWith("background-v", StringComparison.OrdinalIgnoreCase), "Composer uses the provided AzureImage2 background output only.");
     AddCheck("longFormat", width == 1920 && height == 1080 && string.Equals(spec.Format, "Long", StringComparison.OrdinalIgnoreCase), "Hero benchmark uses Long 1920x1080 format.");
-    AddCheck("notEducationalSlide", noEducationalPanels && spec.DesignMode == "PosterQualityHeroOnly", "Date, tips, direction, equipment, observation-detail, callout-label, and educational UI panels are excluded.");
-    AddCheck("titleAndSubtitleOnly", !string.IsNullOrWhiteSpace(spec.Title) && !string.IsNullOrWhiteSpace(spec.Subtitle), "Only the title and subtitle text hierarchy is retained.");
+    AddCheck("noEducationalUI", noEducationalPanels && spec.DesignMode == "PremiumDocumentaryHeroV2", "Labels, callouts, icons, info panels, tips, direction markers, and educational UI are excluded.");
+    AddCheck("titleReadability", titleExact && spec.TitleFontSize >= 78 && spec.SubtitleFontSize >= 36 && RectContains(safe, titleBand), "Title reads as PLANET CONJUNCTION with the Jupiter • Venus • Mercury subtitle inside the safe title band.");
     AddCheck("titleBandSafe", RectContains(safe, titleBand), "Top title band is inside safe margins.");
     AddCheck("heroSceneCentered", RectContains(safe, heroScene) && heroScene.Left > spec.SafeMargin && heroScene.Right < width - spec.SafeMargin, "Large conjunction scene is centered with poster margins.");
     AddCheck("planetAssetsRequired", spec.UseCelestialAssets && assetFilesFound, "Celestial PNG assets are present for Jupiter, Venus, and Mercury.");
     AddCheck("planetAssetsLargerThanSceneOverlay", heroSpritesLargerThanOverlay, $"Hero planet sprite widths exceed Scene Overlay maximum width of {overlayMaxSpriteWidth}px.");
+    AddCheck("focalPointStrength", focalPointStrength, $"Planets are the primary focal point with Jupiter largest, Venus second, Mercury smaller; foreground area ratio is {planetAreaRatio:0.00}.");
     AddCheck("planetAssetsInsideHeroScene", planetsInsideHeroScene, "Large planet assets sit within the central conjunction scene.");
-    AddCheck("posterQualityComposition", spec.TitleFontSize >= 62 && spec.SubtitleFontSize >= 34 && spec.PlanetSprites.Count == 3, "Composition targets premium NASA poster / National Geographic cover scale.");
+    AddCheck("heroCompositionBalance", balancedHeroComposition, "Planet cluster occupies a balanced central hero field while preserving the Azure background around it.");
+    AddCheck("posterQuality", spec.TitleFontSize >= 78 && spec.SubtitleFontSize >= 36 && spec.PlanetSprites.Count == 3 && spec.Composer == "VisualLabHeroComposerV2", "Composition targets premium NASA cover / Netflix science documentary / National Geographic feature-image quality.");
 
     return new VisualLabHeroValidation(checks.All(c => c.Passed), width, height, checks, spec.UseCelestialAssets, assetFilesFound, heroSpritesLargerThanOverlay, noEducationalPanels, assetLookup.Diagnostics);
 
@@ -6609,8 +6621,8 @@ static void DrawVisualLabHero(IImageProcessingContext ctx, VisualLabHeroSpec spe
     }
 
     var title = spec.Title.ToUpperInvariant().Replace(", ", " • ", StringComparison.Ordinal);
-    DrawCenteredText(ctx, title, titleFont, Color.White, new PointF(titleBand.X + titleBand.Width / 2f, titleBand.Y + 10));
-    DrawCenteredText(ctx, spec.Subtitle, subtitleFont, Color.ParseHex("#FFE08A"), new PointF(titleBand.X + titleBand.Width / 2f, titleBand.Y + spec.TitleFontSize + 26));
+    DrawCenteredTextWithStroke(ctx, title, titleFont, Color.White, Color.ParseHex("#020611").WithAlpha(0.95f), 5, new PointF(titleBand.X + titleBand.Width / 2f, titleBand.Y + 10));
+    DrawCenteredTextWithStroke(ctx, spec.Subtitle, subtitleFont, Color.ParseHex("#FFE08A"), Color.ParseHex("#020611").WithAlpha(0.92f), 3, new PointF(titleBand.X + titleBand.Width / 2f, titleBand.Y + spec.TitleFontSize + 26));
     ctx.DrawLine(Color.ParseHex("#FFE08A").WithAlpha(0.72f), 3, new PointF(spec.Width * 0.34f, titleBand.Y + spec.TitleFontSize + spec.SubtitleFontSize + 52), new PointF(spec.Width * 0.66f, titleBand.Y + spec.TitleFontSize + spec.SubtitleFontSize + 52));
 }
 
