@@ -82,6 +82,42 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Contains(completion, item => item.OutputType == "Thumbnail" && item.Requested && item.Status == "Succeeded");
     }
 
+    [Fact]
+    public void Phase10SceneAssetDiagnostics_CountsV2SceneAssetFinalPngs()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "astro-phase10-scene-assets", Guid.NewGuid().ToString("N"), "scene-approval-v3");
+        WritePhase10SceneAssets(root, "short", 6);
+        WritePhase10SceneAssets(root, "long", 6);
+
+        var method = typeof(ProductionPipelineExecutionService)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .Single(m => m.Name == "BuildPhase10SceneAssetDiagnostics"
+                && m.GetParameters().Length == 1
+                && m.GetParameters()[0].ParameterType == typeof(string));
+        var diagnostics = method!.Invoke(null, [root])!;
+        var diagnosticsType = diagnostics.GetType();
+
+        Assert.Equal(6, diagnosticsType.GetProperty("ShortSceneCount")!.GetValue(diagnostics));
+        Assert.Equal(6, diagnosticsType.GetProperty("LongSceneCount")!.GetValue(diagnostics));
+        Assert.Equal(6, diagnosticsType.GetProperty("ShortPngCount")!.GetValue(diagnostics));
+        Assert.Equal(6, diagnosticsType.GetProperty("LongPngCount")!.GetValue(diagnostics));
+    }
+
+    [Fact]
+    public void Phase10SceneAssetValidation_RequiresFinalPngInEachV2SceneDirectory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "astro-phase10-scene-assets", Guid.NewGuid().ToString("N"), "scene-approval-v3");
+        WritePhase10SceneAssets(root, "short", 6);
+        WritePhase10SceneAssets(root, "long", 6, skipFinalSceneNumber: 3);
+
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase10SceneAssetCoverage", BindingFlags.NonPublic | BindingFlags.Static);
+        var exception = Assert.Throws<TargetInvocationException>(() => method!.Invoke(null, [root]));
+
+        var inner = Assert.IsType<InvalidOperationException>(exception.InnerException);
+        Assert.Contains("long scene asset validation expected 6 final PNGs but found 5", inner.Message);
+        Assert.Contains("scene-003-final.png", inner.Message);
+    }
+
 
     [Theory]
     [InlineData("MeteorShower", "Perseids Tonight", "MeteorShower")]
@@ -437,6 +473,18 @@ public sealed class ProductionPipelineExecutionServiceTests
             .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
             .Single(m => m.Name == "BuildRequestedOutputCompletion" && m.GetParameters().Length == 2);
         return (IReadOnlyList<RequestedOutputCompletion>)method.Invoke(null, [context, phaseResults])!;
+    }
+
+    private static void WritePhase10SceneAssets(string root, string profile, int count, int? skipFinalSceneNumber = null)
+    {
+        for (var i = 1; i <= count; i++)
+        {
+            var sceneId = $"scene-{i:000}";
+            var sceneDirectory = Path.Combine(root, "scene-assets", profile, sceneId);
+            Directory.CreateDirectory(sceneDirectory);
+            if (skipFinalSceneNumber == i) continue;
+            File.WriteAllBytes(Path.Combine(sceneDirectory, $"{sceneId}-final.png"), [1, 2, 3]);
+        }
     }
 
     private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null, bool enableSceneVariants = false)
