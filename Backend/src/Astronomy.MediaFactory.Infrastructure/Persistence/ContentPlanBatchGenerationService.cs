@@ -509,7 +509,7 @@ public sealed class ContentPlanBatchGenerationService(
         return request.StartPhaseNo ?? (executionMode == ContentPlanExecutionMode.FullRebuild ? 1 : executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase ? 3 : 1);
     }
 
-    private static int ResolveEndPhaseNo(BatchGenerateFromPlansRequest request) => request.EndPhaseNo ?? 19;
+    private static int ResolveEndPhaseNo(BatchGenerateFromPlansRequest request) => request.EndPhaseNo ?? 20;
 
 
     private TimeSpan ResolveRunningPlanRecoveryStaleAfter(BatchGenerateFromPlansRequest request)

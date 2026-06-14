@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
@@ -22,6 +23,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IAstronomyInfographicRenderer infographicRenderer,
     IHeroAssetIntelligenceEngine heroEngine,
     IThumbnailAssetIntelligenceService thumbnailEngine,
+    IAstroPulseGalleryService galleryEngine,
     IVideoAssemblyIntelligenceService videoAssemblyEngine,
     IEventProductionIntelligenceAdapter intelligenceAdapter,
     IMediaEventStrategyResolver strategyResolver,
@@ -60,8 +62,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var productionIntelligence = intelligenceAdapter.Normalize(request);
         var strategy = strategyResolver.Resolve(productionIntelligence.EventType, productionIntelligence.Title);
         var executionContext = BuildProductionExecutionContext(request.ExecutionContext, productionRequest, eventIdResolution.EventId ?? Guid.Empty, outputRoot, productionIntelligence, strategy);
-        var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 19);
-        var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 19, startPhaseNo, 19);
+        var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 20);
+        var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 20, startPhaseNo, 20);
         var phaseResults = new List<ProductionPhaseResult>();
         var deletedFilesDueToOverwrite = new List<string>();
 
@@ -147,13 +149,14 @@ public sealed partial class ProductionPipelineExecutionService(
         (10, "Validate Scene Assets", PhaseValidateSceneAssetsAsync),
         (11, "Generate Hero", PhaseGenerateHeroAsync),
         (12, "Generate Thumbnails", PhaseGenerateThumbnailsAsync),
-        (13, "Generate Short Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
-        (14, "Generate Long Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.LongForm, ct)),
-        (15, "Generate Short TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
-        (16, "Generate Long TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.LongForm, ct)),
-        (17, "Assemble Short Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
-        (18, "Assemble Long Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.LongForm, ct)),
-        (19, "Final Validation", PhaseFinalValidationAsync)
+        (13, "Generate Gallery", PhaseGenerateGalleryAsync),
+        (14, "Generate Short Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (15, "Generate Long Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (16, "Generate Short TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (17, "Generate Long TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (18, "Assemble Short Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (19, "Assemble Long Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (20, "Publishing Package", PhaseFinalValidationAsync)
     ];
 
 
@@ -165,9 +168,10 @@ public sealed partial class ProductionPipelineExecutionService(
             <= 10 => true,
             11 => IsRequestedOutput(context, "HeroAsset"),
             12 => IsRequestedOutput(context, "Thumbnail"),
-            13 or 15 or 17 => IsRequestedOutput(context, "ShortVideo"),
-            14 or 16 or 18 => IsRequestedOutput(context, "LongVideo"),
-            19 => true,
+            13 => true,
+            14 or 16 or 18 => IsRequestedOutput(context, "ShortVideo"),
+            15 or 17 or 19 => IsRequestedOutput(context, "LongVideo"),
+            20 => true,
             _ => true
         };
 
@@ -190,8 +194,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<RequestedOutputCompletion> BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
         => new[]
         {
-            BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [13, 15, 17]),
-            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [14, 16, 18]),
+            BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [14, 16, 18]),
+            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [15, 17, 19]),
+            BuildRequestedOutputCompletion(context, phaseResults, "Gallery", [13]),
             BuildRequestedOutputCompletion(context, phaseResults, "HeroAsset", [11]),
             BuildRequestedOutputCompletion(context, phaseResults, "Thumbnail", [12])
         };
@@ -268,7 +273,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var started = DateTimeOffset.UtcNow;
         try
         {
-            if (phaseNo <= 14) ValidatePhaseInputContract(context, phaseNo);
+            if (phaseNo <= 15) ValidatePhaseInputContract(context, phaseNo);
             var outputs = (await action(context, cancellationToken)).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var missing = outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
@@ -1354,6 +1359,40 @@ public sealed partial class ProductionPipelineExecutionService(
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    private async Task<IReadOnlyList<string>> PhaseGenerateGalleryAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
+        var result = await galleryEngine.GenerateGeminidsGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Landscape, cancellationToken);
+        var outputs = result.ImagePaths
+            .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        ValidateGalleryContract(outputs, result.ManifestPath, result.ReviewPath);
+        return outputs;
+    }
+
+    private static void ValidateGalleryContract(IReadOnlyList<string> outputs, string manifestPath, string reviewPath)
+    {
+        var galleryImages = outputs
+            .Where(path => Regex.IsMatch(Path.GetFileName(path), @"^gallery-\d{2}\.png$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            .ToArray();
+        var errors = new List<string>();
+        if (galleryImages.Length != 6)
+            errors.Add($"exactly 6 gallery images are required; actual={galleryImages.Length}.");
+        foreach (var path in galleryImages)
+        {
+            if (!File.Exists(path))
+                errors.Add($"gallery image is missing: {NormalizePath(path)}.");
+        }
+        if (!File.Exists(manifestPath))
+            errors.Add($"gallery-manifest.json is required at '{NormalizePath(manifestPath)}'.");
+        if (!File.Exists(reviewPath))
+            errors.Add($"gallery-review.json is required at '{NormalizePath(reviewPath)}'.");
+
+        if (errors.Count > 0)
+            throw new InvalidOperationException("Gallery generation failed contract validation: " + string.Join("; ", errors));
+    }
+
 
     private static void ValidateCtrThumbnailV3Contract(string thumbnailRoot)
     {
@@ -1702,7 +1741,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 FullNarrationText = narration,
                 TotalEstimatedDurationSeconds = scenes.Sum(scene => scene.DurationSeconds),
                 SceneScripts = scenes,
-                Warnings = script.Warnings.Concat([$"Short narration was {action} by Phase 13 narration-duration contract before TTS."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                Warnings = script.Warnings.Concat([$"Short narration was {action} by Phase 14 narration-duration contract before TTS."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
             };
             await File.WriteAllTextAsync(scriptPath, JsonSerializer.Serialize(updated, JsonOptions), cancellationToken);
         }
@@ -3344,8 +3383,11 @@ public sealed partial class ProductionPipelineExecutionService(
         if (deleteStartPhaseNo <= 12 && deleteEndPhaseNo >= 12)
             DeleteProductionSubtree(context.ExecutionContext.ThumbnailRoot!, deletedFiles);
 
+        if (deleteStartPhaseNo <= 13 && deleteEndPhaseNo >= 13)
+            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "gallery"), deletedFiles);
+
         var firstValidationToDelete = Math.Max(deleteStartPhaseNo, 7);
-        var lastValidationToDelete = Math.Min(deleteEndPhaseNo, 12);
+        var lastValidationToDelete = Math.Min(deleteEndPhaseNo, 20);
         for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
     }
