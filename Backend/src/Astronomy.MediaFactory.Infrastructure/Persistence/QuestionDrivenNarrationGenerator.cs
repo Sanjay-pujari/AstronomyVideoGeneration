@@ -80,6 +80,8 @@ public sealed class QuestionDrivenNarrationGenerator(
         var inputPath = BuildPlanPath(request.EventId, request.RegionId, InputFileName, request.ProductionContext);
         var narrationPath = BuildPlanPath(request.EventId, request.RegionId, NarrationFileName, request.ProductionContext);
         var reviewPath = BuildPlanPath(request.EventId, request.RegionId, ReviewFileName, request.ProductionContext);
+        var legacyNarrationPath = BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext);
+        var legacyReviewPath = BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext);
 
         if (!File.Exists(inputPath))
             throw new ArgumentException($"Approved enriched question-driven scene plan was not found at '{inputPath.Replace('\\', '/')}'.", nameof(request));
@@ -90,8 +92,6 @@ public sealed class QuestionDrivenNarrationGenerator(
                 ?? throw new InvalidOperationException("Existing question-driven narration could not be parsed.");
             var existingReview = JsonSerializer.Deserialize<QuestionDrivenNarrationReviewDto>(await File.ReadAllTextAsync(reviewPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing question-driven narration review could not be parsed.");
-            var legacyNarrationPath = BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext);
-            var legacyReviewPath = BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext);
             if (!File.Exists(legacyNarrationPath))
                 await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(existingNarration, JsonOptions), cancellationToken);
             if (!File.Exists(legacyReviewPath))
@@ -120,8 +120,6 @@ public sealed class QuestionDrivenNarrationGenerator(
         Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
         await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
-        var legacyNarrationPath = BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext);
-        var legacyReviewPath = BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext);
         await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
 
