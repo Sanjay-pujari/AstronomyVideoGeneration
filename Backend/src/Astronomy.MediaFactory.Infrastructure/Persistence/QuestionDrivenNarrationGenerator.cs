@@ -11,8 +11,10 @@ public sealed class QuestionDrivenNarrationGenerator(
     ILogger<QuestionDrivenNarrationGenerator> logger) : IQuestionDrivenNarrationGenerator
 {
     private const string InputFileName = "question-driven-scene-plan.enriched.json";
-    private const string NarrationFileName = "question-driven-narration.json";
-    private const string ReviewFileName = "question-driven-narration-review.json";
+    private const string NarrationFileName = "question-driven-narration-v2.json";
+    private const string ReviewFileName = "question-driven-narration-review-v2.json";
+    private const string LegacyNarrationFileName = "question-driven-narration.json";
+    private const string LegacyReviewFileName = "question-driven-narration-review.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InternalTerms = ["question engine", "scene purpose", "metadata", "json", "source answer"];
     private static readonly string[] MeteorShowerForbiddenLeakageTerms = ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST", "western horizon", "planet pairing", "object pairing"];
@@ -20,41 +22,53 @@ public sealed class QuestionDrivenNarrationGenerator(
     private static readonly IReadOnlyDictionary<string, NarrationTemplate> Templates = new Dictionary<string, NarrationTemplate>(StringComparer.OrdinalIgnoreCase)
     {
         [AstronomyQuestionTypes.What] = new(
-            "OpeningHook",
-            "In Udaipur tonight, Venus and Jupiter gather close in the evening sky, giving the west a bright, easy-to-spot planetary moment.",
-            10,
-            "Warm, inviting, with a gentle sense of wonder.",
-            "Venus and Jupiter shine close tonight."),
+            "Hook",
+            "Tonight, the sky is setting up one of those moments that makes you stop, look up, and stay a little longer.",
+            8,
+            "Immediate, cinematic, and human; open with wonder rather than a list of facts.",
+            "Tonight's sky moment begins.",
+            "Hook",
+            "Hero"),
         [AstronomyQuestionTypes.Where] = new(
-            "LocationOrientation",
-            "Face the western horizon. Look roughly one-third of the way up, where the twilight fades and the two bright points begin to stand out.",
-            10,
-            "Clear and practical, like guiding a friend outdoors.",
-            "Look west, about one-third above the horizon."),
+            "ViewingAdvice",
+            "Once you are outside, use the horizon as your map and let the brightest landmarks guide your eyes into the right patch of sky.",
+            9,
+            "Practical and reassuring, like guiding a friend outdoors.",
+            "Use the horizon as your map.",
+            "WhereToLook",
+            "ConjunctionOverlay"),
         [AstronomyQuestionTypes.When] = new(
-            "LocalTiming",
-            "The sweet spot is around 7:23 PM IST, shortly after sunset, while the sky is dim enough for both planets to pop.",
+            "Explanation",
+            "The timing matters because the view changes quickly; a small window can make the difference between a faint sight and a memorable one.",
             9,
-            "Calm and precise, emphasizing local time.",
-            "Best around 7:23 PM IST after sunset."),
+            "Calm and precise while keeping the story moving.",
+            "Timing shapes the view.",
+            "Explanation",
+            "TimingScene"),
         [AstronomyQuestionTypes.How] = new(
-            "ObservationSteps",
-            "Start with Venus, the brighter beacon. Once you have it, scan nearby for Jupiter, softer but still bright in the same patch of sky.",
-            10,
-            "Encouraging and step-by-step.",
-            "Find Venus first, then Jupiter nearby."),
-        [AstronomyQuestionTypes.Why] = new(
-            "ViewingSignificance",
-            "What makes this special is the pairing: two of the sky’s brightest planets appearing close enough to feel like a shared evening signal.",
-            10,
-            "Reflective, appreciative, and lightly cinematic.",
-            "Two bright planets make a rare-looking pair."),
-        [AstronomyQuestionTypes.Action] = new(
-            "ClosingCallToAction",
-            "So if the clouds stay away, step outside this evening, look west, and give yourself a minute with Venus and Jupiter.",
+            "Reward",
+            "Give your eyes a minute to adjust; the reward is not just spotting the event, but watching the scene slowly reveal itself.",
             9,
+            "Encouraging, sensory, and step-by-step.",
+            "Let the sky reveal itself.",
+            "Reward",
+            "RewardScene"),
+        [AstronomyQuestionTypes.Why] = new(
+            "Curiosity",
+            "Here is why it is worth your attention: this is not just another dot in the sky, it is a short-lived alignment of timing, motion, and perspective.",
+            10,
+            "Curious, appreciative, and lightly cinematic.",
+            "A brief alignment of timing and motion.",
+            "Curiosity",
+            "SignificanceScene"),
+        [AstronomyQuestionTypes.Action] = new(
+            "CTA",
+            "If the sky is clear, save the viewing window, step outside, and follow for more sky events you can actually see.",
+            8,
             "Warm closing call-to-action, simple and sincere.",
-            "Clear skies? Step outside and look west.")
+            "Save the window and follow for more.",
+            "CTA",
+            "ClosingScene")
     };
 
     public async Task<QuestionDrivenNarrationResponse> GenerateQuestionDrivenNarrationAsync(QuestionDrivenNarrationRequest request, CancellationToken cancellationToken)
@@ -100,6 +114,8 @@ public sealed class QuestionDrivenNarrationGenerator(
         Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
         await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext), JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext), JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
 
         return BuildResponse(narration, review, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/')], warnings);
     }
@@ -135,7 +151,9 @@ public sealed class QuestionDrivenNarrationGenerator(
                 strategyNarration?.NarrationText ?? template.NarrationText,
                 strategyNarration?.EstimatedDurationSeconds ?? template.EstimatedDurationSeconds,
                 strategyNarration?.VoiceDirection ?? template.VoiceDirection,
-                strategyNarration?.CaptionText ?? template.CaptionText);
+                strategyNarration?.CaptionText ?? template.CaptionText,
+                template.Section,
+                template.SceneType);
         }).ToArray();
 
         return new QuestionDrivenNarrationDto(
@@ -163,12 +181,12 @@ public sealed class QuestionDrivenNarrationGenerator(
 
         return scene.QuestionType.ToLowerInvariant() switch
         {
-            "what" => Line($"{title} is the sky event to watch, centered on {objects} and the current approved production plan.", $"{title}: what to watch.", fact),
-            "where" => Line($"Look toward {direction}; use the production plan’s local sky guidance rather than any cached pilot direction.", $"Look toward {direction}.", $"Sky direction: {direction}."),
-            "when" => Line($"The best local viewing window is {window}, based on the current event intelligence.", $"Best window: {window}.", $"Best viewing window: {window}."),
-            "how" => Line($"Use the current strategy guidance: {FormatList(intelligence.ViewerInstructions, "check the sky conditions, choose a clear view, and observe safely")}.", "Use the current observing guidance.", string.Join(' ', intelligence.ViewerInstructions)),
+            "what" => Line($"Tonight opens with {title}, a sky moment centered on {objects} that is worth catching before it passes.", $"{title}: what to watch.", fact),
+            "where" => Line($"For the best view, turn toward {direction} and let the brightest part of the scene guide your eyes.", $"Look toward {direction}.", $"Sky direction: {direction}."),
+            "when" => Line($"Your best chance comes during {window}, when the timing gives the event its strongest view.", $"Best window: {window}.", $"Best viewing window: {window}."),
+            "how" => Line($"Make it simple: {FormatList(intelligence.ViewerInstructions, "check the sky conditions, choose a clear view, and observe safely")}.", "Use the observing guidance.", string.Join(' ', intelligence.ViewerInstructions)),
             "why" => Line($"This matters because {FirstNonEmpty(intelligence.ScientificContext, title + " has strong local skywatching value")}.", "Why this event matters.", FirstNonEmpty(intelligence.ScientificContext, title)),
-            "action" => Line($"If conditions cooperate, save the {window} window, check weather, and follow the current plan for {title}.", "Save the window and check weather.", $"CTA for {title}: {window}."),
+            "action" => Line($"If conditions cooperate, save the {window} window, check weather, step outside, and follow for more sky events.", "Save the window and check weather.", $"CTA for {title}: {window}."),
             _ => Line(fact, ShortenCaption(fact), fact)
         };
     }
@@ -220,6 +238,12 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "oneQuestionPerScene", narration.Scenes.Select(scene => scene.QuestionType).Distinct(StringComparer.OrdinalIgnoreCase).Count() == narration.Scenes.Count, "each scene focuses on exactly one question type.");
         AddCheck(checks, "captionsShorterThanNarration", narration.Scenes.All(scene => scene.CaptionText.Length < scene.NarrationText.Length), "caption text should be shorter than narration text.");
         AddCheck(checks, "noForbiddenUnrelatedTerms", !NarrationContainsForbiddenLeakage(narration, productionContext, out _), "narration plan must not contain forbidden unrelated event terms.");
+        AddCheck(checks, "hookExists", narration.Scenes.Any(scene => string.Equals(scene.Section, "Hook", StringComparison.OrdinalIgnoreCase)), "hook section exists.");
+        AddCheck(checks, "ctaExists", narration.Scenes.Any(scene => string.Equals(scene.Section, "CTA", StringComparison.OrdinalIgnoreCase)), "CTA section exists.");
+        AddCheck(checks, "storyStructureComplete", new[] { "Hook", "Curiosity", "Explanation", "ViewingAdvice", "Reward", "CTA" }.All(required => narration.Scenes.Any(scene => string.Equals(scene.Section, required, StringComparison.OrdinalIgnoreCase))), "story structure includes Hook, Curiosity, Explanation, ViewingAdvice, Reward, and CTA.");
+        AddCheck(checks, "sceneTypeMapped", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.Section) && !string.IsNullOrWhiteSpace(scene.SceneType)), "every narration section maps to a scene type.");
+        AddCheck(checks, "noRepetitiveSentenceOpenings", HasVariedSentenceOpenings(narration), "no repetitive sentence openings.");
+        AddCheck(checks, "noRoboticPhrasing", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, new[] { "based on the current", "approved production", "source answer", "metadata" })), "narration avoids robotic or internal phrasing.");
 
         return new QuestionDrivenNarrationReviewDto(
             narration.EventId,
@@ -258,6 +282,16 @@ public sealed class QuestionDrivenNarrationGenerator(
             if (IsMeteorShower(intelligence, productionContext)) terms.AddRange(MeteorShowerForbiddenLeakageTerms);
         }
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool HasVariedSentenceOpenings(QuestionDrivenNarrationDto narration)
+    {
+        var openings = narration.Scenes
+            .Select(scene => Clean(scene.NarrationText).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2))
+            .Select(words => string.Join(' ', words).ToLowerInvariant())
+            .Where(opening => opening.Length > 0)
+            .ToArray();
+        return openings.Distinct(StringComparer.OrdinalIgnoreCase).Count() == openings.Length;
     }
 
     private static bool SceneHasNoInternalTerms(QuestionDrivenNarrationSceneDto scene)
@@ -408,5 +442,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         string NarrationText,
         int EstimatedDurationSeconds,
         string VoiceDirection,
-        string CaptionText);
+        string CaptionText,
+        string Section,
+        string SceneType);
 }

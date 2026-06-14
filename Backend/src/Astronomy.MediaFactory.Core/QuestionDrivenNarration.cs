@@ -48,7 +48,9 @@ public sealed record QuestionDrivenNarrationSceneDto(
     string NarrationText,
     int EstimatedDurationSeconds,
     string VoiceDirection,
-    string CaptionText);
+    string CaptionText,
+    string Section = "",
+    string SceneType = "");
 
 public sealed record QuestionDrivenNarrationReviewDto(
     string EventId,

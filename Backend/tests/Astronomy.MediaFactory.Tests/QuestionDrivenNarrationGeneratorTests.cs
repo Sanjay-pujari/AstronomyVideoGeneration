@@ -33,6 +33,8 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.InRange(result.TotalEstimatedDurationSeconds, 45, 70);
         Assert.Empty(result.GeneratedFiles);
         Assert.Empty(result.Warnings);
+        Assert.False(File.Exists(BuildPlanPath(workingDirectory, "question-driven-narration-v2.json")));
+        Assert.False(File.Exists(BuildPlanPath(workingDirectory, "question-driven-narration-review-v2.json")));
         Assert.False(File.Exists(BuildPlanPath(workingDirectory, "question-driven-narration.json")));
         Assert.False(File.Exists(BuildPlanPath(workingDirectory, "question-driven-narration-review.json")));
         Assert.Equal(AstronomyQuestionTypes.What, result.Narration.Scenes.First().QuestionType);
@@ -46,6 +48,11 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             Assert.NotEqual(Normalize(scene.SourceAnswer), Normalize(scene.NarrationText));
         });
         Assert.Equal(result.Narration.Scenes.Count, result.Narration.Scenes.Select(scene => scene.NarrationText).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(result.Review.Checks, check => check.Name == "hookExists" && check.Passed);
+        Assert.Contains(result.Review.Checks, check => check.Name == "ctaExists" && check.Passed);
+        Assert.Contains(result.Review.Checks, check => check.Name == "storyStructureComplete" && check.Passed);
+        Assert.Contains(result.Review.Checks, check => check.Name == "sceneTypeMapped" && check.Passed);
+        Assert.All(result.Narration.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.SceneType)));
     }
 
     [Fact]
@@ -66,12 +73,16 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.Equal(2, result.GeneratedFiles.Count);
         Assert.All(result.GeneratedFiles, path => Assert.True(File.Exists(path)));
 
-        var narrationJson = await File.ReadAllTextAsync(BuildPlanPath(workingDirectory, "question-driven-narration.json"));
+        var narrationJson = await File.ReadAllTextAsync(BuildPlanPath(workingDirectory, "question-driven-narration-v2.json"));
         using var narrationDocument = JsonDocument.Parse(narrationJson);
         Assert.Equal(6, narrationDocument.RootElement.GetProperty("scenes").GetArrayLength());
-        Assert.Equal("Venus and Jupiter shine close tonight.", narrationDocument.RootElement.GetProperty("scenes")[0].GetProperty("captionText").GetString());
+        Assert.Equal("Tonight's sky moment begins.", narrationDocument.RootElement.GetProperty("scenes")[0].GetProperty("captionText").GetString());
+        Assert.Equal("Hook", narrationDocument.RootElement.GetProperty("scenes")[0].GetProperty("section").GetString());
+        Assert.Equal("Hero", narrationDocument.RootElement.GetProperty("scenes")[0].GetProperty("sceneType").GetString());
+        Assert.True(File.Exists(BuildPlanPath(workingDirectory, "question-driven-narration-v2.json")));
+        Assert.True(File.Exists(BuildPlanPath(workingDirectory, "question-driven-narration-review-v2.json")));
 
-        var reviewJson = await File.ReadAllTextAsync(BuildPlanPath(workingDirectory, "question-driven-narration-review.json"));
+        var reviewJson = await File.ReadAllTextAsync(BuildPlanPath(workingDirectory, "question-driven-narration-review-v2.json"));
         using var reviewDocument = JsonDocument.Parse(reviewJson);
         Assert.True(reviewDocument.RootElement.GetProperty("isValid").GetBoolean());
         Assert.Equal(result.TotalEstimatedDurationSeconds, reviewDocument.RootElement.GetProperty("totalEstimatedDurationSeconds").GetInt32());
