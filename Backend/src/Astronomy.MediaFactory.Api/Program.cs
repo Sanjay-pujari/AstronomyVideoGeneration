@@ -904,6 +904,19 @@ app.MapPost("/api/astronomy-intelligence/generate-visual-assets", async (VisualA
     }
 });
 
+app.MapPost("/api/scene-assets-v3/generate", async (SceneAssetsV3Request request, ISceneAssetsV3Service sceneAssets, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Scene Assets V3 generation request received. GenerateShort={GenerateShort}. GenerateLong={GenerateLong}. OverwriteExisting={OverwriteExisting}", request.GenerateShort, request.GenerateLong, request.OverwriteExisting);
+    try
+    {
+        return Results.Ok(await sceneAssets.GenerateAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-render-recipes", async (RenderRecipeRequest request, IRenderRecipeGenerator generator, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy render recipe generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
