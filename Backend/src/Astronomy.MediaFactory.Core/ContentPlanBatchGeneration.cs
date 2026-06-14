@@ -34,7 +34,8 @@ public sealed record BatchGenerateFromPlansRequest(
     bool AllowCompletedPlanRerun = false,
     bool ArchivePreviousRun = false,
     bool RebuildIntelligence = false,
-    bool EnableSceneVariants = false);
+    bool EnableSceneVariants = false,
+    bool EnableSceneAssetsV3 = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -216,7 +217,8 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool RebuildIntelligence = false,
     bool EnableSceneVariants = false,
     int? RequestedStartPhaseNo = null,
-    int? RequestedEndPhaseNo = null);
+    int? RequestedEndPhaseNo = null,
+    bool EnableSceneAssetsV3 = false);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,
@@ -287,7 +289,8 @@ public sealed record ProductionPipelineRequest(
     bool RebuildIntelligence = false,
     bool EnableSceneVariants = false,
     int? RequestedStartPhaseNo = null,
-    int? RequestedEndPhaseNo = null);
+    int? RequestedEndPhaseNo = null,
+    bool EnableSceneAssetsV3 = false);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProductionPhaseStatus

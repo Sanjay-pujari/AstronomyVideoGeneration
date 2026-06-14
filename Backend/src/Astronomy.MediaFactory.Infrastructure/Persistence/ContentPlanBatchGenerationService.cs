@@ -100,7 +100,8 @@ public sealed class ContentPlanBatchGenerationService(
                 request.AllowCompletedPlanRerun,
                 request.ArchivePreviousRun,
                 request.RebuildIntelligence,
-                request.EnableSceneVariants), cancellationToken);
+                request.EnableSceneVariants,
+                EnableSceneAssetsV3: request.EnableSceneAssetsV3), cancellationToken);
 
             return new BatchGenerateFromPlansResponse(
                 Success: execution.Success,

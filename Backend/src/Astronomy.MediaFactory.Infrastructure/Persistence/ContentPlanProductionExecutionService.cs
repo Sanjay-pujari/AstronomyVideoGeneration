@@ -101,7 +101,8 @@ public sealed class ContentPlanProductionExecutionService(
                 ExecutionMode: executionMode,
                 EnableSceneVariants: request.EnableSceneVariants,
                 RequestedStartPhaseNo: requestedStartPhaseNo,
-                RequestedEndPhaseNo: requestedEndPhaseNo), cancellationToken);
+                RequestedEndPhaseNo: requestedEndPhaseNo,
+                EnableSceneAssetsV3: request.EnableSceneAssetsV3), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
             errors.AddRange(pipelineResult.Errors);
