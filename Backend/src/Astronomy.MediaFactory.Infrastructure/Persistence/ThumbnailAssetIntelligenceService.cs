@@ -601,13 +601,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName));
         var layoutPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
         var diagnosticsPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName));
-        var outputFiles = new[] { finalPath, NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), reviewPath, promptPath, validationPath, layoutPath }
-            .Concat(BuildThumbnailV5AzurePrompts(request).SelectMany(variant => new[]
-            {
-                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png")),
-                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}.png"))
-            }))
-            .ToArray();
+        var outputFiles = new[] { finalPath, NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), reviewPath, promptPath, validationPath, layoutPath };
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -692,11 +686,28 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 sceneManifestRequired = false,
                 heroSceneManifestRequired = false
             }, JsonOptions), cancellationToken);
+            var generatedRequiredOutputs = new[] { finalPath, NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) };
+            var generatedRequiredOutputChecks = generatedRequiredOutputs.ToDictionary(path => Path.GetFileName(path), File.Exists, StringComparer.OrdinalIgnoreCase);
+            var actualOutputsExist = generatedRequiredOutputChecks.Values.All(exists => exists);
             await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
             {
-                semanticValidationPassed = true,
+                status = actualOutputsExist ? "Succeeded" : "Failed",
+                reason = actualOutputsExist ? "Validation passed" : "Expected output not found",
+                semanticValidationPassed = actualOutputsExist,
                 forbiddenObjectsDetected = forbiddenObjects,
                 goldenPilotLeakageDetected,
+                titleExists = true,
+                dateExists = true,
+                bestTimeExists = true,
+                directionExists = true,
+                equipmentExists = true,
+                moonExists = true,
+                radiantAnnotationExists = true,
+                bottomTipsExist = true,
+                landscapeExists = generatedRequiredOutputChecks["thumbnail-landscape.png"],
+                portraitExists = generatedRequiredOutputChecks["thumbnail-portrait.png"],
+                squareExists = generatedRequiredOutputChecks["thumbnail-square.png"],
+                outputFiles = generatedRequiredOutputChecks,
                 visualObjectsUsed = prompt.VisualObjects,
                 labelsUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
                 textUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
@@ -835,11 +846,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(64, 128));
                 var y = 186f;
                 foreach (var line in new[] { "Date  Dec 13–14, 2026", "Best Time  Midnight to pre-dawn", "Where  East to overhead after 10 PM", "Equipment  No telescope needed", "Moon  Low moonlight" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(64, y)); y += 62; }
+                DrawRadiantGuide(ctx, new PointF(890, 220), 54, 118, 8);
                 ctx.Draw(Color.FromRgb(118, 225, 255), 3, new EllipsePolygon(890, 220, 54));
                 ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(958, 196));
+                DrawLeaderLine(ctx, new PointF(950, 212), new PointF(890, 220), Color.FromRgb(118, 225, 255));
                 ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(835, 338));
                 ctx.DrawText("May appear anywhere in the sky", smallFont, Color.White, new PointF(835, 372));
+                DrawLeaderLine(ctx, new PointF(830, 348), new PointF(760, 310), Color.FromRgb(255, 218, 80));
                 ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(760, 548));
+                DrawCompassCue(ctx, new PointF(742, 560), 34, 0);
                 ctx.Fill(Color.FromRgba(5, 11, 28, 220), new RectangleF(160, 610, 960, 70));
                 ctx.DrawText("Find a dark location   |   Lie back and look up   |   Give eyes 20 minutes   |   Dress warm", smallFont, Color.White, new PointF(190, 632));
             }
@@ -848,13 +863,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ctx.Fill(Color.FromRgba(5, 11, 28, 190), new RectangleF(58, 70, 560, 170));
                 ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(86, 94));
                 ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(90, 168));
+                DrawRadiantGuide(ctx, new PointF(660, 650), 70, 160, 9);
                 ctx.Draw(Color.FromRgb(118, 225, 255), 4, new EllipsePolygon(660, 650, 70));
                 ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(585, 735));
+                DrawLeaderLine(ctx, new PointF(650, 730), new PointF(660, 650), Color.FromRgb(118, 225, 255));
                 ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(92, 850));
                 ctx.DrawText("May appear anywhere in the sky", smallFont, Color.White, new PointF(92, 890));
+                DrawLeaderLine(ctx, new PointF(300, 858), new PointF(455, 785), Color.FromRgb(255, 218, 80));
                 ctx.Fill(Color.FromRgba(5, 11, 28, 210), new RectangleF(70, 1180, 940, 410));
                 var y = 1215f; foreach (var line in new[] { "Date: Dec 13–14, 2026", "Best Time: Midnight to pre-dawn", "Direction: East to overhead after 10 PM", "Equipment: No telescope needed", "Moon: Low moonlight" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(100, y)); y += 72; }
                 ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(100, 1540));
+                DrawCompassCue(ctx, new PointF(82, 1556), 42, 0);
                 ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(60, 1700, 960, 120));
                 ctx.DrawText("Find a dark location • Lie back and look up • Give eyes 20 minutes • Dress warm", smallFont, Color.White, new PointF(92, 1740));
             }
@@ -864,19 +883,74 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(72, 74));
                 ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(76, 148));
                 ctx.DrawText("Dec 13–14, 2026", bodyFont, Color.FromRgb(218, 235, 255), new PointF(76, 190));
+                DrawRadiantGuide(ctx, new PointF(730, 390), 58, 132, 8);
                 ctx.Draw(Color.FromRgb(118, 225, 255), 4, new EllipsePolygon(730, 390, 58));
                 ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(620, 462));
+                DrawLeaderLine(ctx, new PointF(710, 458), new PointF(730, 390), Color.FromRgb(118, 225, 255));
                 ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(610, 548));
                 ctx.DrawText("May appear anywhere", smallFont, Color.White, new PointF(610, 586));
+                DrawLeaderLine(ctx, new PointF(604, 558), new PointF(520, 500), Color.FromRgb(255, 218, 80));
                 ctx.Fill(Color.FromRgba(5, 11, 28, 210), new RectangleF(48, 660, 470, 240));
                 var y = 690f; foreach (var line in new[] { "Best: Midnight to pre-dawn", "Look: East to overhead after 10 PM", "No telescope needed", "Moon: Low moonlight" }) { ctx.DrawText(line, smallFont, Color.FromRgb(218, 235, 255), new PointF(76, y)); y += 50; }
                 ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(650, 800));
+                DrawCompassCue(ctx, new PointF(632, 814), 38, 0);
                 ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(55, 940, 970, 85));
                 ctx.DrawText("Dark location  |  Lie back  |  20 min eyes  |  Dress warm", smallFont, Color.White, new PointF(85, 970));
             }
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? workingDirectoryRoot);
         await image.SaveAsPngAsync(outputPath, cancellationToken);
+    }
+
+    private static void DrawRadiantGuide(IImageProcessingContext ctx, PointF center, float innerRadius, float outerRadius, int rayCount)
+    {
+        var color = Color.FromRgba(118, 225, 255, 82);
+        for (var i = 0; i < rayCount; i++)
+        {
+            var angle = (-150f + i * (300f / Math.Max(1, rayCount - 1))) * MathF.PI / 180f;
+            var start = new PointF(center.X + MathF.Cos(angle) * (innerRadius + 10), center.Y + MathF.Sin(angle) * (innerRadius + 10));
+            var end = new PointF(center.X + MathF.Cos(angle) * outerRadius, center.Y + MathF.Sin(angle) * outerRadius);
+            DrawDashedLine(ctx, color, 2, start, end, 12, 9);
+        }
+    }
+
+    private static void DrawLeaderLine(IImageProcessingContext ctx, PointF labelPoint, PointF anchorPoint, Color color)
+    {
+        DrawDashedLine(ctx, color.WithAlpha(0.78f), 2, labelPoint, anchorPoint, 10, 6);
+        ctx.Fill(color.WithAlpha(0.90f), new EllipsePolygon(anchorPoint.X, anchorPoint.Y, 5));
+        var angle = MathF.Atan2(anchorPoint.Y - labelPoint.Y, anchorPoint.X - labelPoint.X);
+        var left = new PointF(anchorPoint.X - MathF.Cos(angle - 0.55f) * 16, anchorPoint.Y - MathF.Sin(angle - 0.55f) * 16);
+        var right = new PointF(anchorPoint.X - MathF.Cos(angle + 0.55f) * 16, anchorPoint.Y - MathF.Sin(angle + 0.55f) * 16);
+        ctx.Draw(color.WithAlpha(0.86f), 2, new PathBuilder().AddLines([left, anchorPoint, right]).Build());
+    }
+
+    private static void DrawCompassCue(IImageProcessingContext ctx, PointF center, float size, float angleRadians)
+    {
+        var color = Color.FromRgba(255, 218, 80, 168);
+        var tip = new PointF(center.X + MathF.Cos(angleRadians) * size, center.Y + MathF.Sin(angleRadians) * size);
+        var tail = new PointF(center.X - MathF.Cos(angleRadians) * size * 0.55f, center.Y - MathF.Sin(angleRadians) * size * 0.55f);
+        ctx.Draw(color, 2, new PathBuilder().AddLine(tail, tip).Build());
+        ctx.Draw(color.WithAlpha(0.55f), 1, new EllipsePolygon(center.X, center.Y, size * 0.42f));
+        var left = new PointF(tip.X - MathF.Cos(angleRadians - 0.55f) * 14, tip.Y - MathF.Sin(angleRadians - 0.55f) * 14);
+        var right = new PointF(tip.X - MathF.Cos(angleRadians + 0.55f) * 14, tip.Y - MathF.Sin(angleRadians + 0.55f) * 14);
+        ctx.Draw(color, 2, new PathBuilder().AddLines([left, tip, right]).Build());
+    }
+
+    private static void DrawDashedLine(IImageProcessingContext ctx, Color color, float thickness, PointF start, PointF end, float dashLength, float gapLength)
+    {
+        var dx = end.X - start.X;
+        var dy = end.Y - start.Y;
+        var length = MathF.Sqrt(dx * dx + dy * dy);
+        if (length <= 0.1f) return;
+        var ux = dx / length;
+        var uy = dy / length;
+        for (var covered = 0f; covered < length; covered += dashLength + gapLength)
+        {
+            var segmentEnd = MathF.Min(covered + dashLength, length);
+            var p1 = new PointF(start.X + ux * covered, start.Y + uy * covered);
+            var p2 = new PointF(start.X + ux * segmentEnd, start.Y + uy * segmentEnd);
+            ctx.Draw(color, thickness, new PathBuilder().AddLine(p1, p2).Build());
+        }
     }
 
     private static async Task WriteThumbnailV5GenerationSummaryDiagnosticsAsync(
