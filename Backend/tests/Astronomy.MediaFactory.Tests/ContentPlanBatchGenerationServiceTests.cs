@@ -650,7 +650,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.True(production.CapturedAllowCompletedPlanRerun);
         Assert.True(production.CapturedArchivePreviousRun);
         Assert.Equal(3, production.CapturedStartPhaseNo);
-        Assert.Equal(19, production.CapturedEndPhaseNo);
+        Assert.Equal(20, production.CapturedEndPhaseNo);
         Assert.Equal(ContentPlanExecutionMode.RebuildOutputs, response.ExecutionMode);
         Assert.True(response.CompletedPlanRerun);
         Assert.True(response.PreviousOutputArchived);

@@ -22,6 +22,7 @@ public sealed class ContentPlanProductionExecutionService(
         "Scene Engine Long",
         "Hero Engine",
         "Thumbnail Engine",
+        "Gallery Engine",
         "Narration Short",
         "Narration Long",
         "TTS Short",
@@ -47,7 +48,7 @@ public sealed class ContentPlanProductionExecutionService(
         var executionMode = request.ExecutionMode;
         var isCompletedPlanRerun = IsProductionCompleted(plan) && executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild;
         var requestedStartPhaseNo = ResolveStartPhaseNo(request);
-        var requestedEndPhaseNo = request.EndPhaseNo ?? 19;
+        var requestedEndPhaseNo = request.EndPhaseNo ?? 20;
         var resolvedRange = ResolveExecutionRange(executionMode, requestedStartPhaseNo, requestedEndPhaseNo);
         var startPhaseNo = resolvedRange.StartPhaseNo;
         var endPhaseNo = resolvedRange.EndPhaseNo;
@@ -109,12 +110,12 @@ public sealed class ContentPlanProductionExecutionService(
             var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
             var shortOk = File.Exists(shortVideo);
             var longOk = File.Exists(longVideo);
-            var phase19Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 19);
+            var phase20Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 20);
             var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
             var partialPhaseExecution = IsPartialPhaseExecution(request);
             var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success);
             var productionFailed = partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
-            var productionCompleted = partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase19Succeeded;
+            var productionCompleted = partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase20Succeeded;
             if (partialPhaseExecution)
             {
                 logger.LogDebug(
@@ -233,9 +234,10 @@ public sealed class ContentPlanProductionExecutionService(
             <= 10 => true,
             11 => IsRequestedOutput(productionRequest, "HeroAsset"),
             12 => IsRequestedOutput(productionRequest, "Thumbnail"),
-            13 or 15 or 17 => IsRequestedOutput(productionRequest, "ShortVideo"),
-            14 or 16 or 18 => IsRequestedOutput(productionRequest, "LongVideo"),
-            19 => true,
+            13 => true,
+            14 or 16 or 18 => IsRequestedOutput(productionRequest, "ShortVideo"),
+            15 or 17 or 19 => IsRequestedOutput(productionRequest, "LongVideo"),
+            20 => true,
             _ => true
         };
 
@@ -405,8 +407,8 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static PhaseRangeResolution ResolveExecutionRange(ContentPlanExecutionMode executionMode, int requestedStartPhaseNo, int requestedEndPhaseNo)
     {
-        var requestedStart = Math.Clamp(requestedStartPhaseNo, 1, 19);
-        var requestedEnd = Math.Clamp(requestedEndPhaseNo, requestedStart, 19);
+        var requestedStart = Math.Clamp(requestedStartPhaseNo, 1, 20);
+        var requestedEnd = Math.Clamp(requestedEndPhaseNo, requestedStart, 20);
         if (executionMode != ContentPlanExecutionMode.RebuildOutputs)
             return new(requestedStart, requestedEnd, false);
 
@@ -445,7 +447,8 @@ public sealed class ContentPlanProductionExecutionService(
             10 => [3, 5, 6, 7, 8, 9],
             11 => [10],
             12 => [10, 11],
-            >= 13 => [12],
+            13 => [12],
+            >= 14 => [13],
             _ => []
         };
 
@@ -571,15 +574,17 @@ public sealed class ContentPlanProductionExecutionService(
             entries.Add("hero");
         if (requestedStartPhaseNo <= 12 && requestedEndPhaseNo >= 12)
             entries.Add("thumbnails");
-        if (requestedStartPhaseNo <= 14 && requestedEndPhaseNo >= 13)
+        if (requestedStartPhaseNo <= 13 && requestedEndPhaseNo >= 13)
+            entries.Add("gallery");
+        if (requestedStartPhaseNo <= 15 && requestedEndPhaseNo >= 14)
             entries.Add("narration");
-        if (requestedStartPhaseNo <= 16 && requestedEndPhaseNo >= 15)
+        if (requestedStartPhaseNo <= 17 && requestedEndPhaseNo >= 16)
             entries.Add("tts");
-        if (requestedStartPhaseNo <= 19 && requestedEndPhaseNo >= 17)
+        if (requestedStartPhaseNo <= 19 && requestedEndPhaseNo >= 18)
             entries.Add("video-assembly");
-        if (requestedStartPhaseNo <= 19 && requestedEndPhaseNo >= 10)
+        if (requestedStartPhaseNo <= 20 && requestedEndPhaseNo >= 10)
             entries.Add("validation");
-        if (requestedStartPhaseNo <= 19 && requestedEndPhaseNo >= 1)
+        if (requestedStartPhaseNo <= 20 && requestedEndPhaseNo >= 1)
             entries.Add("phase-manifest.json");
         if (requestedStartPhaseNo <= 3 && requestedEndPhaseNo >= 3)
             entries.Add("question-engine");

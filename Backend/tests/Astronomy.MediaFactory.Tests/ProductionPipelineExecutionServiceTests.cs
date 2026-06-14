@@ -23,11 +23,12 @@ public sealed class ProductionPipelineExecutionServiceTests
         var context = CreateContext("NamedFullMoon", ["ShortVideo"]);
 
         Assert.True(IsPhaseRequired(context, 13));
-        Assert.False(IsPhaseRequired(context, 14));
-        Assert.True(IsPhaseRequired(context, 15));
-        Assert.False(IsPhaseRequired(context, 16));
-        Assert.True(IsPhaseRequired(context, 17));
-        Assert.False(IsPhaseRequired(context, 18));
+        Assert.True(IsPhaseRequired(context, 14));
+        Assert.False(IsPhaseRequired(context, 15));
+        Assert.True(IsPhaseRequired(context, 16));
+        Assert.False(IsPhaseRequired(context, 17));
+        Assert.True(IsPhaseRequired(context, 18));
+        Assert.False(IsPhaseRequired(context, 19));
     }
 
     [Fact]
@@ -41,6 +42,7 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.True(IsPhaseRequired(context, 16));
         Assert.True(IsPhaseRequired(context, 17));
         Assert.True(IsPhaseRequired(context, 18));
+        Assert.True(IsPhaseRequired(context, 19));
     }
 
     [Fact]
@@ -50,13 +52,14 @@ public sealed class ProductionPipelineExecutionServiceTests
 
         Assert.False(IsPhaseRequired(context, 11));
         Assert.True(IsPhaseRequired(context, 12));
-        Assert.False(IsPhaseRequired(context, 13));
+        Assert.True(IsPhaseRequired(context, 13));
         Assert.False(IsPhaseRequired(context, 14));
         Assert.False(IsPhaseRequired(context, 15));
         Assert.False(IsPhaseRequired(context, 16));
         Assert.False(IsPhaseRequired(context, 17));
         Assert.False(IsPhaseRequired(context, 18));
-        Assert.True(IsPhaseRequired(context, 19));
+        Assert.False(IsPhaseRequired(context, 19));
+        Assert.True(IsPhaseRequired(context, 20));
     }
 
     [Fact]
@@ -67,12 +70,13 @@ public sealed class ProductionPipelineExecutionServiceTests
         ProductionPhaseResult[] phaseResults =
         [
             new(12, "Generate Thumbnails", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
-            new(13, "Generate Short Narration", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
-            new(14, "Generate Long Narration", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
-            new(15, "Generate Short TTS", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
-            new(16, "Generate Long TTS", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
-            new(17, "Assemble Short Video", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
-            new(18, "Assemble Long Video", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested")
+            new(13, "Generate Gallery", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
+            new(14, "Generate Short Narration", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
+            new(15, "Generate Long Narration", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
+            new(16, "Generate Short TTS", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
+            new(17, "Generate Long TTS", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
+            new(18, "Assemble Short Video", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
+            new(19, "Assemble Long Video", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested")
         ];
 
         var completion = BuildRequestedOutputCompletion(context, phaseResults);
@@ -606,6 +610,6 @@ public sealed class ProductionPipelineExecutionServiceTests
             new GenericAstronomyEventStrategy(),
             null);
         var pipelineRequest = new ProductionPipelineRequest(request, Guid.NewGuid(), outputRoot, false, ExecutionContext: executionContext, EnableSceneVariants: enableSceneVariants);
-        return new ProductionPhaseContext(pipelineRequest, request, Guid.NewGuid(), Guid.NewGuid().ToString("D"), outputRoot, executionContext, intelligence, new GenericAstronomyEventStrategy(), false, false, 1, 19, false);
+        return new ProductionPhaseContext(pipelineRequest, request, Guid.NewGuid(), Guid.NewGuid().ToString("D"), outputRoot, executionContext, intelligence, new GenericAstronomyEventStrategy(), false, false, 1, 20, false);
     }
 }
