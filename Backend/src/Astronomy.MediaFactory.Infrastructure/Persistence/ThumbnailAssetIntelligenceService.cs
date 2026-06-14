@@ -601,8 +601,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var validationPath = NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName));
         var layoutPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
         var diagnosticsPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName));
-        var azureBackgroundPathForResponse = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-azure-background.png"));
-        var outputFiles = new[] { finalPath, azureBackgroundPathForResponse, reviewPath, promptPath, validationPath, layoutPath };
+        var outputFiles = new[] { finalPath, reviewPath, promptPath, validationPath, layoutPath }
+            .Concat(BuildThumbnailV4AzurePrompts().SelectMany(variant => new[]
+            {
+                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}-azure-background.png")),
+                NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}.png"))
+            }))
+            .ToArray();
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -637,14 +642,34 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (!request.DryRun)
         {
             Directory.CreateDirectory(thumbnailRoot);
-            var finalPromptText = JsonSerializer.Serialize(prompt, JsonOptions);
+            var thumbnailVariants = BuildThumbnailV4AzurePrompts();
+            var finalPromptText = JsonSerializer.Serialize(new { variants = thumbnailVariants }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
             var thumbnailTotalStopwatch = Stopwatch.StartNew();
-            var azureBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-azure-background.png"));
-            var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, finalPromptText, azureBackgroundPath, cancellationToken);
-            if (!azureResult.ProviderSucceeded)
-                throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed: {azureResult.FailureReason}");
-            File.Copy(azureBackgroundPath, finalPath, overwrite: true);
+            var thumbnailVariantResults = new List<(string Variant, string Prompt, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+            foreach (var variant in thumbnailVariants)
+            {
+                var azureBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
+                var variantPath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-v4-{variant.Variant.ToLowerInvariant()}.png"));
+                var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
+                if (!azureResult.ProviderSucceeded)
+                    throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
+                await WriteThumbnailV4OverlayAsync(azureBackgroundPath, variantPath, variant.TextLines, variant.Layout, cancellationToken);
+                var hash = await ComputeSha256Async(variantPath, cancellationToken);
+                thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
+            }
+
+            var duplicateHashGroups = thumbnailVariantResults
+                .GroupBy(v => v.Hash, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => new { imageHash = group.Key, variants = group.Select(v => v.Variant).ToArray() })
+                .ToArray();
+            if (duplicateHashGroups.Length > 0)
+                throw new InvalidOperationException("Thumbnail V4 variant validation failed: duplicate image hashes detected.");
+            if (thumbnailVariantResults.Select(v => v.TextLayout).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
+                throw new InvalidOperationException("Thumbnail V4 variant validation failed: all variants use the same text layout.");
+
+            File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
             await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
             {
@@ -672,11 +697,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             }, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(layoutPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
 
-            File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), true);
-            File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-square.png"), true);
-            File.Copy(finalPath, Path.Combine(thumbnailRoot, "thumbnail-portrait.png"), true);
+            File.Copy(thumbnailVariantResults[0].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), true);
+            File.Copy(thumbnailVariantResults[1].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-square.png"), true);
+            File.Copy(thumbnailVariantResults[2].ImagePath, Path.Combine(thumbnailRoot, "thumbnail-portrait.png"), true);
             thumbnailTotalStopwatch.Stop();
-            await WriteThumbnailGenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, azureResult, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteThumbnailV4GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
         }
 
         return BuildImageGenerationResponse(
@@ -760,6 +785,87 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
         Console.WriteLine();
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 12, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "PhotoCinematic", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
+    }
+
+    private static IReadOnlyList<(string Variant, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV4AzurePrompts() =>
+    [
+        ("A", "Extreme meteor storm sky, high contrast, large headline space left. YouTube thumbnail background only, no text, no people, no panels.", ["GEMINIDS", "PEAK NIGHT", "TONIGHT"], "left-stack"),
+        ("B", "Bright fireball meteor close-up crossing Milky Way, dramatic YouTube style. High contrast cinematic background only, no text, no people.", ["METEOR SHOWER", "TONIGHT"], "bottom-slam"),
+        ("C", "Person-free mountain valley under meteor shower, cinematic suspense, bold title area. Background only, no text, no people.", ["DON'T MISS", "GEMINIDS"], "top-left-angle"),
+        ("D", "Many meteors raining over dark landscape, urgent peak-night mood. YouTube CTR background only, no text, no people.", ["100+ METEORS?", "TONIGHT"], "right-block"),
+        ("E", "Deep space starfield with explosive Geminid streaks, high CTR composition. Background only, no text, no panels.", ["GEMINIDS", "DEC 13–14"], "center-burst"),
+        ("F", "Blue-orange cinematic sky, meteor shower over horizon, mobile-readable layout. Background only, no text, no people.", ["LOOK UP TONIGHT", "GEMINIDS"], "mobile-bottom")
+    ];
+
+    private static async Task WriteThumbnailV4OverlayAsync(string backgroundPath, string outputPath, IReadOnlyList<string> lines, string layout, CancellationToken cancellationToken)
+    {
+        using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
+        image.Mutate(ctx =>
+        {
+            ctx.Resize(new ResizeOptions { Size = new Size(1280, 720), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
+            ctx.Contrast(1.08f).Saturate(1.10f);
+            ctx.Fill(Color.Black.WithAlpha(0.20f), new RectangleF(0, 0, 1280, 720));
+            var title = ResolveThumbnailFont(lines[0].Length > 12 ? 62 : 82, FontStyle.Bold);
+            var second = ResolveThumbnailFont(lines.Count > 1 && lines[1].Length > 10 ? 58 : 72, FontStyle.Bold);
+            var third = ResolveThumbnailFont(54, FontStyle.Bold);
+            var (x, y, alignRight) = layout switch
+            {
+                "bottom-slam" => (70f, 430f, false),
+                "top-left-angle" => (74f, 58f, false),
+                "right-block" => (690f, 250f, true),
+                "center-burst" => (365f, 250f, false),
+                "mobile-bottom" => (110f, 470f, false),
+                _ => (72f, 190f, false)
+            };
+            var backdropWidth = alignRight ? 520f : 660f;
+            ctx.Fill(Color.Black.WithAlpha(0.42f), new RectangleF(alignRight ? 660 : x - 24, y - 22, backdropWidth, lines.Count * 86 + 44));
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var font = i == 0 ? title : i == 1 ? second : third;
+                var color = i == lines.Count - 1 ? Color.FromRgb(255, 202, 68) : Color.White;
+                ctx.DrawText(lines[i], font, color, new PointF(x, y + i * 84));
+            }
+        });
+        await image.SaveAsPngAsync(outputPath, cancellationToken);
+    }
+
+    private static async Task WriteThumbnailV4GenerationSummaryDiagnosticsAsync(
+        string promptText,
+        AzureOpenAIForImageOptions options,
+        string imagePath,
+        string promptPath,
+        string diagnosticsPath,
+        IReadOnlyList<(string Variant, string Prompt, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
+        object duplicateHashGroups,
+        long totalMs,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = options.Endpoint?.Trim() ?? string.Empty;
+        var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
+        var uniqueHashes = variants.Select(v => v.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 12,
+            provider = "AzureOpenAIForImage",
+            deployment,
+            model = deployment,
+            endpoint,
+            apiVersion = "2024-10-21",
+            region = ResolveRegion(endpoint),
+            renderer = "AzureImage2ThumbnailV4Variants",
+            fallbackRendererUsed = false,
+            finalPromptText = promptText,
+            variantCount = variants.Count,
+            azureCallsCount = variants.Count(v => v.Result.ProviderCalled),
+            uniqueImageHashes = uniqueHashes,
+            selectedThumbnailVariant = variants.First().Variant,
+            duplicateHashGroups,
+            imageHash = variants.First().Hash,
+            imagePath = NormalizePath(imagePath),
+            promptPath = NormalizePath(promptPath),
+            totalMs,
+            variants = variants.Select(v => new { v.Variant, v.Prompt, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
+        }, JsonOptions), cancellationToken);
     }
 
     private async Task<AzureImage2GenerationResult> GenerateThumbnailWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken)

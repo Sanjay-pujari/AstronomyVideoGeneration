@@ -5,7 +5,11 @@ using Azure.Core;
 using Azure.Identity;
 using System.Security.Cryptography;
 using System.Text.Json;
+using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Drawing.Processing;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
@@ -413,23 +417,39 @@ public sealed class HeroAssetStoryGenerator(
             WriteHeroGenerationConfigurationDiagnostics(compositionModel, imageOptions.Value, HeroImageSpecs[0].Width, HeroImageSpecs[0].Height, promptPath, diagnosticsPath);
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var azureBackgroundPath = Path.Combine(heroAssetsRoot, "hero-azure-background.png");
-            var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, compositionModel.VisualBlock.SourceScene ?? string.Empty, azureBackgroundPath, cancellationToken);
-            if (!azureResult.ProviderSucceeded)
-                throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed: {azureResult.FailureReason}");
+            var heroVariants = BuildHeroV4AzurePrompts();
+            var heroVariantResults = new List<(string Variant, string Prompt, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+            foreach (var variant in heroVariants)
+            {
+                var azureBackgroundPath = Path.Combine(heroAssetsRoot, $"hero-v4-{variant.Variant.ToLowerInvariant()}-azure-background.png");
+                var variantPath = Path.Combine(heroAssetsRoot, $"hero-v4-{variant.Variant.ToLowerInvariant()}.png");
+                var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
+                if (!azureResult.ProviderSucceeded)
+                    throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
+                await WriteHeroV4OverlayAsync(azureBackgroundPath, variantPath, cancellationToken);
+                var hash = await ComputeSha256Async(variantPath, cancellationToken);
+                heroVariantResults.Add((variant.Variant, variant.Prompt, azureBackgroundPath, variantPath, azureResult, hash));
+                generatedFiles.Add(NormalizePath(azureBackgroundPath));
+                generatedFiles.Add(NormalizePath(variantPath));
+            }
 
-            File.Copy(azureBackgroundPath, heroPath, overwrite: true);
-            File.Copy(azureBackgroundPath, Path.Combine(heroAssetsRoot, HeroLandscapeFileName), overwrite: true);
-            File.Copy(azureBackgroundPath, Path.Combine(heroAssetsRoot, HeroSquareFileName), overwrite: true);
-            File.Copy(azureBackgroundPath, Path.Combine(heroAssetsRoot, HeroPortraitFileName), overwrite: true);
-            generatedFiles.Add(NormalizePath(azureBackgroundPath));
+            var uniqueHeroHashes = heroVariantResults.Select(result => result.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (uniqueHeroHashes.Length != heroVariants.Count)
+                throw new InvalidOperationException($"Hero V4 variant validation failed: expected {heroVariants.Count} unique image hashes but found {uniqueHeroHashes.Length}.");
+
+            var selectedHero = heroVariantResults[0];
+            File.Copy(selectedHero.ImagePath, heroPath, overwrite: true);
+            File.Copy(heroVariantResults[0].ImagePath, Path.Combine(heroAssetsRoot, HeroLandscapeFileName), overwrite: true);
+            File.Copy(heroVariantResults[1].ImagePath, Path.Combine(heroAssetsRoot, HeroSquareFileName), overwrite: true);
+            File.Copy(heroVariantResults[2].ImagePath, Path.Combine(heroAssetsRoot, HeroPortraitFileName), overwrite: true);
             generatedFiles.Add(NormalizePath(heroPath));
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroLandscapeFileName)));
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroSquareFileName)));
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, HeroPortraitFileName)));
 
             heroDiagnosticsStopwatch.Stop();
-            await WriteHeroGenerationSummaryDiagnosticsAsync(compositionModel, imageOptions.Value, heroPath, promptPath, diagnosticsPath, azureResult, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
+            await File.WriteAllTextAsync(promptPath, string.Join(Environment.NewLine + Environment.NewLine, heroVariants.Select(v => $"Variant {v.Variant}: {v.Prompt}")), cancellationToken);
+            await WriteHeroV4GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
 
@@ -873,6 +893,82 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
         Console.WriteLine();
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "WarmTwilightHero", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
+    }
+
+    private static IReadOnlyList<(string Variant, string Prompt)> BuildHeroV4AzurePrompts() =>
+    [
+        ("A", "Cinematic wide meteor shower landscape, mountain horizon, Milky Way, realistic meteors, calm documentary poster. Clean premium astronomy image background with generous dark space for minimal title overlay. No text, no panels, no equipment."),
+        ("B", "Close dramatic sky composition, large bright Geminid meteors, deep blue-black night, intense atmosphere. Cinematic realism, high detail starfield, no text, no panels, no equipment."),
+        ("C", "Udaipur/Indian dark-sky inspired horizon silhouette, meteor shower above, warm horizon glow, premium astronomy campaign. Cinematic realistic night landscape, no text, no panels, no equipment."),
+        ("D", "Minimal elegant NASA-style poster background, meteor radiant visible, large empty title space, cinematic realism. Sparse premium Geminids meteor shower sky, no text, no panels, no equipment.")
+    ];
+
+    private static async Task WriteHeroV4OverlayAsync(string backgroundPath, string outputPath, CancellationToken cancellationToken)
+    {
+        using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
+        image.Mutate(ctx =>
+        {
+            ctx.Resize(new ResizeOptions { Size = new Size(1280, 720), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
+            ctx.Fill(Color.Black.WithAlpha(0.18f), new RectangleF(0, 0, 1280, 720));
+            ctx.Fill(Color.Black.WithAlpha(0.28f), new RectangleF(64, 390, 600, 210));
+            var font = ResolveHeroFont(76, FontStyle.Bold);
+            var mid = ResolveHeroFont(43, FontStyle.Bold);
+            var small = ResolveHeroFont(34, FontStyle.Regular);
+            ctx.DrawText("GEMINIDS", font, Color.White, new PointF(86, 410));
+            ctx.DrawText("METEOR SHOWER PEAK", mid, Color.FromRgb(198, 226, 255), new PointF(90, 500));
+            ctx.DrawText("Dec 13–14, 2026", small, Color.FromRgb(255, 215, 160), new PointF(92, 554));
+        });
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+        await image.SaveAsPngAsync(outputPath, cancellationToken);
+    }
+
+    private static Font ResolveHeroFont(float size, FontStyle style)
+    {
+        foreach (var name in new[] { "Inter", "Segoe UI", "Arial", "DejaVu Sans", "Liberation Sans" })
+        {
+            if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, style);
+        }
+
+        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
+            throw new InvalidOperationException("No system fonts available for hero image generation.");
+
+        return fallbackFamily.CreateFont(size, style);
+    }
+
+    private static async Task WriteHeroV4GenerationSummaryDiagnosticsAsync(
+        AzureOpenAIForImageOptions options,
+        string imagePath,
+        string promptPath,
+        string diagnosticsPath,
+        IReadOnlyList<(string Variant, string Prompt, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
+        long totalMs,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = options.Endpoint?.Trim() ?? string.Empty;
+        var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
+        var uniqueHashes = variants.Select(v => v.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 11,
+            provider = "AzureOpenAIForImage",
+            deployment,
+            model = deployment,
+            endpoint,
+            apiVersion = "2024-10-21",
+            region = ResolveRegion(endpoint),
+            renderer = "AzureImage2HeroV4Variants",
+            fallbackRendererUsed = false,
+            variantCount = variants.Count,
+            azureCallsCount = variants.Count(v => v.Result.ProviderCalled),
+            uniqueImageHashes = uniqueHashes,
+            selectedHeroVariant = variants.First().Variant,
+            imageHash = variants.First().Hash,
+            imagePath = NormalizePath(imagePath),
+            promptPath = NormalizePath(promptPath),
+            totalMs,
+            variants = variants.Select(v => new { v.Variant, v.Prompt, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
+        }, JsonOptions), cancellationToken);
     }
 
     private async Task<AzureImage2GenerationResult> GenerateHeroWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken)
