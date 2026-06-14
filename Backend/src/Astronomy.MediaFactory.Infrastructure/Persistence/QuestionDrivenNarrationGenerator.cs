@@ -17,7 +17,17 @@ public sealed class QuestionDrivenNarrationGenerator(
     private const string LegacyReviewFileName = "question-driven-narration-review.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InternalTerms = ["question engine", "scene purpose", "metadata", "json", "source answer"];
+    private const string MeteorShowerViewingAdviceNarration = "For the best experience, head to a dark location after 10 PM and scan the sky from east to overhead.";
     private static readonly string[] MeteorShowerForbiddenLeakageTerms = ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST", "western horizon", "planet pairing", "object pairing"];
+    private static readonly IReadOnlyDictionary<string, string> MeteorShowerSectionsByQuestionType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        [AstronomyQuestionTypes.What] = "Hook",
+        [AstronomyQuestionTypes.Why] = "Curiosity",
+        [AstronomyQuestionTypes.When] = "Explanation",
+        [AstronomyQuestionTypes.Where] = "ViewingAdvice",
+        [AstronomyQuestionTypes.How] = "Reward",
+        [AstronomyQuestionTypes.Action] = "CTA"
+    };
 
     private static readonly IReadOnlyDictionary<string, NarrationTemplate> Templates = new Dictionary<string, NarrationTemplate>(StringComparer.OrdinalIgnoreCase)
     {
@@ -143,6 +153,7 @@ public sealed class QuestionDrivenNarrationGenerator(
     {
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
         var isProductionStrategyDriven = request.ProductionContext is not null && intelligence is not null;
+        var isMeteorShower = intelligence is not null && IsMeteorShower(intelligence, request.ProductionContext);
         var scenes = enrichedPlan.Scenes.Select(scene =>
         {
             if (!Templates.TryGetValue(scene.QuestionType, out var template))
@@ -151,6 +162,14 @@ public sealed class QuestionDrivenNarrationGenerator(
             var strategyNarration = isProductionStrategyDriven
                 ? BuildStrategyDrivenNarration(scene, intelligence!, request.ProductionContext!)
                 : null;
+            var sourceAnswer = Clean(strategyNarration?.SourceAnswer ?? scene.SourceAnswer);
+            var section = ResolveNarrationSection(scene.QuestionType, template, isMeteorShower);
+            var narrationText = EnsureNarrationIsParaphrased(
+                scene.QuestionType,
+                section,
+                Clean(strategyNarration?.NarrationText ?? template.NarrationText),
+                sourceAnswer,
+                isMeteorShower);
 
             return new QuestionDrivenNarrationSceneDto(
                 scene.SceneNumber,
@@ -158,13 +177,13 @@ public sealed class QuestionDrivenNarrationGenerator(
                 Clean(scene.ScenePurpose),
                 Clean(scene.ViewerQuestion),
                 Clean(strategyNarration?.ViewerTakeaway ?? scene.ViewerTakeaway),
-                Clean(strategyNarration?.SourceAnswer ?? scene.SourceAnswer),
+                sourceAnswer,
                 Clean(strategyNarration?.NarrationIntent ?? scene.NarrationIntent),
-                strategyNarration?.NarrationText ?? template.NarrationText,
+                narrationText,
                 strategyNarration?.EstimatedDurationSeconds ?? template.EstimatedDurationSeconds,
                 strategyNarration?.VoiceDirection ?? template.VoiceDirection,
                 strategyNarration?.CaptionText ?? template.CaptionText,
-                template.Section,
+                section,
                 template.SceneType);
         }).ToArray();
 
@@ -175,6 +194,39 @@ public sealed class QuestionDrivenNarrationGenerator(
             scenes,
             scenes.Sum(scene => scene.EstimatedDurationSeconds),
             DateTimeOffset.UtcNow);
+    }
+
+    private static string ResolveNarrationSection(string questionType, NarrationTemplate template, bool isMeteorShower)
+    {
+        if (isMeteorShower && MeteorShowerSectionsByQuestionType.TryGetValue(questionType, out var meteorSection))
+            return meteorSection;
+
+        return string.Equals(template.Section, "WhereToLook", StringComparison.OrdinalIgnoreCase)
+            ? "ViewingAdvice"
+            : template.Section;
+    }
+
+    private static string EnsureNarrationIsParaphrased(string questionType, string section, string narrationText, string sourceAnswer, bool isMeteorShower)
+    {
+        if (!string.Equals(narrationText.Trim(), sourceAnswer.Trim(), StringComparison.Ordinal))
+            return narrationText;
+
+        if (isMeteorShower && string.Equals(section, "ViewingAdvice", StringComparison.OrdinalIgnoreCase))
+            return MeteorShowerViewingAdviceNarration;
+
+        if (Templates.TryGetValue(questionType, out var template) && !string.Equals(template.NarrationText.Trim(), sourceAnswer.Trim(), StringComparison.Ordinal))
+            return template.NarrationText;
+
+        return section switch
+        {
+            "Hook" => "Tonight's sky story begins with a simple reason to pause, look up, and notice the moment.",
+            "Curiosity" => "The reason this stands out is the rare mix of timing, motion, and sky conditions coming together.",
+            "Explanation" => "The timing matters because the sky changes quickly, so the strongest view belongs to a specific window.",
+            "ViewingAdvice" => "For the clearest view, choose an open dark spot and use the horizon to guide your eyes across the right sky area.",
+            "Reward" => "Give your eyes time to adjust, and the scene can slowly reveal details that are easy to miss at first.",
+            "CTA" => "Save the viewing window, check the sky, step outside, and follow for more events you can actually see.",
+            _ => "Look up with a clear view, follow the timing, and let the sky moment unfold naturally."
+        };
     }
 
     private static StrategyNarrationLine? BuildStrategyDrivenNarration(EnrichedQuestionSceneDto scene, ProductionEventIntelligence intelligence, ProductionPipelineExecutionContext context)
@@ -206,7 +258,7 @@ public sealed class QuestionDrivenNarrationGenerator(
     private static StrategyNarrationLine BuildMeteorShowerNarration(EnrichedQuestionSceneDto scene, ProductionEventIntelligence intelligence)
     {
         var template = Templates.TryGetValue(scene.QuestionType, out var matchedTemplate) ? matchedTemplate : null;
-        var section = template?.Section ?? scene.QuestionType;
+        var section = template is not null ? ResolveNarrationSection(scene.QuestionType, template, isMeteorShower: true) : scene.QuestionType;
         var region = intelligence.VisibilityRegion.Contains("UDAIPUR", StringComparison.OrdinalIgnoreCase) ? "Udaipur" : Clean(intelligence.VisibilityRegion, "your location");
         var title = Clean(intelligence.Title, "Geminids Meteor Shower");
         var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, "2026-12-14 00:00–05:00 IST");
@@ -227,7 +279,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             "Hook" => Line("Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.", "Reliable meteor shower tonight.", source),
             "Curiosity" => Line("What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.", "Bright, slow, colorful meteors.", source),
             "Explanation" => Line("This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.", "Debris from asteroid 3200 Phaethon.", source),
-            "ViewingAdvice" => Line("For the best experience, head to a dark location after 10 PM and scan the sky from east to overhead.", "Dark location; scan east to overhead.", source),
+            "ViewingAdvice" => Line(MeteorShowerViewingAdviceNarration, "Dark location; scan east to overhead.", source),
             "Reward" => Line("With low moonlight, patient observers may catch repeated bright streaks crossing the dark sky.", "Low moonlight helps meteor watching.", source),
             "CTA" => Line("Save this sky guide, step outside after midnight, and follow for more astronomy events.", "Save this guide and follow.", source),
             _ => Line(source, ShortenCaption(source), source)
