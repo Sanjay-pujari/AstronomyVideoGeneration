@@ -318,6 +318,39 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.True(GetBooleanDiagnostic(diagnostics, "PlanetGroupingValidationPathExecuted"));
     }
 
+
+    [Fact]
+    public void Phase7NarrationValidation_Fails_WhenRequiredLegacyFilesAreMissing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "astro-pulse-phase7-validation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var narrationPath = Path.Combine(root, "question-driven-narration.json");
+        var reviewPath = Path.Combine(root, "question-driven-narration-review.json");
+        var response = BuildValidNarrationResponse([]);
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase7NarrationFilesGenerated", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var exception = Assert.Throws<TargetInvocationException>(() => method!.Invoke(null, [response, narrationPath, reviewPath]));
+
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+        Assert.Contains("question-driven-narration.json", exception.InnerException!.Message);
+        Assert.Contains("question-driven-narration-review.json", exception.InnerException.Message);
+    }
+
+    [Fact]
+    public async Task Phase7NarrationValidation_Passes_WhenRequiredLegacyFilesExist()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "astro-pulse-phase7-validation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var narrationPath = Path.Combine(root, "question-driven-narration.json");
+        var reviewPath = Path.Combine(root, "question-driven-narration-review.json");
+        await File.WriteAllTextAsync(narrationPath, "{}");
+        await File.WriteAllTextAsync(reviewPath, "{}");
+        var response = BuildValidNarrationResponse([narrationPath, reviewPath]);
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase7NarrationFilesGenerated", BindingFlags.NonPublic | BindingFlags.Static);
+
+        method!.Invoke(null, [response, narrationPath, reviewPath]);
+    }
+
     private static bool IsPhaseRequired(ProductionPhaseContext context, int phaseNo)
     {
         var method = typeof(ProductionPipelineExecutionService).GetMethod("IsPhaseRequiredForRequestedOutputs", BindingFlags.NonPublic | BindingFlags.Static);
@@ -343,6 +376,14 @@ public sealed class ProductionPipelineExecutionServiceTests
 
     private static int GetIntDiagnostic(object diagnostics, string propertyName)
         => (int)diagnostics.GetType().GetProperty(propertyName)!.GetValue(diagnostics)!;
+
+
+    private static QuestionDrivenNarrationResponse BuildValidNarrationResponse(IReadOnlyList<string> generatedFiles)
+    {
+        var narration = new QuestionDrivenNarrationDto("event-id", "us", "en", [], 0, DateTimeOffset.UtcNow);
+        var review = new QuestionDrivenNarrationReviewDto("event-id", "us", "en", true, 0, 0, [], [], DateTimeOffset.UtcNow);
+        return new QuestionDrivenNarrationResponse("event-id", 0, 0, true, narration, review, generatedFiles, []);
+    }
 
     private static async Task WriteEnrichedScenePlanAsync(
         ProductionPhaseContext context,

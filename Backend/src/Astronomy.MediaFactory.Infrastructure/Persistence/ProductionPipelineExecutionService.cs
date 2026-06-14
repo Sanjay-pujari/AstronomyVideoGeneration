@@ -334,13 +334,29 @@ public sealed partial class ProductionPipelineExecutionService(
         ValidatePhase7NarrationRequest(narrationRequest, context);
         var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(narrationRequest, cancellationToken);
         var outputs = new List<string>(response.GeneratedFiles);
+        var narrationPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json");
+        var reviewPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json");
+        ValidatePhase7NarrationFilesGenerated(response, narrationPath, reviewPath);
+        outputs.Add(narrationPath);
+        outputs.Add(reviewPath);
         Directory.CreateDirectory(context.ExecutionContext.SceneRoot!);
-        CopyFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration.json"), outputs);
-        CopyFile(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration-review.json"), outputs);
+        CopyFile(narrationPath, Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration.json"), outputs);
+        CopyFile(reviewPath, Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration-review.json"), outputs);
         return outputs;
     }
 
+    private static void ValidatePhase7NarrationFilesGenerated(QuestionDrivenNarrationResponse response, string narrationPath, string reviewPath)
+    {
+        var missing = new List<string>();
+        if (!File.Exists(narrationPath)) missing.Add(Path.GetFileName(narrationPath));
+        if (!File.Exists(reviewPath)) missing.Add(Path.GetFileName(reviewPath));
 
+        if (missing.Count > 0)
+            throw new InvalidOperationException("Phase 7 narration generation did not persist required output file(s): " + string.Join(", ", missing) + ".");
+
+        if (!response.IsValid)
+            throw new InvalidOperationException("Phase 7 narration generation failed validation: " + string.Join(" | ", response.Warnings));
+    }
 
     private static async Task<int> AddPhase6SceneVisualVariantsAsync(string enrichedPath, CancellationToken cancellationToken)
     {
