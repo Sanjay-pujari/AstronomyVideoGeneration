@@ -62,6 +62,38 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.True(IsPhaseRequired(context, 20));
     }
 
+
+    [Fact]
+    public void Phase14NarrationExtraction_ReadsSectionsFromRootScenesArray()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "astro-phase14-narration", Guid.NewGuid().ToString("N"), "question-driven-narration-v2.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            section = "WrongRootSection",
+            narration = new { section = "WrongNarrationSection" },
+            scenes = new[]
+            {
+                new { sceneNumber = 1, section = "Hook", narrationText = "Look up tonight." },
+                new { sceneNumber = 2, section = "ViewingAdvice", narrationText = "Face west after sunset." },
+                new { sceneNumber = 3, section = "Explanation", narrationText = "The alignment is easy to see." },
+                new { sceneNumber = 4, section = "Reward", narrationText = "You will spot a bright pairing." },
+                new { sceneNumber = 5, section = "Curiosity", narrationText = "The planets only appear close." },
+                new { sceneNumber = 6, section = "CTA", narrationText = "Save this reminder." }
+            }
+        }));
+
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ExtractNarrationBeats", BindingFlags.NonPublic | BindingFlags.Static);
+        var beats = Assert.IsAssignableFrom<System.Collections.IEnumerable>(method!.Invoke(null, [path]));
+        var sections = beats.Cast<object>()
+            .Select(beat => beat.GetType().GetProperty("Section")!.GetValue(beat)?.ToString())
+            .ToArray();
+
+        Assert.Equal(["Hook", "ViewingAdvice", "Explanation", "Reward", "Curiosity", "CTA"], sections);
+        Assert.DoesNotContain("WrongRootSection", sections);
+        Assert.DoesNotContain("WrongNarrationSection", sections);
+    }
+
     [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {

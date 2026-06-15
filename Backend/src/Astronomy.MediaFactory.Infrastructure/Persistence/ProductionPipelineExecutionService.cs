@@ -1739,6 +1739,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var matchedPairs = new List<object>();
         var unmatchedNarrationSections = new List<string>();
         var unmatchedScenes = new List<string>();
+        var narrationDiagnostics = new List<NarrationSceneDiagnostic>();
 
         var shortRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
         var longRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
@@ -1759,13 +1760,16 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var shortNarration = SelectExisting(shortNarrationCandidates, checkedPaths, "short narration V2 source", missingFiles);
             var longNarration = SelectExisting(longNarrationCandidates, checkedPaths, "long narration V2 source", missingFiles);
-            var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, shortNarration, 5, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, cancellationToken);
-            var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, longNarration, 9, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, cancellationToken);
+            var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, shortNarration, 5, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
+            var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, longNarration, 9, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
 
             var missingShortScenes = shortItems.Where(i => i.SyncStatus != "Matched").Select(i => i.SceneId).ToArray();
             var missingLongScenes = longItems.Where(i => i.SyncStatus != "Matched").Select(i => i.SceneId).ToArray();
             var missingNarrationBeats = shortItems.Concat(longItems).Where(i => string.IsNullOrWhiteSpace(i.NarrationBeat)).Select(i => $"{i.Format}:{i.SceneId}").ToArray();
+            var extractedSections = narrationDiagnostics.Select(n => n.Section).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var errors = missingFiles.Concat(missingNarrationBeats.Select(x => $"Missing narration beat: {x}")).ToList();
+            if (extractedSections.Length == 0) errors.Add("Phase 14 extracted section count = 0 from narration scenes[].section");
+            if (matchedPairs.Count == 0) errors.Add("Phase 14 matchedPairs must not be empty");
             errors.AddRange(shortItems.Concat(longItems).Where(i => !File.Exists(i.SceneImagePath)).Select(i => $"Scene image path does not exist: {i.SceneImagePath}"));
             if (shortItems.Count(i => i.SyncStatus == "Matched") != 5) errors.Add("short matched count != 5");
             if (longItems.Count(i => i.SyncStatus == "Matched") != 9) errors.Add("long matched count != 9");
@@ -1780,6 +1784,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 diagnostics = new
                 {
                     matchingStrategy = "SectionToSceneMapping",
+                    narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
+                    sectionsExtracted = extractedSections,
                     matchedPairs,
                     unmatchedNarrationSections = unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase),
                     unmatchedScenes = unmatchedScenes.Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1815,19 +1821,21 @@ public sealed partial class ProductionPipelineExecutionService(
                 oldPathUsed = false,
                 validationPassed = errors.Count == 0,
                 matchingStrategy = "SectionToSceneMapping",
+                narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
+                sectionsExtracted = extractedSections,
                 matchedPairs,
                 unmatchedNarrationSections = unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase),
                 unmatchedScenes = unmatchedScenes.Distinct(StringComparer.OrdinalIgnoreCase)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, shortNarration, longNarration, oldPaths, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, shortNarration, longNarration, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, "", "", oldPaths, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, "", "", oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
             throw;
         }
     }
@@ -1841,7 +1849,7 @@ public sealed partial class ProductionPipelineExecutionService(
         throw new InvalidOperationException($"Phase 14 missing {label}; checked: {string.Join(", ", candidates.Select(NormalizePath))}. V1 narration fallback is not allowed.");
     }
 
-    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, string narrationPath, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, List<object> matchedPairs, List<string> unmatchedNarrationSections, List<string> unmatchedScenes, CancellationToken ct)
+    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, string narrationPath, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, List<object> matchedPairs, List<string> unmatchedNarrationSections, List<string> unmatchedScenes, List<NarrationSceneDiagnostic> narrationDiagnostics, CancellationToken ct)
     {
         if (!Directory.Exists(sceneRoot)) missingFiles.Add($"{format} scene-assets-v3 root missing: {NormalizePath(sceneRoot)}");
         var timelinePath = Path.Combine(sceneRoot, "visual-timeline-v3.json");
@@ -1859,6 +1867,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var manifestScenes = ReadJsonArray(manifestPath, "scenes");
         var metadataScenes = ReadJsonArray(metadataPath, "scenes");
         var narrationBeats = ExtractNarrationBeats(narrationPath);
+        AddNarrationDiagnostics(narrationDiagnostics, narrationBeats);
         var narrationBeatArray = narrationBeats.ToArray();
         var sectionMap = GetPhase14SectionSceneMap(format);
         var usedNarration = new HashSet<int>();
@@ -1925,18 +1934,29 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<NarrationBeatCandidate> ExtractNarrationBeats(string path)
     {
         var node = JsonNode.Parse(File.ReadAllText(path));
-        var arrays = new[] { node?["beats"] as JsonArray, node?["scenes"] as JsonArray, node?["narration"]?["scenes"] as JsonArray, node?["narrationBeats"] as JsonArray }.Where(a => a is not null).Cast<JsonArray>();
-        var candidates = new List<NarrationBeatCandidate>();
-        foreach (var array in arrays)
-            candidates.AddRange(array.Select((n, i) => new NarrationBeatCandidate(
+        var scenes = node?["scenes"] as JsonArray;
+        if (scenes is null)
+            throw new InvalidOperationException($"Phase 14 narration source must contain scenes[].section: {NormalizePath(path)}");
+
+        return scenes.Select((n, i) => new NarrationBeatCandidate(
                 GetString(n, "sceneId") ?? "",
                 GetInt(n, "beatNo") ?? GetInt(n, "sceneNo") ?? GetInt(n, "sceneNumber") ?? i + 1,
-                GetString(n, "narrationBeat") ?? GetString(n, "text") ?? GetString(n, "script") ?? GetString(n, "narration") ?? "",
+                GetString(n, "narrationText") ?? GetString(n, "narrationBeat") ?? GetString(n, "text") ?? GetString(n, "script") ?? GetString(n, "narration") ?? "",
                 GetString(n, "visualIntent") ?? "",
                 GetString(n, "renderMode") ?? "",
                 GetString(n, "section") ?? "",
-                GetString(n, "scenePurpose") ?? "")));
-        return candidates.Where(c => !string.IsNullOrWhiteSpace(c.Text)).ToArray();
+                GetString(n, "scenePurpose") ?? ""))
+            .Where(c => !string.IsNullOrWhiteSpace(c.Text))
+            .ToArray();
+    }
+
+    private static void AddNarrationDiagnostics(List<NarrationSceneDiagnostic> diagnostics, IReadOnlyList<NarrationBeatCandidate> narrationBeats)
+    {
+        foreach (var beat in narrationBeats)
+        {
+            if (diagnostics.Any(d => d.SceneNumber == beat.BeatNo && string.Equals(d.Section, beat.Section, StringComparison.OrdinalIgnoreCase) && string.Equals(d.NarrationText, beat.Text, StringComparison.Ordinal))) continue;
+            diagnostics.Add(new NarrationSceneDiagnostic(beat.BeatNo, beat.Section, beat.Text));
+        }
     }
 
     private static IReadOnlyDictionary<string, string> GetPhase14SectionSceneMap(string format)
@@ -1986,7 +2006,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string? GetString(JsonNode? node, string name) => node?[name]?.GetValue<string>();
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<object> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<object> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -2000,6 +2020,9 @@ public sealed partial class ProductionPipelineExecutionService(
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
             matchingStrategy = "SectionToSceneMapping",
+            narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
+            sectionsExtracted = narrationDiagnostics.Select(n => n.Section).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase),
+            narrationScenes = narrationDiagnostics,
             matchingStrategyUsedPerScene = strategies,
             matchedPairs,
             unmatchedNarrationSections = unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase),
@@ -2011,6 +2034,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return path;
     }
 
+    private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus);
 
