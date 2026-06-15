@@ -153,7 +153,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (14, "Scene Audio Sync V1", PhaseSceneAudioSyncAsync),
         (15, "TTS Timeline V1", PhaseGenerateTtsTimelineV1Async),
         (16, "Duration Calibration V1", PhaseDurationCalibrationV1Async),
-        (17, "Generate Long TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.LongForm, ct)),
+        (17, "Motion Layer V1", PhaseMotionLayerV1Async),
         (18, "Assemble Short Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
         (19, "Assemble Long Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.LongForm, ct)),
         (20, "Publishing Package", PhaseFinalValidationAsync)
@@ -182,8 +182,9 @@ public sealed partial class ProductionPipelineExecutionService(
             14 => true,
             15 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
             16 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
+            17 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
             18 => IsRequestedOutput(context, "ShortVideo"),
-            17 or 19 => IsRequestedOutput(context, "LongVideo"),
+            19 => IsRequestedOutput(context, "LongVideo"),
             20 => true,
             _ => true
         };
@@ -2363,6 +2364,145 @@ public sealed partial class ProductionPipelineExecutionService(
     private static double? GetDouble(JsonNode? node, string name) => node?[name]?.GetValue<double>();
     private static double RoundDuration(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
     private sealed record SceneDurationPlanItem(string Format, string SceneId, string AudioPath, double AudioDurationSec, double SceneDurationSec, double TransitionDurationSec, string RecommendedTransition, string RecommendedMotion);
+
+
+    private async Task<IReadOnlyList<string>> PhaseMotionLayerV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var planRoot = context.OutputRoot;
+        var motionRoot = Path.Combine(planRoot, "motion");
+        var validationRoot = context.ExecutionContext.ValidationRoot!;
+        Directory.CreateDirectory(motionRoot);
+        Directory.CreateDirectory(validationRoot);
+
+        var durationPlanPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
+        var shortSceneRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+        var longSceneRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
+        var oldPaths = new[]
+        {
+            Path.Combine(planRoot, "question-engine", "scene-approval-v3", "scene-assets"),
+            Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
+            Path.Combine(planRoot, "scene-assets")
+        };
+        var inputPathsChecked = new[] { durationPlanPath, shortSceneRoot, longSceneRoot };
+        var errors = new List<string>();
+        var missingSceneImages = new List<string>();
+        var missingAudioFiles = new List<string>();
+        var invalidDurations = new List<string>();
+        var unsupportedMotionStyles = new List<string>();
+
+        if (!File.Exists(durationPlanPath)) errors.Add($"scene-duration-plan.json missing: {NormalizePath(durationPlanPath)}");
+        if (!Directory.Exists(shortSceneRoot)) errors.Add($"short scene-assets-v3 root missing: {NormalizePath(shortSceneRoot)}");
+        if (!Directory.Exists(longSceneRoot)) errors.Add($"long scene-assets-v3 root missing: {NormalizePath(longSceneRoot)}");
+
+        var sourceDurationPlanVersion = "v1";
+        var shortItems = new List<MotionPlanItem>();
+        var longItems = new List<MotionPlanItem>();
+        var oldPathUsed = false;
+        if (File.Exists(durationPlanPath))
+        {
+            var durationRoot = JsonNode.Parse(await File.ReadAllTextAsync(durationPlanPath, cancellationToken)) ?? new JsonObject();
+            sourceDurationPlanVersion = GetString(durationRoot, "version") ?? "v1";
+            shortItems.AddRange(BuildMotionPlanItems(durationRoot, "short", shortSceneRoot, 5, oldPaths, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, ref oldPathUsed));
+            longItems.AddRange(BuildMotionPlanItems(durationRoot, "long", longSceneRoot, 9, oldPaths, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, ref oldPathUsed));
+        }
+
+        if (shortItems.Count != 5) errors.Add($"short scene count != 5; actual={shortItems.Count}");
+        if (longItems.Count != 9) errors.Add($"long scene count != 9; actual={longItems.Count}");
+        errors.AddRange(missingSceneImages.Select(p => $"Scene image missing: {p}"));
+        errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
+        errors.AddRange(invalidDurations.Select(x => $"sceneDurationSec <= 0: {x}"));
+        errors.AddRange(unsupportedMotionStyles.Select(x => $"Unsupported motionStyle: {x}"));
+        if (oldPathUsed) errors.Add("Old scene asset path used");
+
+        var motionPlanPath = Path.Combine(motionRoot, "motion-plan.json");
+        await File.WriteAllTextAsync(motionPlanPath, JsonSerializer.Serialize(new
+        {
+            version = "v1",
+            sourceDurationPlanVersion,
+            @short = new { sceneCount = shortItems.Count, items = shortItems },
+            @long = new { sceneCount = longItems.Count, items = longItems }
+        }, JsonOptions), cancellationToken);
+        if (!File.Exists(motionPlanPath)) errors.Add($"motion-plan.json missing: {NormalizePath(motionPlanPath)}");
+
+        var validationPassed = errors.Count == 0;
+        var diagnostics = new
+        {
+            inputPathsChecked = inputPathsChecked.Select(NormalizePath),
+            selectedDurationPlanPath = NormalizePath(durationPlanPath),
+            selectedShortSceneRoot = NormalizePath(shortSceneRoot),
+            selectedLongSceneRoot = NormalizePath(longSceneRoot),
+            oldPathsChecked = oldPaths.Select(NormalizePath),
+            oldPathsIgnored = oldPaths.Select(NormalizePath),
+            oldPathUsed,
+            shortSceneCount = shortItems.Count,
+            longSceneCount = longItems.Count,
+            missingSceneImages,
+            missingAudioFiles,
+            invalidDurations,
+            unsupportedMotionStyles,
+            validationPassed
+        };
+        var diagnosticsPath = Path.Combine(validationRoot, "phase-17-motion-diagnostics.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 17,
+            phaseName = "Motion Layer V1",
+            status = validationPassed ? "Succeeded" : "Failed",
+            motionPlanPath = NormalizePath(motionPlanPath),
+            oldPathUsed,
+            validationPassed,
+            errors
+        }, JsonOptions), cancellationToken);
+        if (!validationPassed) throw new InvalidOperationException("Phase 17 Motion Layer V1 failed: " + string.Join(" | ", errors));
+        return [motionPlanPath, validationPath, diagnosticsPath];
+    }
+
+    private static IReadOnlyList<MotionPlanItem> BuildMotionPlanItems(JsonNode durationRoot, string format, string sceneRoot, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> invalidDurations, List<string> unsupportedMotionStyles, ref bool oldPathUsed)
+    {
+        var durationItems = durationRoot[format]?["items"]?.AsArray() ?? [];
+        var manifestPath = Path.Combine(sceneRoot, "scene-manifest-v3.json");
+        var manifestScenes = File.Exists(manifestPath) ? ReadJsonArray(manifestPath, "scenes") : new JsonArray();
+        var manifestBySceneId = manifestScenes.Select(n => new { Node = n, SceneId = GetString(n, "sceneId") ?? string.Empty }).Where(x => !string.IsNullOrWhiteSpace(x.SceneId)).GroupBy(x => x.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
+        var items = new List<MotionPlanItem>();
+        foreach (var durationItem in durationItems.Take(expectedCount))
+        {
+            var sceneId = GetString(durationItem, "sceneId") ?? $"{items.Count + 1:000}";
+            var manifest = manifestBySceneId.TryGetValue(sceneId, out var matched) ? matched : manifestScenes.ElementAtOrDefault(items.Count);
+            var imagePath = FirstNonEmpty(GetString(manifest, "imagePath"), GetString(manifest, "sceneImagePath"), Path.Combine(sceneRoot, sceneId + ".png"));
+            imagePath = Path.IsPathRooted(imagePath) ? imagePath : Path.Combine(sceneRoot, imagePath);
+            var audioPath = GetString(durationItem, "audioPath") ?? string.Empty;
+            var sceneDuration = GetDouble(durationItem, "sceneDurationSec") ?? 0;
+            var motionStyle = GetString(durationItem, "recommendedMotion") ?? "slowZoomIn";
+            var motion = ResolveMotionDefaults(motionStyle);
+            if (motion is null) unsupportedMotionStyles.Add($"{format}:{sceneId}:{motionStyle}");
+            foreach (var oldPath in oldPaths)
+            {
+                if (NormalizePath(imagePath).StartsWith(NormalizePath(oldPath), StringComparison.OrdinalIgnoreCase)) oldPathUsed = true;
+            }
+            if (!File.Exists(imagePath)) missingSceneImages.Add(NormalizePath(imagePath));
+            if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
+            if (sceneDuration <= 0) invalidDurations.Add($"{format}:{sceneId}");
+            var m = motion ?? ResolveMotionDefaults("static")!;
+            items.Add(new MotionPlanItem(format, sceneId, NormalizePath(imagePath), NormalizePath(audioPath), RoundDuration(sceneDuration), GetDouble(durationItem, "transitionDurationSec") ?? 0.4, GetString(durationItem, "recommendedTransition") ?? "crossfade", motionStyle, m.ZoomStart, m.ZoomEnd, m.PanXStart, m.PanXEnd, m.PanYStart, m.PanYEnd, m.ParallaxStrength));
+        }
+        return items;
+    }
+
+    private static MotionDefaults? ResolveMotionDefaults(string motionStyle) => motionStyle switch
+    {
+        "slowZoomIn" => new MotionDefaults(100, 108, 0, 0, 0, 0, 0),
+        "slowZoomOut" => new MotionDefaults(108, 100, 0, 0, 0, 0, 0),
+        "panRight" => new MotionDefaults(104, 104, -2, 2, 0, 0, 0),
+        "panLeft" => new MotionDefaults(104, 104, 2, -2, 0, 0, 0),
+        "parallax" => new MotionDefaults(102, 110, 0, 0, 0, 0, 0.08),
+        "static" => new MotionDefaults(100, 100, 0, 0, 0, 0, 0),
+        _ => null
+    };
+
+    private sealed record MotionDefaults(double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd, double ParallaxStrength);
+    private sealed record MotionPlanItem(string Format, string SceneId, string SceneImagePath, string AudioPath, double SceneDurationSec, double TransitionDurationSec, string Transition, string MotionStyle, double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd, double ParallaxStrength);
 
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {

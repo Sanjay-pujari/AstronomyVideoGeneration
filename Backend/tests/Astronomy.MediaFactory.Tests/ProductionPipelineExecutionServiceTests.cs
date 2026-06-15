@@ -106,7 +106,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             new(14, "Scene Audio Sync V1", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
             new(15, "Generate Long Narration", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
             new(16, "Generate Short TTS", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
-            new(17, "Generate Long TTS", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
+            new(17, "Motion Layer V1", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
             new(18, "Assemble Short Video", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
             new(19, "Assemble Long Video", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested")
         ];
