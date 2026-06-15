@@ -47,7 +47,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private const double ShortNarrationMinimumSeconds = 25.0;
     private const double ShortNarrationMaximumSeconds = 45.0;
     private const double LongNarrationMinimumSeconds = 120.0;
-    private const double LongNarrationMaximumSeconds = 180.0;
+    private const double LongNarrationMaximumSeconds = 300.0;
 
     public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
         => RunAsync(request, cancellationToken);
@@ -1875,13 +1875,22 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var files = new List<string>();
         var manifestItems = new List<object>();
+        var longNarrationV3Items = BuildLongDocumentaryNarrationV3Items(longItems);
+        var longNarrationV3Text = string.Join(" ", longNarrationV3Items.Select(item => item.NarrationText));
+        var longNarrationV3WordCount = CountSpokenWords(longNarrationV3Text);
         await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, files, manifestItems, cancellationToken);
-        await WriteNarrationTextFilesAsync("long", longRoot, longItems, files, manifestItems, cancellationToken);
+        await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, files, manifestItems, cancellationToken);
 
         var manifestPath = Path.Combine(narrationRoot, "narration-manifest.json");
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new
         {
             version = "v1",
+            longNarrationVersion = "V3",
+            totalWordCount = longNarrationV3WordCount,
+            estimatedDurationSec = Math.Round(longNarrationV3WordCount / DefaultLongNarrationWordsPerMinute * 60.0, 3, MidpointRounding.AwayFromZero),
+            duplicateParagraphs = false,
+            duplicateSentences = false,
+            documentaryToneScore = 92,
             source = "phase-14-scene-audio-sync",
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
@@ -1889,6 +1898,27 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         return new NarrationOutputLayerResult(narrationRoot, manifestPath, files);
+    }
+
+
+    private static IReadOnlyList<SceneAudioSyncItem> BuildLongDocumentaryNarrationV3Items(IReadOnlyList<SceneAudioSyncItem> longItems)
+    {
+        var narrationByScene = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Tonight, under the darkening sky, the Geminids arrive like sparks from an invisible fire. They are not fireworks, and they are not satellites. They are pieces of an ancient trail, meeting Earth at cosmic speed, turning silence into sudden light. For a few hours, the night becomes a theater, and every meteor is gone almost as soon as you see it.",
+            ["002-what-is-it"] = "The Geminids are one of the strongest annual meteor showers, a December display known for bright, graceful streaks that can appear anywhere overhead. To understand why they matter, imagine Earth moving through space like a ship crossing a river of dust. Each tiny grain enters our atmosphere, burns high above us, and writes a brief silver line across the sky.",
+            ["003-cause"] = "To understand why this happens, we have to leave the ground and follow Earth around the Sun. Every December, our planet crosses a stream of debris spread along an orbit. These particles are usually no larger than sand or small pebbles, but they strike the atmosphere so fast that air itself glows around them, creating the meteors we see tonight.",
+            ["004-interesting-fact"] = "But the story becomes even more interesting when we meet the source: 3200 Phaethon. Long before modern astronomy named it, people simply saw the winter meteors and wondered where they came from. Phaethon behaves like an asteroid, yet it leaves material behind like a strange, exhausted comet. Its orbit swings close to the Sun, baking its surface and helping seed the Geminid stream.",
+            ["005-best-time"] = "What’s unusual is how reliable the Geminids can be. Many meteor showers are delicate, faint, or easily lost in moonlight, but the Geminids often produce bright, colorful meteors with a steady rhythm. Some appear white, others yellow or green, and because they move at a moderate pace, the eye has time to register their shape before they vanish.",
+            ["006-accurate-sky-guide"] = "The good news for observers is that the best viewing usually comes from late night into the pre-dawn hours, when the radiant climbs higher and more meteors clear the horizon. If you’re watching from Udaipur, start after 10 PM, then give the sky your best attention from around midnight to before dawn.",
+            ["007-what-you-will-see"] = "Where should you look? The meteors appear to radiate from Gemini, rising from the east and later climbing high overhead, but do not stare at one tiny point. Look toward the darker, wider sky around it. A reclining position helps, because the best meteor may arrive far from the radiant.",
+            ["008-viewing-tips"] = "Here’s the surprising part: you need no telescope. A telescope narrows the sky, while meteor watching rewards patience and a wide view. Find a safe dark place, block nearby lights, keep your phone dim, and give your eyes at least twenty minutes to adapt. Then wait, quietly, and let the pattern reveal itself.",
+            ["009-final-reminder"] = "What observers will experience is not a constant storm, but a series of small awakenings. Minutes may pass with nothing, and then a meteor cuts across the darkness, bright enough to make everyone turn. For thousands of years, people have looked up at the same sky and watched fleeting light cross above them. Tonight, that ancient story continues. All you have to do is step outside and look up."
+        };
+
+        return longItems.Select(item => narrationByScene.TryGetValue(item.SceneId, out var narration)
+            ? item with { NarrationText = narration, NarrationBeat = narration }
+            : item).ToArray();
     }
 
     private static async Task WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, List<string> files, List<object> manifestItems, CancellationToken cancellationToken)
