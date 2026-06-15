@@ -102,7 +102,8 @@ public sealed class ContentPlanProductionExecutionService(
                 EnableSceneVariants: request.EnableSceneVariants,
                 RequestedStartPhaseNo: requestedStartPhaseNo,
                 RequestedEndPhaseNo: requestedEndPhaseNo,
-                EnableSceneAssetsV3: request.EnableSceneAssetsV3), cancellationToken);
+                EnableSceneAssetsV3: request.EnableSceneAssetsV3,
+                PublishApproved: request.PublishApproved), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
             errors.AddRange(pipelineResult.Errors);
@@ -392,9 +393,21 @@ public sealed class ContentPlanProductionExecutionService(
             .Select(p => (int?)p.PhaseNo)
             .FirstOrDefault();
 
-        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion, partialPhaseExecution, requestedStartPhase ?? startPhaseNo, requestedEndPhase ?? endPhaseNo, startPhaseNo, endPhaseNo, partialPhaseSuccess, dependencyExpansionApplied);
+        var publishGateDiagnosticsPath = Path.Combine(outputRoot, "validation", "phase-20-publish-gate-diagnostics.json");
+        var publishGateChecked = File.Exists(publishGateDiagnosticsPath);
+        var publishApproved = ReadDiagnosticBool(publishGateDiagnosticsPath, "publishApproved") == true;
+        var phase19ReviewApproved = ReadDiagnosticBool(publishGateDiagnosticsPath, "phase19ReviewApproved") == true;
+
+        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion, partialPhaseExecution, requestedStartPhase ?? startPhaseNo, requestedEndPhase ?? endPhaseNo, startPhaseNo, endPhaseNo, partialPhaseSuccess, dependencyExpansionApplied, plan.Id, plan.Id, true, plan.AstronomyEventIntelligence?.AutoGenerateAllowed, plan.AstronomyEventIntelligence?.AutoGenerateAllowed == false, "ManualPlanId", publishGateChecked, publishApproved, phase19ReviewApproved);
     }
 
+
+    private static bool? ReadDiagnosticBool(string path, string propertyName)
+    {
+        if (!File.Exists(path)) return null;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        return doc.RootElement.TryGetProperty(propertyName, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : null;
+    }
 
     private static bool IsProductionCompleted(ContentGenerationPlan plan)
         => string.Equals(plan.Status, "ProductionCompleted", StringComparison.OrdinalIgnoreCase)

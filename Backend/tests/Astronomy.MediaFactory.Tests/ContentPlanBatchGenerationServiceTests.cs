@@ -153,7 +153,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.Equal(ManualValidationPlanId, Assert.Single(response.SelectedPlans).ContentGenerationPlanId);
         Assert.Contains(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
             && warning.Selected
-            && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+            && warning.Reason.StartsWith("Selected exact planId even though linked event AutoGenerateAllowed=false.", StringComparison.Ordinal));
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal(ManualValidationPlanId, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);
@@ -226,7 +226,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
         Assert.Equal(ManualValidationPlanId, Assert.Single(response.SelectedPlans).ContentGenerationPlanId);
         Assert.Contains(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
             && warning.Selected
-            && warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+            && warning.Reason.StartsWith("Selected exact planId even though linked event AutoGenerateAllowed=false.", StringComparison.Ordinal));
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal("NeedsManualReview", reloadedEvent.VerificationStatus);
         Assert.Equal(ManualValidationPlanId, production.CapturedPlanId);
@@ -369,7 +369,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             && warning.Matched
             && !warning.Selected
             && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
-        Assert.DoesNotContain(response.Warnings, warning => warning.Reason == "Selected manual validation plan even though linked event AutoGenerateAllowed=false.");
+        Assert.DoesNotContain(response.Warnings, warning => warning.Reason.StartsWith("Selected exact planId even though linked event AutoGenerateAllowed=false.", StringComparison.Ordinal));
         Assert.False(reloadedEvent.AutoGenerateAllowed);
         Assert.Equal(Guid.Empty, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);

@@ -35,7 +35,8 @@ public sealed record BatchGenerateFromPlansRequest(
     bool ArchivePreviousRun = false,
     bool RebuildIntelligence = false,
     bool EnableSceneVariants = false,
-    bool EnableSceneAssetsV3 = false);
+    bool EnableSceneAssetsV3 = false,
+    bool PublishApproved = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -91,7 +92,16 @@ public sealed record BatchGenerateFromPlansResponse(
     int? ExpandedStartPhase = null,
     int? ExpandedEndPhase = null,
     bool PartialPhaseSuccess = false,
-    bool DependencyExpansionApplied = false);
+    bool DependencyExpansionApplied = false,
+    Guid? RequestedPlanId = null,
+    Guid? SelectedPlanId = null,
+    bool ManualPlanExecution = false,
+    bool? AutoGenerateAllowed = null,
+    bool AutoGenerateAllowedIgnoredForManualRun = false,
+    string? SelectionMode = null,
+    bool PublishGateChecked = false,
+    bool PublishApproved = false,
+    bool Phase19ReviewApproved = false);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -218,7 +228,8 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool EnableSceneVariants = false,
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
-    bool EnableSceneAssetsV3 = false);
+    bool EnableSceneAssetsV3 = false,
+    bool PublishApproved = false);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,
@@ -290,7 +301,8 @@ public sealed record ProductionPipelineRequest(
     bool EnableSceneVariants = false,
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
-    bool EnableSceneAssetsV3 = false);
+    bool EnableSceneAssetsV3 = false,
+    bool PublishApproved = false);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProductionPhaseStatus
@@ -421,7 +433,16 @@ public sealed record ContentPlanProductionExecutionResult(
     int? ExpandedStartPhase = null,
     int? ExpandedEndPhase = null,
     bool PartialPhaseSuccess = false,
-    bool DependencyExpansionApplied = false);
+    bool DependencyExpansionApplied = false,
+    Guid? RequestedPlanId = null,
+    Guid? SelectedPlanId = null,
+    bool ManualPlanExecution = false,
+    bool? AutoGenerateAllowed = null,
+    bool AutoGenerateAllowedIgnoredForManualRun = false,
+    string? SelectionMode = null,
+    bool PublishGateChecked = false,
+    bool PublishApproved = false,
+    bool Phase19ReviewApproved = false);
 
 
 public sealed record RequestedOutputCompletion(
