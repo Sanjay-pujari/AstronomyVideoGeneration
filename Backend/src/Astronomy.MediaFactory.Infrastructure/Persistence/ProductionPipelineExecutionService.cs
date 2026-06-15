@@ -2397,14 +2397,18 @@ public sealed partial class ProductionPipelineExecutionService(
         var sourceDurationPlanVersion = "v1";
         var shortItems = new List<MotionPlanItem>();
         var longItems = new List<MotionPlanItem>();
-        var oldPathUsed = false;
+        var oldPathUsageReasons = new List<string>();
+        AddOldPathUsageReason(oldPathUsageReasons, "selectedDurationPlanPath", durationPlanPath, oldPaths);
+        AddOldPathUsageReason(oldPathUsageReasons, "selectedShortSceneRoot", shortSceneRoot, oldPaths);
+        AddOldPathUsageReason(oldPathUsageReasons, "selectedLongSceneRoot", longSceneRoot, oldPaths);
         if (File.Exists(durationPlanPath))
         {
             var durationRoot = JsonNode.Parse(await File.ReadAllTextAsync(durationPlanPath, cancellationToken)) ?? new JsonObject();
             sourceDurationPlanVersion = GetString(durationRoot, "version") ?? "v1";
-            shortItems.AddRange(BuildMotionPlanItems(durationRoot, "short", shortSceneRoot, 5, oldPaths, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, ref oldPathUsed));
-            longItems.AddRange(BuildMotionPlanItems(durationRoot, "long", longSceneRoot, 9, oldPaths, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, ref oldPathUsed));
+            shortItems.AddRange(BuildMotionPlanItems(durationRoot, "short", shortSceneRoot, 5, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, oldPaths, oldPathUsageReasons));
+            longItems.AddRange(BuildMotionPlanItems(durationRoot, "long", longSceneRoot, 9, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, oldPaths, oldPathUsageReasons));
         }
+        var oldPathUsed = oldPathUsageReasons.Count > 0;
 
         if (shortItems.Count != 5) errors.Add($"short scene count != 5; actual={shortItems.Count}");
         if (longItems.Count != 9) errors.Add($"long scene count != 9; actual={longItems.Count}");
@@ -2434,6 +2438,7 @@ public sealed partial class ProductionPipelineExecutionService(
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
             oldPathUsed,
+            oldPathUsageReasons,
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
             missingSceneImages,
@@ -2452,6 +2457,7 @@ public sealed partial class ProductionPipelineExecutionService(
             status = validationPassed ? "Succeeded" : "Failed",
             motionPlanPath = NormalizePath(motionPlanPath),
             oldPathUsed,
+            oldPathUsageReasons,
             validationPassed,
             errors
         }, JsonOptions), cancellationToken);
@@ -2459,7 +2465,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return [motionPlanPath, validationPath, diagnosticsPath];
     }
 
-    private static IReadOnlyList<MotionPlanItem> BuildMotionPlanItems(JsonNode durationRoot, string format, string sceneRoot, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> invalidDurations, List<string> unsupportedMotionStyles, ref bool oldPathUsed)
+    private static IReadOnlyList<MotionPlanItem> BuildMotionPlanItems(JsonNode durationRoot, string format, string sceneRoot, int expectedCount, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> invalidDurations, List<string> unsupportedMotionStyles, IReadOnlyList<string> oldPaths, List<string> oldPathUsageReasons)
     {
         var durationItems = durationRoot[format]?["items"]?.AsArray() ?? [];
         var manifestPath = Path.Combine(sceneRoot, "scene-manifest-v3.json");
@@ -2477,10 +2483,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var motionStyle = GetString(durationItem, "recommendedMotion") ?? "slowZoomIn";
             var motion = ResolveMotionDefaults(motionStyle);
             if (motion is null) unsupportedMotionStyles.Add($"{format}:{sceneId}:{motionStyle}");
-            foreach (var oldPath in oldPaths)
-            {
-                if (NormalizePath(imagePath).StartsWith(NormalizePath(oldPath), StringComparison.OrdinalIgnoreCase)) oldPathUsed = true;
-            }
+            AddOldPathUsageReason(oldPathUsageReasons, $"selectedAudioSource[{format}:{sceneId}]", audioPath, oldPaths);
             if (!File.Exists(imagePath)) missingSceneImages.Add(NormalizePath(imagePath));
             if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
             if (sceneDuration <= 0) invalidDurations.Add($"{format}:{sceneId}");
@@ -2489,6 +2492,21 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         return items;
     }
+
+
+    private static void AddOldPathUsageReason(List<string> reasons, string label, string? selectedPath, IReadOnlyList<string> oldPaths)
+    {
+        if (string.IsNullOrWhiteSpace(selectedPath)) return;
+        var normalizedSelected = NormalizePath(selectedPath);
+        if (!oldPaths.Any(oldPath => IsSameOrUnderPath(normalizedSelected, NormalizePath(oldPath)))) return;
+        var reason = $"{label}={normalizedSelected}";
+        if (!reasons.Contains(reason, StringComparer.OrdinalIgnoreCase)) reasons.Add(reason);
+    }
+
+    private static bool IsSameOrUnderPath(string selectedPath, string rootPath)
+        => selectedPath.Equals(rootPath, StringComparison.OrdinalIgnoreCase)
+            || selectedPath.StartsWith(rootPath.TrimEnd('/', Path.DirectorySeparatorChar) + "/", StringComparison.OrdinalIgnoreCase)
+            || selectedPath.StartsWith(rootPath.TrimEnd('/', Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static MotionDefaults? ResolveMotionDefaults(string motionStyle) => motionStyle switch
     {
