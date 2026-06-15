@@ -3721,9 +3721,9 @@ public sealed partial class ProductionPipelineExecutionService(
             var longItems = ReadVideoAssemblyItems(motionRoot, ttsRoot, "long", 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
-            var backgroundAudioPath = ResolvePhase18BackgroundAudioPath(planRoot);
-            if (shortItems.Count == 5) await RenderVideoAssemblyAsync(shortItems, shortVideoPath, shortAudioTrackPath, backgroundAudioPath, cancellationToken);
-            if (longItems.Count == 9) await RenderVideoAssemblyAsync(longItems, longVideoPath, longAudioTrackPath, backgroundAudioPath, cancellationToken);
+            var backgroundMusicConfig = ResolvePhase18BackgroundMusicConfig(planRoot);
+            if (shortItems.Count == 5) await RenderVideoAssemblyAsync(shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, cancellationToken);
+            if (longItems.Count == 9) await RenderVideoAssemblyAsync(longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, cancellationToken);
         }
 
         var shortVideoDuration = File.Exists(shortVideoPath) ? await ProbeAudioDurationSecondsAsync(shortVideoPath, cancellationToken) : 0;
@@ -3737,8 +3737,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortAudioMuxed = File.Exists(shortAudioTrackPath) && shortHasAudioStream;
         var longAudioMuxed = File.Exists(longAudioTrackPath) && longHasAudioStream;
         var audioVideoDurationDeltaSec = Math.Max(Math.Abs(shortAudioDuration - shortVideoDuration), Math.Abs(longAudioDuration - longVideoDuration));
-        var backgroundAudioPathForDiagnostics = ResolvePhase18BackgroundAudioPath(planRoot);
-        var backgroundAudioFound = !string.IsNullOrWhiteSpace(backgroundAudioPathForDiagnostics) && File.Exists(backgroundAudioPathForDiagnostics);
+        var backgroundMusicConfigForDiagnostics = ResolvePhase18BackgroundMusicConfig(planRoot);
+        var backgroundAudioPathForDiagnostics = backgroundMusicConfigForDiagnostics.ConfiguredPath;
+        var backgroundAudioFound = backgroundMusicConfigForDiagnostics.Enabled && !string.IsNullOrWhiteSpace(backgroundAudioPathForDiagnostics) && File.Exists(backgroundAudioPathForDiagnostics);
         var totalScenes = shortSceneCount + longSceneCount;
         var scenesWithZoom = totalScenes;
         var scenesWithPan = totalScenes;
@@ -3758,16 +3759,23 @@ public sealed partial class ProductionPipelineExecutionService(
         if (scenesWithZoom < totalScenes) errors.Add("Not every scene has zoom motion");
         if (scenesWithPan < totalScenes) errors.Add("Not every scene has pan motion");
         if (scenesWithTransitions < Math.Max(0, totalScenes - 1)) errors.Add("Not every scene boundary has a transition");
-        if (!backgroundAudioFound) errors.Add("background audio missing or not configured");
+        if (backgroundMusicConfigForDiagnostics.Enabled && !backgroundAudioFound) errors.Add($"Configured background music file missing: {NormalizePath(backgroundAudioPathForDiagnostics)}");
         if (audioVideoDurationDeltaSec > 1.0) errors.Add($"audio/video duration delta > 1.0; actual={RoundDuration(audioVideoDurationDeltaSec)}");
         if (oldPathUsed) errors.Add("Old scene asset path used");
         var shortBackgroundAudioMixed = File.Exists(shortMixedAudioPath) && shortHasAudioStream;
         var longBackgroundAudioMixed = File.Exists(longMixedAudioPath) && longHasAudioStream;
-        var backgroundAudioMixed = backgroundAudioFound && shortBackgroundAudioMixed && longBackgroundAudioMixed;
+        var backgroundAudioMixed = backgroundMusicConfigForDiagnostics.Enabled ? backgroundAudioFound && shortBackgroundAudioMixed && longBackgroundAudioMixed : false;
+        var effectiveBackgroundVolume = backgroundAudioMixed ? backgroundMusicConfigForDiagnostics.Level : 0.0;
+        var duckingAttempted = backgroundMusicConfigForDiagnostics.Enabled && backgroundMusicConfigForDiagnostics.DuckUnderNarration;
+        var duckingSucceeded = duckingAttempted && File.Exists(shortMixedAudioPath) && File.Exists(longMixedAudioPath);
+        var duckingFallbackUsed = false;
+        var duckingFailureReason = string.Empty;
+        if (backgroundMusicConfigForDiagnostics.Enabled && !backgroundAudioMixed) errors.Add("background music was enabled but was not mixed");
+        if (backgroundMusicConfigForDiagnostics.Enabled && effectiveBackgroundVolume <= 0) errors.Add("background music was enabled but effective background volume is zero");
         var narrationAudioMixed = shortAudioMuxed && longAudioMuxed;
         var finalVideoHasAudio = shortHasAudioStream && longHasAudioStream;
         var finalVideoHasMotion = scenesWithZoom >= totalScenes && scenesWithPan >= totalScenes && scenesWithTransitions >= Math.Max(0, totalScenes - 1);
-        var validationPassed = errors.Count == 0 && videoRendered && !oldPathUsed && narrationAudioMixed && backgroundAudioMixed && finalVideoHasAudio && finalVideoHasMotion && audioVideoDurationDeltaSec <= 1.0;
+        var validationPassed = errors.Count == 0 && videoRendered && !oldPathUsed && narrationAudioMixed && (!backgroundMusicConfigForDiagnostics.Enabled || backgroundAudioMixed) && finalVideoHasAudio && finalVideoHasMotion && audioVideoDurationDeltaSec <= 1.0;
 
         var cinematicDiagnosticsPath = Path.Combine(videoRoot, "phase-18-cinematic-diagnostics.json");
         await File.WriteAllTextAsync(cinematicDiagnosticsPath, JsonSerializer.Serialize(new
@@ -3786,7 +3794,18 @@ public sealed partial class ProductionPipelineExecutionService(
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
             backgroundAudioFound,
             backgroundAudioMixed,
-            duckingApplied = false,
+            backgroundMusicEnabled = backgroundMusicConfigForDiagnostics.Enabled,
+            configuredBackgroundMusicPath = NormalizePath(backgroundMusicConfigForDiagnostics.ConfiguredPath),
+            configuredBackgroundMusicLevelPercent = backgroundMusicConfigForDiagnostics.LevelPercent,
+            configuredDuckUnderNarration = backgroundMusicConfigForDiagnostics.DuckUnderNarration,
+            backgroundMusicLoaded = backgroundAudioFound,
+            backgroundMusicMixed = backgroundAudioMixed,
+            duckingAttempted,
+            duckingSucceeded,
+            duckingFallbackUsed,
+            duckingFailureReason,
+            effectiveBackgroundVolume,
+            duckingApplied = duckingSucceeded,
             finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) },
             finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
             finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
@@ -3820,7 +3839,18 @@ public sealed partial class ProductionPipelineExecutionService(
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
             backgroundAudioFound,
             backgroundAudioMixed,
-            duckingApplied = false,
+            backgroundMusicEnabled = backgroundMusicConfigForDiagnostics.Enabled,
+            configuredBackgroundMusicPath = NormalizePath(backgroundMusicConfigForDiagnostics.ConfiguredPath),
+            configuredBackgroundMusicLevelPercent = backgroundMusicConfigForDiagnostics.LevelPercent,
+            configuredDuckUnderNarration = backgroundMusicConfigForDiagnostics.DuckUnderNarration,
+            backgroundMusicLoaded = backgroundAudioFound,
+            backgroundMusicMixed = backgroundAudioMixed,
+            duckingAttempted,
+            duckingSucceeded,
+            duckingFallbackUsed,
+            duckingFailureReason,
+            effectiveBackgroundVolume,
+            duckingApplied = duckingSucceeded,
             shortAudioMuxed,
             longAudioMuxed,
             shortHasAudioStream,
@@ -3879,7 +3909,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return index >= 0 && index < ttsItems.Count ? GetString(ttsItems[index], "audioPath") : null;
     }
 
-    private async Task RenderVideoAssemblyAsync(IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, string? backgroundAudioPath, CancellationToken cancellationToken)
+    private async Task RenderVideoAssemblyAsync(IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var tempRoot = Path.Combine(Path.GetTempPath(), "astro-video-assembly-" + Guid.NewGuid().ToString("N"));
@@ -3902,8 +3932,8 @@ public sealed partial class ProductionPipelineExecutionService(
             await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
 
             await ConcatenateNarrationTrackAsync(items, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
-            if (string.IsNullOrWhiteSpace(backgroundAudioPath) || !File.Exists(backgroundAudioPath))
-                throw new InvalidOperationException("Phase 18 requires a configured background audio bed. Configure VideoAssembly:BackgroundMusic:WonderCuriosityPath or DefaultPath, or place audio/background.mp3 in the plan root.");
+            if (backgroundMusicConfig.Enabled && (string.IsNullOrWhiteSpace(backgroundMusicConfig.ConfiguredPath) || !File.Exists(backgroundMusicConfig.ConfiguredPath)))
+                throw new InvalidOperationException($"Phase 18 background music is enabled but configured file is missing: {NormalizePath(backgroundMusicConfig.ConfiguredPath)}");
 
             var videoDuration = await ProbeAudioDurationSecondsAsync(videoOnlyPath, cancellationToken);
             var narrationDuration = await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken);
@@ -3911,14 +3941,28 @@ public sealed partial class ProductionPipelineExecutionService(
             if (finalDuration <= 0) throw new InvalidOperationException("Phase 18 cannot determine final video/audio duration.");
 
             var finalMixedAudioPath = ResolvePhase18FinalMixedAudioPath(outputPath);
-            var musicLevel = ResolvePhase18BackgroundMusicLevel();
             var fadeOutStart = Math.Max(0, finalDuration - 1.5);
             var finalDurationText = finalDuration.ToString("0.###", CultureInfo.InvariantCulture);
             var fadeOutStartText = fadeOutStart.ToString("0.###", CultureInfo.InvariantCulture);
-            var musicLevelText = musicLevel.ToString("0.###", CultureInfo.InvariantCulture);
-            var audioFilter = $"[1:a]volume=1.0[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[narr][bg]amix=inputs=2:duration=longest[aout]";
-            var mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundAudioPath, "-filter_complex", audioFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
-            if (mixResult.ExitCode != 0 || !File.Exists(finalMixedAudioPath)) throw new InvalidOperationException($"Unable to mix narration and background ambience: {mixResult.Error}");
+            if (backgroundMusicConfig.Enabled)
+            {
+                var musicLevelText = backgroundMusicConfig.Level.ToString("0.###", CultureInfo.InvariantCulture);
+                var audioFilter = backgroundMusicConfig.DuckUnderNarration
+                    ? $"[2:a]volume={musicLevelText},afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[bg][1:a]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[ducked];[1:a][ducked]amix=inputs=2:duration=longest:normalize=0[aout]"
+                    : $"[1:a]volume=1.0[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[narr][bg]amix=inputs=2:duration=longest:normalize=0[aout]";
+                var mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundMusicConfig.ConfiguredPath, "-filter_complex", audioFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
+                if (mixResult.ExitCode != 0 && backgroundMusicConfig.DuckUnderNarration)
+                {
+                    var fallbackDuckLevel = (backgroundMusicConfig.Level * 0.45).ToString("0.###", CultureInfo.InvariantCulture);
+                    var fallbackFilter = $"[1:a]volume=1.0[narr];[2:a]volume='if(gt(t,0),{fallbackDuckLevel},{musicLevelText})',afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[narr][bg]amix=inputs=2:duration=longest:normalize=0[aout]";
+                    mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundMusicConfig.ConfiguredPath, "-filter_complex", fallbackFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
+                }
+                if (mixResult.ExitCode != 0 || !File.Exists(finalMixedAudioPath)) throw new InvalidOperationException($"Unable to mix narration and background ambience: {mixResult.Error}");
+            }
+            else
+            {
+                File.Copy(narrationTrackPath, finalMixedAudioPath, true);
+            }
 
             var videoExtension = Math.Max(0, finalDuration - videoDuration);
             var videoFilter = $"tpad=stop_mode=clone:stop_duration={videoExtension.ToString("0.###", CultureInfo.InvariantCulture)},trim=duration={finalDurationText},setpts=PTS-STARTPTS";
@@ -3934,8 +3978,17 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
         => Path.Combine(Path.GetDirectoryName(outputPath)!, "final-mixed-audio.m4a");
 
-    private static double ResolvePhase18BackgroundMusicLevel() => 0.12;
+    private Phase18BackgroundMusicConfig ResolvePhase18BackgroundMusicConfig(string planRoot)
+    {
+        var options = videoAssemblyOptions?.Value.BackgroundMusic ?? new VideoAssemblyBackgroundMusicOptions();
+        var configuredPath = options.WonderCuriosityPath;
+        if (string.IsNullOrWhiteSpace(configuredPath)) configuredPath = options.DefaultPath;
+        if (string.IsNullOrWhiteSpace(configuredPath)) configuredPath = Path.Combine(planRoot, "audio", "background.mp3");
+        var levelPercent = Math.Clamp(options.DefaultLevelPercent, 0, 100);
+        return new Phase18BackgroundMusicConfig(options.Enabled, configuredPath, levelPercent, levelPercent / 100.0, options.DuckUnderNarration);
+    }
 
+    private sealed record Phase18BackgroundMusicConfig(bool Enabled, string ConfiguredPath, int LevelPercent, double Level, bool DuckUnderNarration);
 
     private static JsonNode BuildDefaultPhase18MotionPlan(string sceneAssetsRoot, string syncPath, string ttsPath)
     {
@@ -3975,16 +4028,6 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static bool IsImageExtension(string extension)
         => extension.Equals(".png", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
-
-    private string? ResolvePhase18BackgroundAudioPath(string planRoot)
-    {
-        var local = Path.Combine(planRoot, "audio", "background.mp3");
-        if (File.Exists(local)) return local;
-        var configured = videoAssemblyOptions?.Value.BackgroundMusic.WonderCuriosityPath;
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
-        configured = videoAssemblyOptions?.Value.BackgroundMusic.DefaultPath;
-        return !string.IsNullOrWhiteSpace(configured) && File.Exists(configured) ? configured : local;
-    }
 
     private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index)
     {
