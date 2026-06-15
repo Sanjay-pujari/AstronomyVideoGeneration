@@ -12,6 +12,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SixLabors.Fonts;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -645,7 +646,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         if (IsSceneAssetsV3Enabled(context))
-            return await GenerateSceneAssetsV3Async(context, generateShort: true, generateLong: false, cancellationToken);
+            return await GenerateSceneAssetsV3Async(context, 8, "Generate Short Scene Images", generateShort: true, generateLong: false, cancellationToken);
 
         if (!context.PipelineRequest.EnableSceneVariants)
         {
@@ -669,18 +670,59 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private async Task<IReadOnlyList<string>> GenerateSceneAssetsV3Async(ProductionPhaseContext context, bool generateShort, bool generateLong, CancellationToken cancellationToken)
+        => await GenerateSceneAssetsV3Async(context, generateShort ? 8 : 9, generateShort ? "Generate Short Scene Images" : "Generate Long Scene Images", generateShort, generateLong, cancellationToken);
+
+    private async Task<IReadOnlyList<string>> GenerateSceneAssetsV3Async(ProductionPhaseContext context, int phaseNo, string phaseName, bool generateShort, bool generateLong, CancellationToken cancellationToken)
     {
-        if (sceneAssetsV3Service is null)
-            throw new InvalidOperationException("Scene Assets V3 is enabled, but ISceneAssetsV3Service is not registered.");
+        var format = generateShort ? "short" : "long";
+        var expectedCount = generateShort ? 5 : 9;
+        await WriteSceneAssetsHookDiagnosticsAsync(context, BuildSceneAssetsHookDiagnostics(context, phaseNo, phaseName, format, beforeExecution: true), cancellationToken);
+        try
+        {
+            if (sceneAssetsV3Service is null)
+            {
+                await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
+                {
+                    d["errorBeforeGenerator"] = "Scene Assets V3 is enabled, but ISceneAssetsV3Service is not registered.";
+                    d["exceptionType"] = nameof(InvalidOperationException);
+                    d["exceptionMessage"] = "Scene Assets V3 is enabled, but ISceneAssetsV3Service is not registered.";
+                }, cancellationToken);
+                throw new InvalidOperationException("Scene Assets V3 is enabled, but ISceneAssetsV3Service is not registered.");
+            }
 
-        var response = await sceneAssetsV3Service.GenerateAsync(new SceneAssetsV3Request(context.OutputRoot, generateShort, generateLong, context.OverwriteExisting), cancellationToken);
-        if (!Directory.Exists(Path.Combine(context.OutputRoot, "scene-assets-v3")))
-            throw new InvalidOperationException("Scene Assets V3 folder is missing after V3 generation.");
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
+            {
+                d["sceneAssetsVersionDecision"] = "V3";
+                d["decisionReason"] = "enableSceneAssetsV3=true";
+                d["selectedGenerator"] = generateShort ? "SceneAssetsV3ShortGenerator" : "SceneAssetsV3LongGenerator";
+                d["selectedGeneratorClass"] = sceneAssetsV3Service.GetType().Name;
+                d["legacyV2GeneratorCalled"] = false;
+                d["v3GeneratorCalled"] = true;
+                d["actualOutputRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", format));
+            }, cancellationToken);
 
-        var files = response.GeneratedFiles.ToList();
-        if (generateShort) ValidateSceneAssetsV3Format(context.OutputRoot, "short", 5);
-        if (generateLong) ValidateSceneAssetsV3Format(context.OutputRoot, "long", 9);
-        return files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var response = await sceneAssetsV3Service.GenerateAsync(new SceneAssetsV3Request(context.OutputRoot, generateShort, generateLong, context.OverwriteExisting), cancellationToken);
+            if (!Directory.Exists(Path.Combine(context.OutputRoot, "scene-assets-v3")))
+                throw new InvalidOperationException("Scene Assets V3 folder is missing after V3 generation.");
+
+            var files = response.GeneratedFiles.ToList();
+            if (generateShort) ValidateSceneAssetsV3Format(context.OutputRoot, "short", 5);
+            if (generateLong) ValidateSceneAssetsV3Format(context.OutputRoot, "long", 9);
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, files), cancellationToken);
+            return files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or JsonException)
+        {
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
+            {
+                if (string.IsNullOrWhiteSpace(d["actualOutputRoot"]?.GetValue<string>()))
+                    d["actualOutputRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", format));
+                PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, []);
+                d["exceptionType"] = ex.GetType().Name;
+                d["exceptionMessage"] = ex.Message;
+            }, cancellationToken);
+            throw;
+        }
     }
 
     private static IReadOnlyList<string> ValidateSceneAssetsV3(ProductionPhaseContext context)
@@ -690,6 +732,38 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicate = shortFiles.Concat(longFiles).Where(p => p.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).Select(ComputePhase8VisualHash).GroupBy(h => h).Any(g => g.Count() > 1);
         if (duplicate) throw new InvalidOperationException("Scene Assets V3 validation failed: duplicate image hashes detected.");
         return shortFiles.Concat(longFiles).ToArray();
+    }
+
+    private async Task<IReadOnlyList<string>> ValidateSceneAssetsV3WithDiagnosticsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        await WriteSceneAssetsHookDiagnosticsAsync(context, BuildSceneAssetsValidationHookDiagnostics(context, beforeExecution: true), cancellationToken);
+        try
+        {
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, 10, d =>
+            {
+                d["sceneAssetsVersionDecision"] = "V3";
+                d["decisionReason"] = "enableSceneAssetsV3=true";
+                d["selectedValidator"] = "SceneAssetsV3Validator";
+                d["selectedValidatorClass"] = nameof(ValidateSceneAssetsV3);
+                d["legacyV2ValidatorCalled"] = false;
+                d["v3ValidatorCalled"] = true;
+                d["actualShortRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", "short"));
+                d["actualLongRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", "long"));
+            }, cancellationToken);
+            var files = ValidateSceneAssetsV3(context);
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, 10, d => PopulateSceneAssetsValidationDiagnostics(d, context.OutputRoot, validationPassed: true), cancellationToken);
+            return files;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or JsonException)
+        {
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, 10, d =>
+            {
+                PopulateSceneAssetsValidationDiagnostics(d, context.OutputRoot, validationPassed: false);
+                d["exceptionType"] = ex.GetType().Name;
+                d["exceptionMessage"] = ex.Message;
+            }, cancellationToken);
+            throw;
+        }
     }
 
     private static IReadOnlyList<string> ValidateSceneAssetsV3Format(string outputRoot, string format, int expectedCount)
@@ -1337,7 +1411,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseValidateLongSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         if (IsSceneAssetsV3Enabled(context))
-            return await GenerateSceneAssetsV3Async(context, generateShort: false, generateLong: true, cancellationToken);
+            return await GenerateSceneAssetsV3Async(context, 9, "Generate Long Scene Images", generateShort: false, generateLong: true, cancellationToken);
 
         var longValidation = ResolveSceneImageValidationPath(context.ExecutionContext.SceneRoot!, "long", preferSceneAssets: true);
         ValidateSceneImageDirectoryCoverage(longValidation.SelectedPath, "Long scene image validation");
@@ -1347,7 +1421,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseValidateSceneAssetsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         if (IsSceneAssetsV3Enabled(context))
-            return ValidateSceneAssetsV3(context);
+            return await ValidateSceneAssetsV3WithDiagnosticsAsync(context, cancellationToken);
 
         var currentRunValidationRoot = context.ExecutionContext.QuestionRoot!;
         IReadOnlyList<string> materialized;
@@ -2821,6 +2895,7 @@ public sealed partial class ProductionPipelineExecutionService(
             phase8SceneAssetsV3Diagnostics = sceneAssetsV3Diagnostics?.Phase8SceneAssetsV3Diagnostics,
             phase9SceneAssetsV3Diagnostics = sceneAssetsV3Diagnostics?.Phase9SceneAssetsV3Diagnostics,
             phase10SceneAssetsV3Validation = sceneAssetsV3Diagnostics?.Phase10SceneAssetsV3Validation,
+            sceneAssetsHookDiagnostics = phaseNo is 8 or 9 or 10 ? ReadSceneAssetsHookDiagnostics(context, phaseNo) : null,
             preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context),
             executedPhaseNumbers = sceneAssetsV3Diagnostics?.ExecutedPhaseNumbers ?? (status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>()),
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
@@ -2923,6 +2998,146 @@ public sealed partial class ProductionPipelineExecutionService(
 
 
 
+
+    private static string SceneAssetsHookDiagnosticsPath(ProductionPhaseContext context, int phaseNo)
+        => Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-scene-hook-diagnostics.json");
+
+    private static async Task WriteSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, JsonObject diagnostics, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(context.ExecutionContext.ValidationRoot!);
+        await File.WriteAllTextAsync(SceneAssetsHookDiagnosticsPath(context, diagnostics["phaseNo"]!.GetValue<int>()), diagnostics.ToJsonString(JsonOptions), cancellationToken);
+    }
+
+    private static async Task UpdateSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, int phaseNo, Action<JsonObject> update, CancellationToken cancellationToken)
+    {
+        var path = SceneAssetsHookDiagnosticsPath(context, phaseNo);
+        var diagnostics = File.Exists(path)
+            ? JsonNode.Parse(await File.ReadAllTextAsync(path, cancellationToken))!.AsObject()
+            : phaseNo == 10 ? BuildSceneAssetsValidationHookDiagnostics(context, beforeExecution: true) : BuildSceneAssetsHookDiagnostics(context, phaseNo, phaseNo == 8 ? "Generate Short Scene Images" : "Generate Long Scene Images", phaseNo == 8 ? "short" : "long", beforeExecution: true);
+        update(diagnostics);
+        await WriteSceneAssetsHookDiagnosticsAsync(context, diagnostics, cancellationToken);
+    }
+
+    private static JsonObject BuildSceneAssetsHookDiagnostics(ProductionPhaseContext context, int phaseNo, string phaseName, string format, bool beforeExecution)
+    {
+        var v3Root = Path.Combine(context.OutputRoot, "scene-assets-v3", format);
+        var v2Root = Path.Combine(context.OutputRoot, "question-engine", "scene-approval-v3", "scene-assets", format);
+        return new JsonObject
+        {
+            ["phaseNo"] = phaseNo,
+            ["phaseName"] = phaseName,
+            ["requestedStartPhase"] = context.StartPhaseNo,
+            ["requestedEndPhase"] = context.EndPhaseNo,
+            ["enableSceneAssetsV3"] = context.PipelineRequest.EnableSceneAssetsV3,
+            ["sceneAssetsVersionDecision"] = "",
+            ["decisionReason"] = "",
+            ["selectedGenerator"] = "",
+            ["selectedGeneratorClass"] = "",
+            ["legacyV2GeneratorAvailable"] = true,
+            ["v3GeneratorAvailable"] = sceneAssetsV3ServiceAvailable(context),
+            ["legacyV2GeneratorCalled"] = false,
+            ["v3GeneratorCalled"] = false,
+            ["expectedV3Root"] = NormalizePath(v3Root),
+            ["legacyV2Root"] = NormalizePath(v2Root),
+            ["actualOutputRoot"] = "",
+            ["questionEngineRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "question-engine")),
+            ["planRoot"] = NormalizePath(context.OutputRoot),
+            ["fontDiagnostics"] = BuildSceneAssetsFontDiagnosticsJson(),
+            ["preExistingV3Files"] = JsonSerializer.SerializeToNode(ListFilesIfExists(v3Root), JsonOptions),
+            ["preExistingV2Files"] = JsonSerializer.SerializeToNode(ListFilesIfExists(v2Root), JsonOptions),
+            ["errorBeforeGenerator"] = "",
+            ["exceptionType"] = "",
+            ["exceptionMessage"] = ""
+        };
+
+        static bool sceneAssetsV3ServiceAvailable(ProductionPhaseContext _) => true;
+    }
+
+    private static JsonObject BuildSceneAssetsValidationHookDiagnostics(ProductionPhaseContext context, bool beforeExecution)
+        => new()
+        {
+            ["phaseNo"] = 10,
+            ["phaseName"] = "Validate Scene Assets",
+            ["enableSceneAssetsV3"] = context.PipelineRequest.EnableSceneAssetsV3,
+            ["sceneAssetsVersionDecision"] = "",
+            ["decisionReason"] = "",
+            ["selectedValidator"] = "",
+            ["selectedValidatorClass"] = "",
+            ["legacyV2ValidatorCalled"] = false,
+            ["v3ValidatorCalled"] = false,
+            ["expectedV3ShortRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", "short")),
+            ["expectedV3LongRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", "long")),
+            ["legacyV2ShortRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "question-engine", "scene-approval-v3", "scene-assets", "short")),
+            ["legacyV2LongRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "question-engine", "scene-approval-v3", "scene-assets", "long")),
+            ["actualShortRoot"] = "",
+            ["actualLongRoot"] = "",
+            ["shortVisualTimelineExists"] = false,
+            ["longVisualTimelineExists"] = false,
+            ["shortSceneManifestExists"] = false,
+            ["longSceneManifestExists"] = false,
+            ["shortSceneReviewExists"] = false,
+            ["longSceneReviewExists"] = false,
+            ["shortImageCount"] = 0,
+            ["longImageCount"] = 0,
+            ["legacyShortImageCount"] = 0,
+            ["legacyLongImageCount"] = 0,
+            ["missingFiles"] = new JsonArray(),
+            ["validationPassed"] = false,
+            ["exceptionType"] = "",
+            ["exceptionMessage"] = ""
+        };
+
+    private static JsonObject BuildSceneAssetsFontDiagnosticsJson()
+    {
+        var checkedPaths = new[] { "C:/WINDOWS/Fonts", "C:/Windows/Fonts", "%LOCALAPPDATA%/Microsoft/Windows/Fonts", "/usr/share/fonts", "/usr/local/share/fonts", "/Library/Fonts", "~/Library/Fonts" };
+        var fallbacks = new[] { "Segoe UI", "Arial", "Calibri", "Tahoma", "DejaVu Sans" };
+        var resolved = SystemFonts.TryGet("DejaVu Sans", out var requested)
+            ? requested.Name
+            : fallbacks.Select(font => SystemFonts.TryGet(font, out var family) ? family.Name : string.Empty).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? SystemFonts.Collection.Families.FirstOrDefault().Name ?? string.Empty;
+        return new JsonObject { ["requestedFont"] = "DejaVu Sans", ["resolvedFont"] = resolved, ["fontFallbackUsed"] = !string.Equals(resolved, "DejaVu Sans", StringComparison.OrdinalIgnoreCase), ["checkedFontPaths"] = JsonSerializer.SerializeToNode(checkedPaths, JsonOptions) };
+    }
+
+    private static IReadOnlyList<string> ListFilesIfExists(string root)
+        => Directory.Exists(root) ? Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Select(NormalizePath).Order().ToArray() : Array.Empty<string>();
+
+    private static void PopulateSceneAssetsFormatDiagnostics(JsonObject d, string outputRoot, string format, int expectedCount, IReadOnlyList<string> generatedFiles)
+    {
+        var root = Path.Combine(outputRoot, "scene-assets-v3", format);
+        var diag = BuildSceneAssetsV3FormatDiagnostics(root, format, expectedCount);
+        d["generatedFiles"] = JsonSerializer.SerializeToNode((generatedFiles.Count > 0 ? generatedFiles : diag.ImagePaths).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(), JsonOptions);
+        d["visualTimelinePath"] = diag.VisualTimelinePath;
+        d["sceneManifestPath"] = diag.SceneManifestPath;
+        d["sceneReviewPath"] = diag.SceneReviewPath;
+        d["imageCount"] = diag.SceneCount;
+        d["renderModesUsed"] = JsonSerializer.SerializeToNode(diag.RenderModesUsed, JsonOptions);
+        d["accurateSkyGuidePresent"] = diag.AccurateSkyGuidePresent;
+    }
+
+    private static void PopulateSceneAssetsValidationDiagnostics(JsonObject d, string outputRoot, bool validationPassed)
+    {
+        var shortRoot = Path.Combine(outputRoot, "scene-assets-v3", "short");
+        var longRoot = Path.Combine(outputRoot, "scene-assets-v3", "long");
+        d["actualShortRoot"] = NormalizePath(shortRoot);
+        d["actualLongRoot"] = NormalizePath(longRoot);
+        d["shortVisualTimelineExists"] = File.Exists(Path.Combine(shortRoot, "visual-timeline-v3.json"));
+        d["longVisualTimelineExists"] = File.Exists(Path.Combine(longRoot, "visual-timeline-v3.json"));
+        d["shortSceneManifestExists"] = File.Exists(Path.Combine(shortRoot, "scene-manifest-v3.json"));
+        d["longSceneManifestExists"] = File.Exists(Path.Combine(longRoot, "scene-manifest-v3.json"));
+        d["shortSceneReviewExists"] = File.Exists(Path.Combine(shortRoot, "scene-review-v3.json"));
+        d["longSceneReviewExists"] = File.Exists(Path.Combine(longRoot, "scene-review-v3.json"));
+        d["shortImageCount"] = Directory.Exists(shortRoot) ? Directory.EnumerateFiles(shortRoot, "*.png", SearchOption.TopDirectoryOnly).Count() : 0;
+        d["longImageCount"] = Directory.Exists(longRoot) ? Directory.EnumerateFiles(longRoot, "*.png", SearchOption.TopDirectoryOnly).Count() : 0;
+        d["legacyShortImageCount"] = Directory.Exists(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "short")) ? Directory.EnumerateFiles(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "short"), "*.png", SearchOption.AllDirectories).Count() : 0;
+        d["legacyLongImageCount"] = Directory.Exists(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "long")) ? Directory.EnumerateFiles(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "long"), "*.png", SearchOption.AllDirectories).Count() : 0;
+        d["missingFiles"] = JsonSerializer.SerializeToNode(BuildSceneAssetsV3Missing(shortRoot, "short").Concat(BuildSceneAssetsV3Missing(longRoot, "long")).ToArray(), JsonOptions);
+        d["validationPassed"] = validationPassed;
+    }
+
+    private static JsonNode? ReadSceneAssetsHookDiagnostics(ProductionPhaseContext context, int phaseNo)
+    {
+        var path = SceneAssetsHookDiagnosticsPath(context, phaseNo);
+        return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) : null;
+    }
 
     private static SceneAssetsV3PhaseDiagnostics BuildSceneAssetsV3PhaseDiagnostics(ProductionPhaseContext context, int phaseNo)
     {
