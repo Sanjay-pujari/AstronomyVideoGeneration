@@ -3786,7 +3786,7 @@ public sealed partial class ProductionPipelineExecutionService(
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
             backgroundAudioFound,
             backgroundAudioMixed,
-            duckingApplied = backgroundAudioMixed && (videoAssemblyOptions?.Value.BackgroundMusic.DuckUnderNarration ?? true),
+            duckingApplied = false,
             finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) },
             finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
             finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
@@ -3820,7 +3820,7 @@ public sealed partial class ProductionPipelineExecutionService(
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
             backgroundAudioFound,
             backgroundAudioMixed,
-            duckingApplied = backgroundAudioMixed && (videoAssemblyOptions?.Value.BackgroundMusic.DuckUnderNarration ?? true),
+            duckingApplied = false,
             shortAudioMuxed,
             longAudioMuxed,
             shortHasAudioStream,
@@ -3916,11 +3916,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var finalDurationText = finalDuration.ToString("0.###", CultureInfo.InvariantCulture);
             var fadeOutStartText = fadeOutStart.ToString("0.###", CultureInfo.InvariantCulture);
             var musicLevelText = musicLevel.ToString("0.###", CultureInfo.InvariantCulture);
-            var duckingEnabled = videoAssemblyOptions?.Value.BackgroundMusic.DuckUnderNarration ?? true;
-            var audioFilter = duckingEnabled
-                ? $"[1:a]volume=1.0,apad,atrim=0:{finalDurationText}[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1.0,afade=t=out:st={fadeOutStartText}:d=1.5,apad,atrim=0:{finalDurationText}[bg];[bg][narr]sidechaincompress=threshold=0.02:ratio=8:attack=80:release=700[duck];[narr][duck]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{finalDurationText}[a]"
-                : $"[1:a]volume=1.0,apad,atrim=0:{finalDurationText}[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1.0,afade=t=out:st={fadeOutStartText}:d=1.5,apad,atrim=0:{finalDurationText}[bg];[narr][bg]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{finalDurationText}[a]";
-            var mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundAudioPath, "-filter_complex", audioFilter, "-map", "[a]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
+            var audioFilter = $"[1:a]volume=1.0[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[narr][bg]amix=inputs=2:duration=longest[aout]";
+            var mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundAudioPath, "-filter_complex", audioFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
             if (mixResult.ExitCode != 0 || !File.Exists(finalMixedAudioPath)) throw new InvalidOperationException($"Unable to mix narration and background ambience: {mixResult.Error}");
 
             var videoExtension = Math.Max(0, finalDuration - videoDuration);
@@ -3937,11 +3934,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
         => Path.Combine(Path.GetDirectoryName(outputPath)!, "final-mixed-audio.m4a");
 
-    private double ResolvePhase18BackgroundMusicLevel()
-    {
-        var configuredPercent = videoAssemblyOptions?.Value.BackgroundMusic.DefaultLevelPercent ?? 12;
-        return Math.Clamp(configuredPercent / 100.0, 0.10, 0.16);
-    }
+    private static double ResolvePhase18BackgroundMusicLevel() => 0.12;
 
 
     private static JsonNode BuildDefaultPhase18MotionPlan(string sceneAssetsRoot, string syncPath, string ttsPath)
