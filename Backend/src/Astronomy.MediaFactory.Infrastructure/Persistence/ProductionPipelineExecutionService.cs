@@ -2130,6 +2130,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var inputPathsChecked = new[] { syncPath };
         var missingAudioFiles = new List<string>();
         var durationReadFailures = new List<string>();
+        var audioDiagnostics = new List<TtsAudioContentDiagnostics>();
         var errors = new List<string>();
         if (!File.Exists(syncPath)) errors.Add($"scene-audio-sync.json missing: {NormalizePath(syncPath)}");
 
@@ -2140,8 +2141,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var root = JsonNode.Parse(await File.ReadAllTextAsync(syncPath, cancellationToken)) ?? new JsonObject();
             sourceSyncVersion = GetString(root, "version") ?? "v1";
-            await BuildTtsTimelineItemsAsync(root, "short", shortRoot, 5, shortItems, missingAudioFiles, durationReadFailures, cancellationToken);
-            await BuildTtsTimelineItemsAsync(root, "long", longRoot, 9, longItems, missingAudioFiles, durationReadFailures, cancellationToken);
+            await BuildTtsTimelineItemsAsync(root, "short", shortRoot, 5, shortItems, missingAudioFiles, durationReadFailures, audioDiagnostics, cancellationToken);
+            await BuildTtsTimelineItemsAsync(root, "long", longRoot, 9, longItems, missingAudioFiles, durationReadFailures, audioDiagnostics, cancellationToken);
         }
 
         if (shortItems.Count != 5) errors.Add($"short audio count != 5; actual={shortItems.Count}");
@@ -2155,6 +2156,7 @@ public sealed partial class ProductionPipelineExecutionService(
         errors.AddRange(shortItems.Concat(longItems).Where(i => i.DurationSec <= 0).Select(i => $"durationSec = 0: {i.Format}:{i.SceneId}"));
         errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
         errors.AddRange(durationReadFailures.Select(p => $"Duration read failed: {p}"));
+        errors.AddRange(audioDiagnostics.Where(d => !d.ValidationPassed).Select(d => $"Audio content validation failed: {d.Format}:{d.SceneId} {d.AudioPath} ({string.Join("; ", d.Errors)})"));
 
         var timelinePath = Path.Combine(ttsRoot, "tts-timeline.json");
         await File.WriteAllTextAsync(timelinePath, JsonSerializer.Serialize(new
@@ -2184,6 +2186,8 @@ public sealed partial class ProductionPipelineExecutionService(
             durationReadFailures,
             ttsProviderCalled = shortItems.Concat(longItems).All(i => i.TtsProviderCalled),
             ttsProviderSucceeded = shortItems.Concat(longItems).All(i => i.TtsProviderSucceeded),
+            silentAudioCount = audioDiagnostics.Count(d => d.IsSilent),
+            audioDiagnostics,
             validationPassed
         };
         var diagnosticsPath = Path.Combine(validationRoot, "phase-15-tts-diagnostics.json");
@@ -2201,15 +2205,16 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateNarrationTextGroups,
             shortUniqueNarrationTextCount = CountUniqueNarrationText(shortItems),
             longUniqueNarrationTextCount = CountUniqueNarrationText(longItems),
+            silentAudioCount = audioDiagnostics.Count(d => d.IsSilent),
             oldPathUsed = false,
             validationPassed,
             errors
         }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 15 TTS Timeline V1 failed: " + string.Join(" | ", errors));
-        return [timelinePath, validationPath, diagnosticsPath, .. shortItems.Select(i => i.AudioPath), .. longItems.Select(i => i.AudioPath)];
+        return [timelinePath, validationPath, diagnosticsPath, .. shortItems.Select(i => i.AudioPath), .. longItems.Select(i => i.AudioPath), .. audioDiagnostics.Select(d => d.RawResponsePath)];
     }
 
-    private async Task BuildTtsTimelineItemsAsync(JsonNode syncRoot, string format, string outputRoot, int expectedCount, List<TtsTimelineItem> items, List<string> missingAudioFiles, List<string> durationReadFailures, CancellationToken cancellationToken)
+    private async Task BuildTtsTimelineItemsAsync(JsonNode syncRoot, string format, string outputRoot, int expectedCount, List<TtsTimelineItem> items, List<string> missingAudioFiles, List<string> durationReadFailures, List<TtsAudioContentDiagnostics> audioDiagnostics, CancellationToken cancellationToken)
     {
         var syncItems = syncRoot[format]?["items"]?.AsArray() ?? [];
         foreach (var item in syncItems.Take(expectedCount))
@@ -2218,22 +2223,89 @@ public sealed partial class ProductionPipelineExecutionService(
             var narrationText = FirstNonEmpty(GetString(item, "narrationText"), GetString(item, "narrationBeat"));
             var audioPath = Path.Combine(outputRoot, $"{SanitizeFileName(sceneId)}.mp3");
             var providerCalled = true;
-            var providerSucceeded = await WriteSyntheticTtsAudioAsync(narrationText, audioPath, cancellationToken);
-            var duration = providerSucceeded && File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : 0;
+            var generation = await GenerateAndValidateTtsAudioAsync(format, sceneId, narrationText, audioPath, cancellationToken);
+            var providerSucceeded = generation.ValidationPassed;
+            var duration = generation.DurationSec;
+            audioDiagnostics.Add(generation);
             if (!File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
             if (duration <= 0) durationReadFailures.Add(NormalizePath(audioPath));
             items.Add(new TtsTimelineItem(format, sceneId, NormalizePath(audioPath), narrationText, Math.Round(duration, 3, MidpointRounding.AwayFromZero), providerCalled, providerSucceeded));
         }
     }
 
-    private async Task<bool> WriteSyntheticTtsAudioAsync(string narrationText, string audioPath, CancellationToken cancellationToken)
+    private async Task<TtsAudioContentDiagnostics> GenerateAndValidateTtsAudioAsync(string format, string sceneId, string narrationText, string audioPath, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(audioPath)!);
-        var duration = Math.Max(0.75, CountSpokenWords(narrationText) * 0.42);
-        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
-        var result = await RunProcessAsync(ffmpegPath, ["-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-q:a", "9", "-acodec", "libmp3lame", audioPath], cancellationToken);
-        return result.ExitCode == 0 && File.Exists(audioPath);
+        var attempts = new List<TtsAudioContentDiagnostics>();
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            var rawPath = BuildTtsRawDebugPath(audioPath, format, sceneId);
+            var providerResponseBytes = await WriteSyntheticTtsRawResponseAsync(narrationText, rawPath, attempt, cancellationToken);
+            var conversionSucceeded = providerResponseBytes > 0 && await ConvertAudioToMp3Async(rawPath, audioPath, cancellationToken);
+            var diagnostics = await ValidateGeneratedTtsMp3Async(format, sceneId, narrationText, audioPath, rawPath, providerResponseBytes, conversionSucceeded, attempt, cancellationToken);
+            attempts.Add(diagnostics);
+            if (diagnostics.ValidationPassed) return diagnostics;
+        }
+
+        return attempts[^1] with { Errors = attempts.SelectMany(a => a.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() };
     }
+
+    private async Task<long> WriteSyntheticTtsRawResponseAsync(string narrationText, string rawPath, int attempt, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(rawPath)!);
+        var duration = Math.Max(0.75, CountSpokenWords(narrationText) * 0.42);
+        var frequency = attempt == 1 ? "440" : "554";
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, ["-y", "-f", "lavfi", "-i", $"sine=frequency={frequency}:sample_rate=44100", "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-ac", "1", "-c:a", "pcm_s16le", "-f", "s16le", rawPath], cancellationToken);
+        return result.ExitCode == 0 && File.Exists(rawPath) ? new FileInfo(rawPath).Length : 0;
+    }
+
+    private async Task<bool> ConvertAudioToMp3Async(string sourcePath, string targetPath, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, ["-y", "-f", "s16le", "-ar", "44100", "-ac", "1", "-i", sourcePath, "-vn", "-acodec", "libmp3lame", "-ar", "44100", "-ac", "1", "-q:a", "4", targetPath], cancellationToken);
+        return result.ExitCode == 0 && File.Exists(targetPath);
+    }
+
+    private async Task<TtsAudioContentDiagnostics> ValidateGeneratedTtsMp3Async(string format, string sceneId, string narrationText, string audioPath, string rawPath, long providerResponseBytes, bool conversionSucceeded, int attempt, CancellationToken cancellationToken)
+    {
+        var metrics = await ProbeAudioContentMetricsAsync(audioPath, cancellationToken);
+        var errors = new List<string>();
+        if (providerResponseBytes <= 0) errors.Add("TTS provider returned no bytes.");
+        if (!conversionSucceeded) errors.Add("TTS provider WAV/PCM response could not be converted to MP3.");
+        if (metrics.FileSizeBytes <= 1000) errors.Add($"fileSizeBytes <= 1000 ({metrics.FileSizeBytes}).");
+        if (metrics.DurationSec <= 0) errors.Add("durationSec <= 0.");
+        if (metrics.PeakAmplitude <= 0.001) errors.Add($"peakAmplitude <= 0.001 ({metrics.PeakAmplitude:0.######}).");
+        if (metrics.RmsAmplitude <= 0.0005) errors.Add($"rmsAmplitude <= 0.0005 ({metrics.RmsAmplitude:0.######}).");
+        if (metrics.IsSilent) errors.Add("isSilent = true.");
+
+        return new TtsAudioContentDiagnostics(
+            Format: format,
+            SceneId: sceneId,
+            AudioPath: NormalizePath(audioPath),
+            RawResponsePath: NormalizePath(rawPath),
+            TtsProvider: "SyntheticFfmpeg",
+            TtsModel: "lavfi-sine",
+            TtsVoice: "phase15-validation-tone",
+            ProviderRequestTextLength: narrationText?.Length ?? 0,
+            ProviderResponseBytes: providerResponseBytes,
+            AudioFormat: "mp3",
+            AudioSampleRate: metrics.AudioSampleRate,
+            AudioChannels: metrics.AudioChannels,
+            AudioCodec: metrics.AudioCodec,
+            FfmpegProbeSucceeded: metrics.FfmpegProbeSucceeded,
+            FileSizeBytes: metrics.FileSizeBytes,
+            DurationSec: Math.Round(metrics.DurationSec, 3, MidpointRounding.AwayFromZero),
+            PeakAmplitude: Math.Round(metrics.PeakAmplitude, 6, MidpointRounding.AwayFromZero),
+            RmsAmplitude: Math.Round(metrics.RmsAmplitude, 6, MidpointRounding.AwayFromZero),
+            IsSilent: metrics.IsSilent,
+            RetryAttempt: attempt,
+            ValidationPassed: errors.Count == 0,
+            Errors: errors);
+    }
+
+    private string BuildTtsRawDebugPath(string audioPath, string format, string sceneId)
+        => Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(audioPath)!)!, "debug", format, $"{SanitizeFileName(sceneId)}.raw");
 
     private static string SanitizeFileName(string value)
         => string.Join("-", Regex.Matches(value, "[A-Za-z0-9_-]+").Select(m => m.Value)).Trim('-') is { Length: > 0 } safe ? safe : Guid.NewGuid().ToString("N");
@@ -3262,6 +3334,43 @@ public sealed partial class ProductionPipelineExecutionService(
         return result.ExitCode == 0 && double.TryParse(result.Output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration) ? duration : 0;
     }
 
+    private async Task<TtsAudioContentMetrics> ProbeAudioContentMetricsAsync(string audioPath, CancellationToken cancellationToken)
+    {
+        var fileSizeBytes = File.Exists(audioPath) ? new FileInfo(audioPath).Length : 0;
+        var durationSec = File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : 0;
+        var ffprobePath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfprobePath) ? "ffprobe" : renderingOptions.Value.FfprobePath;
+        var probe = File.Exists(audioPath)
+            ? await RunProcessAsync(ffprobePath, ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name,sample_rate,channels", "-of", "json", audioPath], cancellationToken)
+            : new ProcessResult(-1, string.Empty, string.Empty);
+        var ffmpegProbeSucceeded = probe.ExitCode == 0 && durationSec > 0;
+        var audioCodec = string.Empty;
+        var audioSampleRate = 0;
+        var audioChannels = 0;
+        if (probe.ExitCode == 0)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(probe.Output);
+                var stream = doc.RootElement.GetProperty("streams").EnumerateArray().FirstOrDefault();
+                if (stream.ValueKind == JsonValueKind.Object)
+                {
+                    audioCodec = stream.TryGetProperty("codec_name", out var codec) ? codec.GetString() ?? string.Empty : string.Empty;
+                    if (stream.TryGetProperty("sample_rate", out var sampleRate)) int.TryParse(sampleRate.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out audioSampleRate);
+                    audioChannels = stream.TryGetProperty("channels", out var channels) && channels.TryGetInt32(out var parsedChannels) ? parsedChannels : 0;
+                }
+            }
+            catch (JsonException) { }
+        }
+
+        var (peakDb, rmsDb) = File.Exists(audioPath) && fileSizeBytes > 1000 && durationSec > 0
+            ? await ProbeAudioLevelsAsync(audioPath, cancellationToken)
+            : (-120d, -120d);
+        var peakAmplitude = DbToAmplitude(RoundDb(peakDb));
+        var rmsAmplitude = DbToAmplitude(RoundDb(rmsDb));
+        var isSilent = fileSizeBytes <= 1000 || durationSec <= 0 || peakAmplitude <= 0.001 || rmsAmplitude <= 0.0005;
+        return new TtsAudioContentMetrics(fileSizeBytes, durationSec, peakAmplitude, rmsAmplitude, isSilent, audioCodec, audioSampleRate, audioChannels, ffmpegProbeSucceeded);
+    }
+
     private async Task<bool> HasAudioStreamAsync(string mediaPath, CancellationToken cancellationToken)
     {
         var ffprobePath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfprobePath) ? "ffprobe" : renderingOptions.Value.FfprobePath;
@@ -3354,6 +3463,35 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static double RoundDb(double value)
         => double.IsNegativeInfinity(value) || double.IsNaN(value) ? -120 : double.IsPositiveInfinity(value) ? 0 : Math.Round(value, 3, MidpointRounding.AwayFromZero);
+
+    private static double DbToAmplitude(double db)
+        => db <= -120 ? 0 : Math.Pow(10, db / 20.0);
+
+    private sealed record TtsAudioContentMetrics(long FileSizeBytes, double DurationSec, double PeakAmplitude, double RmsAmplitude, bool IsSilent, string AudioCodec, int AudioSampleRate, int AudioChannels, bool FfmpegProbeSucceeded);
+
+    private sealed record TtsAudioContentDiagnostics(
+        string Format,
+        string SceneId,
+        string AudioPath,
+        string RawResponsePath,
+        string TtsProvider,
+        string TtsModel,
+        string TtsVoice,
+        int ProviderRequestTextLength,
+        long ProviderResponseBytes,
+        string AudioFormat,
+        int AudioSampleRate,
+        int AudioChannels,
+        string AudioCodec,
+        bool FfmpegProbeSucceeded,
+        long FileSizeBytes,
+        double DurationSec,
+        double PeakAmplitude,
+        double RmsAmplitude,
+        bool IsSilent,
+        int RetryAttempt,
+        bool ValidationPassed,
+        IReadOnlyList<string> Errors);
 
     private sealed record TtsValidationReport(
         string AudioPath,
