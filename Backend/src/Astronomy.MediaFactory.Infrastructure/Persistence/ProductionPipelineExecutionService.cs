@@ -4502,7 +4502,71 @@ public sealed partial class ProductionPipelineExecutionService(
         var copied = await MaterializePlanFolderAsync(context.Request, context.EventId, context.OutputRoot, [], cancellationToken);
         var validation = await qualityValidator.ValidateFinalOutputAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken, context.Request.RequestedOutputs);
         if (!validation.IsValid) throw new InvalidOperationException("Final validation failed: " + string.Join("; ", validation.Errors));
-        return copied.Concat([Path.Combine(context.OutputRoot, "phase-manifest.json")]).ToArray();
+
+        var publishGatePath = await WriteAndValidatePublishGateAsync(context, cancellationToken);
+        return copied.Concat([Path.Combine(context.OutputRoot, "phase-manifest.json"), publishGatePath]).ToArray();
+    }
+
+    private static async Task<string> WriteAndValidatePublishGateAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var validationRoot = context.ExecutionContext.ValidationRoot ?? Path.Combine(context.OutputRoot, "validation");
+        Directory.CreateDirectory(validationRoot);
+
+        var phase19ValidationPath = Path.Combine(validationRoot, "phase-19-validation.json");
+        var qaReportPath = Path.Combine(context.OutputRoot, "review", "qa-report.json");
+        var phase19QaPassed = JsonBool(phase19ValidationPath, "validationPassed") == true
+            && string.Equals(JsonString(phase19ValidationPath, "status"), "Succeeded", StringComparison.OrdinalIgnoreCase);
+        var phase19ReviewApproved = string.Equals(JsonString(phase19ValidationPath, "recommendation"), "Approved", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(JsonString(qaReportPath, "status"), "Approved", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(JsonString(qaReportPath, "scoring", "recommendation"), "Approved", StringComparison.OrdinalIgnoreCase);
+        var manualReviewApprovalExists = File.Exists(Path.Combine(context.OutputRoot, "review", "manual-review-approval.json"))
+            || File.Exists(Path.Combine(validationRoot, "manual-review-approval.json"))
+            || File.Exists(Path.Combine(context.OutputRoot, "publish-approved.json"))
+            || File.Exists(Path.Combine(validationRoot, "publish-approved.json"));
+        var publishApproved = manualReviewApprovalExists || context.PipelineRequest.PublishApproved;
+        var gatePassed = phase19QaPassed && phase19ReviewApproved && publishApproved;
+
+        var diagnostics = new
+        {
+            publishGateChecked = true,
+            publishApproved,
+            phase19ReviewApproved,
+            phase19QaPassed,
+            manualReviewApprovalExists,
+            publishApprovedFlag = context.PipelineRequest.PublishApproved,
+            phase19ValidationPath = NormalizePath(phase19ValidationPath),
+            qaReportPath = NormalizePath(qaReportPath),
+            validationPassed = gatePassed
+        };
+        var path = Path.Combine(validationRoot, "phase-20-publish-gate-diagnostics.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        if (!gatePassed)
+            throw new InvalidOperationException($"Publishing gate failed: phase19QaPassed={phase19QaPassed}; phase19ReviewApproved={phase19ReviewApproved}; publishApproved={publishApproved}.");
+        return path;
+    }
+
+    private static string? JsonString(string path, params string[] properties)
+    {
+        if (!File.Exists(path)) return null;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        return TryGetJsonElement(doc.RootElement, properties, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    }
+
+    private static bool? JsonBool(string path, params string[] properties)
+    {
+        if (!File.Exists(path)) return null;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        return TryGetJsonElement(doc.RootElement, properties, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : null;
+    }
+
+    private static bool TryGetJsonElement(JsonElement root, IReadOnlyList<string> properties, out JsonElement value)
+    {
+        value = root;
+        foreach (var property in properties)
+        {
+            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(property, out value)) return false;
+        }
+        return true;
     }
 
     private static async Task<string> WritePhase15PlusPathReadinessDiagnosticsAsync(ProductionPhaseContext context, int phaseNo, IReadOnlyList<string> selectedInputPaths, CancellationToken cancellationToken)

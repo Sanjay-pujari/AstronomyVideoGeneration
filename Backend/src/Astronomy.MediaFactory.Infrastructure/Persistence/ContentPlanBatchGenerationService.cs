@@ -57,6 +57,7 @@ public sealed class ContentPlanBatchGenerationService(
             executionMode = ContentPlanExecutionMode.RetryFailed;
         var recoveryMode = executionMode == ContentPlanExecutionMode.RecoverRunning;
         var exactPlanIdMode = IsExactPlanIdMode(request);
+        var manualPlanExecution = request.PlanId.HasValue;
         var selection = SelectPlans(candidates, requestedTitles, request.PlanId, request.OnlyHighPriority, maxPlans, executionMode, recoveryMode, ResolveRunningPlanRecoveryStaleAfter(request), request.AllowCompletedPlanRerun, request.UseProductionPipeline, exactPlanIdMode);
         var selectedPlanEntities = selection.SelectedPlans;
         var warnings = recoveryWarnings.Concat(selection.Warnings).ToArray();
@@ -80,7 +81,13 @@ public sealed class ContentPlanBatchGenerationService(
                 Warnings: warnings,
                 Errors: [],
                 UseProductionPipeline: request.UseProductionPipeline,
-                UsedPlaceholderVisuals: !request.UseProductionPipeline);
+                UsedPlaceholderVisuals: !request.UseProductionPipeline,
+                RequestedPlanId: request.PlanId,
+                SelectedPlanId: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].Id : null,
+                ManualPlanExecution: manualPlanExecution,
+                AutoGenerateAllowed: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed : null,
+                AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities.Count == 1 && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
+                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic");
         }
 
         if (request.UseProductionPipeline)
@@ -105,7 +112,8 @@ public sealed class ContentPlanBatchGenerationService(
                 request.ArchivePreviousRun,
                 request.RebuildIntelligence,
                 request.EnableSceneVariants,
-                EnableSceneAssetsV3: request.EnableSceneAssetsV3), cancellationToken);
+                EnableSceneAssetsV3: request.EnableSceneAssetsV3,
+                PublishApproved: request.PublishApproved), cancellationToken);
 
             ValidateExactPlanIdExecutionResult(request.PlanId, execution.PlanId, exactPlanIdMode);
 
@@ -156,7 +164,16 @@ public sealed class ContentPlanBatchGenerationService(
                 ExpandedStartPhase: execution.ExpandedStartPhase ?? execution.StartPhaseNo ?? requestedStartPhaseNo,
                 ExpandedEndPhase: execution.ExpandedEndPhase ?? execution.EndPhaseNo ?? requestedEndPhaseNo,
                 PartialPhaseSuccess: execution.PartialPhaseSuccess,
-                DependencyExpansionApplied: execution.DependencyExpansionApplied);
+                DependencyExpansionApplied: execution.DependencyExpansionApplied,
+                RequestedPlanId: request.PlanId,
+                SelectedPlanId: execution.PlanId,
+                ManualPlanExecution: manualPlanExecution,
+                AutoGenerateAllowed: selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed,
+                AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
+                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic",
+                PublishGateChecked: execution.PublishGateChecked,
+                PublishApproved: execution.PublishApproved,
+                Phase19ReviewApproved: execution.Phase19ReviewApproved);
         }
 
         logger.LogInformation("Using placeholder planning pipeline");
@@ -172,7 +189,13 @@ public sealed class ContentPlanBatchGenerationService(
                 SelectedPlans: selectedPlans,
                 Steps: DryRunSteps.Cast<object>().ToArray(),
                 Warnings: warnings,
-                Errors: []);
+                Errors: [],
+                RequestedPlanId: request.PlanId,
+                SelectedPlanId: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].Id : null,
+                ManualPlanExecution: manualPlanExecution,
+                AutoGenerateAllowed: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed : null,
+                AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities.Count == 1 && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
+                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic");
         }
 
         var planIds = selectedPlans.Select(p => p.ContentGenerationPlanId).ToArray();
@@ -236,7 +259,13 @@ public sealed class ContentPlanBatchGenerationService(
             0,
             0,
             counters.FailedPlans,
-            []);
+            [],
+            RequestedPlanId: request.PlanId,
+            SelectedPlanId: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].Id : null,
+            ManualPlanExecution: manualPlanExecution,
+            AutoGenerateAllowed: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed : null,
+            AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities.Count == 1 && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
+            SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic");
     }
 
     public async Task<PlansReadyForGenerationResponse> GetPlansReadyForGenerationAsync(
@@ -291,7 +320,7 @@ public sealed class ContentPlanBatchGenerationService(
             SelectRequestedPlan(candidates, planId, onlyHighPriority, maxPlans, recoveryMode, runningPlanRecoveryStaleAfter, allowedStatuses, selected, warnings, selectedIds, completedRerunMode, allowCompletedPlanRerun, useProductionPipeline, exactPlanIdMode);
         }
 
-        if (exactPlanIdMode)
+        if (requestedPlanId.HasValue)
             return new SelectionResult(selected, warnings);
 
         foreach (var requestedTitle in requestedTitles)
@@ -362,11 +391,12 @@ public sealed class ContentPlanBatchGenerationService(
         }
 
         if (selectedIds.Contains(plan.Id)) return;
-        var shouldBypassAutoGenerateAllowed = ShouldBypassAutoGenerateAllowedForExactPlanId(plan, useProductionPipeline, exactPlanIdMode, allowCompletedPlanRerun);
-        if (!IsStatusRunnable(plan, allowedStatuses)
+        var manualPlanExecution = exactPlanIdMode;
+        var statusAllowed = IsStatusRunnable(plan, allowedStatuses) || (allowCompletedPlanRerun && IsProductionCompleted(plan));
+        if (!statusAllowed
             || (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter))
-            || !IsAstronomyEventRunnable(plan, shouldBypassAutoGenerateAllowed || AllowManualValidationAutoGenerateBypass(plan, isExactPlanIdTarget: true))
-            || (onlyHighPriority && !IsHighPriority(plan)))
+            || (!manualPlanExecution && !IsAstronomyEventRunnable(plan, allowManualValidationAutoGenerateBypass: false))
+            || (!manualPlanExecution && onlyHighPriority && !IsHighPriority(plan)))
         {
             warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(
                 plan,
@@ -385,7 +415,8 @@ public sealed class ContentPlanBatchGenerationService(
 
         selected.Add(plan);
         selectedIds.Add(plan.Id);
-        AddAutoGenerateBypassWarningIfNeeded(plan, requestedPlanId.ToString("D"), warnings, useProductionPipeline, exactPlanIdMode, allowCompletedPlanRerun);
+        if (plan.AstronomyEventIntelligence?.AutoGenerateAllowed == false)
+            warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, true, BuildAutoGenerateBypassReason(plan, requestedPlanId.ToString("D"), exactPlanIdMode, useProductionPipeline, allowCompletedPlanRerun)));
     }
 
     private async Task<IReadOnlyList<BatchGenerateFromPlansWarning>> RecoverRunningCandidatesAsync(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -652,7 +683,7 @@ public sealed class ContentPlanBatchGenerationService(
             "matchedDifferentPlanDetected=false");
 
     private static bool IsExactPlanIdMode(BatchGenerateFromPlansRequest request)
-        => request.PlanId.HasValue && request.UseProductionPipeline && request.AllowCompletedPlanRerun;
+        => request.PlanId.HasValue;
 
     private void LogExactPlanIdDiagnostics(BatchGenerateFromPlansRequest request, IReadOnlyList<ContentGenerationPlan> selectedPlans, IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, bool exactPlanIdMode)
     {
@@ -666,19 +697,20 @@ public sealed class ContentPlanBatchGenerationService(
         var autoGenerateAllowedBypassed = exactPlanIdMode && requestedPlan?.AstronomyEventIntelligence?.AutoGenerateAllowed == false && selectedPlanId == request.PlanId.Value;
 
         logger.LogInformation(
-            "Content plan exact planId diagnostics: requestedPlanId={RequestedPlanId}; selectedPlanId={SelectedPlanId}; exactPlanIdMode={ExactPlanIdMode}; linkedEventAutoGenerateAllowed={LinkedEventAutoGenerateAllowed}; autoGenerateAllowedBypassed={AutoGenerateAllowedBypassed}; bypassReason={BypassReason}; matchedDifferentPlanDetected={MatchedDifferentPlanDetected}",
+            "Content plan execution diagnostics: requestedPlanId={RequestedPlanId}; selectedPlanId={SelectedPlanId}; manualPlanExecution={ManualPlanExecution}; autoGenerateAllowed={AutoGenerateAllowed}; autoGenerateAllowedIgnoredForManualRun={AutoGenerateAllowedIgnoredForManualRun}; selectionMode={SelectionMode}; exactPlanIdMode={ExactPlanIdMode}; matchedDifferentPlanDetected={MatchedDifferentPlanDetected}",
             request.PlanId.Value,
             selectedPlanId,
-            exactPlanIdMode,
+            true,
             requestedPlan?.AstronomyEventIntelligence?.AutoGenerateAllowed,
             autoGenerateAllowedBypassed,
-            autoGenerateAllowedBypassed ? "planId + useProductionPipeline + allowCompletedPlanRerun" : "not eligible",
+            "ManualPlanId",
+            exactPlanIdMode,
             matchedDifferentPlanDetected);
     }
 
     private static void ValidateExactPlanIdSelection(Guid? requestedPlanId, IReadOnlyList<ContentGenerationPlan> selectedPlans, bool exactPlanIdMode)
     {
-        if (!exactPlanIdMode || !requestedPlanId.HasValue || selectedPlans.Count == 0) return;
+        if (!requestedPlanId.HasValue || selectedPlans.Count == 0) return;
         if (selectedPlans.Count != 1 || selectedPlans[0].Id != requestedPlanId.Value)
             throw new InvalidOperationException($"Exact planId validation failed: selectedPlanId={selectedPlans.FirstOrDefault()?.Id:D} did not match requestedPlanId={requestedPlanId.Value:D}.");
     }
@@ -686,7 +718,7 @@ public sealed class ContentPlanBatchGenerationService(
 
     private static void ValidateExactPlanIdExecutionResult(Guid? requestedPlanId, Guid selectedPlanId, bool exactPlanIdMode)
     {
-        if (!exactPlanIdMode || !requestedPlanId.HasValue) return;
+        if (!requestedPlanId.HasValue) return;
         if (selectedPlanId != requestedPlanId.Value)
             throw new InvalidOperationException($"Exact planId validation failed: selectedPlanId={selectedPlanId:D} did not match requestedPlanId={requestedPlanId.Value:D}.");
     }
