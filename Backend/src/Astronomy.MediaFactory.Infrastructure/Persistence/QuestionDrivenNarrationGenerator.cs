@@ -15,9 +15,9 @@ public sealed class QuestionDrivenNarrationGenerator(
     private const string ReviewFileName = "question-driven-narration-review-v2.json";
     private const string LegacyNarrationFileName = "question-driven-narration.json";
     private const string LegacyReviewFileName = "question-driven-narration-review.json";
+    private const string DiagnosticsFileName = "question-driven-narration-v2-diagnostics.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InternalTerms = ["question engine", "scene purpose", "metadata", "json", "source answer"];
-    private const string MeteorShowerViewingAdviceNarration = "For the best experience, head to a dark location after 10 PM and scan the sky from east to overhead.";
     private static readonly string[] MeteorShowerForbiddenLeakageTerms = ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST", "western horizon", "planet pairing", "object pairing"];
     private static readonly IReadOnlyDictionary<string, string> MeteorShowerSectionsByQuestionType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -92,6 +92,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var reviewPath = BuildPlanPath(request.EventId, request.RegionId, ReviewFileName, request.ProductionContext);
         var legacyNarrationPath = BuildPlanPath(request.EventId, request.RegionId, LegacyNarrationFileName, request.ProductionContext);
         var legacyReviewPath = BuildPlanPath(request.EventId, request.RegionId, LegacyReviewFileName, request.ProductionContext);
+        var diagnosticsPath = BuildPlanPath(request.EventId, request.RegionId, DiagnosticsFileName, request.ProductionContext);
 
         if (!File.Exists(inputPath))
             throw new ArgumentException($"Approved enriched question-driven scene plan was not found at '{inputPath.Replace('\\', '/')}'.", nameof(request));
@@ -138,6 +139,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(BuildDiagnostics(narration, request), JsonOptions), cancellationToken);
 
         return BuildResponse(narration, review, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
     }
@@ -212,7 +214,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             return narrationText;
 
         if (isMeteorShower && string.Equals(section, "ViewingAdvice", StringComparison.OrdinalIgnoreCase))
-            return MeteorShowerViewingAdviceNarration;
+            return "For the best experience, head to a dark location during the approved viewing window and use the event-specific direction guidance.";
 
         if (Templates.TryGetValue(questionType, out var template) && !string.Equals(template.NarrationText.Trim(), sourceAnswer.Trim(), StringComparison.Ordinal))
             return template.NarrationText;
@@ -260,28 +262,28 @@ public sealed class QuestionDrivenNarrationGenerator(
         var template = Templates.TryGetValue(scene.QuestionType, out var matchedTemplate) ? matchedTemplate : null;
         var section = template is not null ? ResolveNarrationSection(scene.QuestionType, template, isMeteorShower: true) : scene.QuestionType;
         var region = intelligence.VisibilityRegion.Contains("UDAIPUR", StringComparison.OrdinalIgnoreCase) ? "Udaipur" : Clean(intelligence.VisibilityRegion, "your location");
-        var title = Clean(intelligence.Title, "Geminids Meteor Shower");
-        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, "2026-12-14 00:00–05:00 IST");
+        var title = Clean(intelligence.Title, "this meteor shower");
+        var window = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, intelligence.LocalPeakTime, "the best meteor-viewing window");
         var moon = FirstNonEmpty(intelligence.MoonInterference, "low moon interference");
         var source = section switch
         {
             "Hook" => $"{title} is a reliable meteor shower with bright streaks visible from dark skies.",
             "Curiosity" => $"{title} meteors can appear bright, slow, and colorful.",
-            "Explanation" => "The Geminids happen when Earth passes through debris left behind by asteroid 3200 Phaethon.",
-            "ViewingAdvice" => $"For {region}, the approved viewing window is {window}; look east to overhead after 10 PM. No telescope needed.",
+            "Explanation" => FirstNonEmpty(intelligence.ScientificContext, $"{title} happens when Earth crosses the event-specific particle stream described by the approved event intelligence."),
+            "ViewingAdvice" => $"For {region}, the approved viewing window is {window}; use the event-specific direction guidance: {FirstNonEmpty(intelligence.SkyDirectionHint, "open dark sky")}. No telescope needed.",
             "Reward" => $"{moon} improves the chance of catching repeated bright streaks across a dark sky.",
-            "CTA" => $"Save the {window} sky guide, step outside after midnight, and follow for more astronomy events.",
-            _ => "The Geminids are a meteor shower best watched from a dark open sky."
+            "CTA" => $"Save the {window} sky guide, step outside during the approved window, and follow for more astronomy events.",
+            _ => $"{title} is a meteor shower best watched from a dark open sky."
         };
 
         return section switch
         {
             "Hook" => Line("Tonight, one of the year's most reliable meteor showers is preparing to light up the sky.", "Reliable meteor shower tonight.", source),
-            "Curiosity" => Line("What makes the Geminids special is that many of its meteors can appear bright, slow, and colorful.", "Bright, slow, colorful meteors.", source),
-            "Explanation" => Line("This shower happens when Earth passes through debris left behind by asteroid 3200 Phaethon.", "Debris from asteroid 3200 Phaethon.", source),
-            "ViewingAdvice" => Line(MeteorShowerViewingAdviceNarration, "Dark location; scan east to overhead.", source),
+            "Curiosity" => Line($"What makes {title} special is that the approved event intelligence points to memorable bright streaks under dark skies.", "Bright meteor streaks.", source),
+            "Explanation" => Line(FirstNonEmpty(intelligence.ScientificContext, "This shower happens when Earth crosses the event-specific stream of particles described by the approved event intelligence."), "Event-specific meteor source.", source),
+            "ViewingAdvice" => Line($"For the best experience, head to a dark location during {window} and use this direction guidance: {FirstNonEmpty(intelligence.SkyDirectionHint, "open sky") }.", "Use the approved direction guide.", source),
             "Reward" => Line("With low moonlight, patient observers may catch repeated bright streaks crossing the dark sky.", "Low moonlight helps meteor watching.", source),
-            "CTA" => Line("Save this sky guide, step outside after midnight, and follow for more astronomy events.", "Save this guide and follow.", source),
+            "CTA" => Line($"Save this sky guide, step outside during {window}, and follow for more astronomy events.", "Save this guide and follow.", source),
             _ => Line(source, ShortenCaption(source), source)
         };
     }
@@ -352,9 +354,26 @@ public sealed class QuestionDrivenNarrationGenerator(
         {
             terms.AddRange(intelligence.ForbiddenTerms);
             terms.AddRange(intelligence.ForbiddenObjectNames ?? []);
+            terms.AddRange(EventContentGuard.DefaultForbiddenTermsForEventType(productionContext?.EventType ?? intelligence.EventType));
             if (IsMeteorShower(intelligence, productionContext)) terms.AddRange(MeteorShowerForbiddenLeakageTerms);
         }
         return terms.Where(term => !string.IsNullOrWhiteSpace(term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+
+    private static EventContentGuardDiagnostics BuildDiagnostics(QuestionDrivenNarrationDto narration, QuestionDrivenNarrationRequest request)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var promptPreview = string.Join(Environment.NewLine, narration.Scenes.Select(scene => $"{scene.QuestionType}: {scene.NarrationText} {scene.CaptionText}"));
+        return EventContentGuard.BuildDiagnostics(
+            14,
+            "QuestionDrivenNarrationGenerator",
+            FirstNonEmpty(request.EventType, request.ProductionContext?.EventType, intelligence?.EventType),
+            intelligence?.StoryTheme,
+            intelligence?.VisualTheme,
+            ["question-driven-scene-plan.enriched.json", "production-event-intelligence.json", "content-plan-production-request.json"],
+            promptPreview,
+            BuildForbiddenLeakageTerms(request.ProductionContext));
     }
 
     private static int CountCopiedSourceAnswers(QuestionDrivenNarrationDto narration)

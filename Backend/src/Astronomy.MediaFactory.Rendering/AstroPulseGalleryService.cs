@@ -6,6 +6,7 @@ using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Options;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
@@ -19,7 +20,7 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public interface IAstroPulseGalleryService
 {
-    Task<AstroPulseGalleryResult> GenerateGeminidsGalleryAsync(string outputDirectory, AstroPulseGalleryAspect aspect, CancellationToken cancellationToken);
+    Task<AstroPulseGalleryResult> GenerateGalleryAsync(string outputDirectory, AstroPulseGalleryAspect aspect, CancellationToken cancellationToken);
 }
 
 public sealed record AstroPulseGalleryAspect(string Name, int Width, int Height)
@@ -35,12 +36,13 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public async Task<AstroPulseGalleryResult> GenerateGeminidsGalleryAsync(string outputDirectory, AstroPulseGalleryAspect aspect, CancellationToken cancellationToken)
+    public async Task<AstroPulseGalleryResult> GenerateGalleryAsync(string outputDirectory, AstroPulseGalleryAspect aspect, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         Directory.CreateDirectory(outputDirectory);
         EnsureAzureImage2Configured(imageOptions.Value);
-        var topics = BuildTopics();
+        var galleryContext = LoadGalleryContext(outputDirectory);
+        var topics = BuildTopics(galleryContext);
         var images = new List<object>();
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var imagePaths = new List<string>();
@@ -71,9 +73,12 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var validationPath = Path.Combine(outputDirectory, "phase-13-validation.json");
         var valid = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6;
 
-        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V2", eventName = "Geminids Meteor Shower Peak", architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, images }, JsonOptions), cancellationToken);
+        var promptPreview = string.Join(Environment.NewLine, topics.Select(t => t.AzureImage2Prompt));
+        EventContentGuard.ValidateNoForbiddenTerms("AstroPulseGalleryService", "gallery prompt", promptPreview, galleryContext.ForbiddenTerms);
+        var contentDiagnostics = EventContentGuard.BuildDiagnostics(13, "AstroPulseGalleryService", galleryContext.EventType, galleryContext.StoryTheme, galleryContext.VisualTheme, ["production-event-intelligence.json", "content-plan-production-request.json"], promptPreview, galleryContext.ForbiddenTerms);
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V2", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new { accepted = valid, style = "social-media carousel", rejectedStyle = "PowerPoint infographic slide deck", galleryTopicsGenerated = topics.Count, noSharedBackground = true, noDuplicateConcepts = topics.Select(t => t.Concept).Distinct(StringComparer.OrdinalIgnoreCase).Count() == topics.Count, noDuplicateImageHashes = hashes.Count == topics.Count, mobileReadable = true, oneEducationalMessagePerImage = true, skyVisualDominant = true, textAreaMaxPercent = 25 }, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = Array.Empty<string>() }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = Array.Empty<string>() }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid ? "Succeeded" : "Failed", exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, phase12Executed = false, thumbnailRegenerationOccurred = false }, JsonOptions), cancellationToken);
         return new AstroPulseGalleryResult(outputDirectory, imagePaths, reviewPath, manifestPath, diagnosticsPath, validationPath);
     }
@@ -140,15 +145,52 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static async Task<byte[]> ExtractAzureImage2BytesAsync(HttpClient http, string payload, CancellationToken ct) { using var doc = JsonDocument.Parse(payload); var first = doc.RootElement.GetProperty("data")[0]; if (first.TryGetProperty("b64_json", out var b64) && !string.IsNullOrWhiteSpace(b64.GetString())) return Convert.FromBase64String(b64.GetString()!); if (first.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())) return await http.GetByteArrayAsync(url.GetString()!, ct); throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content."); }
     private static async Task<string> ComputeHashAsync(string path, CancellationToken ct) { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
 
-    private static List<GalleryTopic> BuildTopics() =>
-    [
-        new(1, "Hook / event introduction", "Premium cinematic Geminids meteor shower over realistic night landscape", ["GEMINIDS", "METEOR SHOWER PEAK", "Dec 13–14, 2026"], "Premium cinematic Geminids meteor shower over realistic dark night landscape, National Geographic astronomy photography mood, rich sky detail, no text, no labels, no people, social carousel background."),
-        new(2, "What causes the Geminids?", "Earth passing through debris stream from asteroid 3200 Phaethon", ["What causes Geminids?", "Earth crosses debris from asteroid 3200 Phaethon."], "Earth passing through debris stream from asteroid 3200 Phaethon, cinematic realistic space illustration, orbit arcs and dust trail, no text, no labels, premium educational astronomy visual."),
-        new(3, "Best viewing time", "Night sky over dark landscape with clock/calendar inspired composition", ["Best Viewing Time", "Peak: Dec 13–14", "Midnight to pre-dawn"], "Night sky over dark rural landscape, Geminids meteor shower visible, subtle clock and calendar inspired composition created with natural light shapes, no text, no numbers, cinematic."),
-        new(4, "Where to look", "Realistic eastern horizon under starry sky with subtle radiant guide", ["Where To Look", "East to overhead", "After 10 PM"], "Realistic eastern horizon under starry sky, Geminids meteor streaks rising east to overhead, subtle radiant guide made of light not typography, observing direction mood, no text."),
-        new(5, "Why Geminids are special", "Bright colorful meteors across Milky Way", ["Why Geminids Are Special", "Bright, colorful meteors", "One of the strongest annual showers"], "Bright colorful Geminids meteors across the Milky Way, premium astronomy image, rich meteor streaks, deep dark sky, cinematic contrast, no text, no people."),
-        new(6, "Final reminder", "Beautiful dark-sky viewing scene", ["Final Reminder", "Find a dark location", "Give your eyes 20 minutes", "Dress warm"], "Beautiful people-free dark-sky viewing landscape, meteor shower overhead, calm cinematic mood, foreground hills and clear winter night sky, no text, no signs.")
-    ];
+    private static GalleryContext LoadGalleryContext(string outputDirectory)
+    {
+        var root = Directory.GetParent(outputDirectory)?.FullName ?? outputDirectory;
+        var path = Path.Combine(root, "plan-input", "production-event-intelligence.json");
+        if (!File.Exists(path))
+            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, ["selected sky event"], []);
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var eventType = FirstString(doc.RootElement, "eventType", "strategyId");
+        var title = FirstString(doc.RootElement, "title", "shortTitle");
+        var forbidden = ReadStringArray(doc.RootElement, "forbiddenTerms").Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var objects = new[] { "primaryObjects", "secondaryObjects", "resolvedObjectNames", "requiredVisualObjects", "viewerInstructions" }.SelectMany(name => ReadStringArray(doc.RootElement, name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), objects.Length == 0 ? [title] : objects, forbidden);
+    }
+
+    private static List<GalleryTopic> BuildTopics(GalleryContext context)
+    {
+        if (EventContentGuard.IsPlanetConjunction(context.EventType))
+            return
+            [
+                new(1, "Hook / event introduction", "Jupiter and Venus conjunction in twilight", ["JUPITER + VENUS", "CONJUNCTION", "Two bright planets"], "Premium cinematic Jupiter and Venus conjunction in the western sky after sunset, twilight sky, two bright planets close together, realistic landscape horizon, no text, no labels, no people."),
+                new(2, "What aligns", "Two bright planets close together", ["Two bright planets", "Jupiter and Venus appear close."], "Realistic educational astronomy visual showing Jupiter and Venus as two bright planets close together in twilight, subtle orbital alignment feeling, no text, no labels."),
+                new(3, "Best viewing time", "Western sky after sunset", ["Best Viewing Time", "Western sky after sunset", "Twilight sky"], "Cinematic western horizon after sunset with twilight gradient and Jupiter plus Venus bright and close, observing-guide composition, no text, no labels."),
+                new(4, "How close", "Angular separation", ["How Close?", "1.63° apart", "Look west"], "Realistic sky guide background for Jupiter Venus conjunction, two bright planets separated by 1.63 degrees in twilight western sky, no text, no labels."),
+                new(5, "What viewers will see", "Bright planetary pair", ["What You’ll See", "A bright planetary pair", "Low twilight horizon"], "Premium astronomy image of Venus and Jupiter shining as a close pair over a twilight western horizon, cinematic contrast, no text, no people."),
+                new(6, "Final reminder", "Save the conjunction view", ["Final Reminder", "Check the western horizon", "After sunset"], "Beautiful people-free twilight landscape facing west with Venus and Jupiter close together above the horizon, calm cinematic mood, no text, no signs.")
+            ];
+
+        var title = context.Title;
+        var objectText = string.Join(", ", context.Objects.Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(title));
+        return
+        [
+            new(1, "Hook / event introduction", $"Cinematic {title}", [title, context.EventType], $"Premium cinematic astronomy visual for {title}, event-specific objects: {objectText}, realistic sky landscape, no text, no labels, no people."),
+            new(2, "What is happening", "Event-specific explanation", ["What’s Happening", title], $"Educational astronomy visual explaining {title}, use event-specific objects only: {objectText}, no text, no labels."),
+            new(3, "Best viewing time", "Event-specific timing", ["Best Viewing Time", "Use approved window"], $"Cinematic viewing-time visual for {title}, event-specific sky conditions and horizon, no text, no labels."),
+            new(4, "Where to look", "Event-specific direction", ["Where To Look", "Use approved direction"], $"Realistic sky direction guide for {title}, event-specific viewing guidance, no text, no labels."),
+            new(5, "Why it matters", "Event significance", ["Why It Matters", "Event-specific sky story"], $"Premium astronomy image showing why {title} matters, use only current event objects: {objectText}, no text, no people."),
+            new(6, "Final reminder", "Viewing reminder", ["Final Reminder", "Check conditions", "Step outside"], $"Beautiful people-free sky-viewing landscape for {title}, current event objects visible, calm cinematic mood, no text, no signs.")
+        ];
+    }
+
+    private static string FirstString(JsonElement root, params string[] names) { foreach (var name in names) { var value = FindString(root, name); if (!string.IsNullOrWhiteSpace(value)) return value!; } return string.Empty; }
+    private static string? FindString(JsonElement e, string name) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (p.NameEquals(name) && p.Value.ValueKind == JsonValueKind.String) return p.Value.GetString(); var v = FindString(p.Value, name); if (!string.IsNullOrWhiteSpace(v)) return v; } else if (e.ValueKind == JsonValueKind.Array) foreach (var item in e.EnumerateArray()) { var v = FindString(item, name); if (!string.IsNullOrWhiteSpace(v)) return v; } return null; }
+    private static string[] ReadStringArray(JsonElement root, string propertyName) { var values = new List<string>(); CollectArrayValues(root, propertyName, values); return values.ToArray(); }
+    private static void CollectArrayValues(JsonElement e, string name, List<string> values) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (p.NameEquals(name) && p.Value.ValueKind == JsonValueKind.Array) values.AddRange(p.Value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Where(x => !string.IsNullOrWhiteSpace(x))); else CollectArrayValues(p.Value, name, values); } else if (e.ValueKind == JsonValueKind.Array) foreach (var item in e.EnumerateArray()) CollectArrayValues(item, name, values); }
+
+    private sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, IReadOnlyList<string> Objects, IReadOnlyList<string> ForbiddenTerms);
 
     private sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string AzureImage2Prompt);
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);

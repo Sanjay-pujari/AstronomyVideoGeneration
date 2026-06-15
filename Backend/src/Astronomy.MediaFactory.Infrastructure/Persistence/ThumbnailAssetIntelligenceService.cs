@@ -557,7 +557,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
-        var primary = isMeteor ? "GEMINIDS" : CleanHook(current.ShortTitle).ToUpperInvariant();
+        var primary = isMeteor ? eventTitle : CleanHook(current.ShortTitle).ToUpperInvariant();
         var secondary = isMeteor ? "PEAK NIGHT" : CleanTextElement(current.EventType, "CURRENT SKY EVENT").ToUpperInvariant();
         var micro = isMeteor ? "TONIGHT" : CleanTextElement(FirstNonEmpty(current.BestViewingWindowLocal, current.SkyDirectionHint, current.LocalPeakTime), "TONIGHT").ToUpperInvariant();
         var copy = new ThumbnailCopyDto(primary, secondary, micro);
@@ -818,11 +818,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV5AzurePrompts(ThumbnailAssetGenerationRequest request)
     {
+        var title = FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, request.EventId, "selected sky event");
+        var eventType = FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "AstronomyEvent");
+        var prompt = EventContentGuard.IsPlanetConjunction(eventType)
+            ? "Generate realistic Jupiter and Venus conjunction thumbnail background, two bright planets close together in western sky after sunset, twilight sky, angular separation 1.63 degrees, professional astronomy guide background, leave clean space for title and compact event info. No text."
+            : $"Generate realistic astronomy thumbnail background for {title}, event type {eventType}, using current event intelligence objects and viewing guidance, professional astronomy guide background, leave clean space for title and compact event info. No text.";
+        var text = EventContentGuard.IsPlanetConjunction(eventType) ? new[] { "JUPITER + VENUS", "CONJUNCTION" } : new[] { CleanTextElement(title, "SKY EVENT").ToUpperInvariant() };
+        EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", prompt + " " + string.Join(' ', text), request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)) ?? []);
         return
         [
-            ("landscape", "thumbnail-landscape.png", 1280, 720, "Generate realistic meteor shower night sky background, wide mountain horizon, Milky Way, multiple bright meteor streaks, professional astronomy guide background, leave open sky in center/right for radiant annotation, leave darker left area for info panel, leave bottom dark band space for tips. No text.", ["GEMINIDS"], "landscape-guide"),
-            ("portrait", "thumbnail-portrait.png", 1080, 1920, "Generate vertical realistic meteor shower background, tall sky, Milky Way, meteors above, low horizon, leave top title area, middle sky feature area, lower info/tips area. No text.", ["GEMINIDS"], "portrait-guide"),
-            ("square", "thumbnail-square.png", 1080, 1080, "Generate square realistic meteor shower background, balanced sky and horizon, open center for annotations, left or top-left dark area for compact event info, bottom strip for tips. No text.", ["GEMINIDS"], "square-guide")
+            ("landscape", "thumbnail-landscape.png", 1280, 720, prompt, text, "landscape-guide"),
+            ("portrait", "thumbnail-portrait.png", 1080, 1920, prompt, text, "portrait-guide"),
+            ("square", "thumbnail-square.png", 1080, 1080, prompt, text, "square-guide")
         ];
     }
 
@@ -837,23 +844,43 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var titleFont = ResolveThumbnailFont(width == 1280 ? 46 : 58, FontStyle.Bold);
             var subFont = ResolveThumbnailFont(width == 1280 ? 24 : 32, FontStyle.Bold);
             var bodyFont = ResolveThumbnailFont(width == 1280 ? 21 : 27, FontStyle.Regular);
-            var smallFont = ResolveThumbnailFont(width == 1280 ? 18 : 23, FontStyle.Regular);
+            var isConjunction = EventContentGuard.IsPlanetConjunction(FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType));
+            var eventTitle = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, "SKY EVENT"), "SKY EVENT").ToUpperInvariant();
+            var windowText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal, request.ProductionContext?.ProductionEventIntelligence?.PreferredViewingWindow, "Approved viewing window"), "Approved viewing window");
+            var directionText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.SkyDirectionHint, "Approved sky direction"), "Approved sky direction");
+            var moonText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.MoonInterference, "Check sky conditions"), "Check sky conditions");
+            if (isConjunction)
+            {
+                ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(width * .04f, height * .06f, width * .43f, height * .34f));
+                ctx.DrawText("JUPITER + VENUS", titleFont, Color.FromRgb(255, 218, 80), new PointF(width * .06f, height * .09f));
+                ctx.DrawText("CONJUNCTION", subFont, Color.White, new PointF(width * .06f, height * .18f));
+                var bodyLines = new[] { "Two bright planets", "Western sky after sunset", "Twilight sky", "1.63° angular separation" };
+                var y0 = height * .25f;
+                foreach (var line in bodyLines) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(width * .06f, y0)); y0 += Math.Max(42, height * .055f); }
+                var venus = new PointF(width * .68f, height * .36f);
+                var jupiter = new PointF(width * .78f, height * .32f);
+                ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(venus, Math.Max(10, width * .015f)));
+                ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(jupiter, Math.Max(9, width * .013f)));
+                ctx.DrawLine(Color.FromRgb(120, 210, 255), 3, venus, jupiter);
+                ctx.DrawText("1.63°", bodyFont, Color.FromRgb(120, 210, 255), new PointF((venus.X + jupiter.X) / 2, (venus.Y + jupiter.Y) / 2 - 55));
+                return;
+            }
             if (width == 1280 && height == 720)
             {
                 ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(40, 45, 370, 520));
                 ctx.Draw(Color.FromRgb(67, 220, 240), 2, new RectangleF(40, 45, 370, 520));
-                ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(62, 70));
-                ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(64, 128));
+                ctx.DrawText(eventTitle, titleFont, Color.FromRgb(255, 218, 80), new PointF(62, 70));
+                ctx.DrawText("METEOR SHOWER", subFont, Color.White, new PointF(64, 128));
                 var y = 186f;
-                foreach (var line in new[] { "Date  Dec 13–14, 2026", "Best Time  Midnight to pre-dawn", "Where  East to overhead after 10 PM", "Equipment  No telescope needed", "Moon  Low moonlight" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(64, y)); y += 62; }
+                foreach (var line in new[] { $"Event  {eventTitle}", $"Best Time  {windowText}", $"Where  {directionText}", "Equipment  No telescope needed", $"Sky  {moonText}" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(64, y)); y += 62; }
                 DrawRadiantGuide(ctx, new PointF(890, 220), 54, 118, 8);
                 ctx.Draw(Color.FromRgb(118, 225, 255), 3, new EllipsePolygon(890, 220, 54));
-                ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(958, 196));
+                ctx.DrawText("EVENT DIRECTION", bodyFont, Color.White, new PointF(958, 196));
                 DrawLeaderLine(ctx, new PointF(950, 212), new PointF(890, 220), Color.FromRgb(118, 225, 255));
                 ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(835, 338));
                 ctx.DrawText("May appear anywhere in the sky", smallFont, Color.White, new PointF(835, 372));
                 DrawLeaderLine(ctx, new PointF(830, 348), new PointF(760, 310), Color.FromRgb(255, 218, 80));
-                ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(760, 548));
+                ctx.DrawText("LOOK UP  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(760, 548));
                 DrawCompassCue(ctx, new PointF(742, 560), 34, 0);
                 ctx.Fill(Color.FromRgba(5, 11, 28, 220), new RectangleF(160, 610, 960, 70));
                 ctx.DrawText("Find a dark location   |   Lie back and look up   |   Give eyes 20 minutes   |   Dress warm", smallFont, Color.White, new PointF(190, 632));
@@ -861,18 +888,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             else if (width == 1080 && height == 1920)
             {
                 ctx.Fill(Color.FromRgba(5, 11, 28, 190), new RectangleF(58, 70, 560, 170));
-                ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(86, 94));
-                ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(90, 168));
+                ctx.DrawText(eventTitle, titleFont, Color.FromRgb(255, 218, 80), new PointF(86, 94));
+                ctx.DrawText("METEOR SHOWER", subFont, Color.White, new PointF(90, 168));
                 DrawRadiantGuide(ctx, new PointF(660, 650), 70, 160, 9);
                 ctx.Draw(Color.FromRgb(118, 225, 255), 4, new EllipsePolygon(660, 650, 70));
-                ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(585, 735));
+                ctx.DrawText("EVENT DIRECTION", bodyFont, Color.White, new PointF(585, 735));
                 DrawLeaderLine(ctx, new PointF(650, 730), new PointF(660, 650), Color.FromRgb(118, 225, 255));
                 ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(92, 850));
                 ctx.DrawText("May appear anywhere in the sky", smallFont, Color.White, new PointF(92, 890));
                 DrawLeaderLine(ctx, new PointF(300, 858), new PointF(455, 785), Color.FromRgb(255, 218, 80));
                 ctx.Fill(Color.FromRgba(5, 11, 28, 210), new RectangleF(70, 1180, 940, 410));
-                var y = 1215f; foreach (var line in new[] { "Date: Dec 13–14, 2026", "Best Time: Midnight to pre-dawn", "Direction: East to overhead after 10 PM", "Equipment: No telescope needed", "Moon: Low moonlight" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(100, y)); y += 72; }
-                ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(100, 1540));
+                var y = 1215f; foreach (var line in new[] { $"Event: {eventTitle}", $"Best Time: {windowText}", $"Direction: {directionText}", "Equipment: No telescope needed", $"Sky: {moonText}" }) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(100, y)); y += 72; }
+                ctx.DrawText("LOOK UP  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(100, 1540));
                 DrawCompassCue(ctx, new PointF(82, 1556), 42, 0);
                 ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(60, 1700, 960, 120));
                 ctx.DrawText("Find a dark location • Lie back and look up • Give eyes 20 minutes • Dress warm", smallFont, Color.White, new PointF(92, 1740));
@@ -880,19 +907,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             else
             {
                 ctx.Fill(Color.FromRgba(5, 11, 28, 200), new RectangleF(45, 50, 430, 185));
-                ctx.DrawText("GEMINIDS", titleFont, Color.FromRgb(255, 218, 80), new PointF(72, 74));
-                ctx.DrawText("METEOR SHOWER PEAK", subFont, Color.White, new PointF(76, 148));
-                ctx.DrawText("Dec 13–14, 2026", bodyFont, Color.FromRgb(218, 235, 255), new PointF(76, 190));
+                ctx.DrawText(eventTitle, titleFont, Color.FromRgb(255, 218, 80), new PointF(72, 74));
+                ctx.DrawText("METEOR SHOWER", subFont, Color.White, new PointF(76, 148));
+                ctx.DrawText(windowText, bodyFont, Color.FromRgb(218, 235, 255), new PointF(76, 190));
                 DrawRadiantGuide(ctx, new PointF(730, 390), 58, 132, 8);
                 ctx.Draw(Color.FromRgb(118, 225, 255), 4, new EllipsePolygon(730, 390, 58));
-                ctx.DrawText("GEMINIDS RADIANT", bodyFont, Color.White, new PointF(620, 462));
+                ctx.DrawText("EVENT DIRECTION", bodyFont, Color.White, new PointF(620, 462));
                 DrawLeaderLine(ctx, new PointF(710, 458), new PointF(730, 390), Color.FromRgb(118, 225, 255));
                 ctx.DrawText("METEOR STREAKS", bodyFont, Color.FromRgb(255, 218, 80), new PointF(610, 548));
                 ctx.DrawText("May appear anywhere", smallFont, Color.White, new PointF(610, 586));
                 DrawLeaderLine(ctx, new PointF(604, 558), new PointF(520, 500), Color.FromRgb(255, 218, 80));
                 ctx.Fill(Color.FromRgba(5, 11, 28, 210), new RectangleF(48, 660, 470, 240));
-                var y = 690f; foreach (var line in new[] { "Best: Midnight to pre-dawn", "Look: East to overhead after 10 PM", "No telescope needed", "Moon: Low moonlight" }) { ctx.DrawText(line, smallFont, Color.FromRgb(218, 235, 255), new PointF(76, y)); y += 50; }
-                ctx.DrawText("LOOK EAST  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(650, 800));
+                var y = 690f; foreach (var line in new[] { $"Best: {windowText}", $"Look: {directionText}", "No telescope needed", $"Sky: {moonText}" }) { ctx.DrawText(line, smallFont, Color.FromRgb(218, 235, 255), new PointF(76, y)); y += 50; }
+                ctx.DrawText("LOOK UP  ➜", subFont, Color.FromRgb(255, 218, 80), new PointF(650, 800));
                 DrawCompassCue(ctx, new PointF(632, 814), 38, 0);
                 ctx.Fill(Color.FromRgba(5, 11, 28, 225), new RectangleF(55, 940, 970, 85));
                 ctx.DrawText("Dark location  |  Lie back  |  20 min eyes  |  Dress warm", smallFont, Color.White, new PointF(85, 970));
@@ -1551,7 +1578,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var overlay = isMeteor
-            ? new[] { "GEMINIDS", "PEAK NIGHT" }
+            ? new[] { eventTitle, "PEAK NIGHT" }
             : new[] { CleanThumbnailText(current.ShortTitle, current.Title, 18).ToUpperInvariant(), CleanThumbnailText(current.EventType, "SKY EVENT", 20).ToUpperInvariant() };
         var badge = isMeteor ? "TONIGHT" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "TONIGHT", 18).ToUpperInvariant();
         var visualObjects = NormalizeObjectList(isMeteor
