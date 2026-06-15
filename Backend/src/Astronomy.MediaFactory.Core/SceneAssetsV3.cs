@@ -22,7 +22,9 @@ public sealed record SceneAssetsV3Beat(
     string NarrationBeat,
     string VisualIntent,
     string VisualPrompt,
-    int ExpectedDurationSec);
+    int ExpectedDurationSec,
+    string NarrationBeatSource = "generated",
+    string VisualPromptSource = "generated");
 
 public sealed record SceneAssetsV3Manifest(
     string Version,
