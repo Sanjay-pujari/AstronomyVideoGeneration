@@ -62,12 +62,14 @@ public sealed class SceneAssetsV3Service(
         var manifestPath = Path.Combine(dir, "scene-manifest-v3.json");
         var reviewPath = Path.Combine(dir, "scene-review-v3.json");
         var validationPath = Path.Combine(dir, "scene-v3-validation.json");
+        var metadataPath = Path.Combine(dir, "scene-timeline-metadata.json");
         var manifestScenes = new List<SceneAssetsV3ManifestScene>();
         var errors = new List<string>();
 
         try
         {
             await WriteJsonAsync(timelinePath, new SceneAssetsV3Timeline(Version, format, beats), ct); files.Add(timelinePath);
+            await WriteJsonAsync(metadataPath, BuildTimelineMetadata(format, beats), ct); files.Add(metadataPath);
 
             foreach (var beat in beats)
             {
@@ -109,12 +111,15 @@ public sealed class SceneAssetsV3Service(
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         var repeated = duplicate;
-        var review = new SceneAssetsV3Review(manifestScenes.Count, manifestScenes.Any(s => s.RenderMode == "AccurateSkyGuideScene"), manifestScenes.Count(s => s.RenderMode is "CinematicStoryScene" or "FinalReminderScene"), manifestScenes.Count(s => s.RenderMode == "ExplainerScene"), manifestScenes.Count(s => s.RenderMode == "ViewingTipsScene"), duplicate, repeated, manifestScenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)), "Failed");
+        var sameBackground = DetectRepeatedMetadata(beats, b => BackgroundSignature(b));
+        var sameComposition = DetectRepeatedMetadata(beats, b => CompositionSignature(b));
+        var sameCameraAngle = DetectRepeatedMetadata(beats, b => CameraSignature(b));
+        var review = new SceneAssetsV3Review(manifestScenes.Count, manifestScenes.Any(s => s.RenderMode == "AccurateSkyGuideScene"), manifestScenes.Count(s => s.RenderMode is "CinematicStoryScene" or "FinalReminderScene"), manifestScenes.Count(s => s.RenderMode == "ExplainerScene"), manifestScenes.Count(s => s.RenderMode == "ViewingTipsScene"), duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, manifestScenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)), "Failed");
         review = review with { Status = ReviewPassed(review, expectedCount) ? "Passed" : "Failed" };
         await WriteJsonAsync(reviewPath, review, ct); files.Add(reviewPath);
 
-        errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, review, expectedCount));
-        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, review.AllScenesHaveNarrationBeat, errors, BuildFontDiagnostics());
+        errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, metadataPath, review, expectedCount));
+        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, errors, BuildFontDiagnostics());
         await WriteJsonAsync(validationPath, validation, ct); files.Add(validationPath);
         return validationPath;
     }
@@ -131,15 +136,89 @@ public sealed class SceneAssetsV3Service(
             if (beat.RenderMode == "AccurateSkyGuideScene") DrawSkyGuide(ctx);
             else DrawCinematicForeground(ctx, beat);
             var font = ResolveOverlayFont(34, FontStyle.Bold);
-            ctx.DrawText(beat.NarrationBeat, font, Color.FromRgb(235, 240, 248), new PointF(90, 900));
+            ctx.DrawText(SmallSceneLabel(beat), font, Color.FromRgba(235, 240, 248, 210), new PointF(90, 900));
         });
         await image.SaveAsPngAsync(path, new PngEncoder(), ct);
     }
 
-    private static void DrawStars(IImageProcessingContext ctx, int seed) { for (var i = 0; i < 90; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(64 + (i % 5) * 28)), new EllipsePolygon((i * 137 + seed * 61) % Width, (i * 73 + seed * 89) % 760, 1 + i % 3)); }
+    private static void DrawStars(IImageProcessingContext ctx, int seed) { for (var i = 0; i < 180; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(58 + (i % 6) * 27)), new EllipsePolygon((i * 137 + seed * 61) % Width, (i * 73 + seed * 89) % 820, 1 + i % 3)); }
     private static void DrawCinematicForeground(IImageProcessingContext ctx, SceneAssetsV3Beat beat) { for (var i = 0; i < 5 + beat.BeatNo; i++) ctx.DrawLine(Color.FromRgb(190, 230, 255), 3, new PointF(250 + i * 210, 80 + i * 35), new PointF(80 + i * 210, 270 + i * 26)); ctx.Fill(Color.FromRgb(6, 8, 12), new RectangularPolygon(0, 830, Width, 250)); }
-    private void DrawSkyGuide(IImageProcessingContext ctx) { var font = ResolveOverlayFont(30, FontStyle.Regular); ctx.DrawLine(Color.FromRgb(120, 150, 170), 4, new PointF(180, 780), new PointF(1740, 780)); ctx.DrawText("UDAIPUR • DEC 13–14, 2026 • EAST → OVERHEAD AFTER 10 PM", font, Color.White, new PointF(250, 120)); ctx.DrawText("Best window: midnight to pre-dawn • Gemini radiant • meteors can appear anywhere • no telescope", font, Color.FromRgb(190, 220, 255), new PointF(250, 180)); ctx.DrawLine(Color.FromRgb(90, 180, 255), 5, new PointF(520, 760), new PointF(1160, 280)); ctx.DrawText("E horizon", font, Color.White, new PointF(430, 800)); ctx.DrawText("overhead", font, Color.White, new PointF(1120, 230)); ctx.DrawText("Gemini radiant / look direction", font, Color.FromRgb(255, 220, 120), new PointF(900, 420)); }
+    private void DrawSkyGuide(IImageProcessingContext ctx)
+    {
+        var label = ResolveOverlayFont(25, FontStyle.Regular);
+        var title = ResolveOverlayFont(36, FontStyle.Bold);
+        ctx.Fill(Color.FromRgb(4, 12, 32));
+        ctx.Fill(Color.FromRgba(18, 36, 58, 150), new RectangularPolygon(0, 520, Width, 560));
+        for (var i = 0; i < 260; i++) ctx.Fill(Color.FromRgba(245, 250, 255, (byte)(50 + i % 150)), new EllipsePolygon((i * 149 + 97) % Width, (i * 83 + 41) % 760, 1 + i % 3));
+        ctx.Fill(Color.FromRgba(10, 16, 22, 245), new RectangularPolygon(0, 810, Width, 270));
+        ctx.DrawLine(Color.FromRgb(95, 135, 155), 3, new PointF(120, 812), new PointF(1800, 812));
+        ctx.DrawLine(Color.FromRgba(80, 130, 160, 120), 1, new PointF(260, 740), new PointF(1660, 740));
+        ctx.DrawLine(Color.FromRgba(80, 130, 160, 90), 1, new PointF(460, 580), new PointF(1460, 580));
+        ctx.DrawText("Accurate sky guide", title, Color.FromRgb(238, 246, 255), new PointF(96, 80));
+        ctx.DrawText("Location: Udaipur, India  •  Date: Dec 13–14, 2026", label, Color.FromRgb(185, 215, 245), new PointF(96, 132));
+        ctx.DrawText("Observation window: after 10 PM; strongest from midnight to pre-dawn", label, Color.FromRgb(185, 215, 245), new PointF(96, 168));
+        var gemini = new[] { new PointF(965, 315), new PointF(1035, 385), new PointF(1105, 344), new PointF(1172, 405), new PointF(1000, 470), new PointF(1098, 512) };
+        for (var i = 0; i < gemini.Length - 1; i++) ctx.DrawLine(Color.FromRgba(120, 170, 255, 190), 2, gemini[i], gemini[i + 1]);
+        foreach (var p in gemini) ctx.Fill(Color.FromRgb(225, 238, 255), new EllipsePolygon(p, 4));
+        var radiant = new PointF(1055, 425);
+        ctx.Draw(Color.FromRgb(255, 210, 92), 4, new EllipsePolygon(radiant, 26));
+        ctx.DrawLine(Color.FromRgb(255, 210, 92), 3, new PointF(radiant.X - 38, radiant.Y), new PointF(radiant.X + 38, radiant.Y));
+        ctx.DrawLine(Color.FromRgb(255, 210, 92), 3, new PointF(radiant.X, radiant.Y - 38), new PointF(radiant.X, radiant.Y + 38));
+        ctx.DrawLine(Color.FromRgb(90, 185, 255), 6, new PointF(520, 790), new PointF(1055, 425));
+        ctx.DrawLine(Color.FromRgb(90, 185, 255), 6, new PointF(1055, 425), new PointF(1285, 245));
+        ctx.DrawLine(Color.FromRgb(90, 185, 255), 5, new PointF(1285, 245), new PointF(1242, 257));
+        ctx.DrawLine(Color.FromRgb(90, 185, 255), 5, new PointF(1285, 245), new PointF(1268, 288));
+        ctx.DrawText("E horizon", label, Color.FromRgb(235, 242, 248), new PointF(448, 830));
+        ctx.DrawText("overhead", label, Color.FromRgb(235, 242, 248), new PointF(1245, 202));
+        ctx.DrawText("Gemini", label, Color.FromRgb(180, 210, 255), new PointF(1188, 405));
+        ctx.DrawText("radiant", label, Color.FromRgb(255, 220, 120), new PointF(1098, 450));
+        ctx.DrawText("viewing direction", label, Color.FromRgb(120, 210, 255), new PointF(690, 650));
+    }
 
+
+    private static SceneTimelineMetadataDocument BuildTimelineMetadata(string format, IReadOnlyList<SceneAssetsV3Beat> beats) => new(
+        Version,
+        format,
+        beats.Select(beat => new SceneTimelineMetadata(
+            beat.SceneId,
+            beat.RenderMode,
+            beat.VisualIntent,
+            beat.NarrationBeat,
+            beat.ExpectedDurationSec,
+            RecommendedTransition(beat),
+            RecommendedMotion(beat))).ToList());
+
+    private static string RecommendedTransition(SceneAssetsV3Beat beat) => beat.RenderMode switch
+    {
+        "AccurateSkyGuideScene" => "push",
+        "ViewingTipsScene" => "fade",
+        "FinalReminderScene" => "fade",
+        _ => beat.BeatNo % 2 == 0 ? "zoom" : "crossfade"
+    };
+
+    private static string RecommendedMotion(SceneAssetsV3Beat beat) => beat.RenderMode switch
+    {
+        "AccurateSkyGuideScene" => "panRight",
+        "ExplainerScene" => "parallax",
+        "ViewingTipsScene" => "slowZoomOut",
+        "FinalReminderScene" => "slowZoomIn",
+        _ => beat.BeatNo % 2 == 0 ? "panLeft" : "slowZoomIn"
+    };
+
+    private static string SmallSceneLabel(SceneAssetsV3Beat beat) => beat.RenderMode switch
+    {
+        "AccurateSkyGuideScene" => "Geminids observing guide",
+        "ExplainerScene" => beat.SceneId.Contains("cause", StringComparison.OrdinalIgnoreCase) ? "3200 Phaethon debris stream" : "Geminids meteor shower",
+        "ViewingTipsScene" => beat.SceneId.Contains("time", StringComparison.OrdinalIgnoreCase) ? "Peak night window" : "Dark-sky viewing",
+        "FinalReminderScene" => "Peak-night reminder",
+        _ => "Geminids peak"
+    };
+
+    private static bool DetectRepeatedMetadata(IReadOnlyList<SceneAssetsV3Beat> beats, Func<SceneAssetsV3Beat, string> selector) => beats.GroupBy(selector, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+    private static string BackgroundSignature(SceneAssetsV3Beat beat) => NormalizeSignature(beat.VisualPrompt);
+    private static string CompositionSignature(SceneAssetsV3Beat beat) => NormalizeSignature($"{beat.RenderMode}:{beat.VisualIntent}:{beat.VisualPrompt}");
+    private static string CameraSignature(SceneAssetsV3Beat beat) => $"camera-{beat.SceneId}";
+    private static string NormalizeSignature(string value) => string.Join(" ", value.ToLowerInvariant().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
 
     private Font ResolveOverlayFont(float size, FontStyle style)
     {
@@ -179,8 +258,8 @@ public sealed class SceneAssetsV3Service(
 
     private string ResolveRoot(SceneAssetsV3Request request) => !string.IsNullOrWhiteSpace(request.WorkingDirectoryRoot) ? request.WorkingDirectoryRoot! : string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string StyleFor(string mode) => mode == "ExplainerScene" ? "cinematic educational astronomy, realistic space documentary" : "Netflix science documentary, National Geographic astronomy, NASA campaign, realistic cinematic sky, minimal overlay";
-    private static bool ReviewPassed(SceneAssetsV3Review r, int expected) => r.SceneCount == expected && r.AccurateSkyGuidePresent && !r.DuplicateHashDetected && !r.RepeatedBackgroundDetected && r.AllScenesHaveNarrationBeat;
-    private static List<string> BuildValidationErrors(string timeline, string manifest, SceneAssetsV3Review r, int expected) { var e = new List<string>(); if (!File.Exists(timeline)) e.Add("visual-timeline-v3.json is missing."); if (!File.Exists(manifest)) e.Add("scene-manifest-v3.json is missing."); if (r.SceneCount != expected) e.Add($"Expected {expected} scenes but found {r.SceneCount}."); if (!r.AccurateSkyGuidePresent) e.Add("AccurateSkyGuideScene is missing."); if (r.DuplicateHashDetected) e.Add("Duplicate image hashes detected."); if (r.RepeatedBackgroundDetected) e.Add("Repeated generic infographic background detected."); if (!r.AllScenesHaveNarrationBeat) e.Add("At least one scene is missing narrationBeat."); return e; }
+    private static bool ReviewPassed(SceneAssetsV3Review r, int expected) => r.SceneCount == expected && r.AccurateSkyGuidePresent && !r.DuplicateHashDetected && !r.RepeatedBackgroundDetected && !r.SameBackgroundDetected && !r.SameCompositionDetected && !r.SameCameraAngleDetected && r.AllScenesHaveNarrationBeat;
+    private static List<string> BuildValidationErrors(string timeline, string manifest, string metadata, SceneAssetsV3Review r, int expected) { var e = new List<string>(); if (!File.Exists(timeline)) e.Add("visual-timeline-v3.json is missing."); if (!File.Exists(manifest)) e.Add("scene-manifest-v3.json is missing."); if (!File.Exists(metadata)) e.Add("scene-timeline-metadata.json is missing."); if (r.SceneCount != expected) e.Add($"Expected {expected} scenes but found {r.SceneCount}."); if (!r.AccurateSkyGuidePresent) e.Add("AccurateSkyGuideScene is missing."); if (r.DuplicateHashDetected) e.Add("Duplicate image hashes detected."); if (r.RepeatedBackgroundDetected) e.Add("Repeated generic infographic background detected."); if (r.SameBackgroundDetected) e.Add("sameBackgroundDetected review check failed."); if (r.SameCompositionDetected) e.Add("sameCompositionDetected review check failed."); if (r.SameCameraAngleDetected) e.Add("sameCameraAngleDetected review check failed."); if (!r.AllScenesHaveNarrationBeat) e.Add("At least one scene is missing narrationBeat."); return e; }
     private static Task WriteJsonAsync<T>(string path, T value, CancellationToken ct) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), ct);
     private static async Task<string> Sha256Async(string path, CancellationToken ct) { await using var s = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
 

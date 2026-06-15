@@ -47,6 +47,9 @@ public sealed record SceneAssetsV3Review(
     int ViewingTipsSceneCount,
     bool DuplicateHashDetected,
     bool RepeatedBackgroundDetected,
+    bool SameBackgroundDetected,
+    bool SameCompositionDetected,
+    bool SameCameraAngleDetected,
     bool AllScenesHaveNarrationBeat,
     string Status);
 
@@ -60,9 +63,23 @@ public sealed record SceneAssetsV3Validation(
     bool AccurateSkyGuidePresent,
     bool DuplicateHashDetected,
     bool RepeatedGenericInfographicBackgroundDetected,
+    bool SameBackgroundDetected,
+    bool SameCompositionDetected,
+    bool SameCameraAngleDetected,
     bool EverySceneHasNarrationBeat,
     IReadOnlyList<string> Errors,
     SceneAssetsV3FontDiagnostics? FontDiagnostics = null);
+
+public sealed record SceneTimelineMetadata(
+    string SceneId,
+    string RenderMode,
+    string VisualIntent,
+    string NarrationBeat,
+    int EstimatedDurationSec,
+    string RecommendedTransition,
+    string RecommendedMotion);
+
+public sealed record SceneTimelineMetadataDocument(string Version, string Format, IReadOnlyList<SceneTimelineMetadata> Scenes);
 
 public sealed record SceneAssetsV3FontDiagnostics(
     string RequestedFont,

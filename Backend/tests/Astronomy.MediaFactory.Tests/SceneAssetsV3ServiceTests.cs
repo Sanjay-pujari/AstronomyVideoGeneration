@@ -25,6 +25,8 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         Assert.True(File.Exists(Path.Combine(result.OutputRoot, "long", "visual-timeline-v3.json")));
         Assert.True(File.Exists(Path.Combine(result.OutputRoot, "short", "scene-manifest-v3.json")));
         Assert.True(File.Exists(Path.Combine(result.OutputRoot, "long", "scene-manifest-v3.json")));
+        Assert.True(File.Exists(Path.Combine(result.OutputRoot, "short", "scene-timeline-metadata.json")));
+        Assert.True(File.Exists(Path.Combine(result.OutputRoot, "long", "scene-timeline-metadata.json")));
         Assert.True(File.Exists(Path.Combine(result.OutputRoot, "short", "003-accurate-sky-guide.png")));
         Assert.True(File.Exists(Path.Combine(result.OutputRoot, "long", "006-accurate-sky-guide.png")));
 
@@ -37,7 +39,14 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         Assert.Contains("\"sceneCount\": 9", longReview);
         Assert.Contains("\"accurateSkyGuidePresent\": true", longReview);
         Assert.Contains("\"duplicateHashDetected\": false", longReview);
+        Assert.Contains("\"sameBackgroundDetected\": false", longReview);
+        Assert.Contains("\"sameCompositionDetected\": false", longReview);
+        Assert.Contains("\"sameCameraAngleDetected\": false", longReview);
         Assert.Contains("\"status\": \"Passed\"", longReview);
+
+        var shortMetadata = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "scene-timeline-metadata.json"));
+        Assert.Contains("\"recommendedTransition\":", shortMetadata);
+        Assert.Contains("\"recommendedMotion\":", shortMetadata);
     }
 
     public void Dispose()
