@@ -449,6 +449,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
                 await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
                 generatedFiles.Add(NormalizePath(audioPath));
                 generatedFiles.Add(NormalizePath(timingsPath));
+                generatedFiles.AddRange(await GenerateSubtitlesAsync(timings, ResolveRequestProfile(request), cancellationToken));
 
                 TryDeleteDirectory(tempRoot);
                 return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
@@ -523,13 +524,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
         ValidateLongFormVideoTtsTimings(timings);
 
         await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
+        var subtitleFiles = await GenerateSubtitlesAsync(new VideoTtsTimingsDto(request.EventId, request.RegionId, request.Language, request.Platform, timings.AudioFilePath, timings.EstimatedDurationSeconds, timings.ActualDurationSeconds, timings.SectionTimings.Select(s => new VideoTtsSceneTimingDto(s.SectionKey, s.StartSeconds, s.EndSeconds, s.Narration)).ToArray(), timings.TtsProvider, timings.VoiceUsed, timings.GeneratedUtc, timings.AudioValidation, timings.DurationValidation), ScenePresentationProfile.LongForm, cancellationToken);
 
         return BuildLongFormTtsResponse(
             request.Phase,
             audioPath,
             timingsPath,
             timings.ActualDurationSeconds,
-            [NormalizePath(audioPath), NormalizePath(timingsPath)],
+            new[] { NormalizePath(audioPath), NormalizePath(timingsPath) }.Concat(subtitleFiles).ToArray(),
             AzureTtsProviderName,
             audioValidation);
     }
@@ -1571,13 +1573,102 @@ public sealed partial class VideoAssemblyIntelligenceService(
             "InterestingFact" => "A beginner-friendly sky marker",
             "ObservationTips" => "Clear horizon helps",
             "Recap" => "After sunset • West • Two bright points",
-            "Action" => "Step outside tonight",
+            "Action" => "Step outside",
             _ => section
         };
 
     private static double GetDuration(IReadOnlyDictionary<string, double> durations, string sceneKey, double fallback)
         => durations.TryGetValue(sceneKey, out var duration) ? duration : fallback;
 
+
+
+    private async Task<IReadOnlyList<string>> GenerateSubtitlesAsync(VideoTtsTimingsDto timings, ScenePresentationProfile profile, CancellationToken cancellationToken)
+    {
+        var subtitleOptions = videoAssemblyOptions?.Value.Subtitles ?? new VideoAssemblySubtitleOptions();
+        if (!subtitleOptions.Enabled) return [];
+        var folder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var fileStem = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var root = Path.Combine(BuildVideoAssemblyRoot(timings.EventId, timings.RegionId), "subtitles", folder);
+        Directory.CreateDirectory(root);
+        var outputs = new List<string>();
+        var blocks = BuildSubtitleBlocks(timings.SceneTimings);
+        if (subtitleOptions.GenerateSrt)
+        {
+            var path = Path.Combine(root, fileStem + ".srt");
+            await File.WriteAllTextAsync(path, BuildSrt(blocks), cancellationToken);
+            outputs.Add(NormalizePath(path));
+        }
+        if (subtitleOptions.GenerateAss)
+        {
+            var path = Path.Combine(root, fileStem + ".ass");
+            await File.WriteAllTextAsync(path, BuildAss(blocks), cancellationToken);
+            outputs.Add(NormalizePath(path));
+        }
+        var diagnosticsPath = Path.Combine(root, "subtitle-validation.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "V1", srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count }, JsonOptions), cancellationToken);
+        outputs.Add(NormalizePath(diagnosticsPath));
+        return outputs;
+    }
+
+    private static IReadOnlyList<SubtitleBlock> BuildSubtitleBlocks(IReadOnlyList<VideoTtsSceneTimingDto> scenes)
+    {
+        var blocks = new List<SubtitleBlock>();
+        var number = 1;
+        foreach (var scene in scenes)
+        {
+            var sentences = Regex.Split(scene.Narration ?? string.Empty, @"(?<=[.!?])\s+").Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
+            if (sentences.Length == 0) sentences = [scene.Narration ?? string.Empty];
+            var duration = Math.Max(0.1, scene.EndSeconds - scene.StartSeconds);
+            for (var i = 0; i < sentences.Length; i++)
+            {
+                var start = scene.StartSeconds + duration * i / sentences.Length;
+                var end = i == sentences.Length - 1 ? scene.EndSeconds : scene.StartSeconds + duration * (i + 1) / sentences.Length;
+                blocks.Add(new SubtitleBlock(number++, Math.Round(start, 3), Math.Round(end, 3), WrapSubtitle(sentences[i])));
+            }
+        }
+        return blocks;
+    }
+
+    private static IReadOnlyList<string> WrapSubtitle(string text)
+    {
+        var words = Regex.Replace(text ?? string.Empty, "\\s+", " ").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length <= 7) return [string.Join(' ', words)];
+        var mid = (int)Math.Ceiling(words.Length / 2.0);
+        return [string.Join(' ', words.Take(mid)), string.Join(' ', words.Skip(mid))];
+    }
+
+    private static string BuildSrt(IReadOnlyList<SubtitleBlock> blocks)
+    {
+        var builder = new StringBuilder();
+        foreach (var block in blocks)
+        {
+            builder.AppendLine(block.Number.ToString(CultureInfo.InvariantCulture));
+            builder.AppendLine($"{FormatSrtTime(block.StartSeconds)} --> {FormatSrtTime(block.EndSeconds)}");
+            foreach (var line in block.Lines.Take(2)) builder.AppendLine(line);
+            builder.AppendLine();
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildAss(IReadOnlyList<SubtitleBlock> blocks)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("[Script Info]");
+        builder.AppendLine("ScriptType: v4.00+");
+        builder.AppendLine("PlayResX: 1920");
+        builder.AppendLine("PlayResY: 1080");
+        builder.AppendLine("[V4+ Styles]");
+        builder.AppendLine("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding");
+        builder.AppendLine("Style: Documentary,Arial,42,&H00FFFFFF,&H000000FF,&H66000000,&H99000000,0,0,0,0,100,100,0,0,4,1,0,2,90,90,70,1");
+        builder.AppendLine("[Events]");
+        builder.AppendLine("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
+        foreach (var block in blocks) builder.AppendLine($"Dialogue: 0,{FormatAssTime(block.StartSeconds)},{FormatAssTime(block.EndSeconds)},Documentary,,0,0,0,,{string.Join(@"\N", block.Lines.Take(2)).Replace(",", "，")}");
+        return builder.ToString();
+    }
+
+    private static string FormatSrtTime(double seconds) => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"hh\:mm\:ss\,fff", CultureInfo.InvariantCulture);
+    private static string FormatAssTime(double seconds) => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff", CultureInfo.InvariantCulture);
+    private sealed record SubtitleBlock(int Number, double StartSeconds, double EndSeconds, IReadOnlyList<string> Lines);
 
     private VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds, string ttsProvider, string voiceUsed, VideoTtsAudioValidationDto audioValidation)
     {

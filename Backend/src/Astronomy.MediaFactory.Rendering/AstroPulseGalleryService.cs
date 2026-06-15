@@ -56,7 +56,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             azureCalls++;
             var generation = await GenerateBackgroundWithAzureImage2Async(imageOptions.Value, topic.AzureImage2Prompt, backgroundPath, aspect, cancellationToken);
             if (!generation.ProviderSucceeded)
-                throw new InvalidOperationException($"Gallery V2 requires Azure Image2 for gallery-{topic.Number:00}; Azure failed: {generation.FailureReason}");
+                throw new InvalidOperationException($"Gallery V3 requires Azure Image2 for gallery-{topic.Number:00}; Azure failed: {generation.FailureReason}");
 
             using var image = await RenderTopicAsync(topic, aspect, backgroundPath, cancellationToken);
             await image.SaveAsPngAsync(path, cancellationToken);
@@ -64,7 +64,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             var hash = await ComputeHashAsync(path, cancellationToken);
             if (!hashes.Add(hash)) throw new InvalidOperationException($"Duplicate gallery image hash detected for gallery-{topic.Number:00}.png.");
             imagePaths.Add(path);
-            images.Add(new { topic.Number, fileName = Path.GetFileName(path), topic.Purpose, topic.Concept, topic.TextBlocks, topic.AzureImage2Prompt, sha256 = hash, azureRequestMs = generation.AzureRequestMs, imageDownloadMs = generation.ImageDownloadMs });
+            images.Add(new { topic.Number, fileName = Path.GetFileName(path), assetPurpose = topic.Purpose, platformUse = topic.Concept, topic.VisualIntent, topic.OverlayStyle, eventSpecificPrompt = topic.AzureImage2Prompt, topic.TextBlocks, sha256 = hash, azureRequestMs = generation.AzureRequestMs, imageDownloadMs = generation.ImageDownloadMs });
         }
 
         var manifestPath = Path.Combine(outputDirectory, "gallery-manifest.json");
@@ -76,7 +76,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var promptPreview = string.Join(Environment.NewLine, topics.Select(t => t.AzureImage2Prompt));
         EventContentGuard.ValidateNoForbiddenTerms("AstroPulseGalleryService", "gallery prompt", promptPreview, galleryContext.ForbiddenTerms);
         var contentDiagnostics = EventContentGuard.BuildDiagnostics(13, "AstroPulseGalleryService", galleryContext.EventType, galleryContext.StoryTheme, galleryContext.VisualTheme, ["production-event-intelligence.json", "content-plan-production-request.json"], promptPreview, galleryContext.ForbiddenTerms);
-        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V2", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V3", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new { accepted = valid, style = "social-media carousel", rejectedStyle = "PowerPoint infographic slide deck", galleryTopicsGenerated = topics.Count, noSharedBackground = true, noDuplicateConcepts = topics.Select(t => t.Concept).Distinct(StringComparer.OrdinalIgnoreCase).Count() == topics.Count, noDuplicateImageHashes = hashes.Count == topics.Count, mobileReadable = true, oneEducationalMessagePerImage = true, skyVisualDominant = true, textAreaMaxPercent = 25 }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = Array.Empty<string>() }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid ? "Succeeded" : "Failed", exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, phase12Executed = false, thumbnailRegenerationOccurred = false }, JsonOptions), cancellationToken);
@@ -140,7 +140,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     }
 
     private static bool IsAzureImage2Configured(AzureOpenAIForImageOptions options) => !string.IsNullOrWhiteSpace(options.Endpoint) && !string.IsNullOrWhiteSpace(options.ImageDeployment) && (options.UseManagedIdentity || !string.IsNullOrWhiteSpace(options.ApiKey));
-    private static void EnsureAzureImage2Configured(AzureOpenAIForImageOptions options) { if (!IsAzureImage2Configured(options)) throw new InvalidOperationException("Phase 13 Gallery V2 requires Azure Image2 configuration; local fallback is not allowed unless Azure fails during a configured request."); }
+    private static void EnsureAzureImage2Configured(AzureOpenAIForImageOptions options) { if (!IsAzureImage2Configured(options)) throw new InvalidOperationException("Phase 13 Gallery V3 requires Azure Image2 configuration; local fallback is not allowed unless Azure fails during a configured request."); }
     private static async Task AddAzureImage2AuthorizationAsync(HttpRequestMessage request, AzureOpenAIForImageOptions options, CancellationToken ct) { if (options.UseManagedIdentity) { var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions { ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId) ? null : options.ManagedIdentityClientId.Trim() }); var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), ct); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token); return; } request.Headers.Add("api-key", options.ApiKey); }
     private static async Task<byte[]> ExtractAzureImage2BytesAsync(HttpClient http, string payload, CancellationToken ct) { using var doc = JsonDocument.Parse(payload); var first = doc.RootElement.GetProperty("data")[0]; if (first.TryGetProperty("b64_json", out var b64) && !string.IsNullOrWhiteSpace(b64.GetString())) return Convert.FromBase64String(b64.GetString()!); if (first.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())) return await http.GetByteArrayAsync(url.GetString()!, ct); throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content."); }
     private static async Task<string> ComputeHashAsync(string path, CancellationToken ct) { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
@@ -161,28 +161,24 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     private static List<GalleryTopic> BuildTopics(GalleryContext context)
     {
-        if (EventContentGuard.IsPlanetConjunction(context.EventType))
-            return
-            [
-                new(1, "Hook / event introduction", "Jupiter and Venus conjunction in twilight", ["JUPITER + VENUS", "CONJUNCTION", "Two bright planets"], "Premium cinematic Jupiter and Venus conjunction in the western sky after sunset, twilight sky, two bright planets close together, realistic landscape horizon, no text, no labels, no people."),
-                new(2, "What aligns", "Two bright planets close together", ["Two bright planets", "Jupiter and Venus appear close."], "Realistic educational astronomy visual showing Jupiter and Venus as two bright planets close together in twilight, subtle orbital alignment feeling, no text, no labels."),
-                new(3, "Best viewing time", "Western sky after sunset", ["Best Viewing Time", "Western sky after sunset", "Twilight sky"], "Cinematic western horizon after sunset with twilight gradient and Jupiter plus Venus bright and close, observing-guide composition, no text, no labels."),
-                new(4, "How close", "Angular separation", ["How Close?", "1.63° apart", "Look west"], "Realistic sky guide background for Jupiter Venus conjunction, two bright planets separated by 1.63 degrees in twilight western sky, no text, no labels."),
-                new(5, "What viewers will see", "Bright planetary pair", ["What You’ll See", "A bright planetary pair", "Low twilight horizon"], "Premium astronomy image of Venus and Jupiter shining as a close pair over a twilight western horizon, cinematic contrast, no text, no people."),
-                new(6, "Final reminder", "Save the conjunction view", ["Final Reminder", "Check the western horizon", "After sunset"], "Beautiful people-free twilight landscape facing west with Venus and Jupiter close together above the horizon, calm cinematic mood, no text, no signs.")
-            ];
-
         var title = context.Title;
         var objectText = string.Join(", ", context.Objects.Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(title));
+        var basePrompt = $"Event type: {context.EventType}. Resolved object names: {objectText}. Forbidden terms policy: exclude event-profile forbidden concepts.";
         return
         [
-            new(1, "Hook / event introduction", $"Cinematic {title}", [title, context.EventType], $"Premium cinematic astronomy visual for {title}, event-specific objects: {objectText}, realistic sky landscape, no text, no labels, no people."),
-            new(2, "What is happening", "Event-specific explanation", ["What’s Happening", title], $"Educational astronomy visual explaining {title}, use event-specific objects only: {objectText}, no text, no labels."),
-            new(3, "Best viewing time", "Event-specific timing", ["Best Viewing Time", "Use approved window"], $"Cinematic viewing-time visual for {title}, event-specific sky conditions and horizon, no text, no labels."),
-            new(4, "Where to look", "Event-specific direction", ["Where To Look", "Use approved direction"], $"Realistic sky direction guide for {title}, event-specific viewing guidance, no text, no labels."),
-            new(5, "Why it matters", "Event significance", ["Why It Matters", "Event-specific sky story"], $"Premium astronomy image showing why {title} matters, use only current event objects: {objectText}, no text, no people."),
-            new(6, "Final reminder", "Viewing reminder", ["Final Reminder", "Check conditions", "Step outside"], $"Beautiful people-free sky-viewing landscape for {title}, current event objects visible, calm cinematic mood, no text, no signs.")
+            new(1, "cinematic landscape", "landscape social hero", [LimitOverlay(title, 4), "Sky event"], "CinematicHook", "minimal lower-third", $"{basePrompt} Asset purpose: cinematic landscape. Platform use: YouTube community and article header. Visual intent: CinematicHook. Overlay style: minimal lower-third. Event-specific prompt: premium realistic astronomy landscape showing only event-intelligence objects, strong visual hook, no embedded text, no labels, no watermark."),
+            new(2, "square social card", "square event card", [LimitOverlay(title, 5), "Save the date"], "ScientificExplanation", "bold compact social text", $"{basePrompt} Asset purpose: square social card. Platform use: Instagram/Facebook feed. Visual intent: ScientificExplanation. Overlay style: bold compact social text. Event-specific prompt: clean event-specific astronomy visual with resolved objects prominent, square-friendly centered composition, no embedded text, no labels."),
+            new(3, "portrait social story", "vertical story guide", [LimitOverlay(title, 5), "Look up"], "HumanObservation", "mobile story lower-third", $"{basePrompt} Asset purpose: portrait social story. Platform use: Instagram/Facebook story. Visual intent: HumanObservation. Overlay style: mobile story lower-third. Event-specific prompt: vertical mobile astronomy scene with human observer silhouette and event-specific sky objects, cinematic depth, no embedded text, no signs."),
+            new(4, "information guide card", "direction/time guide", ["Viewing Guide", LimitOverlay(title, 5)], "SkyGuide", "compact guide markers", $"{basePrompt} Asset purpose: information guide card. Platform use: reusable guide card. Visual intent: SkyGuide. Overlay style: compact guide markers. Event-specific prompt: clean sky guide composition driven by event intelligence, directional horizon or event markers only if supplied by event profile, no embedded text, no fake labels."),
+            new(5, "detail crop", "object-focused reuse", ["What to watch", LimitOverlay(objectText, 5)], "ObjectCloseup", "small title", $"{basePrompt} Asset purpose: detail crop. Platform use: short-form cutaway. Visual intent: ObjectCloseup. Overlay style: small title. Event-specific prompt: close-up or focused rendering of the most important event objects from event intelligence, no unrelated astronomy event imagery, no embedded text."),
+            new(6, "emotional closing", "shareable reminder", ["Step outside", LimitOverlay(title, 4)], "EmotionalClosing", "minimal cinematic text", $"{basePrompt} Asset purpose: emotional closing. Platform use: final social reminder. Visual intent: EmotionalClosing. Overlay style: minimal cinematic text. Event-specific prompt: beautiful calm sky-viewing scene representing the selected event, varied composition from other gallery assets, no embedded text, no signs.")
         ];
+    }
+
+    private static string LimitOverlay(string value, int maxWords)
+    {
+        var words = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(maxWords).ToArray();
+        return words.Length == 0 ? "Sky event" : string.Join(' ', words);
     }
 
     private static string FirstString(JsonElement root, params string[] names) { foreach (var name in names) { var value = FindString(root, name); if (!string.IsNullOrWhiteSpace(value)) return value!; } return string.Empty; }
@@ -192,6 +188,6 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     private sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, IReadOnlyList<string> Objects, IReadOnlyList<string> ForbiddenTerms);
 
-    private sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string AzureImage2Prompt);
+    private sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string VisualIntent, string OverlayStyle, string AzureImage2Prompt);
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
 }
