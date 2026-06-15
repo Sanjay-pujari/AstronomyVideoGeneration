@@ -357,7 +357,7 @@ public sealed class VideoAssemblyBackgroundMusicOptions
     public bool Enabled { get; set; } = true;
     public string? WonderCuriosityPath { get; set; }
     public string? DefaultPath { get; set; }
-    public int DefaultLevelPercent { get; set; } = 12;
+    public int DefaultLevelPercent { get; set; } = 40;
     public bool DuckUnderNarration { get; set; } = true;
 }
 
