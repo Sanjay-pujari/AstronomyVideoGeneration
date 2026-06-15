@@ -152,7 +152,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (13, "Generate Gallery", PhaseGenerateGalleryAsync),
         (14, "Scene Audio Sync V1", PhaseSceneAudioSyncAsync),
         (15, "TTS Timeline V1", PhaseGenerateTtsTimelineV1Async),
-        (16, "Generate Short TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (16, "Duration Calibration V1", PhaseDurationCalibrationV1Async),
         (17, "Generate Long TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.LongForm, ct)),
         (18, "Assemble Short Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
         (19, "Assemble Long Video", (ctx, ct) => PhaseAssembleVideoAsync(ctx, ScenePresentationProfile.LongForm, ct)),
@@ -180,8 +180,10 @@ public sealed partial class ProductionPipelineExecutionService(
             12 => IsRequestedOutput(context, "Thumbnail"),
             13 => true,
             14 => true,
-            16 or 18 => IsRequestedOutput(context, "ShortVideo"),
-            15 or 17 or 19 => IsRequestedOutput(context, "LongVideo"),
+            15 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
+            16 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
+            18 => IsRequestedOutput(context, "ShortVideo"),
+            17 or 19 => IsRequestedOutput(context, "LongVideo"),
             20 => true,
             _ => true
         };
@@ -206,7 +208,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => new[]
         {
             BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [16, 18]),
-            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [15, 17, 19]),
+            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [15, 16, 17, 19]),
             BuildRequestedOutputCompletion(context, phaseResults, "Gallery", [13]),
             BuildRequestedOutputCompletion(context, phaseResults, "HeroAsset", [11]),
             BuildRequestedOutputCompletion(context, phaseResults, "Thumbnail", [12])
@@ -2236,6 +2238,131 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.Join("-", Regex.Matches(value, "[A-Za-z0-9_-]+").Select(m => m.Value)).Trim('-') is { Length: > 0 } safe ? safe : Guid.NewGuid().ToString("N");
 
     private sealed record TtsTimelineItem(string Format, string SceneId, string AudioPath, string NarrationText, double DurationSec, bool TtsProviderCalled, bool TtsProviderSucceeded);
+
+
+    private async Task<IReadOnlyList<string>> PhaseDurationCalibrationV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        const double transitionPaddingSec = 0.4;
+        const double minimumSceneDurationSec = 3.0;
+        var planRoot = context.OutputRoot;
+        var timingRoot = Path.Combine(planRoot, "timing");
+        var validationRoot = context.ExecutionContext.ValidationRoot!;
+        Directory.CreateDirectory(timingRoot);
+        Directory.CreateDirectory(validationRoot);
+
+        var syncPath = Path.Combine(planRoot, "sync", "scene-audio-sync.json");
+        var ttsTimelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var shortMetadataPath = Path.Combine(planRoot, "scene-assets-v3", "short", "scene-timeline-metadata.json");
+        var longMetadataPath = Path.Combine(planRoot, "scene-assets-v3", "long", "scene-timeline-metadata.json");
+        var oldPaths = new[]
+        {
+            Path.Combine(planRoot, "question-engine", "scene-approval-v3", "scene-assets"),
+            Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
+            Path.Combine(planRoot, "scene-assets")
+        };
+        var inputPathsChecked = new[] { syncPath, ttsTimelinePath, shortMetadataPath, longMetadataPath };
+        var errors = new List<string>();
+        var missingDurationItems = new List<string>();
+        if (!File.Exists(ttsTimelinePath)) errors.Add($"tts-timeline.json missing: {NormalizePath(ttsTimelinePath)}");
+        if (!File.Exists(syncPath)) errors.Add($"scene-audio-sync.json missing: {NormalizePath(syncPath)}");
+        if (!File.Exists(shortMetadataPath)) errors.Add($"short scene-timeline-metadata.json missing: {NormalizePath(shortMetadataPath)}");
+        if (!File.Exists(longMetadataPath)) errors.Add($"long scene-timeline-metadata.json missing: {NormalizePath(longMetadataPath)}");
+
+        var sourceTtsTimelineVersion = "v1";
+        var shortItems = new List<SceneDurationPlanItem>();
+        var longItems = new List<SceneDurationPlanItem>();
+        if (File.Exists(ttsTimelinePath))
+        {
+            var ttsRoot = JsonNode.Parse(await File.ReadAllTextAsync(ttsTimelinePath, cancellationToken)) ?? new JsonObject();
+            sourceTtsTimelineVersion = GetString(ttsRoot, "version") ?? "v1";
+            shortItems.AddRange(BuildSceneDurationPlanItems(ttsRoot, "short", shortMetadataPath, 5, 12.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems));
+            longItems.AddRange(BuildSceneDurationPlanItems(ttsRoot, "long", longMetadataPath, 9, 15.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems));
+        }
+
+        if (shortItems.Count != 5) errors.Add($"short scene count != 5; actual={shortItems.Count}");
+        if (longItems.Count != 9) errors.Add($"long scene count != 9; actual={longItems.Count}");
+        errors.AddRange(missingDurationItems.Select(x => $"Audio duration missing: {x}"));
+        errors.AddRange(shortItems.Concat(longItems).Where(i => i.AudioDurationSec <= 0).Select(i => $"audioDurationSec <= 0: {i.Format}:{i.SceneId}"));
+        errors.AddRange(shortItems.Concat(longItems).Where(i => i.SceneDurationSec < i.AudioDurationSec).Select(i => $"sceneDurationSec < audioDurationSec: {i.Format}:{i.SceneId}"));
+        var oldPathUsed = false;
+        if (oldPathUsed) errors.Add("Old scene asset path used");
+
+        var shortAudioTotal = RoundDuration(shortItems.Sum(i => i.AudioDurationSec));
+        var longAudioTotal = RoundDuration(longItems.Sum(i => i.AudioDurationSec));
+        var shortVideoTotal = RoundDuration(shortItems.Sum(i => i.SceneDurationSec));
+        var longVideoTotal = RoundDuration(longItems.Sum(i => i.SceneDurationSec));
+        var durationMismatchDetected = shortItems.Concat(longItems).Any(i => i.SceneDurationSec < i.AudioDurationSec + i.TransitionDurationSec);
+        var planPath = Path.Combine(timingRoot, "scene-duration-plan.json");
+        await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(new
+        {
+            version = "v1",
+            sourceTtsTimelineVersion,
+            @short = new { sceneCount = shortItems.Count, totalAudioDurationSec = shortAudioTotal, totalVideoDurationSec = shortVideoTotal, items = shortItems },
+            @long = new { sceneCount = longItems.Count, totalAudioDurationSec = longAudioTotal, totalVideoDurationSec = longVideoTotal, items = longItems }
+        }, JsonOptions), cancellationToken);
+        if (!File.Exists(planPath)) errors.Add($"scene-duration-plan.json missing: {NormalizePath(planPath)}");
+
+        var validationPassed = errors.Count == 0;
+        var diagnostics = new
+        {
+            inputPathsChecked = inputPathsChecked.Select(NormalizePath),
+            selectedTtsTimelinePath = NormalizePath(ttsTimelinePath),
+            selectedSyncPath = NormalizePath(syncPath),
+            selectedShortMetadataPath = NormalizePath(shortMetadataPath),
+            selectedLongMetadataPath = NormalizePath(longMetadataPath),
+            oldPathsChecked = oldPaths.Select(NormalizePath),
+            oldPathsIgnored = oldPaths.Select(NormalizePath),
+            oldPathUsed,
+            shortSceneCount = shortItems.Count,
+            longSceneCount = longItems.Count,
+            shortTotalAudioDurationSec = shortAudioTotal,
+            longTotalAudioDurationSec = longAudioTotal,
+            shortTotalVideoDurationSec = shortVideoTotal,
+            longTotalVideoDurationSec = longVideoTotal,
+            durationMismatchDetected,
+            missingDurationItems,
+            validationPassed
+        };
+        var diagnosticsPath = Path.Combine(validationRoot, "phase-16-duration-diagnostics.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        var validationPath = Path.Combine(validationRoot, "phase-16-validation.json");
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 16,
+            phaseName = "Duration Calibration V1",
+            status = validationPassed ? "Succeeded" : "Failed",
+            sceneDurationPlanPath = NormalizePath(planPath),
+            oldPathUsed,
+            validationPassed,
+            errors
+        }, JsonOptions), cancellationToken);
+        if (!validationPassed) throw new InvalidOperationException("Phase 16 Duration Calibration V1 failed: " + string.Join(" | ", errors));
+        return [planPath, validationPath, diagnosticsPath];
+    }
+
+    private static IReadOnlyList<SceneDurationPlanItem> BuildSceneDurationPlanItems(JsonNode ttsRoot, string format, string metadataPath, int expectedCount, double maximumSceneDurationSec, double transitionPaddingSec, double minimumSceneDurationSec, List<string> missingDurationItems)
+    {
+        var ttsItems = ttsRoot[format]?["items"]?.AsArray() ?? [];
+        var metadataScenes = File.Exists(metadataPath) ? ReadJsonArray(metadataPath, "scenes") : new JsonArray();
+        var metadataBySceneId = metadataScenes.Select(n => new { Node = n, SceneId = GetString(n, "sceneId") ?? string.Empty }).Where(x => !string.IsNullOrWhiteSpace(x.SceneId)).GroupBy(x => x.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
+        var items = new List<SceneDurationPlanItem>();
+        foreach (var ttsItem in ttsItems.Take(expectedCount))
+        {
+            var sceneId = GetString(ttsItem, "sceneId") ?? $"{items.Count + 1:000}";
+            var audioDuration = GetDouble(ttsItem, "durationSec") ?? GetDouble(ttsItem, "audioDurationSec") ?? 0;
+            if (audioDuration <= 0) missingDurationItems.Add($"{format}:{sceneId}");
+            var metadata = metadataBySceneId.TryGetValue(sceneId, out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
+            var requestedDuration = Math.Max(minimumSceneDurationSec, audioDuration + transitionPaddingSec);
+            var sceneDuration = requestedDuration > maximumSceneDurationSec ? maximumSceneDurationSec : requestedDuration;
+            if (sceneDuration < audioDuration) sceneDuration = audioDuration;
+            items.Add(new SceneDurationPlanItem(format, sceneId, GetString(ttsItem, "audioPath") ?? string.Empty, RoundDuration(audioDuration), RoundDuration(sceneDuration), transitionPaddingSec, GetString(metadata, "recommendedTransition") ?? "crossfade", GetString(metadata, "recommendedMotion") ?? "slowZoomIn"));
+        }
+        return items;
+    }
+
+    private static double? GetDouble(JsonNode? node, string name) => node?[name]?.GetValue<double>();
+    private static double RoundDuration(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
+    private sealed record SceneDurationPlanItem(string Format, string SceneId, string AudioPath, double AudioDurationSec, double SceneDurationSec, double TransitionDurationSec, string RecommendedTransition, string RecommendedMotion);
 
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
