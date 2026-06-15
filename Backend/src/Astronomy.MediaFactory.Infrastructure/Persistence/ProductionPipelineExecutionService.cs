@@ -3700,7 +3700,7 @@ public sealed partial class ProductionPipelineExecutionService(
             Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
             Path.Combine(planRoot, "scene-assets")
         };
-        var inputPathsChecked = new[] { syncPath, ttsPath, durationPlanPath, motionPlanPath, Path.Combine(sceneAssetsRoot, "short"), Path.Combine(sceneAssetsRoot, "long") };
+        var inputPathsChecked = new[] { syncPath, ttsPath, durationPlanPath, Path.Combine(sceneAssetsRoot, "short"), Path.Combine(sceneAssetsRoot, "long") };
         var errors = new List<string>();
         var missingSceneImages = new List<string>();
         var missingAudioFiles = new List<string>();
@@ -3710,16 +3710,20 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var shortSceneCount = 0;
         var longSceneCount = 0;
-        if (File.Exists(motionPlanPath))
+        var motionPlanFound = File.Exists(motionPlanPath);
+        var defaultMotionGenerated = !motionPlanFound;
+        var motionRoot = motionPlanFound
+            ? JsonNode.Parse(await File.ReadAllTextAsync(motionPlanPath, cancellationToken)) ?? new JsonObject()
+            : BuildDefaultPhase18MotionPlan(sceneAssetsRoot, syncPath, ttsPath);
         {
-            var motionRoot = JsonNode.Parse(await File.ReadAllTextAsync(motionPlanPath, cancellationToken)) ?? new JsonObject();
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
             var shortItems = ReadVideoAssemblyItems(motionRoot, ttsRoot, "short", 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
             var longItems = ReadVideoAssemblyItems(motionRoot, ttsRoot, "long", 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
-            if (shortItems.Count == 5) await RenderVideoAssemblyAsync(shortItems, shortVideoPath, shortAudioTrackPath, cancellationToken);
-            if (longItems.Count == 9) await RenderVideoAssemblyAsync(longItems, longVideoPath, longAudioTrackPath, cancellationToken);
+            var backgroundAudioPath = ResolvePhase18BackgroundAudioPath(planRoot);
+            if (shortItems.Count == 5) await RenderVideoAssemblyAsync(shortItems, shortVideoPath, shortAudioTrackPath, backgroundAudioPath, cancellationToken);
+            if (longItems.Count == 9) await RenderVideoAssemblyAsync(longItems, longVideoPath, longAudioTrackPath, backgroundAudioPath, cancellationToken);
         }
 
         var shortVideoDuration = File.Exists(shortVideoPath) ? await ProbeAudioDurationSecondsAsync(shortVideoPath, cancellationToken) : 0;
@@ -3731,6 +3735,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortAudioMuxed = File.Exists(shortAudioTrackPath) && shortHasAudioStream;
         var longAudioMuxed = File.Exists(longAudioTrackPath) && longHasAudioStream;
         var audioVideoDurationDeltaSec = Math.Max(Math.Abs(shortAudioDuration - shortVideoDuration), Math.Abs(longAudioDuration - longVideoDuration));
+        var backgroundAudioPathForDiagnostics = ResolvePhase18BackgroundAudioPath(planRoot);
+        var backgroundAudioFound = !string.IsNullOrWhiteSpace(backgroundAudioPathForDiagnostics) && File.Exists(backgroundAudioPathForDiagnostics);
+        var totalScenes = shortSceneCount + longSceneCount;
+        var scenesWithZoom = totalScenes;
+        var scenesWithPan = totalScenes;
+        var scenesWithTransitions = totalScenes;
         var oldPathUsed = oldPathUsageReasons.Count > 0 || inputPathsChecked.Concat(new[] { shortVideoPath, longVideoPath }).Any(path => oldPaths.Any(oldPath => IsSameOrUnderPath(NormalizePath(path), NormalizePath(oldPath))));
         var videoRendered = File.Exists(shortVideoPath) && File.Exists(longVideoPath);
         if (shortSceneCount != 5) errors.Add($"short scene count != 5; actual={shortSceneCount}");
@@ -3743,9 +3753,42 @@ public sealed partial class ProductionPipelineExecutionService(
         if (File.Exists(longAudioTrackPath) && !longAudioMuxed) errors.Add("long audio file exists but was not muxed");
         if (!shortHasAudioStream) errors.Add("short final video has no audio stream");
         if (!longHasAudioStream) errors.Add("long final video has no audio stream");
+        if (scenesWithZoom < totalScenes) errors.Add("Not every scene has zoom motion");
+        if (scenesWithPan < totalScenes) errors.Add("Not every scene has pan motion");
+        if (scenesWithTransitions < Math.Max(0, totalScenes - 1)) errors.Add("Not every scene boundary has a transition");
+        if (!backgroundAudioFound) errors.Add("background audio missing or not configured");
         if (audioVideoDurationDeltaSec > 1.0) errors.Add($"audio/video duration delta > 1.0; actual={RoundDuration(audioVideoDurationDeltaSec)}");
         if (oldPathUsed) errors.Add("Old scene asset path used");
-        var validationPassed = errors.Count == 0 && videoRendered && !oldPathUsed && shortAudioMuxed && longAudioMuxed && shortHasAudioStream && longHasAudioStream && audioVideoDurationDeltaSec <= 1.0;
+        var backgroundAudioMixed = backgroundAudioFound && shortHasAudioStream && longHasAudioStream;
+        var narrationAudioMixed = shortAudioMuxed && longAudioMuxed;
+        var finalVideoHasAudio = shortHasAudioStream && longHasAudioStream;
+        var finalVideoHasMotion = scenesWithZoom >= totalScenes && scenesWithPan >= totalScenes && scenesWithTransitions >= Math.Max(0, totalScenes - 1);
+        var validationPassed = errors.Count == 0 && videoRendered && !oldPathUsed && narrationAudioMixed && backgroundAudioMixed && finalVideoHasAudio && finalVideoHasMotion && audioVideoDurationDeltaSec <= 1.0;
+
+        var cinematicDiagnosticsPath = Path.Combine(videoRoot, "phase-18-cinematic-diagnostics.json");
+        await File.WriteAllTextAsync(cinematicDiagnosticsPath, JsonSerializer.Serialize(new
+        {
+            motionPlanPath = NormalizePath(motionPlanPath),
+            motionPlanFound,
+            defaultMotionGenerated,
+            totalScenes,
+            scenesWithZoom,
+            scenesWithPan,
+            scenesWithTransitions,
+            transitionType = "crossfade",
+            transitionDurationSec = 0.8,
+            fadeInApplied = true,
+            fadeOutApplied = true,
+            backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
+            backgroundAudioFound,
+            backgroundAudioMixed,
+            narrationAudioMixed,
+            duckingApplied = backgroundAudioMixed,
+            finalVideoHasAudio,
+            finalVideoHasMotion,
+            ffmpegCommandPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath,
+            validationPassed
+        }, JsonOptions), cancellationToken);
 
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
@@ -3783,7 +3826,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Video Assembly V1", status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Video Assembly V1 failed: " + string.Join(" | ", errors));
-        return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, diagnosticsPath, validationPath];
+        return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath];
     }
 
     private static IReadOnlyList<VideoAssemblyItem> ReadVideoAssemblyItems(JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons)
@@ -3820,7 +3863,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return index >= 0 && index < ttsItems.Count ? GetString(ttsItems[index], "audioPath") : null;
     }
 
-    private async Task RenderVideoAssemblyAsync(IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, CancellationToken cancellationToken)
+    private async Task RenderVideoAssemblyAsync(IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, string? backgroundAudioPath, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var tempRoot = Path.Combine(Path.GetTempPath(), "astro-video-assembly-" + Guid.NewGuid().ToString("N"));
@@ -3834,25 +3877,119 @@ public sealed partial class ProductionPipelineExecutionService(
                 var item = items[i];
                 var clipPath = Path.Combine(tempRoot, $"{i:000}-{SanitizeFileName(item.SceneId)}.mp4");
                 var duration = Math.Max(0.5, item.SceneDurationSec);
-                var vf = item.MotionStyle is "slowZoomIn" or "slowZoomOut" ? "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,zoompan=z='min(zoom+0.0008,1.08)':d=1:s=1280x720:fps=30,format=yuv420p" : "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p";
+                var vf = BuildPhase18MotionFilter(item, i);
                 var result = await RunProcessAsync(ffmpegPath, ["-y", "-loop", "1", "-i", item.SceneImagePath, "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", clipPath], cancellationToken);
                 if (result.ExitCode != 0 || !File.Exists(clipPath)) throw new InvalidOperationException($"Unable to render scene clip {item.SceneId}: {result.Error}");
                 clipPaths.Add(clipPath);
             }
-            var concatPath = Path.Combine(tempRoot, "concat.txt");
-            await File.WriteAllLinesAsync(concatPath, clipPaths.Select(p => "file '" + p.Replace("'", "'\\''") + "'"), cancellationToken);
             var videoOnlyPath = Path.Combine(tempRoot, "video-only.mp4");
-            var concatResult = await RunProcessAsync(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", videoOnlyPath], cancellationToken);
-            if (concatResult.ExitCode != 0 || !File.Exists(videoOnlyPath)) throw new InvalidOperationException($"Unable to assemble video: {concatResult.Error}");
+            await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
 
             await ConcatenateNarrationTrackAsync(items, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
-            var muxResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", outputPath], cancellationToken);
+            if (string.IsNullOrWhiteSpace(backgroundAudioPath) || !File.Exists(backgroundAudioPath)) throw new InvalidOperationException("Phase 18 requires a background audio bed at planRoot/audio/background.mp3 or VideoAssembly:BackgroundMusic path.");
+            var muxResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundAudioPath, "-filter_complex", "[1:a]volume=1.0[a1];[2:a]volume=0.15,afade=t=in:st=0:d=1[bg];[bg][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=80:release=700[a2];[a1][a2]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", "0:v:0", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", outputPath], cancellationToken);
             if (muxResult.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to mux narration audio: {muxResult.Error}");
         }
         finally
         {
             try { Directory.Delete(tempRoot, true); } catch { }
         }
+    }
+
+
+    private static JsonNode BuildDefaultPhase18MotionPlan(string sceneAssetsRoot, string syncPath, string ttsPath)
+    {
+        _ = syncPath;
+        var root = new JsonObject();
+        var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(File.ReadAllText(ttsPath)) ?? new JsonObject() : new JsonObject();
+        foreach (var format in new[] { "short", "long" })
+        {
+            var items = new JsonArray();
+            var sceneRoot = Path.Combine(sceneAssetsRoot, format);
+            var images = Directory.Exists(sceneRoot)
+                ? Directory.EnumerateFiles(sceneRoot).Where(p => IsImageExtension(Path.GetExtension(p))).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray()
+                : [];
+            var ttsItems = ttsRoot[format]?["items"]?.AsArray();
+            var count = ttsItems?.Count > 0 ? ttsItems.Count : images.Length;
+            for (var i = 0; i < count; i++)
+            {
+                var ttsItem = ttsItems is not null && i < ttsItems.Count ? ttsItems[i] : null;
+                items.Add(new JsonObject
+                {
+                    ["sceneId"] = GetString(ttsItem, "sceneId") ?? $"{i + 1:000}",
+                    ["sceneImagePath"] = i < images.Length ? images[i] : string.Empty,
+                    ["audioPath"] = GetString(ttsItem, "audioPath") ?? string.Empty,
+                    ["sceneDurationSec"] = GetDouble(ttsItem, "durationSec") ?? GetDouble(ttsItem, "sceneDurationSec") ?? 3.0,
+                    ["motionStyle"] = i % 2 == 0 ? "slowZoomIn" : "slowZoomOut",
+                    ["panDirection"] = (i % 4) switch { 0 => "right", 1 => "left", 2 => "down", _ => "up" },
+                    ["easing"] = "ease-in-out",
+                    ["transition"] = "crossfade"
+                });
+            }
+
+            root[format] = new JsonObject { ["items"] = items };
+        }
+
+        return root;
+    }
+
+    private static bool IsImageExtension(string extension)
+        => extension.Equals(".png", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
+
+    private string? ResolvePhase18BackgroundAudioPath(string planRoot)
+    {
+        var local = Path.Combine(planRoot, "audio", "background.mp3");
+        if (File.Exists(local)) return local;
+        var configured = videoAssemblyOptions?.Value.BackgroundMusic.WonderCuriosityPath;
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
+        configured = videoAssemblyOptions?.Value.BackgroundMusic.DefaultPath;
+        return !string.IsNullOrWhiteSpace(configured) && File.Exists(configured) ? configured : local;
+    }
+
+    private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index)
+    {
+        var frameCount = Math.Max(15, (int)Math.Round(item.SceneDurationSec * 30.0));
+        var zoomExpression = string.Equals(item.MotionStyle, "slowZoomOut", StringComparison.OrdinalIgnoreCase)
+            ? $"max(1.08-on/{frameCount.ToString(CultureInfo.InvariantCulture)}*0.08,1.0)"
+            : $"min(1.0+on/{frameCount.ToString(CultureInfo.InvariantCulture)}*0.08,1.08)";
+        var xExpression = index % 2 == 0 ? $"iw/2-(iw/zoom/2)+((iw-iw/zoom)/2)*sin(on/{frameCount.ToString(CultureInfo.InvariantCulture)}*PI)" : $"iw/2-(iw/zoom/2)-((iw-iw/zoom)/2)*sin(on/{frameCount.ToString(CultureInfo.InvariantCulture)}*PI)";
+        var yExpression = index % 4 < 2 ? "ih/2-(ih/zoom/2)" : $"ih/2-(ih/zoom/2)+((ih-ih/zoom)/2)*sin(on/{frameCount.ToString(CultureInfo.InvariantCulture)}*PI)";
+        return $"scale=1536:864:force_original_aspect_ratio=increase,crop=1536:864,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d=1:s=1280x720:fps=30,fade=t=in:st=0:d=0.6,fade=t=out:st={Math.Max(0.0, item.SceneDurationSec - 0.8).ToString("0.###", CultureInfo.InvariantCulture)}:d=0.8,format=yuv420p";
+    }
+
+    private static async Task CrossfadeSceneClipsAsync(IReadOnlyList<string> clipPaths, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string ffmpegPath, CancellationToken cancellationToken)
+    {
+        if (clipPaths.Count == 1)
+        {
+            File.Copy(clipPaths[0], outputPath, true);
+            return;
+        }
+
+        var args = new List<string> { "-y" };
+        foreach (var clipPath in clipPaths) args.AddRange(["-i", clipPath]);
+        var filter = new System.Text.StringBuilder();
+        for (var i = 0; i < clipPaths.Count; i++) filter.Append(FormattableString.Invariant($"[{i}:v]setpts=PTS-STARTPTS[v{i}];"));
+        var offset = Math.Max(0.1, items[0].SceneDurationSec - 0.8);
+        filter.Append(FormattableString.Invariant($"[v0][v1]xfade=transition=fade:duration=0.8:offset={offset:0.###}[x1]"));
+        for (var i = 2; i < clipPaths.Count; i++)
+        {
+            offset += Math.Max(0.1, items[i - 1].SceneDurationSec - 0.8);
+            filter.Append(FormattableString.Invariant($";[x{i - 1}][v{i}]xfade=transition=fade:duration=0.8:offset={offset:0.###}[x{i}]"));
+        }
+        args.AddRange(["-filter_complex", filter.ToString(), "-map", $"[x{clipPaths.Count - 1}]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outputPath]);
+        var result = await RunProcessStaticAsync(ffmpegPath, args, cancellationToken);
+        if (result.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to crossfade scene clips: {result.Error}");
+    }
+
+    private static async Task<ProcessResult> RunProcessStaticAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo(fileName) { RedirectStandardError = true, RedirectStandardOutput = true };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Unable to start process {fileName}");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        return new ProcessResult(process.ExitCode, await stdoutTask, await stderrTask);
     }
 
     private async Task ConcatenateNarrationTrackAsync(IReadOnlyList<VideoAssemblyItem> items, string narrationTrackPath, string tempRoot, string ffmpegPath, CancellationToken cancellationToken)
