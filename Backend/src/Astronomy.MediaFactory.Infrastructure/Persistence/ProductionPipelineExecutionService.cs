@@ -4136,8 +4136,8 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var input in inputs)
             if (!File.Exists(input) && !Directory.Exists(input)) errors.Add($"Input missing: {NormalizePath(input)}");
 
-        var shortVideo = await BuildPhase19VideoChecksAsync(shortVideoPath, "short", cancellationToken);
-        var longVideo = await BuildPhase19VideoChecksAsync(longVideoPath, "long", cancellationToken);
+        var shortVideo = await BuildPhase19VideoChecksAsync(shortVideoPath, "short", motionPlanPath, cancellationToken);
+        var longVideo = await BuildPhase19VideoChecksAsync(longVideoPath, "long", motionPlanPath, cancellationToken);
         var sceneChecks = BuildPhase19SceneChecks(sceneAssetsRoot, syncPath, ttsPath, durationPlanPath, motionPlanPath);
         var storyChecks = BuildPhase19StoryChecks(syncPath, ttsPath, sceneAssetsRoot);
         var audioChecks = await BuildPhase19AudioChecksAsync(shortVideoPath, longVideoPath, cancellationToken);
@@ -4150,6 +4150,7 @@ public sealed partial class ProductionPipelineExecutionService(
         errors.AddRange(audioChecks.Errors);
         errors.AddRange(visualChecks.Errors);
 
+        var qaIssues = shortVideo.Issues.Concat(longVideo.Issues).Concat(sceneChecks.Issues).Concat(storyChecks.Issues).ToArray();
         var storytellingScore = ScoreBooleans(storyChecks.Checks);
         var visualScore = ScoreBooleans(visualChecks.Checks.Concat(sceneChecks.VisualChecks));
         var audioScore = ScoreBooleans(audioChecks.Checks.Concat(new[] { shortVideo.AudioStreamExists, longVideo.AudioStreamExists, shortVideo.AudioDurationSec > 0, longVideo.AudioDurationSec > 0, !shortVideo.HasSilentSection, !longVideo.HasSilentSection }));
@@ -4157,9 +4158,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var retentionScore = ScoreBooleans(new[] { storyChecks.HookPresent, storyChecks.EmotionalEndingPresent, visualChecks.SceneDiversityPresent, !sceneChecks.HasDuplicateScenes });
         var technicalScore = ScoreBooleans(new[] { shortVideo.VideoExists, longVideo.VideoExists, shortVideo.VideoDurationSec > 0, longVideo.VideoDurationSec > 0, !sceneChecks.HasMissingScenes, !sceneChecks.HasMissingAudio, !shortVideo.HasBlackFramesOver2Sec, !longVideo.HasBlackFramesOver2Sec, !shortVideo.HasFrozenFrameOver3Sec, !longVideo.HasFrozenFrameOver3Sec });
         var overallScore = (int)Math.Round(new[] { storytellingScore, visualScore, audioScore, scientificScore, retentionScore, technicalScore }.Average(), MidpointRounding.AwayFromZero);
-        var recommendation = overallScore >= 80 ? "Approved" : "Needs Improvement";
+        var falsePositiveRisk = qaIssues.Length == 0 ? 5 : Math.Min(95, (int)Math.Round(qaIssues.Average(i => 100 - i.Confidence), MidpointRounding.AwayFromZero));
+        var qaConfidence = Math.Clamp(100 - falsePositiveRisk - (errors.Count == 0 ? 0 : Math.Min(20, errors.Count * 2)), 0, 100);
+        var recommendation = overallScore >= 80 && qaConfidence >= 80 ? "Approved" : "Needs Improvement";
 
-        var scoring = new { overallScore, storytellingScore, visualScore, audioScore, scientificScore, retentionScore, recommendation };
+        var scoring = new { overallScore, storytellingScore, visualScore, audioScore, scientificScore, retentionScore, technicalScore, falsePositiveRisk, qaConfidence, recommendation };
         var review = new
         {
             phaseNo = 19,
@@ -4177,7 +4180,7 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(videoReviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
 
         var qaReportPath = Path.Combine(reviewRoot, "qa-report.json");
-        await File.WriteAllTextAsync(qaReportPath, JsonSerializer.Serialize(new { status = recommendation, scoring, errors, checks = review }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(qaReportPath, JsonSerializer.Serialize(new { status = recommendation, scoring, issues = qaIssues, errors, checks = review }, JsonOptions), cancellationToken);
 
         var diagnosticsPath = Path.Combine(validationRoot, "phase-19-review-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
@@ -4187,63 +4190,78 @@ public sealed partial class ProductionPipelineExecutionService(
             qaReportPath = NormalizePath(qaReportPath),
             errors,
             scoring,
-            validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && overallScore >= 0 && !string.IsNullOrWhiteSpace(recommendation)
+            validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && qaConfidence >= 80
         }, JsonOptions), cancellationToken);
 
-        var validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && overallScore >= 0 && !string.IsNullOrWhiteSpace(recommendation);
+        var validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && qaConfidence >= 80;
         var validationPath = Path.Combine(validationRoot, "phase-19-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 19, phaseName = "Video QA & Production Review", status = validationPassed ? "Succeeded" : "Failed", validationPassed, overallScore, recommendation, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 19, phaseName = "Video QA & Production Review", status = validationPassed ? "Succeeded" : "Failed", validationPassed, overallScore, qaConfidence, falsePositiveRisk, recommendation, issues = qaIssues, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 19 Video QA & Production Review failed: " + string.Join(" | ", errors));
         return [videoReviewPath, qaReportPath, validationPath, diagnosticsPath];
     }
 
-    private sealed record Phase19VideoChecks(string Profile, string VideoPath, bool VideoExists, bool AudioStreamExists, double VideoDurationSec, double AudioDurationSec, bool HasSilentSection, bool HasBlackFramesOver2Sec, bool HasFrozenFrameOver3Sec, IReadOnlyList<string> Errors);
-    private sealed record Phase19SceneChecks(bool HasMissingScenes, bool HasMissingAudio, bool HasDuplicateScenes, IReadOnlyList<bool> VisualChecks, IReadOnlyList<string> Errors);
-    private sealed record Phase19StoryChecks(bool HookPresent, bool EducationalExplanationPresent, bool PracticalViewingGuidancePresent, bool AccurateSkyGuidePresent, bool EmotionalEndingPresent, bool NoDuplicateNarration, bool NarrationContinuityPresent, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
+    private sealed record Phase19QaIssue(string IssueType, string SceneId, string Reason, int Confidence);
+    private sealed record Phase19VideoChecks(string Profile, string VideoPath, bool VideoExists, bool AudioStreamExists, double VideoDurationSec, double AudioDurationSec, bool HasSilentSection, bool HasBlackFramesOver2Sec, bool HasFrozenFrameOver3Sec, IReadOnlyList<Phase19QaIssue> Issues, IReadOnlyList<string> Errors);
+    private sealed record Phase19SceneChecks(bool HasMissingScenes, bool HasMissingAudio, bool HasDuplicateScenes, IReadOnlyList<Phase19QaIssue> Issues, IReadOnlyList<bool> VisualChecks, IReadOnlyList<string> Errors);
+    private sealed record Phase19StoryChecks(bool HookPresent, bool EducationalExplanationPresent, bool PracticalViewingGuidancePresent, bool AccurateSkyGuidePresent, bool EmotionalEndingPresent, bool NoDuplicateNarration, bool NarrationContinuityPresent, IReadOnlyList<Phase19QaIssue> Issues, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
     private sealed record Phase19AudioChecks(bool NarrationAudible, bool BackgroundMusicAudible, bool DuckingApplied, bool NoClipping, bool NoDistortion, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
     private sealed record Phase19VisualChecks(bool MotionApplied, bool TransitionsApplied, bool SceneDiversityPresent, bool GuideScenePresent, bool ViewerScenePresent, bool ScientificExplanationScenePresent, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
 
-    private async Task<Phase19VideoChecks> BuildPhase19VideoChecksAsync(string videoPath, string profile, CancellationToken cancellationToken)
+    private async Task<Phase19VideoChecks> BuildPhase19VideoChecksAsync(string videoPath, string profile, string motionPlanPath, CancellationToken cancellationToken)
     {
         var exists = File.Exists(videoPath);
         var audioStream = exists && await HasAudioStreamAsync(videoPath, cancellationToken);
         var duration = exists ? await ProbeAudioDurationSecondsAsync(videoPath, cancellationToken) : 0;
         var audioDuration = audioStream ? duration : 0;
         var silent = exists && await DetectPhase19MediaIssueAsync(videoPath, $"silencedetect=noise=-45dB:d=1.0", "silence_start", cancellationToken);
-        var black = exists && await DetectPhase19MediaIssueAsync(videoPath, "blackdetect=d=2.0:pix_th=0.10", "black_start", cancellationToken);
-        var frozen = exists && await DetectPhase19MediaIssueAsync(videoPath, "freezedetect=n=-60dB:d=3", "freeze_start", cancellationToken);
+        var motionActive = Phase19MotionIsActive(motionPlanPath);
+        var blackEvidence = exists ? await DetectPhase19MediaIssuesAsync(videoPath, "blackdetect=d=2.0:pix_th=0.10", "black_start", cancellationToken) : [];
+        var frozenEvidence = exists && !motionActive ? await DetectPhase19MediaIssuesAsync(videoPath, "freezedetect=n=-60dB:d=3", "freeze_start", cancellationToken) : [];
+        var black = blackEvidence.Any(e => !Phase19IsTransitionWindowEvidence(e, duration));
+        var frozen = frozenEvidence.Count > 0;
         var errors = new List<string>();
         if (!exists) errors.Add($"{profile} video missing: {NormalizePath(videoPath)}");
         if (!audioStream) errors.Add($"{profile} video has no audio stream");
         if (duration <= 0) errors.Add($"{profile} video duration <= 0");
         if (audioDuration <= 0) errors.Add($"{profile} audio duration <= 0");
         if (silent) errors.Add($"{profile} video has silent sections");
+        var issues = new List<Phase19QaIssue>();
+        if (black) issues.Add(new("BlackFrame", profile, $"Luminance stayed below threshold for over 2 seconds outside transition windows. Evidence: {string.Join("; ", blackEvidence.Where(e => !Phase19IsTransitionWindowEvidence(e, duration)).Take(3))}", 90));
+        if (frozen) issues.Add(new("FrozenFrame", profile, $"Visual transform delta remained below threshold for over 3 seconds with no active motion plan. Evidence: {string.Join("; ", frozenEvidence.Take(3))}", 88));
         if (black) errors.Add($"{profile} video has black frames over 2 seconds");
         if (frozen) errors.Add($"{profile} video has frozen frame over 3 seconds");
-        return new Phase19VideoChecks(profile, NormalizePath(videoPath), exists, audioStream, RoundDuration(duration), RoundDuration(audioDuration), silent, black, frozen, errors);
+        return new Phase19VideoChecks(profile, NormalizePath(videoPath), exists, audioStream, RoundDuration(duration), RoundDuration(audioDuration), silent, black, frozen, issues, errors);
     }
 
     private async Task<bool> DetectPhase19MediaIssueAsync(string mediaPath, string filter, string marker, CancellationToken cancellationToken)
+        => (await DetectPhase19MediaIssuesAsync(mediaPath, filter, marker, cancellationToken)).Count > 0;
+
+    private async Task<IReadOnlyList<string>> DetectPhase19MediaIssuesAsync(string mediaPath, string filter, string marker, CancellationToken cancellationToken)
     {
         var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
         var args = filter.StartsWith("silencedetect", StringComparison.OrdinalIgnoreCase)
             ? new[] { "-hide_banner", "-i", mediaPath, "-af", filter, "-f", "null", "-" }
             : new[] { "-hide_banner", "-i", mediaPath, "-vf", filter, "-an", "-f", "null", "-" };
         var result = await RunProcessAsync(ffmpegPath, args, cancellationToken);
-        return (result.Output + result.Error).Contains(marker, StringComparison.OrdinalIgnoreCase);
+        return Regex.Matches(result.Output + result.Error, $@"[^\r\n]*{Regex.Escape(marker)}[^\r\n]*", RegexOptions.IgnoreCase).Select(m => m.Value.Trim()).ToArray();
     }
 
     private static Phase19SceneChecks BuildPhase19SceneChecks(string sceneAssetsRoot, string syncPath, string ttsPath, string durationPlanPath, string motionPlanPath)
     {
         var errors = new List<string>();
-        var sceneIds = ReadPhase19ProfileSceneIds(motionPlanPath, durationPlanPath, syncPath);
-        var duplicate = sceneIds.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+        var duplicateGroups = ReadPhase19SceneFingerprints(Path.Combine(sceneAssetsRoot, "short", "scene-timeline-metadata.json"), Path.Combine(sceneAssetsRoot, "long", "scene-timeline-metadata.json"), syncPath, durationPlanPath, motionPlanPath)
+            .Where(s => !string.IsNullOrWhiteSpace(s.SourceImage) && !string.IsNullOrWhiteSpace(s.CropRegion) && !string.IsNullOrWhiteSpace(s.CameraMotion) && s.DurationSeconds > 0)
+            .GroupBy(s => $"{s.SourceImage}|{s.CropRegion}|{s.CameraMotion}|{s.DurationSeconds:0.###}", StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .ToArray();
+        var duplicate = duplicateGroups.Length > 0;
         var missingScenes = new[] { Path.Combine(sceneAssetsRoot, "short"), Path.Combine(sceneAssetsRoot, "long") }.Any(p => !Directory.Exists(p) || !Directory.EnumerateFiles(p).Any(IsImageFile));
         var missingAudio = !File.Exists(ttsPath) || ReadPhase19AudioPaths(ttsPath).Any(p => string.IsNullOrWhiteSpace(p) || !File.Exists(p));
+        var issues = duplicateGroups.Select(g => new Phase19QaIssue("DuplicateScene", string.Join(",", g.Select(x => x.SceneId).Distinct(StringComparer.OrdinalIgnoreCase)), $"Same source image, crop, motion, and duration. Evidence: {g.Key}", 92)).ToArray();
         if (missingScenes) errors.Add("Missing scenes detected");
         if (missingAudio) errors.Add("Missing audio detected");
         if (duplicate) errors.Add("Duplicate scenes detected");
-        return new Phase19SceneChecks(missingScenes, missingAudio, duplicate, [!missingScenes, !duplicate], errors);
+        return new Phase19SceneChecks(missingScenes, missingAudio, duplicate, issues, [!missingScenes, !duplicate], errors);
     }
 
     private static Phase19StoryChecks BuildPhase19StoryChecks(string syncPath, string ttsPath, string sceneAssetsRoot)
@@ -4251,7 +4269,17 @@ public sealed partial class ProductionPipelineExecutionService(
         var text = string.Join(" ", ReadPhase19TextValues(syncPath).Concat(ReadPhase19TextValues(ttsPath)).Concat(ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "short", "scene-timeline-metadata.json"))).Concat(ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "long", "scene-timeline-metadata.json"))));
         var normalizedNarration = Regex.Matches(text.ToLowerInvariant(), "[a-z0-9']+").Select(m => m.Value).ToArray();
         var chunks = Regex.Split(text, @"(?<=[.!?])\s+").Where(s => CountSpokenWords(s) >= 4).Select(s => s.Trim()).ToArray();
-        var duplicateNarration = chunks.GroupBy(s => Regex.Replace(s.ToLowerInvariant(), "\\s+", " ")).Any(g => g.Count() > 1);
+        var duplicateNarrationCandidates = chunks
+            .Select(s => new { Original = s, Normalized = NormalizePhase19NarrationForSimilarity(s), SentenceCount = Regex.Matches(s, @"[.!?](?:\s|$)").Count })
+            .Where(x => x.SentenceCount > 1)
+            .ToArray();
+        var duplicateNarrationIssues = duplicateNarrationCandidates
+            .SelectMany((left, i) => duplicateNarrationCandidates.Skip(i + 1)
+                .Select(right => new { Left = left, Right = right, Similarity = Phase19TextSimilarity(left.Normalized, right.Normalized) }))
+            .Where(pair => pair.Similarity > 0.95)
+            .Select(pair => new Phase19QaIssue("DuplicateNarration", "", $"Normalized text similarity is {pair.Similarity:P1}, sentence count is greater than 1, and the passage appears more than once. Evidence: {pair.Left.Original}", 93))
+            .ToArray();
+        var duplicateNarration = duplicateNarrationIssues.Length > 0;
         bool Has(params string[] terms) => terms.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
         var hook = Has("hook", "look", "tonight", "this week", "don't miss", "watch");
         var explanation = Has("because", "happens", "why", "orbit", "moon", "planet", "constellation", "astronom");
@@ -4265,9 +4293,10 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!practical) errors.Add("Practical viewing guidance not detected");
         if (!guide) errors.Add("Accurate sky guide not detected");
         if (!ending) errors.Add("Emotional ending not detected");
+        var issues = duplicateNarrationIssues;
         if (duplicateNarration) errors.Add("Duplicate narration detected");
         if (!continuity) errors.Add("Narration continuity not detected");
-        return new Phase19StoryChecks(hook, explanation, practical, guide, ending, !duplicateNarration, continuity, [hook, explanation, practical, guide, ending, !duplicateNarration, continuity], errors);
+        return new Phase19StoryChecks(hook, explanation, practical, guide, ending, !duplicateNarration, continuity, issues, [hook, explanation, practical, guide, ending, !duplicateNarration, continuity], errors);
     }
 
     private async Task<Phase19AudioChecks> BuildPhase19AudioChecksAsync(string shortVideoPath, string longVideoPath, CancellationToken cancellationToken)
@@ -4309,6 +4338,112 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!viewer) errors.Add("Viewer scene not detected");
         if (!science) errors.Add("Scientific explanation scene not detected");
         return new Phase19VisualChecks(motion, transitions, diversity, guide, viewer, science, [motion, transitions, diversity, guide, viewer, science], errors);
+    }
+
+    private sealed record Phase19SceneFingerprint(string SceneId, string SourceImage, string CropRegion, string CameraMotion, double DurationSeconds);
+
+    private static bool Phase19MotionIsActive(string motionPlanPath)
+    {
+        var text = File.Exists(motionPlanPath) ? File.ReadAllText(motionPlanPath) : string.Empty;
+        return Regex.IsMatch(text, "\\b(zoom|pan|parallax|drift|cameraMotion|motionStyle|transformDelta)\\b", RegexOptions.IgnoreCase);
+    }
+
+    private static bool Phase19IsTransitionWindowEvidence(string evidence, double durationSeconds)
+    {
+        var values = Regex.Matches(evidence, @"(?:black_start|black_end):(?<t>[0-9]+(?:\.[0-9]+)?)")
+            .Select(m => double.Parse(m.Groups["t"].Value, CultureInfo.InvariantCulture))
+            .ToArray();
+        if (values.Length == 0) return false;
+        var start = values.Min();
+        var end = values.Max();
+        return start <= 2.5 || (durationSeconds > 0 && end >= durationSeconds - 2.5);
+    }
+
+    private static string NormalizePhase19NarrationForSimilarity(string text)
+        => string.Join(" ", Regex.Matches(text.ToLowerInvariant(), "[a-z0-9']+").Select(m => m.Value));
+
+    private static double Phase19TextSimilarity(string left, string right)
+    {
+        if (left.Length == 0 && right.Length == 0) return 1;
+        if (left.Length == 0 || right.Length == 0) return 0;
+        var distance = LevenshteinDistance(left, right);
+        return 1.0 - distance / (double)Math.Max(left.Length, right.Length);
+    }
+
+    private static int LevenshteinDistance(string left, string right)
+    {
+        var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+        var current = new int[right.Length + 1];
+        for (var i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = left[i - 1] == right[j - 1] ? 0 : 1;
+                current[j] = Math.Min(Math.Min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+            }
+            (previous, current) = (current, previous);
+        }
+        return previous[right.Length];
+    }
+
+    private static IReadOnlyList<Phase19SceneFingerprint> ReadPhase19SceneFingerprints(params string[] paths)
+    {
+        var fingerprints = new List<Phase19SceneFingerprint>();
+        foreach (var path in paths.Where(File.Exists))
+        {
+            try
+            {
+                var root = JsonNode.Parse(File.ReadAllText(path));
+                foreach (var obj in DescendantObjects(root))
+                {
+                    var sceneId = GetString(obj, "sceneId", "id");
+                    if (string.IsNullOrWhiteSpace(sceneId)) continue;
+                    fingerprints.Add(new Phase19SceneFingerprint(
+                        sceneId,
+                        GetString(obj, "sourceImage", "sourceImagePath", "imagePath", "finalImagePath", "selectedImagePath"),
+                        GetString(obj, "cropRegion", "crop", "cropBox"),
+                        GetString(obj, "cameraMotion", "motionStyle", "motion"),
+                        GetDouble(obj, "durationSeconds", "durationSec", "sceneDurationSec")));
+                }
+            }
+            catch (JsonException)
+            {
+                // Phase 19 QA is a review stage; unreadable optional metadata should not create duplicate-scene false positives.
+            }
+        }
+        return fingerprints;
+    }
+
+    private static IEnumerable<JsonObject> DescendantObjects(JsonNode? node)
+    {
+        if (node is JsonObject obj)
+        {
+            yield return obj;
+            foreach (var child in obj.Select(kvp => kvp.Value))
+                foreach (var descendant in DescendantObjects(child))
+                    yield return descendant;
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var child in array)
+                foreach (var descendant in DescendantObjects(child))
+                    yield return descendant;
+        }
+    }
+
+    private static string GetString(JsonObject obj, params string[] names)
+        => names.Select(name => obj.TryGetPropertyValue(name, out var node) ? node : null)
+            .OfType<JsonNode>()
+            .Select(node => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : node.ToJsonString())
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static double GetDouble(JsonObject obj, params string[] names)
+    {
+        foreach (var name in names)
+            if (obj.TryGetPropertyValue(name, out var node) && double.TryParse(node?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+                return value;
+        return 0;
     }
 
     private static int ScoreBooleans(IEnumerable<bool> checks)
