@@ -3728,8 +3728,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var shortVideoDuration = File.Exists(shortVideoPath) ? await ProbeAudioDurationSecondsAsync(shortVideoPath, cancellationToken) : 0;
         var longVideoDuration = File.Exists(longVideoPath) ? await ProbeAudioDurationSecondsAsync(longVideoPath, cancellationToken) : 0;
-        var shortAudioDuration = File.Exists(shortAudioTrackPath) ? await ProbeAudioDurationSecondsAsync(shortAudioTrackPath, cancellationToken) : 0;
-        var longAudioDuration = File.Exists(longAudioTrackPath) ? await ProbeAudioDurationSecondsAsync(longAudioTrackPath, cancellationToken) : 0;
+        var shortMixedAudioPath = ResolvePhase18FinalMixedAudioPath(shortVideoPath);
+        var longMixedAudioPath = ResolvePhase18FinalMixedAudioPath(longVideoPath);
+        var shortAudioDuration = File.Exists(shortMixedAudioPath) ? await ProbeAudioDurationSecondsAsync(shortMixedAudioPath, cancellationToken) : File.Exists(shortAudioTrackPath) ? await ProbeAudioDurationSecondsAsync(shortAudioTrackPath, cancellationToken) : 0;
+        var longAudioDuration = File.Exists(longMixedAudioPath) ? await ProbeAudioDurationSecondsAsync(longMixedAudioPath, cancellationToken) : File.Exists(longAudioTrackPath) ? await ProbeAudioDurationSecondsAsync(longAudioTrackPath, cancellationToken) : 0;
         var shortHasAudioStream = File.Exists(shortVideoPath) && await HasAudioStreamAsync(shortVideoPath, cancellationToken);
         var longHasAudioStream = File.Exists(longVideoPath) && await HasAudioStreamAsync(longVideoPath, cancellationToken);
         var shortAudioMuxed = File.Exists(shortAudioTrackPath) && shortHasAudioStream;
@@ -3759,7 +3761,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!backgroundAudioFound) errors.Add("background audio missing or not configured");
         if (audioVideoDurationDeltaSec > 1.0) errors.Add($"audio/video duration delta > 1.0; actual={RoundDuration(audioVideoDurationDeltaSec)}");
         if (oldPathUsed) errors.Add("Old scene asset path used");
-        var backgroundAudioMixed = backgroundAudioFound && shortHasAudioStream && longHasAudioStream;
+        var shortBackgroundAudioMixed = File.Exists(shortMixedAudioPath) && shortHasAudioStream;
+        var longBackgroundAudioMixed = File.Exists(longMixedAudioPath) && longHasAudioStream;
+        var backgroundAudioMixed = backgroundAudioFound && shortBackgroundAudioMixed && longBackgroundAudioMixed;
         var narrationAudioMixed = shortAudioMuxed && longAudioMuxed;
         var finalVideoHasAudio = shortHasAudioStream && longHasAudioStream;
         var finalVideoHasMotion = scenesWithZoom >= totalScenes && scenesWithPan >= totalScenes && scenesWithTransitions >= Math.Max(0, totalScenes - 1);
@@ -3782,8 +3786,12 @@ public sealed partial class ProductionPipelineExecutionService(
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
             backgroundAudioFound,
             backgroundAudioMixed,
+            duckingApplied = backgroundAudioMixed && (videoAssemblyOptions?.Value.BackgroundMusic.DuckUnderNarration ?? true),
+            finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) },
+            finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
+            finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
+            audioVideoDurationDeltaSec = RoundDuration(audioVideoDurationDeltaSec),
             narrationAudioMixed,
-            duckingApplied = backgroundAudioMixed,
             finalVideoHasAudio,
             finalVideoHasMotion,
             ffmpegCommandPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath,
@@ -3807,6 +3815,12 @@ public sealed partial class ProductionPipelineExecutionService(
             longVideoPath = NormalizePath(longVideoPath),
             shortAudioTrackPath = NormalizePath(shortAudioTrackPath),
             longAudioTrackPath = NormalizePath(longAudioTrackPath),
+            shortFinalMixedAudioPath = NormalizePath(shortMixedAudioPath),
+            longFinalMixedAudioPath = NormalizePath(longMixedAudioPath),
+            backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
+            backgroundAudioFound,
+            backgroundAudioMixed,
+            duckingApplied = backgroundAudioMixed && (videoAssemblyOptions?.Value.BackgroundMusic.DuckUnderNarration ?? true),
             shortAudioMuxed,
             longAudioMuxed,
             shortHasAudioStream,
@@ -3815,6 +3829,8 @@ public sealed partial class ProductionPipelineExecutionService(
             longAudioDurationSec = RoundDuration(longAudioDuration),
             shortVideoDurationSec = RoundDuration(shortVideoDuration),
             longVideoDurationSec = RoundDuration(longVideoDuration),
+            finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
+            finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
             audioVideoDurationDeltaSec = RoundDuration(audioVideoDurationDeltaSec),
             shortSceneCount,
             longSceneCount,
@@ -3886,14 +3902,45 @@ public sealed partial class ProductionPipelineExecutionService(
             await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
 
             await ConcatenateNarrationTrackAsync(items, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
-            if (string.IsNullOrWhiteSpace(backgroundAudioPath) || !File.Exists(backgroundAudioPath)) throw new InvalidOperationException("Phase 18 requires a background audio bed at planRoot/audio/background.mp3 or VideoAssembly:BackgroundMusic path.");
-            var muxResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundAudioPath, "-filter_complex", "[1:a]volume=1.0[a1];[2:a]volume=0.15,afade=t=in:st=0:d=1[bg];[bg][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=80:release=700[a2];[a1][a2]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", "0:v:0", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", outputPath], cancellationToken);
-            if (muxResult.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to mux narration audio: {muxResult.Error}");
+            if (string.IsNullOrWhiteSpace(backgroundAudioPath) || !File.Exists(backgroundAudioPath))
+                throw new InvalidOperationException("Phase 18 requires a configured background audio bed. Configure VideoAssembly:BackgroundMusic:WonderCuriosityPath or DefaultPath, or place audio/background.mp3 in the plan root.");
+
+            var videoDuration = await ProbeAudioDurationSecondsAsync(videoOnlyPath, cancellationToken);
+            var narrationDuration = await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken);
+            var finalDuration = Math.Max(videoDuration, narrationDuration);
+            if (finalDuration <= 0) throw new InvalidOperationException("Phase 18 cannot determine final video/audio duration.");
+
+            var finalMixedAudioPath = ResolvePhase18FinalMixedAudioPath(outputPath);
+            var musicLevel = ResolvePhase18BackgroundMusicLevel();
+            var fadeOutStart = Math.Max(0, finalDuration - 1.5);
+            var finalDurationText = finalDuration.ToString("0.###", CultureInfo.InvariantCulture);
+            var fadeOutStartText = fadeOutStart.ToString("0.###", CultureInfo.InvariantCulture);
+            var musicLevelText = musicLevel.ToString("0.###", CultureInfo.InvariantCulture);
+            var duckingEnabled = videoAssemblyOptions?.Value.BackgroundMusic.DuckUnderNarration ?? true;
+            var audioFilter = duckingEnabled
+                ? $"[1:a]volume=1.0,apad,atrim=0:{finalDurationText}[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1.0,afade=t=out:st={fadeOutStartText}:d=1.5,apad,atrim=0:{finalDurationText}[bg];[bg][narr]sidechaincompress=threshold=0.02:ratio=8:attack=80:release=700[duck];[narr][duck]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{finalDurationText}[a]"
+                : $"[1:a]volume=1.0,apad,atrim=0:{finalDurationText}[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1.0,afade=t=out:st={fadeOutStartText}:d=1.5,apad,atrim=0:{finalDurationText}[bg];[narr][bg]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{finalDurationText}[a]";
+            var mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundAudioPath, "-filter_complex", audioFilter, "-map", "[a]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
+            if (mixResult.ExitCode != 0 || !File.Exists(finalMixedAudioPath)) throw new InvalidOperationException($"Unable to mix narration and background ambience: {mixResult.Error}");
+
+            var videoExtension = Math.Max(0, finalDuration - videoDuration);
+            var videoFilter = $"tpad=stop_mode=clone:stop_duration={videoExtension.ToString("0.###", CultureInfo.InvariantCulture)},trim=duration={finalDurationText},setpts=PTS-STARTPTS";
+            var muxResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", finalMixedAudioPath, "-filter:v", videoFilter, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", finalDurationText, outputPath], cancellationToken);
+            if (muxResult.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to mux mixed audio: {muxResult.Error}");
         }
         finally
         {
             try { Directory.Delete(tempRoot, true); } catch { }
         }
+    }
+
+    private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
+        => Path.Combine(Path.GetDirectoryName(outputPath)!, "final-mixed-audio.m4a");
+
+    private double ResolvePhase18BackgroundMusicLevel()
+    {
+        var configuredPercent = videoAssemblyOptions?.Value.BackgroundMusic.DefaultLevelPercent ?? 12;
+        return Math.Clamp(configuredPercent / 100.0, 0.10, 0.16);
     }
 
 
