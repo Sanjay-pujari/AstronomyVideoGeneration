@@ -32,6 +32,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IProductionPipelineQualityValidator qualityValidator,
     IOptions<RenderingOptions> renderingOptions,
     ILogger<ProductionPipelineExecutionService> logger,
+    IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
+    IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
     ISceneAssetsV3Service? sceneAssetsV3Service = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
@@ -2196,8 +2198,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var root = JsonNode.Parse(await File.ReadAllTextAsync(syncPath, cancellationToken)) ?? new JsonObject();
             sourceSyncVersion = GetString(root, "version") ?? "v1";
-            await BuildTtsTimelineItemsAsync(root, "short", shortRoot, Path.Combine(narrationRoot, "short"), 5, shortItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, cancellationToken);
-            await BuildTtsTimelineItemsAsync(root, "long", longRoot, Path.Combine(narrationRoot, "long"), 9, longItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, cancellationToken);
+            await BuildTtsTimelineItemsAsync(context, root, "short", shortRoot, Path.Combine(narrationRoot, "short"), 5, shortItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, cancellationToken);
+            await BuildTtsTimelineItemsAsync(context, root, "long", longRoot, Path.Combine(narrationRoot, "long"), 9, longItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, cancellationToken);
         }
 
         if (shortItems.Count != 5) errors.Add($"short audio count != 5; actual={shortItems.Count}");
@@ -2214,6 +2216,10 @@ public sealed partial class ProductionPipelineExecutionService(
         errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
         errors.AddRange(durationReadFailures.Select(p => $"Duration read failed: {p}"));
         errors.AddRange(audioDiagnostics.Where(d => !d.ValidationPassed).Select(d => $"Audio content validation failed: {d.Format}:{d.SceneId} {d.AudioPath} ({string.Join("; ", d.Errors)})"));
+        errors.AddRange(audioDiagnostics.Where(d => IsForbiddenPhase15TtsConfiguration(d)).Select(d => $"Forbidden Phase 15 TTS provider configuration: {d.Format}:{d.SceneId} provider={d.TtsProvider}, model={d.TtsModel}, voice={d.TtsVoice}"));
+        errors.AddRange(audioDiagnostics.Where(d => d.ProviderRequestTextLength > 0 && !d.RealProviderCalled).Select(d => $"Real TTS provider was not called: {d.Format}:{d.SceneId}"));
+        errors.AddRange(audioDiagnostics.Where(d => !d.RealProviderSucceeded).Select(d => $"Real TTS provider did not succeed: {d.Format}:{d.SceneId}"));
+        errors.AddRange(audioDiagnostics.Where(d => d.FallbackUsed).Select(d => $"TTS fallback was used: {d.Format}:{d.SceneId} {d.FallbackReason}"));
 
         var timelinePath = Path.Combine(ttsRoot, "tts-timeline.json");
         await File.WriteAllTextAsync(timelinePath, JsonSerializer.Serialize(new
@@ -2246,6 +2252,11 @@ public sealed partial class ProductionPipelineExecutionService(
             longUniqueNarrationTextCount = CountUniqueNarrationText(longItems),
             missingAudioFiles,
             durationReadFailures,
+            configuredTtsProvider = ResolveConfiguredPhase15TtsProviderName(),
+            realProviderCalled = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderCalled),
+            realProviderSucceeded = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderSucceeded),
+            fallbackUsed = audioDiagnostics.Any(d => d.FallbackUsed),
+            fallbackReason = string.Join(" | ", audioDiagnostics.Select(d => d.FallbackReason).Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.OrdinalIgnoreCase)),
             ttsProviderCalled = shortItems.Concat(longItems).All(i => i.TtsProviderCalled),
             ttsProviderSucceeded = shortItems.Concat(longItems).All(i => i.TtsProviderSucceeded),
             silentAudioCount = audioDiagnostics.Count(d => d.IsSilent),
@@ -2268,6 +2279,10 @@ public sealed partial class ProductionPipelineExecutionService(
             shortUniqueNarrationTextCount = CountUniqueNarrationText(shortItems),
             longUniqueNarrationTextCount = CountUniqueNarrationText(longItems),
             silentAudioCount = audioDiagnostics.Count(d => d.IsSilent),
+            realProviderCalled = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderCalled),
+            realProviderSucceeded = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderSucceeded),
+            fallbackUsed = audioDiagnostics.Any(d => d.FallbackUsed),
+            isSyntheticTone = audioDiagnostics.Any(d => d.IsSyntheticTone),
             oldPathUsed = false,
             validationPassed,
             errors
@@ -2276,7 +2291,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return [timelinePath, validationPath, diagnosticsPath, .. shortItems.Select(i => i.AudioPath), .. longItems.Select(i => i.AudioPath), .. audioDiagnostics.Select(d => d.RawResponsePath)];
     }
 
-    private async Task BuildTtsTimelineItemsAsync(JsonNode syncRoot, string format, string outputRoot, string narrationDirectory, int expectedCount, List<TtsTimelineItem> items, List<string> missingAudioFiles, List<string> durationReadFailures, List<TtsAudioContentDiagnostics> audioDiagnostics, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, CancellationToken cancellationToken)
+    private async Task BuildTtsTimelineItemsAsync(ProductionPhaseContext context, JsonNode syncRoot, string format, string outputRoot, string narrationDirectory, int expectedCount, List<TtsTimelineItem> items, List<string> missingAudioFiles, List<string> durationReadFailures, List<TtsAudioContentDiagnostics> audioDiagnostics, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, CancellationToken cancellationToken)
     {
         var syncItems = syncRoot[format]?["items"]?.AsArray() ?? [];
         foreach (var item in syncItems.Take(expectedCount))
@@ -2296,7 +2311,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             var audioPath = Path.Combine(outputRoot, $"{SanitizeFileName(sceneId)}.mp3");
             var providerCalled = true;
-            var generation = await GenerateAndValidateTtsAudioAsync(format, sceneId, narrationText, audioPath, cancellationToken);
+            var generation = await GenerateAndValidateTtsAudioAsync(context, format, sceneId, narrationText, audioPath, cancellationToken);
             var providerSucceeded = generation.ValidationPassed;
             var duration = generation.DurationSec;
             audioDiagnostics.Add(generation);
@@ -2306,21 +2321,84 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private async Task<TtsAudioContentDiagnostics> GenerateAndValidateTtsAudioAsync(string format, string sceneId, string narrationText, string audioPath, CancellationToken cancellationToken)
+    private async Task<TtsAudioContentDiagnostics> GenerateAndValidateTtsAudioAsync(ProductionPhaseContext context, string format, string sceneId, string narrationText, string audioPath, CancellationToken cancellationToken)
     {
-        var attempts = new List<TtsAudioContentDiagnostics>();
-        for (var attempt = 1; attempt <= 2; attempt++)
+        var rawPath = BuildTtsRawDebugPath(audioPath, format, sceneId);
+        var provider = ResolveConfiguredPhase15TtsProviderName();
+        var model = ResolveConfiguredPhase15TtsModel();
+        var voice = ResolveConfiguredPhase15TtsVoice(narrationText);
+        var audioFormat = azureSpeechOptions?.Value.DefaultAudioFormat ?? "mp3";
+        var realProviderCalled = false;
+        var realProviderSucceeded = false;
+        var fallbackUsed = false;
+        var fallbackReason = string.Empty;
+        int? providerHttpStatus = null;
+        long providerResponseBytes = 0;
+
+        try
         {
-            var rawPath = BuildTtsRawDebugPath(audioPath, format, sceneId);
-            var providerResponseBytes = await WriteSyntheticTtsRawResponseAsync(narrationText, rawPath, attempt, cancellationToken);
-            var conversionSucceeded = providerResponseBytes > 0 && await ConvertAudioToMp3Async(rawPath, audioPath, cancellationToken);
-            var diagnostics = await ValidateGeneratedTtsMp3Async(format, sceneId, narrationText, audioPath, rawPath, providerResponseBytes, conversionSucceeded, attempt, cancellationToken);
-            attempts.Add(diagnostics);
-            if (diagnostics.ValidationPassed) return diagnostics;
+            if (!IsAzureSpeechConfigured(azureSpeechOptions?.Value) || azureSpeechClient is null)
+                throw new InvalidOperationException("Azure Speech TTS provider is not configured for Phase 15.");
+
+            realProviderCalled = true;
+            var audioBytes = await azureSpeechClient.SynthesizeMp3Async(narrationText, azureSpeechOptions!.Value, cancellationToken);
+            providerResponseBytes = audioBytes.LongLength;
+            providerHttpStatus = 200;
+            Directory.CreateDirectory(Path.GetDirectoryName(audioPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(rawPath)!);
+            await File.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
+            await File.WriteAllBytesAsync(rawPath, audioBytes, cancellationToken);
+            realProviderSucceeded = providerResponseBytes > 0 && File.Exists(audioPath);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            fallbackReason = ex.Message;
+            if (context.ExecutionContext.UseProductionPipeline)
+                return await ValidateGeneratedTtsMp3Async(format, sceneId, narrationText, audioPath, rawPath, provider, model, voice, providerResponseBytes, audioFormat, realProviderCalled, realProviderSucceeded, fallbackUsed, fallbackReason, providerHttpStatus, 1, cancellationToken);
+
+            fallbackUsed = true;
+            provider = "SyntheticFfmpeg";
+            model = "lavfi-sine";
+            voice = "phase15-development-fallback-tone";
+            providerResponseBytes = await WriteSyntheticTtsRawResponseAsync(narrationText, rawPath, 1, cancellationToken);
+            if (providerResponseBytes > 0)
+                await ConvertAudioToMp3Async(rawPath, audioPath, cancellationToken);
         }
 
-        return attempts[^1] with { Errors = attempts.SelectMany(a => a.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() };
+        return await ValidateGeneratedTtsMp3Async(format, sceneId, narrationText, audioPath, rawPath, provider, model, voice, providerResponseBytes, audioFormat, realProviderCalled, realProviderSucceeded, fallbackUsed, fallbackReason, providerHttpStatus, 1, cancellationToken);
     }
+
+
+    private string ResolveConfiguredPhase15TtsProviderName()
+        => IsAzureSpeechConfigured(azureSpeechOptions?.Value) && azureSpeechClient is not null ? "AzureSpeechTts" : "Unconfigured";
+
+    private string ResolveConfiguredPhase15TtsModel()
+        => azureSpeechOptions?.Value.DefaultAudioFormat ?? string.Empty;
+
+    private string ResolveConfiguredPhase15TtsVoice(string narrationText)
+    {
+        if (azureSpeechOptions is null) return string.Empty;
+        var language = narrationText.Any(ch => ch >= '\u0900' && ch <= '\u097F') ? "hi" : "en";
+        return azureSpeechOptions.Value.GetPreferredVoices(language).FirstOrDefault() ?? azureSpeechOptions.Value.DefaultVoiceName ?? string.Empty;
+    }
+
+    private static bool IsAzureSpeechConfigured(AzureSpeechOptions? options)
+    {
+        if (options is null) return false;
+        if (options.UseManagedIdentity)
+            return !string.IsNullOrWhiteSpace(options.Region) && !string.IsNullOrWhiteSpace(options.ResourceId);
+        return !string.IsNullOrWhiteSpace(options.Key) && (!string.IsNullOrWhiteSpace(options.Region) || !string.IsNullOrWhiteSpace(options.Endpoint));
+    }
+
+    private static bool IsForbiddenPhase15TtsConfiguration(TtsAudioContentDiagnostics diagnostics)
+        => string.Equals(diagnostics.TtsProvider, "SyntheticFfmpeg", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(diagnostics.TtsModel, "lavfi-sine", StringComparison.OrdinalIgnoreCase)
+           || diagnostics.TtsVoice.Contains("validation-tone", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSyntheticTone(string ttsProvider, string ttsModel, string ttsVoice)
+        => string.Equals(ttsProvider, "SyntheticFfmpeg", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(ttsModel, "lavfi-sine", StringComparison.OrdinalIgnoreCase)
+           || ttsVoice.Contains("tone", StringComparison.OrdinalIgnoreCase);
 
     private async Task<long> WriteSyntheticTtsRawResponseAsync(string narrationText, string rawPath, int attempt, CancellationToken cancellationToken)
     {
@@ -2340,12 +2418,13 @@ public sealed partial class ProductionPipelineExecutionService(
         return result.ExitCode == 0 && File.Exists(targetPath);
     }
 
-    private async Task<TtsAudioContentDiagnostics> ValidateGeneratedTtsMp3Async(string format, string sceneId, string narrationText, string audioPath, string rawPath, long providerResponseBytes, bool conversionSucceeded, int attempt, CancellationToken cancellationToken)
+    private async Task<TtsAudioContentDiagnostics> ValidateGeneratedTtsMp3Async(string format, string sceneId, string narrationText, string audioPath, string rawPath, string ttsProvider, string ttsModel, string ttsVoice, long providerResponseBytes, string audioFormat, bool realProviderCalled, bool realProviderSucceeded, bool fallbackUsed, string fallbackReason, int? providerHttpStatus, int attempt, CancellationToken cancellationToken)
     {
         var metrics = await ProbeAudioContentMetricsAsync(audioPath, cancellationToken);
         var errors = new List<string>();
         if (providerResponseBytes <= 0) errors.Add("TTS provider returned no bytes.");
-        if (!conversionSucceeded) errors.Add("TTS provider WAV/PCM response could not be converted to MP3.");
+        if (!realProviderCalled && (narrationText?.Length ?? 0) > 0) errors.Add("realProviderCalled = false.");
+        if (!realProviderSucceeded) errors.Add("speechProviderSucceeded = false.");
         if (metrics.FileSizeBytes <= 1000) errors.Add($"fileSizeBytes <= 1000 ({metrics.FileSizeBytes}).");
         if (metrics.DurationSec <= 0) errors.Add("durationSec <= 0.");
         if (metrics.PeakAmplitude <= 0.001) errors.Add($"peakAmplitude <= 0.001 ({metrics.PeakAmplitude:0.######}).");
@@ -2357,12 +2436,21 @@ public sealed partial class ProductionPipelineExecutionService(
             SceneId: sceneId,
             AudioPath: NormalizePath(audioPath),
             RawResponsePath: NormalizePath(rawPath),
-            TtsProvider: "SyntheticFfmpeg",
-            TtsModel: "lavfi-sine",
-            TtsVoice: "phase15-validation-tone",
+            TtsProvider: ttsProvider,
+            TtsModel: ttsModel,
+            TtsVoice: ttsVoice,
             ProviderRequestTextLength: narrationText?.Length ?? 0,
+            ConfiguredTtsProvider: ResolveConfiguredPhase15TtsProviderName(),
+            RealProviderCalled: realProviderCalled,
+            RealProviderSucceeded: realProviderSucceeded,
+            FallbackUsed: fallbackUsed,
+            FallbackReason: fallbackReason,
+            ProviderHttpStatus: providerHttpStatus,
             ProviderResponseBytes: providerResponseBytes,
-            AudioFormat: "mp3",
+            GeneratedSpeechFilePath: NormalizePath(audioPath),
+            IsSyntheticTone: IsSyntheticTone(ttsProvider, ttsModel, ttsVoice),
+            SpeechValidationPassed: errors.Count == 0,
+            AudioFormat: audioFormat,
             AudioSampleRate: metrics.AudioSampleRate,
             AudioChannels: metrics.AudioChannels,
             AudioCodec: metrics.AudioCodec,
@@ -3551,7 +3639,16 @@ public sealed partial class ProductionPipelineExecutionService(
         string TtsModel,
         string TtsVoice,
         int ProviderRequestTextLength,
+        string ConfiguredTtsProvider,
+        bool RealProviderCalled,
+        bool RealProviderSucceeded,
+        bool FallbackUsed,
+        string FallbackReason,
+        int? ProviderHttpStatus,
         long ProviderResponseBytes,
+        string GeneratedSpeechFilePath,
+        bool IsSyntheticTone,
+        bool SpeechValidationPassed,
         string AudioFormat,
         int AudioSampleRate,
         int AudioChannels,
