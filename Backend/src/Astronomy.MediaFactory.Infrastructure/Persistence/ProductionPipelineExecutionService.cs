@@ -1773,7 +1773,8 @@ public sealed partial class ProductionPipelineExecutionService(
             errors.AddRange(shortItems.Concat(longItems).Where(i => !File.Exists(i.SceneImagePath)).Select(i => $"Scene image path does not exist: {i.SceneImagePath}"));
             if (shortItems.Count(i => i.SyncStatus == "Matched") != 5) errors.Add("short matched count != 5");
             if (longItems.Count(i => i.SyncStatus == "Matched") != 9) errors.Add("long matched count != 9");
-            errors.AddRange(matchedPairs.Where(p => !string.Equals(p.MappedSceneId, p.SceneId, StringComparison.OrdinalIgnoreCase)).Select(p => $"Phase 14 matchedPairs mappedSceneId != sceneId: {p.Format}:{p.Section} mappedSceneId={p.MappedSceneId} sceneId={p.SceneId}"));
+            errors.AddRange(unmatchedScenes.Distinct(StringComparer.OrdinalIgnoreCase).Select(scene => $"Unmatched scene: {scene}"));
+            errors.AddRange(unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase).Select(section => $"Unmatched narration section: {section}"));
 
             var syncPath = Path.Combine(syncRoot, "scene-audio-sync.json");
             await File.WriteAllTextAsync(syncPath, JsonSerializer.Serialize(new
@@ -1797,6 +1798,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 @short = new { sceneCount = 5, syncStatus = errors.Count == 0 ? "Succeeded" : "Failed", items = shortItems },
                 @long = new { sceneCount = 9, syncStatus = errors.Count == 0 ? "Succeeded" : "Failed", items = longItems }
             }, JsonOptions), cancellationToken);
+
+            if (!File.Exists(syncPath)) errors.Add($"scene-audio-sync.json was not created: {NormalizePath(syncPath)}");
 
             var validationPath = Path.Combine(validationRoot, "phase-14-validation.json");
             await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
@@ -1963,33 +1966,33 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private static IReadOnlyDictionary<string, string> GetPhase14SectionSceneMap(string format)
+    private static IReadOnlyDictionary<string, string[]> GetPhase14SectionSceneMap(string format)
         => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
-            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            ? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Hook"] = "001-hook",
-                ["Explanation"] = "002-cause",
-                ["ViewingAdvice"] = "003-accurate-sky-guide",
-                ["Reward"] = "004-viewing-tip",
-                ["CTA"] = "005-final-reminder"
+                ["Hook"] = ["001-hook"],
+                ["Explanation"] = ["002-cause"],
+                ["ViewingAdvice"] = ["003-accurate-sky-guide"],
+                ["Reward"] = ["004-viewing-tip"],
+                ["CTA"] = ["005-final-reminder"]
             }
-            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Hook"] = "001-hook",
-                ["Explanation"] = "003-cause",
-                ["ViewingAdvice"] = "006-accurate-sky-guide",
-                ["Reward"] = "008-viewing-tips",
-                ["Curiosity"] = "004-interesting-fact",
-                ["CTA"] = "009-final-reminder"
+                ["Hook"] = ["001-hook"],
+                ["Explanation"] = ["003-cause"],
+                ["ViewingAdvice"] = ["006-accurate-sky-guide"],
+                ["Reward"] = ["005-best-time", "008-viewing-tips"],
+                ["Curiosity"] = ["002-what-is-it", "004-interesting-fact", "007-what-you-will-see"],
+                ["CTA"] = ["006-accurate-sky-guide", "009-final-reminder"]
             };
 
-    private static string ResolveMappedSceneId(IReadOnlyDictionary<string, string> sectionMap, string section)
-        => !string.IsNullOrWhiteSpace(section) && sectionMap.TryGetValue(section, out var sceneId) ? sceneId : "";
+    private static string ResolveMappedSceneId(IReadOnlyDictionary<string, string[]> sectionMap, string section)
+        => !string.IsNullOrWhiteSpace(section) && sectionMap.TryGetValue(section, out var sceneIds) ? sceneIds.FirstOrDefault() ?? "" : "";
 
-    private static NarrationBeatCandidate? FindNarrationBySectionSceneMapping(IReadOnlyList<NarrationBeatCandidate> candidates, IReadOnlyDictionary<string, string> sectionMap, string sceneId)
+    private static NarrationBeatCandidate? FindNarrationBySectionSceneMapping(IReadOnlyList<NarrationBeatCandidate> candidates, IReadOnlyDictionary<string, string[]> sectionMap, string sceneId)
         => candidates.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Section)
-            && sectionMap.TryGetValue(c.Section, out var mappedSceneId)
-            && string.Equals(mappedSceneId, sceneId, StringComparison.OrdinalIgnoreCase));
+            && sectionMap.TryGetValue(c.Section, out var mappedSceneIds)
+            && mappedSceneIds.Any(mappedSceneId => string.Equals(mappedSceneId, sceneId, StringComparison.OrdinalIgnoreCase)));
 
     private static NarrationBeatCandidate? BestSectionSemanticNarrationFallback(IReadOnlyList<NarrationBeatCandidate> candidates, string visualIntent, string renderMode, string narrationBeat)
         => candidates.OrderByDescending(c =>
