@@ -42,7 +42,8 @@ public sealed record ProductionEventIntelligence(
     string? SkyGuideTheme = null,
     string? NarrationTheme = null,
     string? EventSpecificStrategySource = null,
-    bool DownstreamHardcodingDetected = false);
+    bool DownstreamHardcodingDetected = false,
+    IReadOnlyList<string>? RelativeObjectOrder = null);
 
 public sealed record MediaEventStrategyDefinition(
     string EventType,

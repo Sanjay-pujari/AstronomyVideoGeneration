@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
@@ -35,18 +36,19 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
             ForbiddenTerms: []);
 
         var strategy = strategyResolver.Resolve(seed.EventType, seed.Title);
-        var definition = strategy.BuildDefinition(seed);
-        return seed with
+        var seedForStrategy = EnrichPlanetConjunctionSeed(seed, source);
+        var definition = strategy.BuildDefinition(seedForStrategy);
+        return seedForStrategy with
         {
-            VisualMotifs = definition.VisualMotifs,
+            VisualMotifs = ResolveVisualMotifs(strategy.EventType, definition),
             SceneStrategy = definition.SceneStoryArcShort.Concat(definition.SceneStoryArcLong).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            ForbiddenTerms = definition.ForbiddenUnrelatedObjects,
+            ForbiddenTerms = ResolveForbiddenTerms(strategy.EventType, definition),
             StrategyId = strategy.EventType,
-            ResolvedObjectNames = seed.PrimaryObjects.Concat(seed.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            ForbiddenObjectNames = definition.ForbiddenUnrelatedObjects,
-            RequiredVisualObjects = definition.RequiredVisualObjects ?? seed.PrimaryObjects,
-            RequiredNarrationFacts = definition.RequiredNarrationFacts ?? definition.RequiredFactualFields,
-            PreferredViewingWindow = seed.BestViewingWindowLocal ?? seed.LocalPeakTime,
+            ResolvedObjectNames = ResolveObjectNames(strategy.EventType, seedForStrategy),
+            ForbiddenObjectNames = ResolveForbiddenTerms(strategy.EventType, definition),
+            RequiredVisualObjects = ResolveRequiredVisualObjects(strategy.EventType, definition, seedForStrategy),
+            RequiredNarrationFacts = ResolveRequiredNarrationFacts(strategy.EventType, definition),
+            PreferredViewingWindow = seedForStrategy.BestViewingWindowLocal ?? seedForStrategy.LocalPeakTime,
             ViewingSafetyRules = definition.ViewingSafetyRules ?? [],
             ThumbnailCopyCandidates = definition.ThumbnailHooks,
             HeroCopyCandidates = definition.HeroCopyCandidates ?? definition.ThumbnailHooks,
@@ -57,14 +59,78 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
             VisualTheme = ResolveVisualTheme(strategy.EventType, definition),
             SkyGuideTheme = ResolveSkyGuideTheme(strategy.EventType),
             NarrationTheme = ResolveNarrationTheme(strategy.EventType, definition),
+            RelativeObjectOrder = ResolveRelativeObjectOrder(strategy.EventType, seedForStrategy),
             EventSpecificStrategySource = $"Event Intelligence / Event Profile / Event Content Strategy::{strategy.EventType}",
             DownstreamHardcodingDetected = false,
-            QualityWarnings = seed.QualityWarnings.Concat(BuildQualityWarnings(seed, definition)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            QualityWarnings = seedForStrategy.QualityWarnings.Concat(BuildQualityWarnings(seedForStrategy, definition)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
     }
 
+
+    private static ProductionEventIntelligence EnrichPlanetConjunctionSeed(ProductionEventIntelligence seed, ContentPlanProductionPipelineRequest source)
+    {
+        if (!IsPlanetConjunction(seed.EventType, seed.Title)) return seed with { AngularSeparationDegrees = source.AngularSeparationDegrees };
+        var objects = seed.PrimaryObjects.Concat(seed.SecondaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (objects.Length == 0 && seed.Title.Contains("Venus", StringComparison.OrdinalIgnoreCase) && seed.Title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) objects = ["Venus", "Jupiter"];
+        var primary = seed.PrimaryObjects.Count > 0 ? seed.PrimaryObjects : objects.Take(1).ToArray();
+        var secondary = seed.SecondaryObjects.Count > 0 ? seed.SecondaryObjects : objects.Skip(1).ToArray();
+        var localPeak = seed.LocalPeakTime ?? FormatLocalTime(source.PeakUtc, source.TimeZone);
+        var window = seed.BestViewingWindowLocal ?? BuildViewingWindow(source, localPeak);
+        var direction = seed.SkyDirectionHint ?? ResolveConjunctionDirection(source, localPeak);
+        var viewerInstructions = seed.ViewerInstructions.Concat([$"Look for {string.Join(" and ", objects.DefaultIfEmpty("the two planets"))} close together.", $"{direction}.", $"Best viewing: {window}."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return seed with { LocalPeakTime = localPeak, BestViewingWindowLocal = window, SkyDirectionHint = direction, PrimaryObjects = primary, SecondaryObjects = secondary, VisibilityRegion = seed.VisibilityRegion ?? source.RegionId, ViewerInstructions = viewerInstructions, AngularSeparationDegrees = source.AngularSeparationDegrees };
+    }
+
+    private static string? FormatLocalTime(DateTimeOffset? utc, string? timeZone)
+    {
+        if (!utc.HasValue) return null;
+        var local = utc.Value;
+        if (!string.IsNullOrWhiteSpace(timeZone))
+        {
+            try { local = TimeZoneInfo.ConvertTime(utc.Value, TimeZoneInfo.FindSystemTimeZoneById(timeZone)); } catch (TimeZoneNotFoundException) { } catch (InvalidTimeZoneException) { }
+        }
+        return local.ToString("MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture);
+    }
+
+    private static string? BuildViewingWindow(ContentPlanProductionPipelineRequest source, string? localPeak)
+        => !string.IsNullOrWhiteSpace(source.BestViewingWindowLocal) ? source.BestViewingWindowLocal
+            : source.StartUtc.HasValue && source.EndUtc.HasValue ? $"around {FormatLocalTime(source.StartUtc, source.TimeZone)} to {FormatLocalTime(source.EndUtc, source.TimeZone)}"
+            : !string.IsNullOrWhiteSpace(localPeak) ? $"around {localPeak}" : null;
+
+    private static string? ResolveConjunctionDirection(ContentPlanProductionPipelineRequest source, string? localPeak)
+    {
+        if (!string.IsNullOrWhiteSpace(source.SkyDirectionHint)) return source.SkyDirectionHint;
+        var text = string.Join(' ', source.Title, source.ContentStrategy, source.VerificationSource);
+        if (text.Contains("west", StringComparison.OrdinalIgnoreCase)) return "Look toward the western sky after sunset";
+        if (text.Contains("east", StringComparison.OrdinalIgnoreCase)) return "Look toward the eastern sky before sunrise";
+        if (localPeak?.Contains("AM", StringComparison.OrdinalIgnoreCase) == true) return "Look toward the eastern sky before sunrise";
+        return "Look toward the western sky after sunset";
+    }
+
+    private static bool IsPlanetConjunction(string eventType, string title)
+        => eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<string> ResolveForbiddenTerms(string eventType, MediaEventStrategyDefinition definition)
+        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? ["meteor", "meteor shower", "radiant", "Phaethon", "debris stream", "Geminids"] : definition.ForbiddenUnrelatedObjects;
+
+    private static IReadOnlyList<string> ResolveVisualMotifs(string eventType, MediaEventStrategyDefinition definition)
+        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? ["two bright planets close together", "twilight sky", "clean Venus and Jupiter labels", "horizon direction marker", "angular separation callout"] : definition.VisualMotifs;
+
+    private static IReadOnlyList<string> ResolveObjectNames(string eventType, ProductionEventIntelligence intelligence)
+        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static IReadOnlyList<string> ResolveRequiredVisualObjects(string eventType, MediaEventStrategyDefinition definition, ProductionEventIntelligence intelligence)
+        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? ResolveObjectNames(eventType, intelligence) : definition.RequiredVisualObjects ?? intelligence.PrimaryObjects;
+
+    private static IReadOnlyList<string> ResolveRequiredNarrationFacts(string eventType, MediaEventStrategyDefinition definition)
+        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint), nameof(ProductionEventIntelligence.AngularSeparationDegrees), nameof(ProductionEventIntelligence.ResolvedObjectNames)] : definition.RequiredNarrationFacts ?? definition.RequiredFactualFields;
+
+    private static IReadOnlyList<string> ResolveRelativeObjectOrder(string eventType, ProductionEventIntelligence intelligence)
+        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? ResolveObjectNames(eventType, intelligence) : [];
+
     private static string ResolveStoryTheme(string eventType) => eventType switch
     {
+        "Conjunction" => "Planetary conjunction",
         "PlanetPairing" => "Planetary Encounter",
         "MeteorShower" => "Meteor Shower Peak",
         _ => eventType
@@ -72,12 +138,14 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
 
     private static string ResolveVisualTheme(string eventType, MediaEventStrategyDefinition definition) => eventType switch
     {
+        "Conjunction" => "two bright planets close together in twilight sky",
         "PlanetPairing" => "Twilight sky with two bright planets",
         _ => string.Join(", ", definition.VisualMotifs.Take(3))
     };
 
     private static string ResolveSkyGuideTheme(string eventType) => eventType switch
     {
+        "Conjunction" => "Venus and Jupiter markers with direction and altitude",
         "PlanetPairing" => "Planet markers with direction and altitude",
         "MeteorShower" => "Radiant direction with dark-sky viewing window",
         _ => "Direction and timing guide"
@@ -85,6 +153,7 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
 
     private static string ResolveNarrationTheme(string eventType, MediaEventStrategyDefinition definition) => eventType switch
     {
+        "Conjunction" => "calm documentary explanation of apparent planetary alignment",
         "PlanetPairing" => "Close apparent meeting of two planets",
         _ => definition.NarrationTone
     };

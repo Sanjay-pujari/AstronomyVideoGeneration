@@ -212,7 +212,9 @@ public sealed record ContentPlanProductionPipelineRequest(
     string? RecommendedPublishWindow,
     IReadOnlyList<string> RecommendedContentTypes,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> SourceNotes);
+    IReadOnlyList<string> SourceNotes,
+    string? TimeZone = null,
+    decimal? AngularSeparationDegrees = null);
 
 public sealed record ContentPlanProductionExecutionRequest(
     Guid ContentGenerationPlanId,
