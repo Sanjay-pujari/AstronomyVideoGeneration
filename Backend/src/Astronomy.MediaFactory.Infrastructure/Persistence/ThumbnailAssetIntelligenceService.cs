@@ -557,6 +557,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
+        var eventTitle = ResolveMeteorThumbnailTitle(current);
         var primary = isMeteor ? eventTitle : CleanHook(current.ShortTitle).ToUpperInvariant();
         var secondary = isMeteor ? "PEAK NIGHT" : CleanTextElement(current.EventType, "CURRENT SKY EVENT").ToUpperInvariant();
         var micro = isMeteor ? "TONIGHT" : CleanTextElement(FirstNonEmpty(current.BestViewingWindowLocal, current.SkyDirectionHint, current.LocalPeakTime), "TONIGHT").ToUpperInvariant();
@@ -844,6 +845,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var titleFont = ResolveThumbnailFont(width == 1280 ? 46 : 58, FontStyle.Bold);
             var subFont = ResolveThumbnailFont(width == 1280 ? 24 : 32, FontStyle.Bold);
             var bodyFont = ResolveThumbnailFont(width == 1280 ? 21 : 27, FontStyle.Regular);
+            var smallFont = ResolveThumbnailFont(width == 1280 ? 18 : 24, FontStyle.Regular);
             var isConjunction = EventContentGuard.IsPlanetConjunction(FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType));
             var eventTitle = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, "SKY EVENT"), "SKY EVENT").ToUpperInvariant();
             var windowText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal, request.ProductionContext?.ProductionEventIntelligence?.PreferredViewingWindow, "Approved viewing window"), "Approved viewing window");
@@ -1577,6 +1579,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
+        var eventTitle = ResolveMeteorThumbnailTitle(current);
         var overlay = isMeteor
             ? new[] { eventTitle, "PEAK NIGHT" }
             : new[] { CleanThumbnailText(current.ShortTitle, current.Title, 18).ToUpperInvariant(), CleanThumbnailText(current.EventType, "SKY EVENT", 20).ToUpperInvariant() };
@@ -2518,6 +2521,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static string CleanHook(string value)
         => (value ?? string.Empty).Trim().Trim('.', '!', '?').ToUpperInvariant();
+
+    private static string ResolveMeteorThumbnailTitle(CurrentEventLock current)
+        => CleanThumbnailText(FirstNonEmpty(current.ShortTitle, current.Title), "METEOR SHOWER", 18).ToUpperInvariant();
 
     private static string CleanTextElement(string? value, string fallback)
         => string.Join(' ', (string.IsNullOrWhiteSpace(value) ? fallback : value).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
