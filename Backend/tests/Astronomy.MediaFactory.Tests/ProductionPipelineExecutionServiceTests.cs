@@ -46,14 +46,14 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
-    public void PhaseGating_ThumbnailOnly_SkipsVideoAndAssetPhasesNotRequested()
+    public void PhaseGating_ThumbnailOnly_RunsSceneAudioSyncButSkipsVideoPhasesNotRequested()
     {
         var context = CreateContext("FutureDomain", ["Thumbnail"]);
 
         Assert.False(IsPhaseRequired(context, 11));
         Assert.True(IsPhaseRequired(context, 12));
         Assert.True(IsPhaseRequired(context, 13));
-        Assert.False(IsPhaseRequired(context, 14));
+        Assert.True(IsPhaseRequired(context, 14));
         Assert.False(IsPhaseRequired(context, 15));
         Assert.False(IsPhaseRequired(context, 16));
         Assert.False(IsPhaseRequired(context, 17));
@@ -71,7 +71,7 @@ public sealed class ProductionPipelineExecutionServiceTests
         [
             new(12, "Generate Thumbnails", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
             new(13, "Generate Gallery", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
-            new(14, "Generate Short Narration", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
+            new(14, "Scene Audio Sync V1", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
             new(15, "Generate Long Narration", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),
             new(16, "Generate Short TTS", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
             new(17, "Generate Long TTS", ProductionPhaseStatus.Skipped, now, now, 0, [], [], null, [], [], false, "Output type not requested"),

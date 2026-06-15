@@ -449,7 +449,8 @@ public sealed class ContentPlanProductionExecutionService(
             11 => [10],
             12 => [10, 11],
             13 => [],
-            >= 14 => [13],
+            14 => [],
+            >= 15 => [14],
             _ => []
         };
 
@@ -577,13 +578,15 @@ public sealed class ContentPlanProductionExecutionService(
             entries.Add("thumbnails");
         if (requestedStartPhaseNo <= 13 && requestedEndPhaseNo >= 13)
             entries.Add("gallery");
-        if (requestedStartPhaseNo <= 15 && requestedEndPhaseNo >= 14)
+        if (requestedStartPhaseNo <= 14 && requestedEndPhaseNo >= 14)
+            entries.Add("sync");
+        if (requestedStartPhaseNo <= 15 && requestedEndPhaseNo >= 15)
             entries.Add("narration");
         if (requestedStartPhaseNo <= 17 && requestedEndPhaseNo >= 16)
             entries.Add("tts");
         if (requestedStartPhaseNo <= 19 && requestedEndPhaseNo >= 18)
             entries.Add("video-assembly");
-        if (requestedStartPhaseNo <= 20 && requestedEndPhaseNo >= 10)
+        if (requestedStartPhaseNo <= 20 && requestedEndPhaseNo >= 10 && !(requestedStartPhaseNo == 14 && requestedEndPhaseNo == 14))
             entries.Add("validation");
         if (requestedStartPhaseNo <= 20 && requestedEndPhaseNo >= 1)
             entries.Add("phase-manifest.json");

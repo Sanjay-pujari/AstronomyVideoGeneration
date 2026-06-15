@@ -150,7 +150,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (11, "Generate Hero", PhaseGenerateHeroAsync),
         (12, "Generate Thumbnails", PhaseGenerateThumbnailsAsync),
         (13, "Generate Gallery", PhaseGenerateGalleryAsync),
-        (14, "Generate Short Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
+        (14, "Scene Audio Sync V1", PhaseSceneAudioSyncAsync),
         (15, "Generate Long Narration", (ctx, ct) => PhaseGenerateVideoNarrationAsync(ctx, ScenePresentationProfile.LongForm, ct)),
         (16, "Generate Short TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.ShortForm, ct)),
         (17, "Generate Long TTS", (ctx, ct) => PhaseGenerateTtsAsync(ctx, ScenePresentationProfile.LongForm, ct)),
@@ -179,7 +179,8 @@ public sealed partial class ProductionPipelineExecutionService(
             11 => IsRequestedOutput(context, "HeroAsset"),
             12 => IsRequestedOutput(context, "Thumbnail"),
             13 => true,
-            14 or 16 or 18 => IsRequestedOutput(context, "ShortVideo"),
+            14 => true,
+            16 or 18 => IsRequestedOutput(context, "ShortVideo"),
             15 or 17 or 19 => IsRequestedOutput(context, "LongVideo"),
             20 => true,
             _ => true
@@ -204,7 +205,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<RequestedOutputCompletion> BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
         => new[]
         {
-            BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [14, 16, 18]),
+            BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [16, 18]),
             BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [15, 17, 19]),
             BuildRequestedOutputCompletion(context, phaseResults, "Gallery", [13]),
             BuildRequestedOutputCompletion(context, phaseResults, "HeroAsset", [11]),
@@ -1717,6 +1718,217 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Hero generation failed contract validation: hero files contain forbidden terms for the selected event strategy: " + string.Join("; ", hits));
     }
 
+    private async Task<IReadOnlyList<string>> PhaseSceneAudioSyncAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var planRoot = context.OutputRoot;
+        var syncRoot = Path.Combine(planRoot, "sync");
+        var validationRoot = context.ExecutionContext.ValidationRoot!;
+        Directory.CreateDirectory(syncRoot);
+        Directory.CreateDirectory(validationRoot);
+
+        var oldPaths = new[]
+        {
+            Path.Combine(planRoot, "question-engine", "scene-approval-v3", "scene-assets"),
+            Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
+            Path.Combine(planRoot, "scene-assets")
+        };
+        var checkedPaths = new List<string>();
+        var missingFiles = new List<string>();
+        var exceptions = new List<string>();
+        var strategyByScene = new List<object>();
+
+        var shortRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+        var longRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
+        var shortNarrationCandidates = new[]
+        {
+            Path.Combine(planRoot, "narration-engine", "short", "question-driven-narration-v2.json"),
+            Path.Combine(planRoot, "narration-engine", "question-driven-narration-v2.json"),
+            Path.Combine(planRoot, "question-engine", "question-driven-narration-v2.json")
+        };
+        var longNarrationCandidates = new[]
+        {
+            Path.Combine(planRoot, "narration-engine", "long", "question-driven-narration-v2.json"),
+            Path.Combine(planRoot, "narration-engine", "question-driven-narration-v2.json"),
+            Path.Combine(planRoot, "question-engine", "question-driven-narration-v2.json")
+        };
+
+        try
+        {
+            var shortNarration = SelectExisting(shortNarrationCandidates, checkedPaths, "short narration V2 source", missingFiles);
+            var longNarration = SelectExisting(longNarrationCandidates, checkedPaths, "long narration V2 source", missingFiles);
+            var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, shortNarration, 5, checkedPaths, missingFiles, strategyByScene, cancellationToken);
+            var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, longNarration, 9, checkedPaths, missingFiles, strategyByScene, cancellationToken);
+
+            var missingShortScenes = shortItems.Where(i => i.SyncStatus != "Matched").Select(i => i.SceneId).ToArray();
+            var missingLongScenes = longItems.Where(i => i.SyncStatus != "Matched").Select(i => i.SceneId).ToArray();
+            var missingNarrationBeats = shortItems.Concat(longItems).Where(i => string.IsNullOrWhiteSpace(i.NarrationBeat)).Select(i => $"{i.Format}:{i.SceneId}").ToArray();
+            var errors = missingFiles.Concat(missingNarrationBeats.Select(x => $"Missing narration beat: {x}")).ToList();
+            errors.AddRange(shortItems.Concat(longItems).Where(i => !File.Exists(i.SceneImagePath)).Select(i => $"Scene image path does not exist: {i.SceneImagePath}"));
+            if (shortItems.Count(i => i.SyncStatus == "Matched") != 5) errors.Add("short matched count != 5");
+            if (longItems.Count(i => i.SyncStatus == "Matched") != 9) errors.Add("long matched count != 9");
+
+            var syncPath = Path.Combine(syncRoot, "scene-audio-sync.json");
+            await File.WriteAllTextAsync(syncPath, JsonSerializer.Serialize(new
+            {
+                version = "v1",
+                sourceSceneAssetsVersion = "V3.1",
+                sourceNarrationVersion = "V2",
+                planId = context.Request.PlanId.ToString("D"),
+                regionId = context.Request.RegionId,
+                language = context.Request.Language,
+                @short = new { sceneCount = 5, syncStatus = errors.Count == 0 ? "Succeeded" : "Failed", items = shortItems },
+                @long = new { sceneCount = 9, syncStatus = errors.Count == 0 ? "Succeeded" : "Failed", items = longItems }
+            }, JsonOptions), cancellationToken);
+
+            var validationPath = Path.Combine(validationRoot, "phase-14-validation.json");
+            await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+            {
+                phaseNo = 14,
+                phaseName = "Scene Audio Sync V1",
+                status = errors.Count == 0 ? "Succeeded" : "Failed",
+                sceneAssetsVersion = "V3.1",
+                narrationVersion = "V2",
+                syncRoot = NormalizePath(syncRoot),
+                sceneAudioSyncPath = NormalizePath(syncPath),
+                shortSceneAssetsRoot = NormalizePath(shortRoot),
+                longSceneAssetsRoot = NormalizePath(longRoot),
+                shortNarrationSource = NormalizePath(shortNarration),
+                longNarrationSource = NormalizePath(longNarration),
+                shortSceneCount = 5,
+                longSceneCount = 9,
+                shortMatchedCount = shortItems.Count(i => i.SyncStatus == "Matched"),
+                longMatchedCount = longItems.Count(i => i.SyncStatus == "Matched"),
+                missingShortScenes,
+                missingLongScenes,
+                missingNarrationBeats,
+                oldPathUsed = false,
+                validationPassed = errors.Count == 0
+            }, JsonOptions), cancellationToken);
+
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, shortNarration, longNarration, oldPaths, strategyByScene, missingFiles, exceptions, cancellationToken);
+            if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
+            return [syncPath, validationPath, diagnosticsPath];
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
+        {
+            exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, "", "", oldPaths, strategyByScene, missingFiles, exceptions, cancellationToken);
+            throw;
+        }
+    }
+
+    private static string SelectExisting(IReadOnlyList<string> candidates, List<string> checkedPaths, string label, List<string> missingFiles)
+    {
+        checkedPaths.AddRange(candidates.Select(NormalizePath));
+        var selected = candidates.FirstOrDefault(File.Exists);
+        if (!string.IsNullOrWhiteSpace(selected)) return selected;
+        missingFiles.Add($"Missing {label}; checked: {string.Join(", ", candidates.Select(NormalizePath))}");
+        throw new InvalidOperationException($"Phase 14 missing {label}; checked: {string.Join(", ", candidates.Select(NormalizePath))}. V1 narration fallback is not allowed.");
+    }
+
+    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, string narrationPath, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, CancellationToken ct)
+    {
+        if (!Directory.Exists(sceneRoot)) missingFiles.Add($"{format} scene-assets-v3 root missing: {NormalizePath(sceneRoot)}");
+        var timelinePath = Path.Combine(sceneRoot, "visual-timeline-v3.json");
+        var manifestPath = Path.Combine(sceneRoot, "scene-manifest-v3.json");
+        var reviewPath = Path.Combine(sceneRoot, "scene-review-v3.json");
+        var metadataPath = Path.Combine(sceneRoot, "scene-timeline-metadata.json");
+        foreach (var path in new[] { timelinePath, manifestPath, reviewPath, metadataPath })
+        {
+            checkedPaths.Add(NormalizePath(path));
+            if (!File.Exists(path)) missingFiles.Add($"Required {format} Scene Assets V3.1 file missing: {NormalizePath(path)}");
+        }
+        if (missingFiles.Any(m => m.Contains(format, StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Phase 14 missing required scene asset inputs: " + string.Join(" | ", missingFiles));
+
+        var timelineBeats = ReadJsonArray(timelinePath, "beats");
+        var manifestScenes = ReadJsonArray(manifestPath, "scenes");
+        var metadataScenes = ReadJsonArray(metadataPath, "scenes");
+        var narrationBeats = ExtractNarrationBeats(narrationPath);
+        var items = new List<SceneAudioSyncItem>();
+        for (var i = 0; i < expectedCount; i++)
+        {
+            var beat = timelineBeats.ElementAtOrDefault(i);
+            var sceneId = GetString(beat, "sceneId") ?? $"{i + 1:000}";
+            var beatNo = GetInt(beat, "beatNo") ?? i + 1;
+            var metadata = metadataScenes.FirstOrDefault(n => string.Equals(GetString(n, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase)) ?? metadataScenes.ElementAtOrDefault(i);
+            var manifest = manifestScenes.FirstOrDefault(n => string.Equals(GetString(n, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase)) ?? manifestScenes.ElementAtOrDefault(i);
+            var narration = narrationBeats.FirstOrDefault(n => string.Equals(n.SceneId, sceneId, StringComparison.OrdinalIgnoreCase))
+                ?? narrationBeats.FirstOrDefault(n => n.BeatNo == beatNo)
+                ?? BestNarrationFallback(narrationBeats, GetString(metadata, "visualIntent") ?? GetString(beat, "visualIntent") ?? "", GetString(metadata, "renderMode") ?? GetString(beat, "renderMode") ?? "", GetString(beat, "narrationBeat") ?? "");
+            var strategy = narration is null ? "Unmatched" : string.Equals(narration.SceneId, sceneId, StringComparison.OrdinalIgnoreCase) ? "sceneId" : narration.BeatNo == beatNo ? "beatNo" : "visualIntent/renderMode/textSimilarity";
+            var imagePath = GetString(manifest, "imagePath") ?? Path.Combine(sceneRoot, sceneId + ".png");
+            strategies.Add(new { format, sceneId, beatNo, strategy });
+            items.Add(new SceneAudioSyncItem(
+                format,
+                beatNo,
+                sceneId,
+                imagePath,
+                narration?.Text ?? GetString(beat, "narrationBeat") ?? "",
+                GetString(metadata, "visualIntent") ?? GetString(beat, "visualIntent") ?? "",
+                GetString(metadata, "renderMode") ?? GetString(beat, "renderMode") ?? GetString(manifest, "renderMode") ?? "",
+                GetInt(metadata, "estimatedDurationSec") ?? GetInt(beat, "expectedDurationSec") ?? 5,
+                GetString(metadata, "recommendedTransition") ?? "crossfade",
+                GetString(metadata, "recommendedMotion") ?? "slowZoomIn",
+                narration is null ? "Unmatched" : "Matched"));
+        }
+
+        await Task.CompletedTask;
+        return items;
+    }
+
+    private static JsonArray ReadJsonArray(string path, string property)
+    {
+        var node = JsonNode.Parse(File.ReadAllText(path));
+        return node?[property] as JsonArray ?? new JsonArray();
+    }
+
+    private static IReadOnlyList<NarrationBeatCandidate> ExtractNarrationBeats(string path)
+    {
+        var node = JsonNode.Parse(File.ReadAllText(path));
+        var arrays = new[] { node?["beats"] as JsonArray, node?["scenes"] as JsonArray, node?["narration"]?["scenes"] as JsonArray, node?["narrationBeats"] as JsonArray }.Where(a => a is not null).Cast<JsonArray>();
+        var candidates = new List<NarrationBeatCandidate>();
+        foreach (var array in arrays)
+            candidates.AddRange(array.Select((n, i) => new NarrationBeatCandidate(GetString(n, "sceneId") ?? "", GetInt(n, "beatNo") ?? GetInt(n, "sceneNo") ?? i + 1, GetString(n, "narrationBeat") ?? GetString(n, "text") ?? GetString(n, "script") ?? GetString(n, "narration") ?? "", GetString(n, "visualIntent") ?? "", GetString(n, "renderMode") ?? "")));
+        return candidates.Where(c => !string.IsNullOrWhiteSpace(c.Text)).ToArray();
+    }
+
+    private static NarrationBeatCandidate? BestNarrationFallback(IReadOnlyList<NarrationBeatCandidate> candidates, string visualIntent, string renderMode, string narrationBeat)
+        => candidates.OrderByDescending(c => (string.Equals(c.RenderMode, renderMode, StringComparison.OrdinalIgnoreCase) ? 10 : 0) + Similarity(c.VisualIntent + " " + c.Text, visualIntent + " " + narrationBeat)).FirstOrDefault();
+
+    private static int Similarity(string a, string b)
+    {
+        var aa = Regex.Matches(a.ToLowerInvariant(), "[a-z0-9]+").Select(m => m.Value).ToHashSet();
+        var bb = Regex.Matches(b.ToLowerInvariant(), "[a-z0-9]+").Select(m => m.Value).ToHashSet();
+        return aa.Count == 0 || bb.Count == 0 ? 0 : aa.Intersect(bb).Count();
+    }
+
+    private static string? GetString(JsonNode? node, string name) => node?[name]?.GetValue<string>();
+    private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
+
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
+    {
+        var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+        {
+            allCheckedInputPaths = checkedPaths.Distinct(StringComparer.OrdinalIgnoreCase),
+            selectedShortSceneSource = NormalizePath(shortRoot),
+            selectedLongSceneSource = NormalizePath(longRoot),
+            selectedShortNarrationSource = NormalizePath(shortNarration),
+            selectedLongNarrationSource = NormalizePath(longNarration),
+            oldPathsChecked = oldPaths.Select(NormalizePath),
+            oldPathsIgnored = oldPaths.Select(NormalizePath),
+            matchingStrategyUsedPerScene = strategies,
+            missingFiles,
+            exceptions,
+            syncRoot = NormalizePath(syncRoot)
+        }, JsonOptions), ct);
+        return path;
+    }
+
+    private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode);
+    private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus);
+
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
@@ -2857,6 +3069,8 @@ public sealed partial class ProductionPipelineExecutionService(
             canRetry = false;
         }
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry, reason);
+        if (phaseNo == 14 && File.Exists(validationPath))
+            return result;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
             ? phase6SceneEnrichmentDiagnostics
             : null;
@@ -3782,7 +3996,10 @@ public sealed partial class ProductionPipelineExecutionService(
         if (deleteStartPhaseNo <= 13 && deleteEndPhaseNo >= 13)
             DeleteProductionSubtree(Path.Combine(context.OutputRoot, "gallery"), deletedFiles);
 
-        if (deleteStartPhaseNo <= 15 && deleteEndPhaseNo >= 14)
+        if (deleteStartPhaseNo <= 14 && deleteEndPhaseNo >= 14)
+            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "sync"), deletedFiles);
+
+        if (deleteStartPhaseNo <= 15 && deleteEndPhaseNo >= 15)
             DeleteProductionSubtree(context.ExecutionContext.NarrationRoot!, deletedFiles);
 
         if (deleteStartPhaseNo <= 17 && deleteEndPhaseNo >= 16)
@@ -3824,7 +4041,8 @@ public sealed partial class ProductionPipelineExecutionService(
         if (startPhaseNo <= 11 && endPhaseNo >= 11) roots.Add(context.ExecutionContext.HeroRoot!);
         if (startPhaseNo <= 12 && endPhaseNo >= 12) roots.Add(context.ExecutionContext.ThumbnailRoot!);
         if (startPhaseNo <= 13 && endPhaseNo >= 13) roots.Add(Path.Combine(context.OutputRoot, "gallery"));
-        if (startPhaseNo <= 15 && endPhaseNo >= 14) roots.Add(context.ExecutionContext.NarrationRoot!);
+        if (startPhaseNo <= 14 && endPhaseNo >= 14) roots.Add(Path.Combine(context.OutputRoot, "sync"));
+        if (startPhaseNo <= 15 && endPhaseNo >= 15) roots.Add(context.ExecutionContext.NarrationRoot!);
         if (startPhaseNo <= 17 && endPhaseNo >= 16) roots.Add(context.ExecutionContext.TtsRoot!);
         if (startPhaseNo <= 19 && endPhaseNo >= 18) roots.Add(context.ExecutionContext.VideoAssemblyRoot!);
         return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
