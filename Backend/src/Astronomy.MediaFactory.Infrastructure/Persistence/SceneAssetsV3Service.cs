@@ -24,6 +24,17 @@ public sealed class SceneAssetsV3Service(
     private const string Version = "v3";
     private const int Width = 1920;
     private const int Height = 1080;
+    private const string RequestedOverlayFont = "DejaVu Sans";
+    private static readonly string[] WindowsSafeFontFallbacks = ["Segoe UI", "Arial", "Calibri", "Tahoma", "DejaVu Sans"];
+    private static readonly string[] CheckedFontPaths = [
+        "C:/WINDOWS/Fonts",
+        "C:/Windows/Fonts",
+        "%LOCALAPPDATA%/Microsoft/Windows/Fonts",
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        "/Library/Fonts",
+        "~/Library/Fonts"
+    ];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     public async Task<SceneAssetsV3Response> GenerateAsync(SceneAssetsV3Request request, CancellationToken cancellationToken)
@@ -48,33 +59,51 @@ public sealed class SceneAssetsV3Service(
         var dir = Path.Combine(root, format);
         Directory.CreateDirectory(dir);
         var timelinePath = Path.Combine(dir, "visual-timeline-v3.json");
-        await WriteJsonAsync(timelinePath, new SceneAssetsV3Timeline(Version, format, beats), ct); files.Add(timelinePath);
-
+        var manifestPath = Path.Combine(dir, "scene-manifest-v3.json");
+        var reviewPath = Path.Combine(dir, "scene-review-v3.json");
+        var validationPath = Path.Combine(dir, "scene-v3-validation.json");
         var manifestScenes = new List<SceneAssetsV3ManifestScene>();
-        foreach (var beat in beats)
+        var errors = new List<string>();
+
+        try
         {
-            var imagePath = Path.Combine(dir, beat.SceneId + ".png");
-            var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene";
-            var providerSucceeded = false;
-            if ((!File.Exists(imagePath) || overwrite) && providerCalled)
+            await WriteJsonAsync(timelinePath, new SceneAssetsV3Timeline(Version, format, beats), ct); files.Add(timelinePath);
+
+            foreach (var beat in beats)
             {
-                var result = await imageGenerator.GenerateAsync(new AICinematicAssetRequest(
-                    $"scene-assets-v3-{format}-{beat.SceneId}", beat.SceneId, beat.RenderMode, format, beat.SceneId,
-                    "scene-background", "cinematic wonder", "narration-beat", StyleFor(beat.RenderMode), beat.VisualPrompt,
-                    "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath), ct);
-                providerSucceeded = result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(imagePath);
-                if (!providerSucceeded)
-                    warnings.Add($"Azure Image2 did not produce {format}/{beat.SceneId}; deterministic Scene V3 fallback was rendered. Status={result.GenerationStatus}.");
+                var imagePath = Path.Combine(dir, beat.SceneId + ".png");
+                var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene";
+                var providerSucceeded = false;
+                if ((!File.Exists(imagePath) || overwrite) && providerCalled)
+                {
+                    var result = await imageGenerator.GenerateAsync(new AICinematicAssetRequest(
+                        $"scene-assets-v3-{format}-{beat.SceneId}", beat.SceneId, beat.RenderMode, format, beat.SceneId,
+                        "scene-background", "cinematic wonder", "narration-beat", StyleFor(beat.RenderMode), beat.VisualPrompt,
+                        "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath), ct);
+                    providerSucceeded = result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(imagePath);
+                    if (!providerSucceeded)
+                        warnings.Add($"Azure Image2 did not produce {format}/{beat.SceneId}; deterministic Scene V3 fallback was rendered. Status={result.GenerationStatus}.");
+                }
+
+                if (!File.Exists(imagePath) || overwrite && !providerSucceeded)
+                    await RenderDeterministicSceneAsync(imagePath, beat, ct);
+
+                manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
+                files.Add(imagePath);
             }
-
-            if (!File.Exists(imagePath) || overwrite && !providerSucceeded)
-                await RenderDeterministicSceneAsync(imagePath, beat, ct);
-
-            manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
-            files.Add(imagePath);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var warning = $"Scene Assets V3 {format} generation failed after {manifestScenes.Count}/{expectedCount} scenes; writing validation diagnostics when possible. {ex.GetType().Name}: {ex.Message}";
+            logger.LogWarning(ex, "{Warning}", warning);
+            warnings.Add(warning);
+            errors.Add(warning);
         }
 
-        var manifestPath = Path.Combine(dir, "scene-manifest-v3.json");
         var manifest = new SceneAssetsV3Manifest(Version, format, manifestScenes.Count, manifestScenes);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
 
@@ -82,12 +111,10 @@ public sealed class SceneAssetsV3Service(
         var repeated = duplicate;
         var review = new SceneAssetsV3Review(manifestScenes.Count, manifestScenes.Any(s => s.RenderMode == "AccurateSkyGuideScene"), manifestScenes.Count(s => s.RenderMode is "CinematicStoryScene" or "FinalReminderScene"), manifestScenes.Count(s => s.RenderMode == "ExplainerScene"), manifestScenes.Count(s => s.RenderMode == "ViewingTipsScene"), duplicate, repeated, manifestScenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)), "Failed");
         review = review with { Status = ReviewPassed(review, expectedCount) ? "Passed" : "Failed" };
-        var reviewPath = Path.Combine(dir, "scene-review-v3.json");
         await WriteJsonAsync(reviewPath, review, ct); files.Add(reviewPath);
 
-        var errors = BuildValidationErrors(timelinePath, manifestPath, review, expectedCount);
-        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, review.AllScenesHaveNarrationBeat, errors);
-        var validationPath = Path.Combine(dir, "scene-v3-validation.json");
+        errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, review, expectedCount));
+        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, review.AllScenesHaveNarrationBeat, errors, BuildFontDiagnostics());
         await WriteJsonAsync(validationPath, validation, ct); files.Add(validationPath);
         return validationPath;
     }
@@ -103,7 +130,7 @@ public sealed class SceneAssetsV3Service(
             DrawStars(ctx, beat.BeatNo);
             if (beat.RenderMode == "AccurateSkyGuideScene") DrawSkyGuide(ctx);
             else DrawCinematicForeground(ctx, beat);
-            var font = SystemFonts.CreateFont("DejaVu Sans", 34, FontStyle.Bold);
+            var font = ResolveOverlayFont(34, FontStyle.Bold);
             ctx.DrawText(beat.NarrationBeat, font, Color.FromRgb(235, 240, 248), new PointF(90, 900));
         });
         await image.SaveAsPngAsync(path, new PngEncoder(), ct);
@@ -111,7 +138,44 @@ public sealed class SceneAssetsV3Service(
 
     private static void DrawStars(IImageProcessingContext ctx, int seed) { for (var i = 0; i < 90; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(64 + (i % 5) * 28)), new EllipsePolygon((i * 137 + seed * 61) % Width, (i * 73 + seed * 89) % 760, 1 + i % 3)); }
     private static void DrawCinematicForeground(IImageProcessingContext ctx, SceneAssetsV3Beat beat) { for (var i = 0; i < 5 + beat.BeatNo; i++) ctx.DrawLine(Color.FromRgb(190, 230, 255), 3, new PointF(250 + i * 210, 80 + i * 35), new PointF(80 + i * 210, 270 + i * 26)); ctx.Fill(Color.FromRgb(6, 8, 12), new RectangularPolygon(0, 830, Width, 250)); }
-    private static void DrawSkyGuide(IImageProcessingContext ctx) { var font = SystemFonts.CreateFont("DejaVu Sans", 30, FontStyle.Regular); ctx.DrawLine(Color.FromRgb(120, 150, 170), 4, new PointF(180, 780), new PointF(1740, 780)); ctx.DrawText("UDAIPUR • DEC 13–14, 2026 • EAST → OVERHEAD AFTER 10 PM", font, Color.White, new PointF(250, 120)); ctx.DrawText("Best window: midnight to pre-dawn • Gemini radiant • meteors can appear anywhere • no telescope", font, Color.FromRgb(190, 220, 255), new PointF(250, 180)); ctx.DrawLine(Color.FromRgb(90, 180, 255), 5, new PointF(520, 760), new PointF(1160, 280)); ctx.DrawText("E horizon", font, Color.White, new PointF(430, 800)); ctx.DrawText("overhead", font, Color.White, new PointF(1120, 230)); ctx.DrawText("Gemini radiant / look direction", font, Color.FromRgb(255, 220, 120), new PointF(900, 420)); }
+    private void DrawSkyGuide(IImageProcessingContext ctx) { var font = ResolveOverlayFont(30, FontStyle.Regular); ctx.DrawLine(Color.FromRgb(120, 150, 170), 4, new PointF(180, 780), new PointF(1740, 780)); ctx.DrawText("UDAIPUR • DEC 13–14, 2026 • EAST → OVERHEAD AFTER 10 PM", font, Color.White, new PointF(250, 120)); ctx.DrawText("Best window: midnight to pre-dawn • Gemini radiant • meteors can appear anywhere • no telescope", font, Color.FromRgb(190, 220, 255), new PointF(250, 180)); ctx.DrawLine(Color.FromRgb(90, 180, 255), 5, new PointF(520, 760), new PointF(1160, 280)); ctx.DrawText("E horizon", font, Color.White, new PointF(430, 800)); ctx.DrawText("overhead", font, Color.White, new PointF(1120, 230)); ctx.DrawText("Gemini radiant / look direction", font, Color.FromRgb(255, 220, 120), new PointF(900, 420)); }
+
+
+    private Font ResolveOverlayFont(float size, FontStyle style)
+    {
+        foreach (var fontName in WindowsSafeFontFallbacks)
+        {
+            if (SystemFonts.TryGet(fontName, out var family))
+            {
+                if (!fontName.Equals(RequestedOverlayFont, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogWarning("Scene Assets V3 requested font {RequestedFont} is not available; using fallback font {ResolvedFont}. CheckedFontPaths={CheckedFontPaths}", RequestedOverlayFont, family.Name, CheckedFontPaths);
+                }
+
+                return family.CreateFont(size, style);
+            }
+        }
+
+        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
+        {
+            throw new InvalidOperationException("No system fonts available for Scene Assets V3 deterministic overlay rendering.");
+        }
+
+        logger.LogWarning("Scene Assets V3 requested font {RequestedFont} and configured fallbacks are not available; using first available font {ResolvedFont}. CheckedFontPaths={CheckedFontPaths}", RequestedOverlayFont, fallbackFamily.Name, CheckedFontPaths);
+        return fallbackFamily.CreateFont(size, style);
+    }
+
+    private static SceneAssetsV3FontDiagnostics BuildFontDiagnostics()
+    {
+        var resolved = WindowsSafeFontFallbacks.FirstOrDefault(fontName => SystemFonts.TryGet(fontName, out _));
+        resolved ??= SystemFonts.Collection.Families.FirstOrDefault().Name;
+        return new SceneAssetsV3FontDiagnostics(
+            RequestedOverlayFont,
+            string.IsNullOrWhiteSpace(resolved) ? "" : resolved,
+            !string.Equals(resolved, RequestedOverlayFont, StringComparison.OrdinalIgnoreCase),
+            CheckedFontPaths);
+    }
 
     private string ResolveRoot(SceneAssetsV3Request request) => !string.IsNullOrWhiteSpace(request.WorkingDirectoryRoot) ? request.WorkingDirectoryRoot! : string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string StyleFor(string mode) => mode == "ExplainerScene" ? "cinematic educational astronomy, realistic space documentary" : "Netflix science documentary, National Geographic astronomy, NASA campaign, realistic cinematic sky, minimal overlay";
