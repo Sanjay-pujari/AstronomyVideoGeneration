@@ -157,7 +157,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (16, "Duration Calibration V1", PhaseDurationCalibrationV1Async),
         (17, "Motion Layer V1", PhaseMotionLayerV1Async),
         (18, "Video Assembly V1", PhaseVideoAssemblyV1Async),
-        (19, "Video Assembly V1 Compatibility Check", PhaseVideoAssemblyCompatibilityCheckAsync),
+        (19, "Video QA & Production Review", PhaseVideoQaProductionReviewAsync),
         (20, "Publishing Package", PhaseFinalValidationAsync)
     ];
 
@@ -211,7 +211,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => new[]
         {
             BuildRequestedOutputCompletion(context, phaseResults, "ShortVideo", [16, 18]),
-            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [15, 16, 17, 19]),
+            BuildRequestedOutputCompletion(context, phaseResults, "LongVideo", [15, 16, 17, 18, 19]),
             BuildRequestedOutputCompletion(context, phaseResults, "Gallery", [13]),
             BuildRequestedOutputCompletion(context, phaseResults, "HeroAsset", [11]),
             BuildRequestedOutputCompletion(context, phaseResults, "Thumbnail", [12])
@@ -4116,8 +4116,226 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"Unable to concatenate narration track: {concatResult.Error}");
     }
 
-    private Task<IReadOnlyList<string>> PhaseVideoAssemblyCompatibilityCheckAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
-        => Task.FromResult<IReadOnlyList<string>>([Path.Combine(context.OutputRoot, "video", "short", "final-short.mp4"), Path.Combine(context.OutputRoot, "video", "long", "final-long.mp4")]);
+    private async Task<IReadOnlyList<string>> PhaseVideoQaProductionReviewAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var planRoot = context.OutputRoot;
+        var reviewRoot = Path.Combine(planRoot, "review");
+        var validationRoot = context.ExecutionContext.ValidationRoot!;
+        Directory.CreateDirectory(reviewRoot);
+        Directory.CreateDirectory(validationRoot);
+
+        var shortVideoPath = Path.Combine(planRoot, "video", "short", "final-short.mp4");
+        var longVideoPath = Path.Combine(planRoot, "video", "long", "final-long.mp4");
+        var syncPath = Path.Combine(planRoot, "sync", "scene-audio-sync.json");
+        var ttsPath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var durationPlanPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
+        var motionPlanPath = Path.Combine(planRoot, "motion", "motion-plan.json");
+        var sceneAssetsRoot = Path.Combine(planRoot, "scene-assets-v3");
+        var inputs = new[] { shortVideoPath, longVideoPath, syncPath, ttsPath, durationPlanPath, motionPlanPath, sceneAssetsRoot };
+        var errors = new List<string>();
+        foreach (var input in inputs)
+            if (!File.Exists(input) && !Directory.Exists(input)) errors.Add($"Input missing: {NormalizePath(input)}");
+
+        var shortVideo = await BuildPhase19VideoChecksAsync(shortVideoPath, "short", cancellationToken);
+        var longVideo = await BuildPhase19VideoChecksAsync(longVideoPath, "long", cancellationToken);
+        var sceneChecks = BuildPhase19SceneChecks(sceneAssetsRoot, syncPath, ttsPath, durationPlanPath, motionPlanPath);
+        var storyChecks = BuildPhase19StoryChecks(syncPath, ttsPath, sceneAssetsRoot);
+        var audioChecks = await BuildPhase19AudioChecksAsync(shortVideoPath, longVideoPath, cancellationToken);
+        var visualChecks = BuildPhase19VisualChecks(motionPlanPath, sceneAssetsRoot);
+
+        errors.AddRange(shortVideo.Errors);
+        errors.AddRange(longVideo.Errors);
+        errors.AddRange(sceneChecks.Errors);
+        errors.AddRange(storyChecks.Errors);
+        errors.AddRange(audioChecks.Errors);
+        errors.AddRange(visualChecks.Errors);
+
+        var storytellingScore = ScoreBooleans(storyChecks.Checks);
+        var visualScore = ScoreBooleans(visualChecks.Checks.Concat(sceneChecks.VisualChecks));
+        var audioScore = ScoreBooleans(audioChecks.Checks.Concat(new[] { shortVideo.AudioStreamExists, longVideo.AudioStreamExists, shortVideo.AudioDurationSec > 0, longVideo.AudioDurationSec > 0, !shortVideo.HasSilentSection, !longVideo.HasSilentSection }));
+        var scientificScore = ScoreBooleans(new[] { storyChecks.AccurateSkyGuidePresent, storyChecks.EducationalExplanationPresent, visualChecks.ScientificExplanationScenePresent });
+        var retentionScore = ScoreBooleans(new[] { storyChecks.HookPresent, storyChecks.EmotionalEndingPresent, visualChecks.SceneDiversityPresent, !sceneChecks.HasDuplicateScenes });
+        var technicalScore = ScoreBooleans(new[] { shortVideo.VideoExists, longVideo.VideoExists, shortVideo.VideoDurationSec > 0, longVideo.VideoDurationSec > 0, !sceneChecks.HasMissingScenes, !sceneChecks.HasMissingAudio, !shortVideo.HasBlackFramesOver2Sec, !longVideo.HasBlackFramesOver2Sec, !shortVideo.HasFrozenFrameOver3Sec, !longVideo.HasFrozenFrameOver3Sec });
+        var overallScore = (int)Math.Round(new[] { storytellingScore, visualScore, audioScore, scientificScore, retentionScore, technicalScore }.Average(), MidpointRounding.AwayFromZero);
+        var recommendation = overallScore >= 80 ? "Approved" : "Needs Improvement";
+
+        var scoring = new { overallScore, storytellingScore, visualScore, audioScore, scientificScore, retentionScore, recommendation };
+        var review = new
+        {
+            phaseNo = 19,
+            phaseName = "Video QA & Production Review",
+            reviewOnly = true,
+            inputsChecked = inputs.Select(NormalizePath),
+            video = new { @short = shortVideo, @long = longVideo },
+            sceneChecks,
+            storyChecks,
+            audioChecks,
+            visualChecks,
+            scoring
+        };
+        var videoReviewPath = Path.Combine(reviewRoot, "video-review.json");
+        await File.WriteAllTextAsync(videoReviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
+
+        var qaReportPath = Path.Combine(reviewRoot, "qa-report.json");
+        await File.WriteAllTextAsync(qaReportPath, JsonSerializer.Serialize(new { status = recommendation, scoring, errors, checks = review }, JsonOptions), cancellationToken);
+
+        var diagnosticsPath = Path.Combine(validationRoot, "phase-19-review-diagnostics.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
+        {
+            inputPathsChecked = inputs.Select(NormalizePath),
+            videoReviewPath = NormalizePath(videoReviewPath),
+            qaReportPath = NormalizePath(qaReportPath),
+            errors,
+            scoring,
+            validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && overallScore >= 0 && !string.IsNullOrWhiteSpace(recommendation)
+        }, JsonOptions), cancellationToken);
+
+        var validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && overallScore >= 0 && !string.IsNullOrWhiteSpace(recommendation);
+        var validationPath = Path.Combine(validationRoot, "phase-19-validation.json");
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 19, phaseName = "Video QA & Production Review", status = validationPassed ? "Succeeded" : "Failed", validationPassed, overallScore, recommendation, errors }, JsonOptions), cancellationToken);
+        if (!validationPassed) throw new InvalidOperationException("Phase 19 Video QA & Production Review failed: " + string.Join(" | ", errors));
+        return [videoReviewPath, qaReportPath, validationPath, diagnosticsPath];
+    }
+
+    private sealed record Phase19VideoChecks(string Profile, string VideoPath, bool VideoExists, bool AudioStreamExists, double VideoDurationSec, double AudioDurationSec, bool HasSilentSection, bool HasBlackFramesOver2Sec, bool HasFrozenFrameOver3Sec, IReadOnlyList<string> Errors);
+    private sealed record Phase19SceneChecks(bool HasMissingScenes, bool HasMissingAudio, bool HasDuplicateScenes, IReadOnlyList<bool> VisualChecks, IReadOnlyList<string> Errors);
+    private sealed record Phase19StoryChecks(bool HookPresent, bool EducationalExplanationPresent, bool PracticalViewingGuidancePresent, bool AccurateSkyGuidePresent, bool EmotionalEndingPresent, bool NoDuplicateNarration, bool NarrationContinuityPresent, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
+    private sealed record Phase19AudioChecks(bool NarrationAudible, bool BackgroundMusicAudible, bool DuckingApplied, bool NoClipping, bool NoDistortion, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
+    private sealed record Phase19VisualChecks(bool MotionApplied, bool TransitionsApplied, bool SceneDiversityPresent, bool GuideScenePresent, bool ViewerScenePresent, bool ScientificExplanationScenePresent, IReadOnlyList<bool> Checks, IReadOnlyList<string> Errors);
+
+    private async Task<Phase19VideoChecks> BuildPhase19VideoChecksAsync(string videoPath, string profile, CancellationToken cancellationToken)
+    {
+        var exists = File.Exists(videoPath);
+        var audioStream = exists && await HasAudioStreamAsync(videoPath, cancellationToken);
+        var duration = exists ? await ProbeAudioDurationSecondsAsync(videoPath, cancellationToken) : 0;
+        var audioDuration = audioStream ? duration : 0;
+        var silent = exists && await DetectPhase19MediaIssueAsync(videoPath, $"silencedetect=noise=-45dB:d=1.0", "silence_start", cancellationToken);
+        var black = exists && await DetectPhase19MediaIssueAsync(videoPath, "blackdetect=d=2.0:pix_th=0.10", "black_start", cancellationToken);
+        var frozen = exists && await DetectPhase19MediaIssueAsync(videoPath, "freezedetect=n=-60dB:d=3", "freeze_start", cancellationToken);
+        var errors = new List<string>();
+        if (!exists) errors.Add($"{profile} video missing: {NormalizePath(videoPath)}");
+        if (!audioStream) errors.Add($"{profile} video has no audio stream");
+        if (duration <= 0) errors.Add($"{profile} video duration <= 0");
+        if (audioDuration <= 0) errors.Add($"{profile} audio duration <= 0");
+        if (silent) errors.Add($"{profile} video has silent sections");
+        if (black) errors.Add($"{profile} video has black frames over 2 seconds");
+        if (frozen) errors.Add($"{profile} video has frozen frame over 3 seconds");
+        return new Phase19VideoChecks(profile, NormalizePath(videoPath), exists, audioStream, RoundDuration(duration), RoundDuration(audioDuration), silent, black, frozen, errors);
+    }
+
+    private async Task<bool> DetectPhase19MediaIssueAsync(string mediaPath, string filter, string marker, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var args = filter.StartsWith("silencedetect", StringComparison.OrdinalIgnoreCase)
+            ? new[] { "-hide_banner", "-i", mediaPath, "-af", filter, "-f", "null", "-" }
+            : new[] { "-hide_banner", "-i", mediaPath, "-vf", filter, "-an", "-f", "null", "-" };
+        var result = await RunProcessAsync(ffmpegPath, args, cancellationToken);
+        return (result.Output + result.Error).Contains(marker, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Phase19SceneChecks BuildPhase19SceneChecks(string sceneAssetsRoot, string syncPath, string ttsPath, string durationPlanPath, string motionPlanPath)
+    {
+        var errors = new List<string>();
+        var sceneIds = ReadPhase19ProfileSceneIds(motionPlanPath, durationPlanPath, syncPath);
+        var duplicate = sceneIds.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+        var missingScenes = new[] { Path.Combine(sceneAssetsRoot, "short"), Path.Combine(sceneAssetsRoot, "long") }.Any(p => !Directory.Exists(p) || !Directory.EnumerateFiles(p).Any(IsImageFile));
+        var missingAudio = !File.Exists(ttsPath) || ReadPhase19AudioPaths(ttsPath).Any(p => string.IsNullOrWhiteSpace(p) || !File.Exists(p));
+        if (missingScenes) errors.Add("Missing scenes detected");
+        if (missingAudio) errors.Add("Missing audio detected");
+        if (duplicate) errors.Add("Duplicate scenes detected");
+        return new Phase19SceneChecks(missingScenes, missingAudio, duplicate, [!missingScenes, !duplicate], errors);
+    }
+
+    private static Phase19StoryChecks BuildPhase19StoryChecks(string syncPath, string ttsPath, string sceneAssetsRoot)
+    {
+        var text = string.Join(" ", ReadPhase19TextValues(syncPath).Concat(ReadPhase19TextValues(ttsPath)).Concat(ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "short", "scene-timeline-metadata.json"))).Concat(ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "long", "scene-timeline-metadata.json"))));
+        var normalizedNarration = Regex.Matches(text.ToLowerInvariant(), "[a-z0-9']+").Select(m => m.Value).ToArray();
+        var chunks = Regex.Split(text, @"(?<=[.!?])\s+").Where(s => CountSpokenWords(s) >= 4).Select(s => s.Trim()).ToArray();
+        var duplicateNarration = chunks.GroupBy(s => Regex.Replace(s.ToLowerInvariant(), "\\s+", " ")).Any(g => g.Count() > 1);
+        bool Has(params string[] terms) => terms.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
+        var hook = Has("hook", "look", "tonight", "this week", "don't miss", "watch");
+        var explanation = Has("because", "happens", "why", "orbit", "moon", "planet", "constellation", "astronom");
+        var practical = Has("view", "look", "binocular", "telescope", "horizon", "time", "where", "when");
+        var guide = Has("sky", "guide", "direction", "horizon", "azimuth", "altitude", "constellation");
+        var ending = Has("remember", "worth", "beautiful", "wonder", "enjoy", "clear skies", "final");
+        var continuity = normalizedNarration.Length > 20 && (Has("then", "next", "after", "finally") || chunks.Length >= 3);
+        var errors = new List<string>();
+        if (!hook) errors.Add("Hook not detected");
+        if (!explanation) errors.Add("Educational explanation not detected");
+        if (!practical) errors.Add("Practical viewing guidance not detected");
+        if (!guide) errors.Add("Accurate sky guide not detected");
+        if (!ending) errors.Add("Emotional ending not detected");
+        if (duplicateNarration) errors.Add("Duplicate narration detected");
+        if (!continuity) errors.Add("Narration continuity not detected");
+        return new Phase19StoryChecks(hook, explanation, practical, guide, ending, !duplicateNarration, continuity, [hook, explanation, practical, guide, ending, !duplicateNarration, continuity], errors);
+    }
+
+    private async Task<Phase19AudioChecks> BuildPhase19AudioChecksAsync(string shortVideoPath, string longVideoPath, CancellationToken cancellationToken)
+    {
+        var shortLevels = File.Exists(shortVideoPath) ? await ProbeAudioLevelsAsync(shortVideoPath, cancellationToken) : (-120d, -120d);
+        var longLevels = File.Exists(longVideoPath) ? await ProbeAudioLevelsAsync(longVideoPath, cancellationToken) : (-120d, -120d);
+        var peak = Math.Max(shortLevels.PeakDb, longLevels.PeakDb);
+        var rms = Math.Max(shortLevels.RmsDb, longLevels.RmsDb);
+        var narrationAudible = rms > -35;
+        var noClipping = peak <= -0.1;
+        var noDistortion = peak <= 0 && rms < -6;
+        var musicAudible = File.Exists(ResolvePhase18FinalMixedAudioPath(shortVideoPath)) || File.Exists(ResolvePhase18FinalMixedAudioPath(longVideoPath));
+        var ducking = ResolvePhase18BackgroundMusicConfig(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(shortVideoPath)!, "..", ".."))).DuckUnderNarration;
+        var errors = new List<string>();
+        if (!narrationAudible) errors.Add("Narration is not audible");
+        if (!musicAudible) errors.Add("Background music is not audible or mixed audio artifact missing");
+        if (!ducking) errors.Add("Ducking is not configured");
+        if (!noClipping) errors.Add("Audio clipping detected");
+        if (!noDistortion) errors.Add("Potential audio distortion detected");
+        return new Phase19AudioChecks(narrationAudible, musicAudible, ducking, noClipping, noDistortion, [narrationAudible, musicAudible, ducking, noClipping, noDistortion], errors);
+    }
+
+    private static Phase19VisualChecks BuildPhase19VisualChecks(string motionPlanPath, string sceneAssetsRoot)
+    {
+        var motionText = File.Exists(motionPlanPath) ? File.ReadAllText(motionPlanPath) : string.Empty;
+        var sceneText = string.Join(" ", ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "short", "scene-timeline-metadata.json")).Concat(ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "long", "scene-timeline-metadata.json"))));
+        bool Has(params string[] terms) => terms.Any(term => sceneText.Contains(term, StringComparison.OrdinalIgnoreCase));
+        var motion = motionText.Contains("motionStyle", StringComparison.OrdinalIgnoreCase) || motionText.Contains("zoom", StringComparison.OrdinalIgnoreCase) || motionText.Contains("pan", StringComparison.OrdinalIgnoreCase);
+        var transitions = motionText.Contains("transition", StringComparison.OrdinalIgnoreCase) || motionText.Contains("crossfade", StringComparison.OrdinalIgnoreCase);
+        var diversity = ReadPhase19SceneIds(motionPlanPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 6 || Regex.Matches(sceneText.ToLowerInvariant(), "guide|viewer|science|explanation|hook|tip|cause|final").Select(m => m.Value).Distinct().Count() >= 3;
+        var guide = Has("guide", "sky", "horizon", "direction");
+        var viewer = Has("viewer", "viewing", "watch", "look");
+        var science = Has("science", "scientific", "explanation", "cause", "orbit", "astronom");
+        var errors = new List<string>();
+        if (!motion) errors.Add("Motion not detected");
+        if (!transitions) errors.Add("Transitions not detected");
+        if (!diversity) errors.Add("Scene diversity not detected");
+        if (!guide) errors.Add("Guide scene not detected");
+        if (!viewer) errors.Add("Viewer scene not detected");
+        if (!science) errors.Add("Scientific explanation scene not detected");
+        return new Phase19VisualChecks(motion, transitions, diversity, guide, viewer, science, [motion, transitions, diversity, guide, viewer, science], errors);
+    }
+
+    private static int ScoreBooleans(IEnumerable<bool> checks)
+    {
+        var values = checks.ToArray();
+        return values.Length == 0 ? 0 : (int)Math.Round(values.Count(v => v) * 100.0 / values.Length, MidpointRounding.AwayFromZero);
+    }
+
+    private static IReadOnlyList<string> ReadPhase19SceneIds(params string[] paths)
+        => paths.Where(File.Exists).SelectMany(path => Regex.Matches(File.ReadAllText(path), "\"sceneId\"\\s*:\\s*\"([^\"]+)\"").Select(m => m.Groups[1].Value)).ToArray();
+
+    private static IReadOnlyList<string> ReadPhase19ProfileSceneIds(params string[] paths)
+        => paths.Where(File.Exists).SelectMany(path =>
+        {
+            var text = File.ReadAllText(path);
+            var matches = Regex.Matches(text, "\"(?<profile>short|long)\"\\s*:\\s*\\{(?<body>.*?)(?=\n\\s*\"(?:short|long)\"\\s*:|\n\\s*\\})", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (matches.Count == 0) return Regex.Matches(text, "\"sceneId\"\\s*:\\s*\"([^\"]+)\"").Select(m => m.Groups[1].Value);
+            return matches.SelectMany(match => Regex.Matches(match.Groups["body"].Value, "\"sceneId\"\\s*:\\s*\"([^\"]+)\"").Select(m => match.Groups["profile"].Value + ":" + m.Groups[1].Value));
+        }).ToArray();
+
+    private static IReadOnlyList<string> ReadPhase19AudioPaths(string path)
+        => !File.Exists(path) ? [] : Regex.Matches(File.ReadAllText(path), "\"audioPath\"\\s*:\\s*\"([^\"]*)\"").Select(m => m.Groups[1].Value).ToArray();
+
+    private static IReadOnlyList<string> ReadPhase19TextValues(string path)
+        => !File.Exists(path) ? [] : Regex.Matches(File.ReadAllText(path), "\"(?:narrationText|narration|text|section|scenePurpose|visualIntent|renderMode)\"\\s*:\\s*\"([^\"]*)\"").Select(m => Regex.Unescape(m.Groups[1].Value)).ToArray();
+
+    private static bool IsImageFile(string path) => IsImageExtension(Path.GetExtension(path));
 
     private sealed record VideoAssemblyItem(string SceneId, string SceneImagePath, string AudioPath, double SceneDurationSec, string Transition, string MotionStyle);
 
