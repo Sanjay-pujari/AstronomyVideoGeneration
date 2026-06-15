@@ -68,6 +68,110 @@ public sealed class EventProductionIntelligenceTests
         Assert.DoesNotContain("Geminids", string.Join(" ", result.VisualMotifs.Concat(result.SceneStrategy)), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void AstronomyAdapter_NormalizesPlanetPairingWithoutMeteorLeakage()
+    {
+        var adapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([
+            new MeteorShowerStrategy(),
+            new PlanetPairingStrategy(),
+            new PlanetGroupingStrategy(),
+            new ConjunctionStrategy(),
+            new NamedFullMoonStrategy(),
+            new NewMoonStrategy(),
+            new LunarEclipseStrategy(),
+            new SolarEclipseStrategy(),
+            new GenericAstronomyEventStrategy()
+        ]));
+
+        var planRequest = new ContentPlanProductionPipelineRequest(
+            Guid.NewGuid(),
+            "RareEventAlert",
+            "Venus and Jupiter Close Pairing",
+            "Venus + Jupiter",
+            "PlanetPairing",
+            "IN-RJ-UDAIPUR",
+            "en",
+            ["Venus"],
+            ["Jupiter"],
+            DateTimeOffset.Parse("2026-06-20T13:00:00Z"),
+            DateTimeOffset.Parse("2026-06-20T14:00:00Z"),
+            DateTimeOffset.Parse("2026-06-20T16:00:00Z"),
+            DateTimeOffset.Parse("2026-06-19T12:00:00Z"),
+            "venus-jupiter-pairing-2026",
+            "ShortAndLong",
+            ["HeroAsset", "Thumbnail", "Gallery", "SceneAssets", "LongVideo", "ShortVideo"],
+            9m, 8m, 8m, 9m,
+            "Verified",
+            "source",
+            "PlanetPairing",
+            "2026-06-20 08:00 PM IST",
+            "western horizon",
+            "India",
+            null,
+            "2026-06-20 19:30–20:30 IST",
+            "Venus is brighter; Jupiter appears nearby.",
+            null,
+            "publish same evening",
+            ["ShortVideo", "LongVideo"],
+            [],
+            []);
+
+        var result = adapter.Normalize(new ProductionPipelineRequest(planRequest, Guid.NewGuid(), "/tmp/out", false, true));
+
+        Assert.Equal("PlanetPairing", result.EventType);
+        Assert.Equal("Planetary Encounter", result.StoryTheme);
+        Assert.Equal("Twilight sky with two bright planets", result.VisualTheme);
+        Assert.Equal("Planet markers with direction and altitude", result.SkyGuideTheme);
+        Assert.Equal("Close apparent meeting of two planets", result.NarrationTheme);
+        Assert.Equal("Event Intelligence / Event Profile / Event Content Strategy::PlanetPairing", result.EventSpecificStrategySource);
+        Assert.Contains("Venus", result.RequiredVisualObjects!);
+        Assert.Contains("Jupiter", result.RequiredVisualObjects!);
+        Assert.Contains("meteor", result.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("meteor shower", result.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("debris stream", result.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("Phaethon", result.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("Geminids", result.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+
+        var generatedStrategyText = string.Join(" ", result.VisualMotifs.Concat(result.SceneStrategy).Concat(result.ThumbnailCopyCandidates ?? []).Concat(result.HeroCopyCandidates ?? []));
+        foreach (var forbidden in result.ForbiddenTerms)
+        {
+            Assert.DoesNotContain(forbidden, generatedStrategyText, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void AstronomyAdapter_PlanetPairingSupportDoesNotChangeMeteorShowerStrategyOutput()
+    {
+        var meteorOnlyAdapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([
+            new MeteorShowerStrategy(),
+            new GenericAstronomyEventStrategy()
+        ]));
+        var multiEventAdapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([
+            new MeteorShowerStrategy(),
+            new PlanetPairingStrategy(),
+            new GenericAstronomyEventStrategy()
+        ]));
+        var request = new ProductionPipelineRequest(BuildGeminidsPlanRequest(), Guid.NewGuid(), "/tmp/out", false, true);
+
+        var baseline = meteorOnlyAdapter.Normalize(request);
+        var multiEvent = multiEventAdapter.Normalize(request);
+
+        Assert.Equal(baseline.EventType, multiEvent.EventType);
+        Assert.Equal(baseline.VisualMotifs, multiEvent.VisualMotifs);
+        Assert.Equal(baseline.SceneStrategy, multiEvent.SceneStrategy);
+        Assert.Equal(baseline.ForbiddenTerms, multiEvent.ForbiddenTerms);
+        Assert.Equal(baseline.RequiredVisualObjects, multiEvent.RequiredVisualObjects);
+        Assert.Equal(baseline.RequiredNarrationFacts, multiEvent.RequiredNarrationFacts);
+        Assert.Equal(baseline.ThumbnailCopyCandidates, multiEvent.ThumbnailCopyCandidates);
+        Assert.Equal(baseline.HeroCopyCandidates, multiEvent.HeroCopyCandidates);
+    }
+
+    private static ContentPlanProductionPipelineRequest BuildGeminidsPlanRequest()
+        => new(
+            Guid.NewGuid(), "RareEventAlert", "Geminids Meteor Shower Peak", "Geminids", "MeteorShower", "IN-RJ-UDAIPUR", "en",
+            ["Geminids"], ["Meteors"], DateTimeOffset.Parse("2026-12-13T18:00:00Z"), DateTimeOffset.Parse("2026-12-13T18:30:00Z"), DateTimeOffset.Parse("2026-12-14T06:00:00Z"), DateTimeOffset.Parse("2026-12-10T12:00:00Z"),
+            "geminids-2026", "ShortAndLong", ["ShortVideo", "LongVideo"], 10m, 9m, 9m, 10m, "Verified", "source", "RareEventAlert", "2026-12-14 12:00 AM IST", "east to overhead", "India", "Low", "2026-12-14 00:00–05:00 IST", "Radiant high after midnight.", 10m, "publish evening before", ["ShortVideo"], [], []);
+
 
     [Theory]
     [InlineData("open the file", "file", true)]

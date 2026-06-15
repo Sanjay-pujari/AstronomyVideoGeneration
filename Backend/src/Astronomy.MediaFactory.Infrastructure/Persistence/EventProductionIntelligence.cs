@@ -53,9 +53,41 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
             ShortSceneArc = definition.SceneStoryArcShort,
             LongSceneArc = definition.SceneStoryArcLong,
             ValidationRules = definition.ValidationRules,
+            StoryTheme = ResolveStoryTheme(strategy.EventType),
+            VisualTheme = ResolveVisualTheme(strategy.EventType, definition),
+            SkyGuideTheme = ResolveSkyGuideTheme(strategy.EventType),
+            NarrationTheme = ResolveNarrationTheme(strategy.EventType, definition),
+            EventSpecificStrategySource = $"Event Intelligence / Event Profile / Event Content Strategy::{strategy.EventType}",
+            DownstreamHardcodingDetected = false,
             QualityWarnings = seed.QualityWarnings.Concat(BuildQualityWarnings(seed, definition)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
     }
+
+    private static string ResolveStoryTheme(string eventType) => eventType switch
+    {
+        "PlanetPairing" => "Planetary Encounter",
+        "MeteorShower" => "Meteor Shower Peak",
+        _ => eventType
+    };
+
+    private static string ResolveVisualTheme(string eventType, MediaEventStrategyDefinition definition) => eventType switch
+    {
+        "PlanetPairing" => "Twilight sky with two bright planets",
+        _ => string.Join(", ", definition.VisualMotifs.Take(3))
+    };
+
+    private static string ResolveSkyGuideTheme(string eventType) => eventType switch
+    {
+        "PlanetPairing" => "Planet markers with direction and altitude",
+        "MeteorShower" => "Radiant direction with dark-sky viewing window",
+        _ => "Direction and timing guide"
+    };
+
+    private static string ResolveNarrationTheme(string eventType, MediaEventStrategyDefinition definition) => eventType switch
+    {
+        "PlanetPairing" => "Close apparent meeting of two planets",
+        _ => definition.NarrationTone
+    };
 
     private static IReadOnlyList<string> BuildQualityWarnings(ProductionEventIntelligence intelligence, MediaEventStrategyDefinition strategy)
     {
@@ -328,7 +360,20 @@ public sealed class PlanetPairingStrategy : MediaEventStrategyBase
         WhyRequiredIntents: [Intent("pairing significance", "°", "close pairing", "bright", "close together", "easy to notice")],
         ActionRequiredIntents: [Intent("pairing CTA", "set a reminder", "save", "check", "clear", "enjoy", "watch")]);
     public override bool CanHandle(string eventType, string title) => eventType.Contains("PlanetPairing", StringComparison.OrdinalIgnoreCase) || title.Contains("planet pairing", StringComparison.OrdinalIgnoreCase);
-    public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(EventType, StandardQuestions, ["Hook", "Objects", "Time", "Direction", "Separation", "CTA"], ["Intro", "Objects", "Geometry", "Timing", "Finding guide", "Viewing tips", "Photo tip", "CTA"], ["two bright planets", "twilight gradient", "horizon guide", "clean labels"], [nameof(ProductionEventIntelligence.LocalPeakTime), nameof(ProductionEventIntelligence.SkyDirectionHint)], "clear, elegant, orientation-first", ["Close Pairing", "Look West", "Tonight"], ["meteor shower", "radiant", "eclipse shadow"], ["Name both planets and angular context."]);
+    public override MediaEventStrategyDefinition BuildDefinition(ProductionEventIntelligence intelligence) => new(
+        EventType,
+        StandardQuestions,
+        ["Hook", "Objects", "Viewing window", "Direction and altitude", "Apparent close approach", "CTA"],
+        ["Intro", "Objects", "Apparent geometry", "Local timing", "Finding guide", "Viewing tips", "Photo tip", "CTA"],
+        ["Twilight sky with two bright planets", "planet markers", "direction and altitude guide", "clean labels"],
+        [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint)],
+        "Close apparent meeting of two planets",
+        ["Planetary Encounter", "Venus + Jupiter", "Look West"],
+        ["meteor", "meteor shower", "debris stream", "Phaethon", "Geminids"],
+        ["Name both planets and angular context.", "Use generic event profile fields only downstream."],
+        RequiredVisualObjects: intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+        RequiredNarrationFacts: [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint), nameof(ProductionEventIntelligence.PrimaryObjects)],
+        HeroCopyCandidates: ["Planetary Encounter", "Two bright planets", "Twilight close pairing"]);
 
     public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
     {

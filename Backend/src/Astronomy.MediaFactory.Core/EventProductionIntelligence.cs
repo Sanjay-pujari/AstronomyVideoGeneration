@@ -36,7 +36,13 @@ public sealed record ProductionEventIntelligence(
     IReadOnlyList<string>? ValidationRules = null,
     decimal? AngularSeparationDegrees = null,
     decimal? AltitudeDegrees = null,
-    string? ReferenceObject = null);
+    string? ReferenceObject = null,
+    string? StoryTheme = null,
+    string? VisualTheme = null,
+    string? SkyGuideTheme = null,
+    string? NarrationTheme = null,
+    string? EventSpecificStrategySource = null,
+    bool DownstreamHardcodingDetected = false);
 
 public sealed record MediaEventStrategyDefinition(
     string EventType,
