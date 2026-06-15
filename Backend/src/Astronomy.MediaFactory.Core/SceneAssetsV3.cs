@@ -61,7 +61,14 @@ public sealed record SceneAssetsV3Validation(
     bool DuplicateHashDetected,
     bool RepeatedGenericInfographicBackgroundDetected,
     bool EverySceneHasNarrationBeat,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    SceneAssetsV3FontDiagnostics? FontDiagnostics = null);
+
+public sealed record SceneAssetsV3FontDiagnostics(
+    string RequestedFont,
+    string ResolvedFont,
+    bool FontFallbackUsed,
+    IReadOnlyList<string> CheckedFontPaths);
 
 public interface ISceneAssetsV3Service
 {
