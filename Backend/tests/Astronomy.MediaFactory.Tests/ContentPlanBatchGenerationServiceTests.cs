@@ -160,7 +160,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
-    public async Task GenerateFromPlansAsync_ProductionCompletedManualValidationPlanId_DoesNotBypassAutoGenerateAllowed()
+    public async Task GenerateFromPlansAsync_ProductionCompletedManualValidationPlanId_BypassesAutoGenerateAllowedForExactPlanIdRerun()
     {
         await using var db = CreateDb();
         var intelligence = SeedManualValidationPlan(db, status: "ProductionCompleted", planStatus: "ProductionCompleted");
@@ -182,16 +182,22 @@ public sealed class ContentPlanBatchGenerationServiceTests
 
         var reloadedEvent = await db.AstronomyEventIntelligences.SingleAsync(e => e.Id == intelligence.Id);
         Assert.True(response.Success);
-        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(ManualValidationPlanId, response.PlanId);
+        Assert.Equal(ManualValidationPlanId, Assert.Single(response.SelectedPlans).ContentGenerationPlanId);
         var warning = Assert.Single(response.Warnings, warning => warning.RequestedTitle == ManualValidationPlanId.ToString("D")
             && warning.Matched
-            && !warning.Selected
-            && warning.Reason.StartsWith("Excluded because linked astronomy event AutoGenerateAllowed was false.", StringComparison.Ordinal));
-        Assert.Contains("isExactTarget=true", warning.Reason);
-        Assert.Contains("isManualValidationPlan=true", warning.Reason);
-        Assert.Contains("shouldBypassAutoGenerateAllowed=false", warning.Reason);
+            && warning.Selected
+            && warning.Reason.StartsWith("Selected exact planId even though linked event AutoGenerateAllowed=false.", StringComparison.Ordinal));
+        Assert.Contains($"requestedPlanId={ManualValidationPlanId:D}", warning.Reason);
+        Assert.Contains($"selectedPlanId={ManualValidationPlanId:D}", warning.Reason);
+        Assert.Contains("exactPlanIdMode=true", warning.Reason);
+        Assert.Contains("linkedEventAutoGenerateAllowed=false", warning.Reason);
+        Assert.Contains("autoGenerateAllowedBypassed=true", warning.Reason);
+        Assert.Contains("bypassReason=planId + useProductionPipeline + allowCompletedPlanRerun", warning.Reason);
+        Assert.Contains("matchedDifferentPlanDetected=false", warning.Reason);
         Assert.False(reloadedEvent.AutoGenerateAllowed);
-        Assert.Equal(Guid.Empty, production.CapturedPlanId);
+        Assert.Equal(ManualValidationPlanId, production.CapturedPlanId);
         Assert.False(legacy.WasCalled);
     }
 
