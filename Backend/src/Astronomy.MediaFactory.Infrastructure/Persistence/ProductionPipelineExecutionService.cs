@@ -770,7 +770,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var root = Path.Combine(outputRoot, "scene-assets-v3", format);
         if (!Directory.Exists(root)) throw new InvalidOperationException($"Scene Assets V3 {format} folder is missing: {NormalizePath(root)}");
-        var required = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json" }.Select(f => Path.Combine(root, f)).ToList();
+        var required = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json" }.Select(f => Path.Combine(root, f)).ToList();
         var expectedImages = format.Equals("short", StringComparison.OrdinalIgnoreCase)
             ? new[] { "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" }
             : new[] { "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tips.png", "009-final-reminder.png" };
@@ -782,6 +782,14 @@ public sealed partial class ProductionPipelineExecutionService(
         if (manifest.SceneCount != expectedCount || manifest.Scenes.Count != expectedCount) throw new InvalidOperationException($"Scene Assets V3 {format} expected {expectedCount} scenes but found {manifest.Scenes.Count}.");
         if (!manifest.Scenes.Any(s => s.RenderMode == "AccurateSkyGuideScene")) throw new InvalidOperationException($"Scene Assets V3 {format} is missing AccurateSkyGuideScene.");
         if (manifest.Scenes.Any(s => string.IsNullOrWhiteSpace(s.NarrationBeat))) throw new InvalidOperationException($"Scene Assets V3 {format} has a scene without narrationBeat.");
+        var metadata = JsonSerializer.Deserialize<SceneTimelineMetadataDocument>(File.ReadAllText(Path.Combine(root, "scene-timeline-metadata.json")), JsonOptions)
+            ?? throw new InvalidOperationException($"Scene Assets V3 {format} timeline metadata could not be parsed.");
+        if (metadata.Scenes.Count != expectedCount) throw new InvalidOperationException($"Scene Assets V3 {format} timeline metadata expected {expectedCount} scenes but found {metadata.Scenes.Count}.");
+        var review = JsonSerializer.Deserialize<SceneAssetsV3Review>(File.ReadAllText(Path.Combine(root, "scene-review-v3.json")), JsonOptions)
+            ?? throw new InvalidOperationException($"Scene Assets V3 {format} review could not be parsed.");
+        if (review.SameBackgroundDetected) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: sameBackgroundDetected is true.");
+        if (review.SameCompositionDetected) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: sameCompositionDetected is true.");
+        if (review.SameCameraAngleDetected) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: sameCameraAngleDetected is true.");
         return required;
     }
 
@@ -3174,7 +3182,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> BuildSceneAssetsV3Missing(string root, string format)
     {
-        var expected = format == "short" ? new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" } : new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tips.png", "009-final-reminder.png" };
+        var expected = format == "short" ? new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" } : new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tips.png", "009-final-reminder.png" };
         return expected.Select(f => Path.Combine(root, f)).Where(p => !File.Exists(p)).Select(NormalizePath).ToArray();
     }
 
