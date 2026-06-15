@@ -441,7 +441,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => Path.Combine(context.ExecutionContext.NarrationRoot!, "long", "narration.txt");
 
     private static string BuildLongSceneApprovalRoot(ProductionPhaseContext context)
-        => Path.Combine(context.ExecutionContext.SceneRoot!, "long");
+        => Path.Combine(context.OutputRoot, "scene-assets-v3", "long");
 
     private static async Task ValidatePhase6EnrichedScenePlanContractAsync(ProductionPhaseContext context, string enrichedPath, CancellationToken cancellationToken)
     {
@@ -1736,7 +1736,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var missingFiles = new List<string>();
         var exceptions = new List<string>();
         var strategyByScene = new List<object>();
-        var matchedPairs = new List<object>();
+        var matchedPairs = new List<Phase14MatchedPair>();
         var unmatchedNarrationSections = new List<string>();
         var unmatchedScenes = new List<string>();
         var narrationDiagnostics = new List<NarrationSceneDiagnostic>();
@@ -1773,6 +1773,7 @@ public sealed partial class ProductionPipelineExecutionService(
             errors.AddRange(shortItems.Concat(longItems).Where(i => !File.Exists(i.SceneImagePath)).Select(i => $"Scene image path does not exist: {i.SceneImagePath}"));
             if (shortItems.Count(i => i.SyncStatus == "Matched") != 5) errors.Add("short matched count != 5");
             if (longItems.Count(i => i.SyncStatus == "Matched") != 9) errors.Add("long matched count != 9");
+            errors.AddRange(matchedPairs.Where(p => !string.Equals(p.MappedSceneId, p.SceneId, StringComparison.OrdinalIgnoreCase)).Select(p => $"Phase 14 matchedPairs mappedSceneId != sceneId: {p.Format}:{p.Section} mappedSceneId={p.MappedSceneId} sceneId={p.SceneId}"));
 
             var syncPath = Path.Combine(syncRoot, "scene-audio-sync.json");
             await File.WriteAllTextAsync(syncPath, JsonSerializer.Serialize(new
@@ -1849,7 +1850,7 @@ public sealed partial class ProductionPipelineExecutionService(
         throw new InvalidOperationException($"Phase 14 missing {label}; checked: {string.Join(", ", candidates.Select(NormalizePath))}. V1 narration fallback is not allowed.");
     }
 
-    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, string narrationPath, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, List<object> matchedPairs, List<string> unmatchedNarrationSections, List<string> unmatchedScenes, List<NarrationSceneDiagnostic> narrationDiagnostics, CancellationToken ct)
+    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, string narrationPath, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, List<Phase14MatchedPair> matchedPairs, List<string> unmatchedNarrationSections, List<string> unmatchedScenes, List<NarrationSceneDiagnostic> narrationDiagnostics, CancellationToken ct)
     {
         if (!Directory.Exists(sceneRoot)) missingFiles.Add($"{format} scene-assets-v3 root missing: {NormalizePath(sceneRoot)}");
         var timelinePath = Path.Combine(sceneRoot, "visual-timeline-v3.json");
@@ -1866,6 +1867,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var timelineBeats = ReadJsonArray(timelinePath, "beats");
         var manifestScenes = ReadJsonArray(manifestPath, "scenes");
         var metadataScenes = ReadJsonArray(metadataPath, "scenes");
+        var scenesById = metadataScenes
+            .Select((node, index) => new { Node = node, Index = index, SceneId = GetString(node, "sceneId") ?? string.Empty })
+            .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
+            .GroupBy(item => item.SceneId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var narrationBeats = ExtractNarrationBeats(narrationPath);
         AddNarrationDiagnostics(narrationDiagnostics, narrationBeats);
         var narrationBeatArray = narrationBeats.ToArray();
@@ -1874,10 +1880,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var items = new List<SceneAudioSyncItem>();
         for (var i = 0; i < expectedCount; i++)
         {
-            var beat = timelineBeats.ElementAtOrDefault(i);
-            var sceneId = GetString(beat, "sceneId") ?? $"{i + 1:000}";
+            var metadataEntry = metadataScenes.ElementAtOrDefault(i);
+            var sceneId = GetString(metadataEntry, "sceneId") ?? GetString(timelineBeats.ElementAtOrDefault(i), "sceneId") ?? $"{i + 1:000}";
+            if (scenesById.TryGetValue(sceneId, out var selectedScene))
+                metadataEntry = selectedScene.Node;
+
+            var beat = timelineBeats.FirstOrDefault(n => string.Equals(GetString(n, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase)) ?? timelineBeats.ElementAtOrDefault(i);
             var beatNo = GetInt(beat, "beatNo") ?? i + 1;
-            var metadata = metadataScenes.FirstOrDefault(n => string.Equals(GetString(n, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase)) ?? metadataScenes.ElementAtOrDefault(i);
+            var metadata = metadataEntry;
             var manifest = manifestScenes.FirstOrDefault(n => string.Equals(GetString(n, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase)) ?? manifestScenes.ElementAtOrDefault(i);
             var visualIntent = GetString(metadata, "visualIntent") ?? GetString(beat, "visualIntent") ?? "";
             var renderMode = GetString(metadata, "renderMode") ?? GetString(beat, "renderMode") ?? GetString(manifest, "renderMode") ?? "";
@@ -1895,15 +1905,9 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 var narrationIndex = Array.IndexOf(narrationBeatArray, narration);
                 if (narrationIndex >= 0) usedNarration.Add(narrationIndex);
-                matchedPairs.Add(new
-                {
-                    format,
-                    section = narration.Section,
-                    scenePurpose = narration.ScenePurpose,
-                    mappedSceneId = ResolveMappedSceneId(sectionMap, narration.Section),
-                    sceneId,
-                    matchingStrategy = strategy
-                });
+                var mappedSceneId = ResolveMappedSceneId(sectionMap, narration.Section);
+                if (string.IsNullOrWhiteSpace(mappedSceneId)) mappedSceneId = sceneId;
+                matchedPairs.Add(new Phase14MatchedPair(format, narration.Section, narration.ScenePurpose, mappedSceneId, sceneId, strategy));
             }
             strategies.Add(new { format, sceneId, beatNo, section = narration?.Section ?? "", strategy });
             items.Add(new SceneAudioSyncItem(
@@ -2006,7 +2010,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string? GetString(JsonNode? node, string name) => node?[name]?.GetValue<string>();
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<object> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -2035,12 +2039,14 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
+    private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus);
 
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
+        outputs.Add(await WritePhase15PlusPathReadinessDiagnosticsAsync(context, 15, [Path.Combine(context.OutputRoot, "sync", "scene-audio-sync.json"), Path.Combine(context.OutputRoot, "scene-assets-v3", "short"), Path.Combine(context.OutputRoot, "scene-assets-v3", "long"), Path.Combine(context.OutputRoot, "question-engine", "question-driven-narration-v2.json")], cancellationToken));
         var intelligenceRequest = BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Intelligence" : "LongFormIntelligence");
         var scriptRequest = BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Script" : "LongFormScript");
         if (profile == ScenePresentationProfile.LongForm)
@@ -2689,8 +2695,10 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         await EnsureNarrationValidationPassedBeforeTtsAsync(context, profile, cancellationToken);
+        var readinessPhaseNo = profile == ScenePresentationProfile.ShortForm ? 16 : 17;
+        var readinessPath = await WritePhase15PlusPathReadinessDiagnosticsAsync(context, readinessPhaseNo, [Path.Combine(context.OutputRoot, "sync", "scene-audio-sync.json"), Path.Combine(context.ExecutionContext.NarrationRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.txt")], cancellationToken);
         var response = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Tts" : "LongFormTts"), cancellationToken);
-        var outputs = new List<string>(response.GeneratedFiles);
+        var outputs = new List<string>(response.GeneratedFiles) { readinessPath };
         var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
         var source = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-tts-audio.mp3") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-tts-audio.mp3");
         var target = Path.Combine(context.ExecutionContext.TtsRoot!, profileFolder, "narration.mp3");
@@ -2878,6 +2886,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseAssembleVideoAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
+        outputs.Add(await WritePhase15PlusPathReadinessDiagnosticsAsync(context, profile == ScenePresentationProfile.ShortForm ? 18 : 19, [Path.Combine(context.OutputRoot, "scene-assets-v3"), Path.Combine(context.OutputRoot, "sync", "scene-audio-sync.json"), Path.Combine(context.ExecutionContext.TtsRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.mp3"), Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long")], cancellationToken));
         if (profile == ScenePresentationProfile.ShortForm)
         {
             var intelligence = await videoAssemblyEngine.GenerateVideoAssemblyAsync(BuildVideoRequest(context, profile, "Intelligence"), cancellationToken);
@@ -2904,6 +2913,48 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!validation.IsValid) throw new InvalidOperationException("Final validation failed: " + string.Join("; ", validation.Errors));
         return copied.Concat([Path.Combine(context.OutputRoot, "phase-manifest.json")]).ToArray();
     }
+
+    private static async Task<string> WritePhase15PlusPathReadinessDiagnosticsAsync(ProductionPhaseContext context, int phaseNo, IReadOnlyList<string> selectedInputPaths, CancellationToken cancellationToken)
+    {
+        var validationRoot = context.ExecutionContext.ValidationRoot ?? Path.Combine(context.OutputRoot, "validation");
+        Directory.CreateDirectory(validationRoot);
+        var allowedInputs = new[]
+        {
+            Path.Combine(context.OutputRoot, "sync", "scene-audio-sync.json"),
+            Path.Combine(context.OutputRoot, "scene-assets-v3", "short"),
+            Path.Combine(context.OutputRoot, "scene-assets-v3", "long"),
+            Path.Combine(context.OutputRoot, "scene-assets-v3"),
+            Path.Combine(context.OutputRoot, "question-engine", "question-driven-narration-v2.json")
+        };
+        var oldPaths = new[]
+        {
+            Path.Combine(context.OutputRoot, "question-engine", "scene-approval-v3", "scene-assets"),
+            Path.Combine(context.OutputRoot, "scene-approval-v3", "scene-assets"),
+            Path.Combine(context.OutputRoot, "scene-assets")
+        };
+        var inputPathsChecked = allowedInputs.Concat(selectedInputPaths).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
+        var normalizedSelected = selectedInputPaths.Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
+        var oldNormalized = oldPaths.Select(NormalizePath).ToArray();
+        var oldPathUsed = normalizedSelected.Any(selected => oldNormalized.Any(oldPath => selected.Equals(oldPath, StringComparison.OrdinalIgnoreCase) || selected.StartsWith(oldPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || selected.StartsWith(oldPath + '/', StringComparison.OrdinalIgnoreCase)));
+        var missingFiles = selectedInputPaths.Where(path => !File.Exists(path) && !Directory.Exists(path)).Select(NormalizePath).ToArray();
+        var validationPassed = !oldPathUsed && missingFiles.Length == 0;
+        var pathOut = Path.Combine(validationRoot, $"phase-{phaseNo}-path-readiness-diagnostics.json");
+        await File.WriteAllTextAsync(pathOut, JsonSerializer.Serialize(new
+        {
+            phaseNo,
+            inputPathsChecked,
+            selectedInputPaths = normalizedSelected,
+            oldPathsChecked = oldNormalized,
+            oldPathsIgnored = oldNormalized,
+            oldPathUsed,
+            missingFiles,
+            validationPassed
+        }, JsonOptions), cancellationToken);
+        if (oldPathUsed)
+            throw new InvalidOperationException($"Phase {phaseNo} path readiness failed: old scene asset path was selected.");
+        return pathOut;
+    }
+
 
     private VideoAssemblyGenerationRequest BuildVideoRequest(ProductionPhaseContext context, ScenePresentationProfile profile, string phase)
         => new()
