@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Azure.Core;
@@ -55,7 +56,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
-    private const string DefaultHeroHook = "TONIGHT'S SKY EVENT";
+    private const string DefaultHeroHook = "SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
     private static readonly HeroImageSpec[] HeroImageSpecs =
@@ -424,7 +425,7 @@ public sealed class HeroAssetStoryGenerator(
             var heroVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
             foreach (var variant in heroVariants)
             {
-                var azureBackgroundPath = Path.Combine(candidatesRoot, $"hero-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png");
+                var azureBackgroundPath = Path.Combine(candidatesRoot, $"hero-v6-{variant.Variant.ToLowerInvariant()}-azure-background.png");
                 var variantPath = Path.Combine(heroAssetsRoot, variant.FileName);
                 var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
@@ -437,12 +438,12 @@ public sealed class HeroAssetStoryGenerator(
             }
 
             if (heroVariantResults.Count(v => v.Result.ProviderCalled) < 3)
-                throw new InvalidOperationException("Hero V5 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
+                throw new InvalidOperationException("Hero V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
             if (heroVariantResults.Select(v => (v.Width, v.Height)).Distinct().Count() != 3)
-                throw new InvalidOperationException("Hero V5 validation failed: landscape, portrait, and square dimensions must be distinct.");
+                throw new InvalidOperationException("Hero V6 validation failed: landscape, portrait, and square dimensions must be distinct.");
             var uniqueHeroHashes = heroVariantResults.Select(result => result.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (uniqueHeroHashes.Length != heroVariants.Count)
-                throw new InvalidOperationException($"Hero V5 variant validation failed: expected {heroVariants.Count} unique image hashes but found {uniqueHeroHashes.Length}.");
+                throw new InvalidOperationException($"Hero V6 variant validation failed: expected {heroVariants.Count} unique image hashes but found {uniqueHeroHashes.Length}.");
 
             var selectedHero = heroVariantResults[0];
             File.Copy(selectedHero.ImagePath, heroPath, overwrite: true);
@@ -567,7 +568,7 @@ public sealed class HeroAssetStoryGenerator(
         {
             HeroFileName, HeroLandscapeFileName, HeroPortraitFileName, HeroSquareFileName, HeroGenerationDiagnosticsFileName, HeroPromptFileName
         };
-        foreach (var file in Directory.EnumerateFiles(heroAssetsRoot, "hero-v5-*.png").Concat(Directory.EnumerateFiles(heroAssetsRoot, "*.txt")))
+        foreach (var file in Directory.EnumerateFiles(heroAssetsRoot, "hero-v6-*.png").Concat(Directory.EnumerateFiles(heroAssetsRoot, "*.txt")))
         {
             if (!allowed.Contains(Path.GetFileName(file))) File.Delete(file);
         }
@@ -914,9 +915,9 @@ public sealed class HeroAssetStoryGenerator(
         var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event");
         var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
         var objectText = ResolveHeroPromptObjectText(heroStory, intelligence);
-        var basePrompt = EventContentGuard.IsPlanetConjunction(eventType)
-            ? $"Jupiter and Venus conjunction, two bright planets in the western sky after sunset, twilight sky, angular separation 1.63 degrees, realistic horizon, premium astronomy poster, clean negative space, photorealistic, no text."
-            : $"Cinematic astronomy poster for {eventTitle}, event type {eventType}, required visual focus: {objectText}, realistic sky and horizon, premium documentary style, clean negative space, photorealistic, no text.";
+        var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? intelligence?.LocalPeakTime ?? intelligence?.BestViewingWindowLocal ?? "peak window";
+        var directionText = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "event-approved viewing direction");
+        var basePrompt = $"Cinematic astronomy poster for {eventTitle}, event type {eventType}, required visual focus: {objectText}, absolute date/time: {dateText}, primary viewing direction: {directionText}, most important visual objects only from event intelligence, realistic sky and horizon, premium documentary style, clean negative space, photorealistic, no text, no unrelated event imagery.";
         EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)) ?? []);
         return
         [
@@ -1332,7 +1333,7 @@ public sealed class HeroAssetStoryGenerator(
         => string.Empty;
 
     private static string ResolveHeroImageCta(string ctaText)
-        => "STEP OUTSIDE TONIGHT";
+        => "STEP OUTSIDE PEAK";
 
     private static string FormatHeroDirection(string directionText)
     {
@@ -1585,9 +1586,9 @@ public sealed class HeroAssetStoryGenerator(
         var candidates = new List<string>
         {
             DefaultHeroHook,
-            "LOOK UP TONIGHT",
+            "LOOK UP NOW",
             "EVENING SKY HIGHLIGHT",
-            "DON'T MISS THIS TONIGHT"
+            "DON'T MISS THIS PEAK"
         };
 
         AddHookCandidate(candidates, heroStory.HeroHook);
@@ -1600,9 +1601,9 @@ public sealed class HeroAssetStoryGenerator(
         AddHookCandidate(candidates, heroStory.HeroStorySource.Why);
 
         if (!string.IsNullOrWhiteSpace(heroStory.HeroAction) && heroStory.HeroAction.Contains("west", StringComparison.OrdinalIgnoreCase))
-            candidates.Add("FACE WEST TONIGHT");
+            candidates.Add("FACE WEST PEAK");
         if (IsMeteorStory(heroStory.HeroStorySource))
-            candidates.AddRange(["METEORS TONIGHT", "WATCH THE DARK SKY", "PEAK VIEWING WINDOW"]);
+            candidates.AddRange(["METEORS PEAK", "WATCH THE DARK SKY", "PEAK VIEWING WINDOW"]);
 
         if (intelligence is not null)
         {
@@ -1655,7 +1656,7 @@ public sealed class HeroAssetStoryGenerator(
         var shareabilityScore = 78;
         var understandabilityScore = 84;
 
-        if (hook.Contains("TONIGHT", StringComparison.OrdinalIgnoreCase))
+        if (hook.Contains("PEAK WINDOW", StringComparison.OrdinalIgnoreCase))
         {
             scrollStoppingScore += 9;
             clickabilityScore += 10;

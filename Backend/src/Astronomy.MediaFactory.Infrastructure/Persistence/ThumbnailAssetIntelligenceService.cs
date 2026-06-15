@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Azure.Core;
@@ -559,8 +560,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var eventTitle = ResolveMeteorThumbnailTitle(current);
         var primary = isMeteor ? eventTitle : CleanHook(current.ShortTitle).ToUpperInvariant();
-        var secondary = isMeteor ? "PEAK NIGHT" : CleanTextElement(current.EventType, "CURRENT SKY EVENT").ToUpperInvariant();
-        var micro = isMeteor ? "TONIGHT" : CleanTextElement(FirstNonEmpty(current.BestViewingWindowLocal, current.SkyDirectionHint, current.LocalPeakTime), "TONIGHT").ToUpperInvariant();
+        var secondary = isMeteor ? CleanTextElement(FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "PEAK WINDOW"), "PEAK WINDOW").ToUpperInvariant() : CleanTextElement(current.EventType, "SKY EVENT").ToUpperInvariant();
+        var micro = CleanTextElement(FirstNonEmpty(current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), current.LocalPeakTime, current.BestViewingWindowLocal, current.SkyDirectionHint, "PEAK WINDOW"), "PEAK WINDOW").ToUpperInvariant();
         var copy = new ThumbnailCopyDto(primary, secondary, micro);
         var scores = new ThumbnailReadinessScoresDto(98, 98, 96, 96, 98);
         var intelligence = new ThumbnailIntelligenceDto(
@@ -574,7 +575,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             "High",
             isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : "A timely astronomy event with direct click-through text.",
             BuildPureV3VisualFocus(current),
-            "Thumbnail V5 Azure Image2 realistic astronomy background with deterministic educational guide overlay.",
+            "Thumbnail V6 Azure Image2 realistic astronomy background with deterministic educational guide overlay.",
             "PureAzureImage2Prompt",
             "none",
             ["scene image selection", "approved scene assets", "hero-scene-manifest.json", "thumbnail-scene-manifest.json"],
@@ -658,9 +659,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             }
 
             if (thumbnailVariantResults.Count(v => v.Result.ProviderCalled) < 3)
-                throw new InvalidOperationException("Thumbnail V5 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
+                throw new InvalidOperationException("Thumbnail V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
             if (thumbnailVariantResults.Select(v => (v.Width, v.Height)).Distinct().Count() != 3)
-                throw new InvalidOperationException("Thumbnail V5 validation failed: landscape, portrait, and square dimensions must be distinct.");
+                throw new InvalidOperationException("Thumbnail V6 validation failed: landscape, portrait, and square dimensions must be distinct.");
 
             var duplicateHashGroups = thumbnailVariantResults
                 .GroupBy(v => v.Hash, StringComparer.OrdinalIgnoreCase)
@@ -668,9 +669,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 .Select(group => new { imageHash = group.Key, variants = group.Select(v => v.Variant).ToArray() })
                 .ToArray();
             if (duplicateHashGroups.Length > 0)
-                throw new InvalidOperationException("Thumbnail V5 variant validation failed: duplicate image hashes detected.");
+                throw new InvalidOperationException("Thumbnail V6 variant validation failed: duplicate image hashes detected.");
             if (thumbnailVariantResults.Select(v => v.TextLayout).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
-                throw new InvalidOperationException("Thumbnail V5 variant validation failed: all variants use the same text layout.");
+                throw new InvalidOperationException("Thumbnail V6 variant validation failed: all variants use the same text layout.");
 
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
             await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
@@ -727,7 +728,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validation,
             requestedRenderer: "PureAzureImage2ThumbnailV3",
             actualRendererUsed: "PureAzureImage2ThumbnailV3",
-            rendererSelectionReason: "Thumbnail V5 uses ProductionPipelineRequest event intelligence to build an Azure Image2 realistic astronomy background, then applies deterministic mini astronomy guide overlays with event facts, direction, best time, sky features, and tips.",
+            rendererSelectionReason: "Thumbnail V6 uses ProductionPipelineRequest event intelligence to build an Azure Image2 realistic astronomy background, then applies deterministic mini astronomy guide overlays with event facts, direction, best time, sky features, and tips.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: true,
             photoCinematicRendererCompleted: true,
@@ -821,10 +822,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var title = FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, request.EventId, "selected sky event");
         var eventType = FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "AstronomyEvent");
-        var prompt = EventContentGuard.IsPlanetConjunction(eventType)
-            ? "Generate realistic Jupiter and Venus conjunction thumbnail background, two bright planets close together in western sky after sunset, twilight sky, angular separation 1.63 degrees, professional astronomy guide background, leave clean space for title and compact event info. No text."
-            : $"Generate realistic astronomy thumbnail background for {title}, event type {eventType}, using current event intelligence objects and viewing guidance, professional astronomy guide background, leave clean space for title and compact event info. No text.";
-        var text = EventContentGuard.IsPlanetConjunction(eventType) ? new[] { "JUPITER + VENUS", "CONJUNCTION" } : new[] { CleanTextElement(title, "SKY EVENT").ToUpperInvariant() };
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var objects = string.Join(" + ", (intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).Take(2));
+        var prompt = $"Generate realistic high-CTR astronomy thumbnail background for {title}, event type {eventType}, resolved object names: {FirstNonEmpty(objects, title)}, using current event intelligence objects and viewing guidance only, strong visual hook, no large info panels, clean space for 3-6 word main text, absolute date/time if shown, no text embedded in background, no unrelated event imagery.";
+        var text = new[] { CleanTextElement(FirstNonEmpty(objects, title), "SKY EVENT").ToUpperInvariant() };
         EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", prompt + " " + string.Join(' ', text), request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)) ?? []);
         return
         [
@@ -1264,9 +1265,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var candidates = new List<string>
         {
             DefaultThumbnailHook,
-            "LOOK UP TONIGHT",
-            "SKY HIGHLIGHT TONIGHT",
-            "SEE THE SKY TONIGHT"
+            "LOOK UP NOW",
+            "SKY HIGHLIGHT",
+            "SEE THE SKY"
         };
 
         if (!string.IsNullOrWhiteSpace(heroStory.HeroHook))
@@ -1328,7 +1329,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             clarityScore -= 4;
         }
 
-        if (hook.Contains("TONIGHT", StringComparison.OrdinalIgnoreCase))
+        if (hook.Contains("PEAK WINDOW", StringComparison.OrdinalIgnoreCase))
         {
             clickabilityScore += 7;
             curiosityScore += 5;
@@ -1408,7 +1409,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         if (cleanObjects.Count == 1)
         {
-            var headline = TruncateThumbnailText($"{FormatThumbnailObjectName(cleanObjects[0])} TONIGHT", 28);
+            var headline = TruncateThumbnailText($"{FormatThumbnailObjectName(cleanObjects[0])} PEAK", 28);
             return new ThumbnailCopyDto(headline, string.Empty, string.Empty);
         }
 
@@ -1420,7 +1421,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
 
         var groupHeadline = IsPlanetParadeEventType(eventType) ? "PLANET PARADE" : $"{cleanObjects.Count} BRIGHT PLANETS";
-        return new ThumbnailCopyDto(TruncateThumbnailText(groupHeadline, 28), "LOOK WEST TONIGHT", string.Empty);
+        return new ThumbnailCopyDto(TruncateThumbnailText(groupHeadline, 28), "LOOK WEST PEAK", string.Empty);
     }
 
     private static IReadOnlyList<string> ResolvePlanetFamilyVisibleObjects(ProductionEventIntelligence? intelligence)
@@ -1583,7 +1584,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var overlay = isMeteor
             ? new[] { eventTitle, "PEAK NIGHT" }
             : new[] { CleanThumbnailText(current.ShortTitle, current.Title, 18).ToUpperInvariant(), CleanThumbnailText(current.EventType, "SKY EVENT", 20).ToUpperInvariant() };
-        var badge = isMeteor ? "TONIGHT" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "TONIGHT", 18).ToUpperInvariant();
+        var badge = isMeteor ? "PEAK WINDOW" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "PEAK WINDOW", 18).ToUpperInvariant();
         var visualObjects = NormalizeObjectList(isMeteor
             ? ["Meteor", "Meteor shower", "Meteor streaks", "Dark sky"]
             : current.PrimaryObjects.Concat(current.SecondaryObjects).DefaultIfEmpty(current.ShortTitle));
@@ -1653,7 +1654,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var sub = ResolveThumbnailFont(72, FontStyle.Bold);
             var badgeFont = ResolveThumbnailFont(34, FontStyle.Bold);
             ctx.DrawText(prompt.CtrOverlay.ElementAtOrDefault(0) ?? "SKY EVENT", headline, Color.White, new PointF(64, 96));
-            ctx.DrawText(prompt.CtrOverlay.ElementAtOrDefault(1) ?? "TONIGHT", sub, Color.ParseHex("#F8D36B"), new PointF(66, 204));
+            ctx.DrawText(prompt.CtrOverlay.ElementAtOrDefault(1) ?? "PEAK WINDOW", sub, Color.ParseHex("#F8D36B"), new PointF(66, 204));
             ctx.Fill(Color.ParseHex("#E83B3B"), new RectangleF(68, 326, 300, 64));
             ctx.DrawText(prompt.Badge, badgeFont, Color.White, new PointF(90, 342));
         });
