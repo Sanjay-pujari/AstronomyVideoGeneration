@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
@@ -70,7 +69,7 @@ public sealed class SceneAssetsV3Service(
         var manifestScenes = new List<SceneAssetsV3ManifestScene>();
         var sceneDiagnostics = new List<object>();
         var errors = new List<string>();
-        ValidateNoForbiddenTerms("visualTimeline", JsonSerializer.Serialize(new SceneAssetsV3Timeline(Version, format, beats), JsonOptions), context.ForbiddenTerms);
+        EventContentGuard.ValidateObject("SceneAssetsV3Service", "visualTimeline", new SceneAssetsV3Timeline(Version, format, beats), context.ForbiddenTerms);
 
         try
         {
@@ -96,7 +95,7 @@ public sealed class SceneAssetsV3Service(
                 if (!File.Exists(imagePath) || overwrite && !providerSucceeded)
                     await RenderDeterministicSceneAsync(imagePath, beat, ct);
 
-                var forbiddenDetected = DetectForbiddenTerms(string.Join(Environment.NewLine, beat.NarrationBeat, beat.VisualIntent, beat.VisualPrompt), context.ForbiddenTerms);
+                var forbiddenDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beat.NarrationBeat, beat.VisualIntent, beat.VisualPrompt), context.ForbiddenTerms);
                 var providerName = providerCalled ? imageGenerator.GetType().Name : "DeterministicRenderer";
                 var azureCallsCount = providerCalled ? 1 : 0;
                 logger.LogInformation(
@@ -137,9 +136,9 @@ public sealed class SceneAssetsV3Service(
         }
 
         var manifest = new SceneAssetsV3Manifest(Version, format, manifestScenes.Count, manifestScenes);
-        ValidateNoForbiddenTerms("sceneManifest", JsonSerializer.Serialize(manifest, JsonOptions), context.ForbiddenTerms);
+        EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
-        await WriteJsonAsync(diagnosticsPath, new { version = Version, format, eventType = context.EventType, scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
+        await WriteJsonAsync(diagnosticsPath, new { version = Version, format, eventType = context.EventType, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         var repeated = duplicate;
@@ -148,7 +147,7 @@ public sealed class SceneAssetsV3Service(
         var sameCameraAngle = DetectRepeatedMetadata(beats, b => CameraSignature(b));
         var review = new SceneAssetsV3Review(manifestScenes.Count, manifestScenes.Any(s => s.RenderMode == "AccurateSkyGuideScene"), manifestScenes.Count(s => s.RenderMode is "CinematicStoryScene" or "FinalReminderScene"), manifestScenes.Count(s => s.RenderMode == "ExplainerScene"), manifestScenes.Count(s => s.RenderMode == "ViewingTipsScene"), duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, manifestScenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)), "Failed");
         review = review with { Status = ReviewPassed(review, expectedCount) ? "Passed" : "Failed" };
-        ValidateNoForbiddenTerms("sceneReview", JsonSerializer.Serialize(review, JsonOptions), context.ForbiddenTerms);
+        EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneReview", review, context.ForbiddenTerms);
         await WriteJsonAsync(reviewPath, review, ct); files.Add(reviewPath);
 
         errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, metadataPath, review, expectedCount));
@@ -306,7 +305,7 @@ public sealed class SceneAssetsV3Service(
         return new SceneAssetsV3TimelineContext(
             string.IsNullOrWhiteSpace(eventType) ? "Generic" : eventType,
             FirstString(root, "storyTheme"), FirstString(root, "visualTheme"), FirstString(root, "skyGuideTheme"),
-            ReadStringArray(root, "requiredVisualObjects").DefaultIfEmpty(FirstString(root, "title")).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            ReadAllowedVisualObjects(root),
             forbidden,
             ExtractNarrationBeats(narration.RootElement));
     }
@@ -322,11 +321,11 @@ public sealed class SceneAssetsV3Service(
         {
             var narration = i < context.NarrationBeats.Count ? context.NarrationBeats[i] : BuildFallbackNarration(context, ids[i]);
             narration = EnsureRequiredNarrationContext(context, narration);
-            ValidateNoForbiddenTerms("narrationBeat", narration, context.ForbiddenTerms);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "narrationBeat", narration, context.ForbiddenTerms);
             var intent = BuildVisualIntent(context, ids[i]);
             var prompt = BuildVisualPrompt(context, ids[i], intent);
-            ValidateNoForbiddenTerms("visualIntent", intent, context.ForbiddenTerms);
-            ValidateNoForbiddenTerms("visualPrompt", prompt, context.ForbiddenTerms);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "visualIntent", intent, context.ForbiddenTerms);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "visualPrompt", prompt, context.ForbiddenTerms);
             result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intent, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, "question-driven-narration-v2.json", "production-event-intelligence.json"));
         }
         return result;
@@ -382,12 +381,11 @@ public sealed class SceneAssetsV3Service(
     private static string? FindString(JsonElement e, string name) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (p.NameEquals(name) && p.Value.ValueKind == JsonValueKind.String) return p.Value.GetString(); var v = FindString(p.Value, name); if (!string.IsNullOrWhiteSpace(v)) return v; } else if (e.ValueKind == JsonValueKind.Array) foreach (var item in e.EnumerateArray()) { var v = FindString(item, name); if (!string.IsNullOrWhiteSpace(v)) return v; } return null; }
     private static string? ResolveFirstExisting(params string[] paths) => paths.FirstOrDefault(File.Exists);
     private static string FirstNonEmpty(params string[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
-    private static bool IsPlanetConjunction(string eventType) => eventType.Contains("CONJUNCTION", StringComparison.OrdinalIgnoreCase) || eventType.Contains("PlanetConjunction", StringComparison.OrdinalIgnoreCase) || eventType.Contains("PlanetPairing", StringComparison.OrdinalIgnoreCase);
-    private static IEnumerable<string> DefaultForbiddenTerms(string eventType) => IsPlanetConjunction(eventType) ? ["Geminids", "meteor", "meteor shower", "radiant", "Phaethon", "debris stream"] : [];
+    private static bool IsPlanetConjunction(string eventType) => EventContentGuard.IsPlanetConjunction(eventType);
+    private static IEnumerable<string> DefaultForbiddenTerms(string eventType) => EventContentGuard.DefaultForbiddenTermsForEventType(eventType);
+    private static IReadOnlyList<string> ReadAllowedVisualObjects(JsonElement root) => new[] { "primaryObjects", "secondaryObjects", "resolvedObjectNames", "requiredVisualObjects", "viewerInstructions" }.SelectMany(name => ReadStringArray(root, name)).DefaultIfEmpty(FirstString(root, "title")).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     private static string JoinNatural(IEnumerable<string> values) => string.Join(", ", values.Where(v => !string.IsNullOrWhiteSpace(v)).DefaultIfEmpty("the selected sky event"));
-    private static IReadOnlyList<string> DetectForbiddenTerms(string text, IReadOnlyList<string> terms) => terms.Where(term => ContainsTerm(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    private static void ValidateNoForbiddenTerms(string area, string text, IReadOnlyList<string> terms) { var hits = DetectForbiddenTerms(text, terms); if (hits.Count > 0) throw new InvalidOperationException($"Scene Assets V3 forbidden terms detected in {area}: {string.Join(", ", hits)}"); }
-    private static bool ContainsTerm(string text, string term) => !string.IsNullOrWhiteSpace(text) && !string.IsNullOrWhiteSpace(term) && CultureInfo.InvariantCulture.CompareInfo.IndexOf(text, term, CompareOptions.IgnoreCase) >= 0;
+    private static bool ContainsTerm(string text, string term) => EventContentGuard.DetectForbiddenTerms(text, [term]).Count > 0;
 
     private sealed record SceneAssetsV3TimelineContext(string EventType, string StoryTheme, string VisualTheme, string SkyGuideTheme, IReadOnlyList<string> RequiredVisualObjects, IReadOnlyList<string> ForbiddenTerms, IReadOnlyList<string> NarrationBeats);
 

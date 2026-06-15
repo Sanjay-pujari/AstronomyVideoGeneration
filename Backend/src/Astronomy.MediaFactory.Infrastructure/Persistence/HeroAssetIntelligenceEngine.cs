@@ -774,16 +774,16 @@ public sealed class HeroAssetStoryGenerator(
 
     private static string BuildCinematicHeroTitleOverlay(string eventTitle, string eventType, string selectedHook)
     {
-        if (IsMeteorEventType(eventType) || eventTitle.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
-            return "GEMINIDS\nMETEOR SHOWER PEAK";
+        if (IsMeteorEventType(eventType))
+            return Clean(FirstNonEmpty(selectedHook, eventTitle, "Meteor Shower")).ToUpperInvariant();
 
         return Clean(FirstNonEmpty(selectedHook, eventTitle)).ToUpperInvariant();
     }
 
     private static string BuildCinematicHeroBackgroundPrompt(string eventTitle, string eventType, string primaryObjects)
     {
-        if (IsMeteorEventType(eventType) || eventTitle.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
-            return "Azure Image2 cinematic background | premium cinematic meteor shower sky | dark mountain or open landscape horizon | bright meteor streaks across a realistic starry sky | subtle Geminids radiant feeling | NASA documentary poster and Netflix science documentary quality | clean image-only background reserved for minimal title overlay";
+        if (IsMeteorEventType(eventType))
+            return $"Azure Image2 cinematic background | premium cinematic meteor shower sky for {eventTitle} | primary sky focus: {primaryObjects} | dark mountain or open landscape horizon | event-specific meteor streaks across a realistic starry sky | NASA documentary poster and Netflix science documentary quality | clean image-only background reserved for minimal title overlay";
 
         return $"Azure Image2 cinematic background | premium emotional astronomy documentary poster for {eventTitle} | primary sky focus: {primaryObjects} | realistic night sky, dramatic atmosphere | clean image-only background reserved for minimal title overlay";
     }
@@ -911,11 +911,18 @@ public sealed class HeroAssetStoryGenerator(
 
     private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
     {
+        var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event");
+        var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
+        var objectText = ResolveHeroPromptObjectText(heroStory, intelligence);
+        var basePrompt = EventContentGuard.IsPlanetConjunction(eventType)
+            ? $"Jupiter and Venus conjunction, two bright planets in the western sky after sunset, twilight sky, angular separation 1.63 degrees, realistic horizon, premium astronomy poster, clean negative space, photorealistic, no text."
+            : $"Cinematic astronomy poster for {eventTitle}, event type {eventType}, required visual focus: {objectText}, realistic sky and horizon, premium documentary style, clean negative space, photorealistic, no text.";
+        EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)) ?? []);
         return
         [
-            ("landscape", HeroLandscapeFileName, 1920, 1080, "Wide cinematic meteor shower sky over a dark mountain horizon, Milky Way visible, multiple realistic Geminid meteor streaks, deep blue-black sky, subtle warm horizon glow, premium documentary poster composition, large clean negative space for title on left or lower third, photorealistic, National Geographic quality, no text."),
-            ("portrait", HeroPortraitFileName, 1080, 1920, "Vertical cinematic meteor shower poster, tall star-filled sky, radiant feeling overhead, mountains low at bottom, dramatic bright meteor streaks leading upward, premium astronomy campaign artwork, large clean negative space in upper or middle area for title, photorealistic, no text."),
-            ("square", HeroSquareFileName, 1080, 1080, "Balanced cinematic meteor shower scene, central Milky Way and bright meteors, dark mountain silhouette at bottom, premium astronomy poster, clean negative space for title, photorealistic, no text.")
+            ("landscape", HeroLandscapeFileName, 1920, 1080, "Wide " + basePrompt),
+            ("portrait", HeroPortraitFileName, 1080, 1920, "Vertical " + basePrompt),
+            ("square", HeroSquareFileName, 1080, 1080, "Square " + basePrompt)
         ];
     }
 
@@ -941,8 +948,8 @@ public sealed class HeroAssetStoryGenerator(
         {
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
             ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
-            var title = "GEMINIDS";
-            var subtitle = "METEOR SHOWER PEAK";
+            var title = Clean(FirstNonEmpty(selectedHook, heroStory.HeroHook, heroStory.HeroStorySource.What, "SKY EVENT")).ToUpperInvariant();
+            var subtitle = Clean(FirstNonEmpty(heroStory.HeroMessage, heroStory.HeroVisualFocus, "ASTRONOMY EVENT")).ToUpperInvariant();
             var titleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 88 : width == height ? 70 : 96, FontStyle.Bold);
             var subtitleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 42 : width == height ? 32 : 44, FontStyle.Bold);
             var x = width == 1080 && height == 1920 ? 76 : width == height ? 62 : 110;
