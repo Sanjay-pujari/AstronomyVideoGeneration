@@ -311,7 +311,12 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private async Task<IReadOnlyList<string>> PhaseBuildProductionIntelligenceAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
-        => [await WriteProductionIntelligenceAsync(context.OutputRoot, context.ProductionEventIntelligence, cancellationToken)];
+    {
+        var intelligencePath = await WriteProductionIntelligenceAsync(context.OutputRoot, context.ProductionEventIntelligence, cancellationToken);
+        var diagnosticsPath = await WriteProductionIntelligenceDiagnosticsAsync(context.OutputRoot, context.ProductionEventIntelligence, cancellationToken);
+        ValidatePlanetConjunctionPhase2(context.ProductionEventIntelligence);
+        return [intelligencePath, diagnosticsPath];
+    }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateQuestionsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
@@ -5712,6 +5717,60 @@ public sealed partial class ProductionPipelineExecutionService(
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhaseNo = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhaseNo = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), executedPhaseNumbers = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray(), skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
+
+
+    private static async Task<string> WriteProductionIntelligenceDiagnosticsAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputRoot, "plan-input", "production-event-intelligence-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var completenessFields = new object?[] { intelligence.LocalPeakTime, intelligence.BestViewingWindowLocal, intelligence.SkyDirectionHint, intelligence.VisibilityRegion, intelligence.AngularSeparationDegrees, intelligence.PrimaryObjects, intelligence.SecondaryObjects, intelligence.ResolvedObjectNames, intelligence.RelativeObjectOrder, intelligence.RequiredVisualObjects, intelligence.RequiredNarrationFacts, intelligence.VisualMotifs, intelligence.ViewerInstructions, intelligence.ForbiddenTerms };
+        var score = completenessFields.Count(HasDiagnosticValue) / (decimal)completenessFields.Length;
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+        {
+            selectedEventType = intelligence.EventType,
+            selectedStrategyId = intelligence.StrategyId,
+            intelligence.ResolvedObjectNames,
+            intelligence.AngularSeparationDegrees,
+            intelligence.LocalPeakTime,
+            intelligence.BestViewingWindowLocal,
+            intelligence.SkyDirectionHint,
+            intelligence.RequiredVisualObjects,
+            intelligence.ForbiddenTerms,
+            eventIntelligenceCompletenessScore = Math.Round(score, 2)
+        }, JsonOptions), cancellationToken);
+        return path;
+    }
+
+    private static bool HasDiagnosticValue(object? value)
+        => value switch
+        {
+            null => false,
+            string text => !string.IsNullOrWhiteSpace(text),
+            System.Collections.IEnumerable values => values.Cast<object?>().Any(),
+            _ => true
+        };
+
+    private static void ValidatePlanetConjunctionPhase2(ProductionEventIntelligence intelligence)
+    {
+        if (!IsPlanetConjunctionIntelligence(intelligence)) return;
+        var errors = new List<string>();
+        if (string.IsNullOrWhiteSpace(intelligence.LocalPeakTime)) errors.Add("PlanetConjunction localPeakTime is required before Phase 3.");
+        if (string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint)) errors.Add("PlanetConjunction skyDirectionHint is required before Phase 3.");
+        if (string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)) errors.Add("PlanetConjunction bestViewingWindowLocal is required before Phase 3.");
+        if (!intelligence.AngularSeparationDegrees.HasValue) errors.Add("PlanetConjunction angularSeparationDegrees is required before Phase 3.");
+        var names = intelligence.ResolvedObjectNames ?? [];
+        if (!names.Any(n => n.Equals("Venus", StringComparison.OrdinalIgnoreCase)) || !names.Any(n => n.Equals("Jupiter", StringComparison.OrdinalIgnoreCase))) errors.Add("PlanetConjunction resolvedObjectNames must include both Venus and Jupiter before Phase 3.");
+        var forbiddenTerms = new[] { "meteor", "meteor shower", "radiant", "Phaethon", "debris stream", "Geminids" };
+        var checkedText = string.Join(" ", intelligence.VisualTheme, intelligence.NarrationTheme, string.Join(" ", intelligence.SceneStrategy ?? []), string.Join(" ", intelligence.VisualMotifs ?? []));
+        foreach (var term in forbiddenTerms)
+            if (checkedText.Contains(term, StringComparison.OrdinalIgnoreCase)) errors.Add($"PlanetConjunction intelligence contains forbidden term '{term}' before Phase 3.");
+        if (errors.Count > 0) throw new InvalidOperationException(string.Join(" | ", errors));
+    }
+
+    private static bool IsPlanetConjunctionIntelligence(ProductionEventIntelligence intelligence)
+        => intelligence.EventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
+            || (intelligence.StrategyId?.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ?? false)
+            || intelligence.Title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
 
     private async Task<string> WriteProductionIntelligenceAsync(string outputRoot, ProductionEventIntelligence intelligence, CancellationToken cancellationToken)
     {

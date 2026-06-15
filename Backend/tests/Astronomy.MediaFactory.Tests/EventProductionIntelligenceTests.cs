@@ -140,6 +140,74 @@ public sealed class EventProductionIntelligenceTests
     }
 
     [Fact]
+    public void AstronomyAdapter_PlanetConjunctionEnrichesVenusJupiterBeforePhase3()
+    {
+        var adapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([
+            new MeteorShowerStrategy(),
+            new PlanetPairingStrategy(),
+            new PlanetGroupingStrategy(),
+            new ConjunctionStrategy(),
+            new GenericAstronomyEventStrategy()
+        ]));
+
+        var planRequest = new ContentPlanProductionPipelineRequest(
+            Guid.NewGuid(),
+            "PlanetConjunction",
+            "Venus and Jupiter conjunction",
+            "Venus + Jupiter",
+            "PLANET_CONJUNCTION",
+            "IN-RJ-UDAIPUR",
+            "en",
+            ["Venus"],
+            ["Jupiter"],
+            DateTimeOffset.Parse("2026-06-20T13:00:00Z"),
+            DateTimeOffset.Parse("2026-06-20T14:00:00Z"),
+            DateTimeOffset.Parse("2026-06-20T16:00:00Z"),
+            DateTimeOffset.Parse("2026-06-19T12:00:00Z"),
+            "venus-jupiter-conjunction-2026",
+            "ShortAndLong",
+            ["SceneAssets", "LongVideo", "ShortVideo"],
+            9m, 8m, 8m, 9m,
+            "Verified",
+            "source",
+            "Planetary conjunction in the western evening sky",
+            null,
+            null,
+            "India",
+            null,
+            null,
+            null,
+            null,
+            "publish same evening",
+            ["ShortVideo", "LongVideo"],
+            [],
+            [],
+            "Asia/Kolkata",
+            1.4m);
+
+        var result = adapter.Normalize(new ProductionPipelineRequest(planRequest, Guid.NewGuid(), "/tmp/out", false, true));
+
+        Assert.Equal("Conjunction", result.StrategyId);
+        Assert.Equal("Planetary conjunction", result.StoryTheme);
+        Assert.Equal("two bright planets close together in twilight sky", result.VisualTheme);
+        Assert.Equal("Venus and Jupiter markers with direction and altitude", result.SkyGuideTheme);
+        Assert.Equal("calm documentary explanation of apparent planetary alignment", result.NarrationTheme);
+        Assert.Equal(1.4m, result.AngularSeparationDegrees);
+        Assert.Contains("Venus", result.ResolvedObjectNames!);
+        Assert.Contains("Jupiter", result.ResolvedObjectNames!);
+        Assert.Contains("Venus", result.RequiredVisualObjects!);
+        Assert.Contains("Jupiter", result.RequiredVisualObjects!);
+        Assert.NotNull(result.LocalPeakTime);
+        Assert.NotNull(result.BestViewingWindowLocal);
+        Assert.Equal("Look toward the western sky after sunset", result.SkyDirectionHint);
+        foreach (var forbidden in new[] { "meteor", "meteor shower", "radiant", "Phaethon", "debris stream", "Geminids" })
+            Assert.Contains(forbidden, result.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        var generatedText = string.Join(" ", result.VisualTheme, result.NarrationTheme, string.Join(" ", result.SceneStrategy), string.Join(" ", result.VisualMotifs));
+        Assert.DoesNotContain("Geminids", generatedText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("debris stream", generatedText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void AstronomyAdapter_PlanetPairingSupportDoesNotChangeMeteorShowerStrategyOutput()
     {
         var meteorOnlyAdapter = new AstronomyEventProductionIntelligenceAdapter(new MediaEventStrategyResolver([

@@ -57,7 +57,9 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
             ReadString(metadata, raw, "recommendedPublishWindow"),
             ReadStringArray(metadata, raw, "recommendedContentTypes"),
             warnings,
-            sourceNotes);
+            sourceNotes,
+            ReadString(metadata, raw, "timeZone", "timezone", "ianaTimeZone") ?? intelligence.TimeZone,
+            ReadDecimal(metadata, raw, "minimumAngularSeparationDegrees", "angularSeparationDegrees", "angularSeparation", "separationDegrees"));
     }
 
     private static string ResolveContentCategoryCode(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence)
