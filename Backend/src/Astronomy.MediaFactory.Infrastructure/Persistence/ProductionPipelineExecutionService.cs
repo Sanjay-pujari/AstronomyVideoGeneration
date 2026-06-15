@@ -4272,8 +4272,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<Phase19AudioChecks> BuildPhase19AudioChecksAsync(string shortVideoPath, string longVideoPath, CancellationToken cancellationToken)
     {
-        var shortLevels = File.Exists(shortVideoPath) ? await ProbeAudioLevelsAsync(shortVideoPath, cancellationToken) : (-120d, -120d);
-        var longLevels = File.Exists(longVideoPath) ? await ProbeAudioLevelsAsync(longVideoPath, cancellationToken) : (-120d, -120d);
+        var shortLevels = File.Exists(shortVideoPath) ? await ProbeAudioLevelsAsync(shortVideoPath, cancellationToken) : (PeakDb: -120d, RmsDb: -120d);
+        var longLevels = File.Exists(longVideoPath) ? await ProbeAudioLevelsAsync(longVideoPath, cancellationToken) : (PeakDb: -120d, RmsDb: -120d);
         var peak = Math.Max(shortLevels.PeakDb, longLevels.PeakDb);
         var rms = Math.Max(shortLevels.RmsDb, longLevels.RmsDb);
         var narrationAudible = rms > -35;
