@@ -312,6 +312,12 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(File.Exists(Path.Combine(thumbnailRoot, "thumbnail-final.png")));
         using var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-review.json")));
         Assert.True(review.RootElement.GetProperty("semanticValidationPassed").GetBoolean());
+
+        using var phase12Validation = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "phase-12-validation.json")));
+        Assert.Equal("PlanetaryEvent", phase12Validation.RootElement.GetProperty("detectedEventFamily").GetString());
+        Assert.Equal("PlanetaryEvent", phase12Validation.RootElement.GetProperty("overlayEventFamily").GetString());
+        Assert.Equal("PlanetaryEvent", phase12Validation.RootElement.GetProperty("thumbnailEventFamily").GetString());
+
         var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
         Assert.Contains("Jupiter", promptText);
         Assert.Contains("Venus", promptText);
@@ -627,6 +633,11 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(review.RootElement.GetProperty("semanticValidationPassed").GetBoolean());
         Assert.False(review.RootElement.GetProperty("goldenPilotLeakageDetected").GetBoolean());
         Assert.Empty(review.RootElement.GetProperty("forbiddenObjectsDetected").EnumerateArray());
+
+        using var phase12Validation = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "phase-12-validation.json")));
+        Assert.Equal("MeteorEvent", phase12Validation.RootElement.GetProperty("detectedEventFamily").GetString());
+        Assert.Equal("MeteorEvent", phase12Validation.RootElement.GetProperty("overlayEventFamily").GetString());
+        Assert.Equal("MeteorEvent", phase12Validation.RootElement.GetProperty("thumbnailEventFamily").GetString());
 
         var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
         Assert.Contains("GEMINIDS", promptText);
