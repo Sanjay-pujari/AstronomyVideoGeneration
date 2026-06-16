@@ -451,6 +451,8 @@ public sealed class HeroAssetStoryGenerator(
 
             heroDiagnosticsStopwatch.Stop();
             await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
+            await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
+            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json")));
             await WriteHeroV5GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
@@ -917,16 +919,47 @@ public sealed class HeroAssetStoryGenerator(
         var objectText = ResolveHeroPromptObjectText(heroStory, intelligence);
         var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? intelligence?.LocalPeakTime ?? intelligence?.BestViewingWindowLocal ?? "peak window";
         var directionText = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "event-approved viewing direction");
-        var basePrompt = $"Cinematic astronomy poster for {eventTitle}, event type {eventType}, required visual focus: {objectText}, absolute date/time: {dateText}, primary viewing direction: {directionText}, most important visual objects only from event intelligence, realistic sky and horizon, premium documentary style, clean negative space, photorealistic, no text, no unrelated event imagery.";
-        EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)) ?? []);
+        var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "premium event-poster astronomy");
+        var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "clear where-to-look sky guidance");
+        var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var basePrompt = $"Event poster style astronomy image. What event: {eventTitle}. Event type: {eventType}. Absolute date/time: {dateText}. Where to look: {directionText}. Key objects / resolved object names: {objectText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: deterministic poster overlay with event, date/time, where-to-look, key objects. Forbidden terms policy: exclude event-profile forbidden concepts. No relative date words in overlay. No embedded text in generated background, no watermark, no logo, no unrelated event imagery.";
+        EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, forbidden);
         return
         [
-            ("landscape", HeroLandscapeFileName, 1920, 1080, "Wide " + basePrompt),
-            ("portrait", HeroPortraitFileName, 1080, 1920, "Vertical " + basePrompt),
-            ("square", HeroSquareFileName, 1080, 1080, "Square " + basePrompt)
+            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHook. Composition type: wide cinematic event poster. Prompt variation: landscape poster with large sky objects and horizon direction cue. {basePrompt}"),
+            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: HumanObservation. Composition type: vertical mobile event poster with observer scale. Prompt variation: tall sky stack, oversized key objects, safe top/bottom copy space. {basePrompt}"),
+            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: SkyGuide. Composition type: square centered poster guide. Prompt variation: bold central object pairing with simple directional horizon. {basePrompt}")
         ];
     }
 
+
+    private static async Task WriteHeroVisualPromptDiagnosticsAsync(string heroAssetsRoot, IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> variants, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
+    {
+        var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
+        var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var prompts = variants.Select(v => v.Prompt).ToArray();
+        var mainText = FirstNonEmpty(intelligence?.Title, intelligence?.ShortTitle, "Sky event");
+        var direction = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "approved viewing direction");
+        var dateTime = FirstNonEmpty(intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "peak window");
+        await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
+        {
+            phaseNo = 11,
+            product = "Hero V6",
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "event poster", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
+            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
+            promptDiversityScore = CalculatePromptDiversityScore(prompts),
+            repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
+            forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts), forbidden),
+            finalPrompts = variants.Select(v => new { imageId = v.Variant, fileName = v.FileName, width = v.Width, height = v.Height, finalPrompt = v.Prompt })
+        }, JsonOptions), cancellationToken);
+    }
+
+    private static int CalculatePromptDiversityScore(IEnumerable<string> prompts)
+    {
+        var list = prompts.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
+        return list.Length <= 1 ? 100 : (int)Math.Round(100.0 * list.Distinct(StringComparer.OrdinalIgnoreCase).Count() / list.Length, MidpointRounding.AwayFromZero);
+    }
 
     private static string ResolveHeroPromptObjectText(HeroAssetStoryDto heroStory, ProductionEventIntelligence? intelligence)
     {

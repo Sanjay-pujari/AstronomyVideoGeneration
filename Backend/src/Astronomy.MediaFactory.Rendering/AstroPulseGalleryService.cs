@@ -70,6 +70,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var manifestPath = Path.Combine(outputDirectory, "gallery-manifest.json");
         var reviewPath = Path.Combine(outputDirectory, "gallery-review.json");
         var diagnosticsPath = Path.Combine(outputDirectory, "gallery-generation-diagnostics.json");
+        var visualPromptDiagnosticsPath = Path.Combine(outputDirectory, "visual-prompt-diagnostics.json");
         var validationPath = Path.Combine(outputDirectory, "phase-13-validation.json");
         var valid = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6;
 
@@ -79,6 +80,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V3", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new { accepted = valid, style = "social-media carousel", rejectedStyle = "PowerPoint infographic slide deck", galleryTopicsGenerated = topics.Count, noSharedBackground = true, noDuplicateConcepts = topics.Select(t => t.Concept).Distinct(StringComparer.OrdinalIgnoreCase).Count() == topics.Count, noDuplicateImageHashes = hashes.Count == topics.Count, mobileReadable = true, oneEducationalMessagePerImage = true, skyVisualDominant = true, textAreaMaxPercent = 25 }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = Array.Empty<string>() }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(BuildVisualPromptDiagnostics(galleryContext, topics), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid ? "Succeeded" : "Failed", exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, phase12Executed = false, thumbnailRegenerationOccurred = false }, JsonOptions), cancellationToken);
         return new AstroPulseGalleryResult(outputDirectory, imagePaths, reviewPath, manifestPath, diagnosticsPath, validationPath);
     }
@@ -109,6 +111,28 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         ctx.DrawText(topic.TextBlocks[0], title, Color.White, new PointF(pad, top));
         for (var i = 1; i < topic.TextBlocks.Count; i++)
             ctx.DrawText(topic.TextBlocks[i], body, i == 1 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(pad, top + a.Height * (.075f * i)));
+    }
+
+    private static object BuildVisualPromptDiagnostics(GalleryContext context, IReadOnlyList<GalleryTopic> topics)
+    {
+        var prompts = topics.Select(t => t.AzureImage2Prompt).ToArray();
+        return new
+        {
+            phaseNo = 13,
+            product = "Gallery V3",
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = true, eventType = context.EventType, resolvedObjectNames = context.Objects, visualTheme = context.VisualTheme, skyGuideTheme = context.StoryTheme, forbiddenTerms = context.ForbiddenTerms },
+            promptDiversityScore = CalculatePromptDiversityScore(prompts),
+            repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
+            forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts), context.ForbiddenTerms),
+            finalPrompts = topics.Select(t => new { imageId = $"gallery-{t.Number:00}", fileName = $"gallery-{t.Number:00}.png", finalPrompt = t.AzureImage2Prompt, t.VisualIntent, compositionType = t.Concept, promptVariation = t.Purpose, t.OverlayStyle, textBlocks = t.TextBlocks })
+        };
+    }
+
+    private static int CalculatePromptDiversityScore(IEnumerable<string> prompts)
+    {
+        var list = prompts.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
+        return list.Length <= 1 ? 100 : (int)Math.Round(100.0 * list.Distinct(StringComparer.OrdinalIgnoreCase).Count() / list.Length, MidpointRounding.AwayFromZero);
     }
 
     private async Task<AzureImage2GenerationResult> GenerateBackgroundWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, AstroPulseGalleryAspect aspect, CancellationToken ct)

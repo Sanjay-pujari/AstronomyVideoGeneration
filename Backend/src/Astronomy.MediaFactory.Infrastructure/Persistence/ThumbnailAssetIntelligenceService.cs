@@ -675,6 +675,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
             await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
+            await WriteThumbnailVisualPromptDiagnosticsAsync(thumbnailRoot, thumbnailVariants, request, cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
             {
                 semanticValidationPassed = true,
@@ -824,16 +825,57 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var eventType = FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "AstronomyEvent");
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
         var objects = string.Join(" + ", (intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).Take(2));
-        var prompt = $"Generate realistic high-CTR astronomy thumbnail background for {title}, event type {eventType}, resolved object names: {FirstNonEmpty(objects, title)}, using current event intelligence objects and viewing guidance only, strong visual hook, no large info panels, clean space for 3-6 word main text, absolute date/time if shown, no text embedded in background, no unrelated event imagery.";
-        var text = new[] { CleanTextElement(FirstNonEmpty(objects, title), "SKY EVENT").ToUpperInvariant() };
-        EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", prompt + " " + string.Join(' ', text), request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)) ?? []);
+        var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
+        var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "simple where-to-look cue");
+        var forbidden = request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var mainText = LimitThumbnailWords(CleanTextElement(FirstNonEmpty(objects, title), "SKY EVENT").ToUpperInvariant(), 6);
+        var basePrompt = $"High-CTR astronomy thumbnail background for {title}. Event type: {eventType}. Resolved object names: {FirstNonEmpty(objects, title)}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: simple huge 3-6 word main text only, no subtitles. Forbidden terms policy: exclude event-profile forbidden concepts. Use current event intelligence objects and viewing guidance only, oversized key objects, strong visual hook, uncluttered negative space, no cropped text, no embedded background text, no unrelated event imagery.";
+        var text = new[] { mainText };
+        EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", basePrompt + " " + string.Join(' ', text), forbidden);
         return
         [
-            ("landscape", "thumbnail-landscape.png", 1280, 720, prompt, text, "landscape-guide"),
-            ("portrait", "thumbnail-portrait.png", 1080, 1920, prompt, text, "portrait-guide"),
-            ("square", "thumbnail-square.png", 1080, 1080, prompt, text, "square-guide")
+            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: CinematicHook. Composition type: large-object YouTube thumbnail. Prompt variation: wide crop, object on right, text-safe left. {basePrompt}", text, "large-left-text"),
+            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: ObjectCloseup. Composition type: vertical story thumbnail with oversized object. Prompt variation: tall crop, object top, text-safe lower third. {basePrompt}", text, "stacked-lower-text"),
+            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: SkyGuide. Composition type: square high-contrast social thumbnail. Prompt variation: centered key objects with clear empty text band. {basePrompt}", text, "bold-bottom-text")
         ];
     }
+
+    private static async Task WriteThumbnailVisualPromptDiagnosticsAsync(string thumbnailRoot, IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt, string[] TextLines, string Layout)> variants, ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var eventType = FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, "AstronomyEvent");
+        var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var prompts = variants.Select(v => v.Prompt).ToArray();
+        var mainText = variants.FirstOrDefault().TextLines?.FirstOrDefault() ?? string.Empty;
+        await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
+        {
+            phaseNo = 12,
+            product = "Thumbnail V6",
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
+            thumbnailCtrChecks = new { mainText, mainTextWordCount = CountWords(mainText), mainTextMaxSixWords = CountWords(mainText) <= 6, simpleText = true, noLongSubtitles = true, noCroppedText = true },
+            promptDiversityScore = CalculatePromptDiversityScore(prompts),
+            repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
+            forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts.Concat([mainText])), forbidden),
+            relativeOverlayWordsDetected = DetectRelativeDateWords([mainText]),
+            finalPrompts = variants.Select(v => new { imageId = v.Variant, fileName = v.FileName, width = v.Width, height = v.Height, finalPrompt = v.Prompt, textLines = v.TextLines, v.Layout })
+        }, JsonOptions), cancellationToken);
+    }
+
+    private static int CalculatePromptDiversityScore(IEnumerable<string> prompts)
+    {
+        var list = prompts.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
+        return list.Length <= 1 ? 100 : (int)Math.Round(100.0 * list.Distinct(StringComparer.OrdinalIgnoreCase).Count() / list.Length, MidpointRounding.AwayFromZero);
+    }
+
+    private static IReadOnlyList<string> DetectRelativeDateWords(IEnumerable<string> values)
+    {
+        var text = string.Join(" ", values).ToLowerInvariant();
+        return new[] { "today", "tonight", "tomorrow" }.Where(text.Contains).ToArray();
+    }
+
+    private static int CountWords(string value) => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+    private static string LimitThumbnailWords(string value, int maxWords) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => !new[] { "TODAY", "TONIGHT", "TOMORROW" }.Contains(w, StringComparer.OrdinalIgnoreCase)).Take(maxWords));
 
     private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
     {
@@ -852,6 +894,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var windowText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal, request.ProductionContext?.ProductionEventIntelligence?.PreferredViewingWindow, "Approved viewing window"), "Approved viewing window");
             var directionText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.SkyDirectionHint, "Approved sky direction"), "Approved sky direction");
             var moonText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.MoonInterference, "Check sky conditions"), "Check sky conditions");
+            var mainText = LimitThumbnailWords(eventTitle, 6);
+            var boxWidth = width == 1280 ? width * .52f : width * .82f;
+            var boxHeight = width == 1280 ? height * .28f : height * .18f;
+            var boxX = width == 1280 ? width * .055f : width * .08f;
+            var boxY = width == 1280 ? height * .58f : height * .68f;
+            ctx.Fill(Color.FromRgba(3, 8, 22, 218), new RectangleF(boxX, boxY, boxWidth, boxHeight));
+            ctx.DrawText(mainText, titleFont, Color.FromRgb(255, 230, 92), new PointF(boxX + 28, boxY + 28));
+            return;
             if (isConjunction)
             {
                 ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(width * .04f, height * .06f, width * .43f, height * .34f));

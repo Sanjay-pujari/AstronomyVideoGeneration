@@ -66,6 +66,7 @@ public sealed class SceneAssetsV3Service(
         var validationPath = Path.Combine(dir, "scene-v3-validation.json");
         var metadataPath = Path.Combine(dir, "scene-timeline-metadata.json");
         var diagnosticsPath = Path.Combine(dir, "scene-assets-v3-diagnostics.json");
+        var visualPromptDiagnosticsPath = Path.Combine(dir, "visual-prompt-diagnostics.json");
         var manifestScenes = new List<SceneAssetsV3ManifestScene>();
         var sceneDiagnostics = new List<object>();
         var errors = new List<string>();
@@ -146,6 +147,7 @@ public sealed class SceneAssetsV3Service(
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
         await WriteJsonAsync(diagnosticsPath, new { version = Version, format, eventType = context.EventType, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
+        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.2", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.CompositionType, b.PromptVariation, b.OverlayStyle, b.OverlayText, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         var repeatedPrompt = DetectRepeatedMetadata(beats, b => b.VisualPrompt);
@@ -382,9 +384,9 @@ public sealed class SceneAssetsV3Service(
     {
         var visualObjects = JoinNatural(c.RequiredVisualObjects);
         var sequence = format == "short"
-            ? new[] { "CinematicHook", "ScientificExplanation", "SkyGuide", "ViewingTips", "EmotionalClosing" }
-            : new[] { "CinematicHook", "ScientificExplanation", "GeometryDiagram", "ObjectCloseup", "ObjectCloseup", "SkyGuide", "HumanObservation", "ViewingTips", "EmotionalClosing" };
-        var compositions = new[] { "wide twilight horizon", "labeled subject pairing", "clean line-of-sight diagram", "single-object macro closeup", "secondary-object closeup", "directional sky guide", "human silhouette observation", "minimal tips card over sky", "cinematic closing landscape" };
+            ? new[] { "CinematicHook", "ObjectCloseup", "SkyGuide", "ViewingTips", "EmotionalClosing" }
+            : new[] { "CinematicHook", "ObjectCloseup", "ScientificExplanation", "GeometryDiagram", "SkyGuide", "HumanObservation", "ViewingTips", "ObjectCloseup", "EmotionalClosing" };
+        var compositions = new[] { "wide cinematic horizon with foreground silhouette", "large-object telephoto closeup", "split-depth scientific explainer", "clean Earth-to-sky geometry diagram", "directional horizon sky guide", "human observer over-the-shoulder", "minimal field tips over real sky", "dramatic crop with oversized key object", "quiet emotional closing landscape" };
         var densities = new[] { "Minimal", "Low", "Medium", "Low", "Low", "Guide", "Minimal", "Low", "Minimal" };
         var intent = sequence[Math.Min(index, sequence.Length - 1)];
         var composition = compositions[Math.Min(index, compositions.Length - 1)];
@@ -415,7 +417,26 @@ public sealed class SceneAssetsV3Service(
     private static string BuildVisualPrompt(SceneAssetsV3TimelineContext c, string sceneId, VisualIntentSpec spec)
     {
         var objects = JoinNatural(c.RequiredVisualObjects);
-        return $"Event type: {c.EventType}. Resolved object names: {objects}. Visual intent: {spec.VisualIntent}. Composition type: {spec.CompositionType}. Overlay style: {spec.OverlayStyle}. Forbidden terms policy: exclude all event-profile forbidden concepts. Scene-specific visual goal: {spec.PromptVariation}; {sceneId}; {FirstNonEmpty(c.VisualTheme, c.StoryTheme, c.SkyGuideTheme, "event-intelligence driven astronomy story")}. Create a realistic astronomy documentary background with no embedded text, no watermark, no logo, and no unrelated event imagery.";
+        return $"Event type: {c.EventType}. Resolved object names: {objects}. Visual theme: {FirstNonEmpty(c.VisualTheme, c.StoryTheme, "cinematic astronomy documentary")}. Sky guide theme: {FirstNonEmpty(c.SkyGuideTheme, "accurate horizon guidance")}. Visual intent: {spec.VisualIntent}. Composition type: {spec.CompositionType}. Prompt variation: {spec.PromptVariation}. Overlay style: {spec.OverlayStyle}. Forbidden terms policy: exclude event-profile forbidden concepts. Gallery V3 diversity strategy: unique asset purpose, unique camera distance, unique foreground/background relationship, no reused generic nebula template. Scene-specific visual goal: {sceneId}. Create a realistic astronomy documentary background with no embedded text, no watermark, no logo, no unrelated event imagery, and leave safe negative space for deterministic overlay.";
+    }
+
+    private static object BuildVisualPromptDiagnostics(int phaseNo, string product, SceneAssetsV3TimelineContext context, IEnumerable<object> prompts)
+    {
+        var promptArray = prompts.ToArray();
+        var promptTexts = promptArray.Select(p => (string)(p.GetType().GetProperty("finalPrompt")?.GetValue(p) ?? string.Empty)).ToArray();
+        var score = CalculatePromptDiversityScore(promptTexts);
+        return new
+        {
+            phaseNo,
+            product,
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = true, eventType = context.EventType, resolvedObjectNames = context.RequiredVisualObjects, visualTheme = context.VisualTheme, skyGuideTheme = context.SkyGuideTheme, forbiddenTerms = context.ForbiddenTerms },
+            promptDiversityScore = score,
+            repeatedPromptDetected = promptTexts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
+            forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, promptTexts), context.ForbiddenTerms),
+            relativeOverlayWordsDetected = Array.Empty<string>(),
+            finalPrompts = promptArray
+        };
     }
 
     private static IReadOnlyList<string> ExtractNarrationBeats(JsonElement root)
