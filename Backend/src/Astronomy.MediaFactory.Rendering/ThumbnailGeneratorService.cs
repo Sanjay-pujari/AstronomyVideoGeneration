@@ -137,7 +137,7 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
             : eventType;
         var objectCopy = ToThumbnailCopy(FirstNonEmpty(eventObjectContext.ObjectPairText, eventObjectContext.PrimaryObjectName, headline));
 
-        return [headline, eventCopy, objectCopy]
+        return new[] { headline, eventCopy, objectCopy }
             .Where(v => !string.IsNullOrWhiteSpace(v))
             .Select(ToThumbnailCopy)
             .Distinct(StringComparer.OrdinalIgnoreCase)
