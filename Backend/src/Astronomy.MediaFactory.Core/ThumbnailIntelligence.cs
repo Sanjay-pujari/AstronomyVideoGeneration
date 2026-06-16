@@ -183,7 +183,21 @@ public sealed record ThumbnailIntelligenceDto(
     IReadOnlyList<ThumbnailPlatformTargetDto> PlatformTargets,
     ThumbnailReadinessScoresDto Scores,
     IReadOnlyList<string> Warnings,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    string? EventFamily = null,
+    string? ThumbnailOverlayTemplate = null,
+    PlanetaryThumbnailGuideCardDto? GuideCard = null,
+    IReadOnlyList<string>? ObjectLabels = null,
+    IReadOnlyList<string>? Callouts = null,
+    string? SkyGuideCue = null);
+
+public sealed record PlanetaryThumbnailGuideCardDto(
+    string Date,
+    string BestTime,
+    string Direction,
+    string ViewingWindow,
+    string? Separation,
+    string? Altitude);
 
 public sealed record ThumbnailHookScoreDto(
     string Hook,
