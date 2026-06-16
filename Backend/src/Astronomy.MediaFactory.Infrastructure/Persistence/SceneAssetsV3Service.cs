@@ -248,11 +248,11 @@ public sealed class SceneAssetsV3Service(
 
         if (beat.SceneGuideType.Equals("PlanetConjunction", StringComparison.OrdinalIgnoreCase))
         {
-            var first = new PointF(900, 430);
-            var second = new PointF(1010, 400);
-            ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(first, 15));
-            ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(second, 13));
-            ctx.DrawLine(Color.FromRgb(120, 210, 255), 4, first, second);
+            var conjunctionPrimary = new PointF(900, 430);
+            var conjunctionSecondary = new PointF(1010, 400);
+            ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(conjunctionPrimary, 15));
+            ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(conjunctionSecondary, 13));
+            ctx.DrawLine(Color.FromRgb(120, 210, 255), 4, conjunctionPrimary, conjunctionSecondary);
             ctx.DrawText("object labels", label, Color.FromRgb(255, 245, 190), new PointF(805, 462));
             ctx.DrawText("separation", label, Color.FromRgb(120, 210, 255), new PointF(902, 342));
             ctx.DrawText("altitude", label, Color.FromRgb(235, 242, 248), new PointF(1180, 625));
