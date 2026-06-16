@@ -668,7 +668,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 thumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode,
                 finalThumbnailPath: finalPath);
             if (!IsPlanetaryEvent(prompt.EventType)) ValidateRc1ThumbnailContract(prompt.CtrOverlay, thumbnailVariants.Select(v => v.Layout));
-            var finalPromptText = JsonSerializer.Serialize(new { prompt, variants = thumbnailVariants }, JsonOptions);
+            var finalPromptText = JsonSerializer.Serialize(new
+            {
+                prompt,
+                variants = thumbnailVariants,
+                eventFamily = semanticProfile.ResolvedEventFamily,
+                eventFamilyResolverInput = semanticProfile.EventFamilyResolverInput,
+                eventFamilyResolverReason = semanticProfile.EventFamilyResolverReason,
+                eventFamilyProfileName = semanticProfile.EventFamilyProfileName,
+                eventFamilyProfileVersion = semanticProfile.EventFamilyProfileVersion
+            }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
             var thumbnailTotalStopwatch = Stopwatch.StartNew();
             var thumbnailVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
@@ -756,7 +765,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 thumbnailVocabularyProfile = prompt.ThumbnailVocabularyProfile,
                 thumbnailEventType = semanticProfile.EventType,
                 eventType = semanticProfile.EventType,
-                eventFamily = semanticProfile.EventFamily,
+                eventFamily = semanticProfile.ResolvedEventFamily,
+                legacyEventFamily = semanticProfile.EventFamily,
+                eventFamilyResolverInput = semanticProfile.EventFamilyResolverInput,
+                eventFamilyResolverReason = semanticProfile.EventFamilyResolverReason,
+                eventFamilyProfileName = semanticProfile.EventFamilyProfileName,
+                eventFamilyProfileVersion = semanticProfile.EventFamilyProfileVersion,
                 expectedObjects = semanticProfile.ExpectedObjects,
                 forbiddenTermsApplied = semanticProfile.ForbiddenTermsApplied,
                 forbiddenTermsSkippedBecauseExpected = semanticProfile.ForbiddenTermsSkippedBecauseExpected,
@@ -812,7 +826,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 thumbnailRulesPassed = actualOutputsExist,
                 thumbnailEventType = semanticProfile.EventType,
                 eventType = semanticProfile.EventType,
-                eventFamily = semanticProfile.EventFamily,
+                eventFamily = semanticProfile.ResolvedEventFamily,
+                legacyEventFamily = semanticProfile.EventFamily,
+                eventFamilyResolverInput = semanticProfile.EventFamilyResolverInput,
+                eventFamilyResolverReason = semanticProfile.EventFamilyResolverReason,
+                eventFamilyProfileName = semanticProfile.EventFamilyProfileName,
+                eventFamilyProfileVersion = semanticProfile.EventFamilyProfileVersion,
                 expectedObjects = semanticProfile.ExpectedObjects,
                 forbiddenTermsApplied = semanticProfile.ForbiddenTermsApplied,
                 forbiddenTermsSkippedBecauseExpected = semanticProfile.ForbiddenTermsSkippedBecauseExpected,
@@ -1128,7 +1147,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             generatedAtUtc = DateTimeOffset.UtcNow,
             requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : IsPlanetaryEvent(eventType) ? "PlanetarySkyGuideThumbnail" : "RC1CinematicThumbnail", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
             eventType = validationProfile.EventType,
-            eventFamily = validationProfile.EventFamily,
+            eventFamily = validationProfile.ResolvedEventFamily,
+            legacyEventFamily = validationProfile.EventFamily,
+            eventFamilyResolverInput = validationProfile.EventFamilyResolverInput,
+            eventFamilyResolverReason = validationProfile.EventFamilyResolverReason,
+            eventFamilyProfileName = validationProfile.EventFamilyProfileName,
+            eventFamilyProfileVersion = validationProfile.EventFamilyProfileVersion,
             expectedObjects = validationProfile.ExpectedObjects,
             forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
             forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
@@ -1207,7 +1231,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTermsDetected,
             goldenPilotLeakageDetected,
             eventType = validationProfile.EventType,
-            eventFamily = validationProfile.EventFamily,
+            eventFamily = validationProfile.ResolvedEventFamily,
+            legacyEventFamily = validationProfile.EventFamily,
+            eventFamilyResolverInput = validationProfile.EventFamilyResolverInput,
+            eventFamilyResolverReason = validationProfile.EventFamilyResolverReason,
+            eventFamilyProfileName = validationProfile.EventFamilyProfileName,
+            eventFamilyProfileVersion = validationProfile.EventFamilyProfileVersion,
             expectedObjects = validationProfile.ExpectedObjects,
             forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
             forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
@@ -2179,6 +2208,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return terms.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    private static EventFamilyResolution ResolveEventFamily(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects)
+        => EventFamilyResolver.ResolveWithDiagnostics(eventType, contentCategoryCode, primaryObjects, secondaryObjects);
+
     private static ThumbnailValidatorProfile ResolveThumbnailValidatorProfile(ThumbnailAssetGenerationRequest request)
     {
         var current = BuildCurrentEventLock(request);
@@ -2205,19 +2237,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 : NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []));
         var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
         var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
+        var familyResolution = ResolveEventFamily(current.EventType, request.ProductionContext?.Category, current.PrimaryObjects, current.SecondaryObjects);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
         return new ThumbnailValidatorProfile(
             current.EventType,
             eventFamily,
             expectedObjects,
             applied,
             skipped,
-            validatorProfile);
+            validatorProfile,
+            familyResolution.Family.ToString(),
+            familyResolution.Input,
+            familyResolution.Reason,
+            familyProfile.GetType().Name,
+            EventFamilyProfiles.Version);
     }
 
     private static ThumbnailValidatorProfile ResolveThumbnailValidatorProfile(CurrentEventLock? current)
     {
         if (current is null)
-            return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent");
+            return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent", EventFamily.Unknown.ToString(), EventFamilyResolver.ResolveWithDiagnostics(null, null, [], []).Input, "No current event lock was available.", nameof(EventFamilyProfileBase), EventFamilyProfiles.Version);
         var expectedObjects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects).Concat(current.RequiredVisualObjects));
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
@@ -2234,7 +2273,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             : NormalizeObjectList(current.ForbiddenObjectNames);
         var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
         var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
-        return new ThumbnailValidatorProfile(current.EventType, eventFamily, expectedObjects, applied, skipped, validatorProfile);
+        var familyResolution = ResolveEventFamily(current.EventType, current.Category, current.PrimaryObjects, current.SecondaryObjects);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
+        return new ThumbnailValidatorProfile(current.EventType, eventFamily, expectedObjects, applied, skipped, validatorProfile, familyResolution.Family.ToString(), familyResolution.Input, familyResolution.Reason, familyProfile.GetType().Name, EventFamilyProfiles.Version);
     }
 
     private static IReadOnlyList<string> DetectThumbnailForbiddenTerms(ThumbnailValidatorProfile profile, IEnumerable<string> thumbnailMetadataAndOverlayText)
@@ -2959,7 +3000,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTermsDetected,
             goldenPilotLeakageDetected,
             eventType = validationProfile.EventType,
-            eventFamily = validationProfile.EventFamily,
+            eventFamily = validationProfile.ResolvedEventFamily,
+            legacyEventFamily = validationProfile.EventFamily,
+            eventFamilyResolverInput = validationProfile.EventFamilyResolverInput,
+            eventFamilyResolverReason = validationProfile.EventFamilyResolverReason,
+            eventFamilyProfileName = validationProfile.EventFamilyProfileName,
+            eventFamilyProfileVersion = validationProfile.EventFamilyProfileVersion,
             expectedObjects = validationProfile.ExpectedObjects,
             forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
             forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
@@ -3310,7 +3356,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         IReadOnlyList<string> ExpectedObjects,
         IReadOnlyList<string> ForbiddenTermsApplied,
         IReadOnlyList<string> ForbiddenTermsSkippedBecauseExpected,
-        string ValidatorProfile);
+        string ValidatorProfile,
+        string ResolvedEventFamily,
+        IReadOnlyDictionary<string, object> EventFamilyResolverInput,
+        string EventFamilyResolverReason,
+        string EventFamilyProfileName,
+        string EventFamilyProfileVersion);
 
     private sealed record CurrentEventLock(
         string PlanId,
