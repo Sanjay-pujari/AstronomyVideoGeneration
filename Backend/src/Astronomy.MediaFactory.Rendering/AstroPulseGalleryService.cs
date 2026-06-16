@@ -116,12 +116,20 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static object BuildVisualPromptDiagnostics(GalleryContext context, IReadOnlyList<GalleryTopic> topics)
     {
         var prompts = topics.Select(t => t.AzureImage2Prompt).ToArray();
+        var hardcodedTerms = EventObjectContextBuilder.DetectBannedHardcodedTerms(string.Join(Environment.NewLine, prompts.Concat(topics.SelectMany(t => t.TextBlocks))));
         return new
         {
             phaseNo = 13,
             product = "Gallery V3",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = true, eventType = context.EventType, resolvedObjectNames = context.Objects, visualTheme = context.VisualTheme, skyGuideTheme = context.StoryTheme, forbiddenTerms = context.ForbiddenTerms },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = true, eventType = context.EventType, resolvedObjectNames = context.EventObjectContext.ObjectNames, visualTheme = context.VisualTheme, skyGuideTheme = context.StoryTheme, forbiddenTerms = context.ForbiddenTerms },
+            eventObjectContext = context.EventObjectContext.ToDiagnostics(),
+            objectNamesSource = context.EventObjectContext.ObjectNamesSource,
+            cleanObjectNames = context.EventObjectContext.ObjectNames,
+            removedInvalidObjectNameCandidates = context.EventObjectContext.RemovedInvalidObjectNameCandidates,
+            hardcodedObjectTermsDetected = hardcodedTerms,
+            objectNameValidationPassed = context.EventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
+            runtimeHardcodingDetected = hardcodedTerms.Count > 0,
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts), context.ForbiddenTerms),
@@ -174,20 +182,19 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var root = Directory.GetParent(outputDirectory)?.FullName ?? outputDirectory;
         var path = Path.Combine(root, "plan-input", "production-event-intelligence.json");
         if (!File.Exists(path))
-            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, ["selected sky event"], []);
+            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, EventObjectContextBuilder.FromJsonValues("AstronomyEvent", "Selected astronomy event", [], [], [], ["selected sky event"]), []);
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var eventType = FirstString(doc.RootElement, "eventType", "strategyId");
         var title = FirstString(doc.RootElement, "title", "shortTitle");
         var forbidden = ReadStringArray(doc.RootElement, "forbiddenTerms").Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var objects = new[] { "primaryObjects", "secondaryObjects", "resolvedObjectNames", "requiredVisualObjects" }.SelectMany(name => ReadStringArray(doc.RootElement, name)).Select(CleanObjectName).Where(IsCleanObjectName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (EventContentGuard.IsPlanetConjunction(eventType) && objects.Any(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Equals("Venus", StringComparison.OrdinalIgnoreCase))) objects = ["Jupiter", "Venus"];
-        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), objects.Length == 0 ? [title] : objects, forbidden);
+        var eventObjectContext = EventObjectContextBuilder.FromJsonValues(eventType, title, ReadStringArray(doc.RootElement, "resolvedObjectNames"), ReadStringArray(doc.RootElement, "primaryObjects"), ReadStringArray(doc.RootElement, "secondaryObjects"), ReadStringArray(doc.RootElement, "requiredVisualObjects"));
+        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), eventObjectContext, forbidden);
     }
 
     private static List<GalleryTopic> BuildTopics(GalleryContext context)
     {
         var title = CleanGalleryTitle(context.Title);
-        var objectText = string.Join(", ", context.Objects.Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(title));
+        var objectText = string.Join(", ", context.EventObjectContext.ObjectNames.Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(title));
         var basePrompt = $"Event type: {context.EventType}. Resolved object names: {objectText}. Forbidden terms policy: exclude event-profile forbidden concepts.";
         return
         [
@@ -215,7 +222,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static string[] ReadStringArray(JsonElement root, string propertyName) { var values = new List<string>(); CollectArrayValues(root, propertyName, values); return values.ToArray(); }
     private static void CollectArrayValues(JsonElement e, string name, List<string> values) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (p.NameEquals(name) && p.Value.ValueKind == JsonValueKind.Array) values.AddRange(p.Value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Where(x => !string.IsNullOrWhiteSpace(x))); else CollectArrayValues(p.Value, name, values); } else if (e.ValueKind == JsonValueKind.Array) foreach (var item in e.EnumerateArray()) CollectArrayValues(item, name, values); }
 
-    private sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, IReadOnlyList<string> Objects, IReadOnlyList<string> ForbiddenTerms);
+    private sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms);
 
     private sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string VisualIntent, string OverlayStyle, string AzureImage2Prompt);
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
