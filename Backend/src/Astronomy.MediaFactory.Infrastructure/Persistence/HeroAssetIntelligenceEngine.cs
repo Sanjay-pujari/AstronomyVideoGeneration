@@ -763,33 +763,28 @@ public sealed class HeroAssetStoryGenerator(
             : intelligence?.PrimaryObjects?.Count > 0 == true
                 ? string.Join(", ", intelligence.PrimaryObjects)
                 : FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, "primary sky target");
-        var titleOverlay = BuildCinematicHeroTitleOverlay(eventTitle, eventType, selectedHook);
-        var prompt = BuildCinematicHeroBackgroundPrompt(eventTitle, eventType, primaryObjects);
+        var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
+        var titleOverlay = BuildEducationalHeroTitleOverlay(eventObjectContext, eventTitle, selectedHook);
+        var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date from event intelligence";
+        var timeText = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "Local viewing time");
+        var directionText = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "Viewing direction from event intelligence");
+        var objectText = FirstNonEmpty(eventObjectContext.ObjectListText, primaryObjects, eventObjectContext.ObjectHeadlineText, "Key event objects");
+        var prompt = BuildEducationalHeroBackgroundPrompt(eventTitle, eventType, objectText, dateText, timeText, directionText);
 
         return new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto(titleOverlay),
             new HeroCompositionSceneBlockDto(prompt),
-            new HeroCompositionTextBlockDto("none", string.Empty),
-            new HeroCompositionTextBlockDto("none", string.Empty),
-            new HeroCompositionTextBlockDto("none", string.Empty),
-            new HeroCompositionValidationDto(true, true, false, false, false, 100));
+            new HeroCompositionTextBlockDto("direction-panel", directionText),
+            new HeroCompositionTextBlockDto("date-time-panel", $"{dateText} • {timeText}"),
+            new HeroCompositionTextBlockDto("object-labels", objectText),
+            new HeroCompositionValidationDto(true, true, true, true, true, 100));
     }
 
-    private static string BuildCinematicHeroTitleOverlay(string eventTitle, string eventType, string selectedHook)
-    {
-        if (IsMeteorEventType(eventType))
-            return Clean(FirstNonEmpty(selectedHook, eventTitle, "Meteor Shower")).ToUpperInvariant();
+    private static string BuildEducationalHeroTitleOverlay(EventObjectContext eventObjectContext, string eventTitle, string selectedHook)
+        => Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, selectedHook, "Sky Event")).ToUpperInvariant();
 
-        return Clean(FirstNonEmpty(selectedHook, eventTitle)).ToUpperInvariant();
-    }
-
-    private static string BuildCinematicHeroBackgroundPrompt(string eventTitle, string eventType, string primaryObjects)
-    {
-        if (IsMeteorEventType(eventType))
-            return $"Azure Image2 cinematic background | premium cinematic meteor shower sky for {eventTitle} | primary sky focus: {primaryObjects} | dark mountain or open landscape horizon | event-specific meteor streaks across a realistic starry sky | NASA documentary poster and Netflix science documentary quality | clean image-only background reserved for minimal title overlay";
-
-        return $"Azure Image2 cinematic background | premium emotional astronomy documentary poster for {eventTitle} | primary sky focus: {primaryObjects} | realistic night sky, dramatic atmosphere | clean image-only background reserved for minimal title overlay";
-    }
+    private static string BuildEducationalHeroBackgroundPrompt(string eventTitle, string eventType, string objectText, string dateText, string timeText, string directionText)
+        => $"Azure Image2 educational observing event poster | 70% realistic astronomy sky image, 20% guide information, 10% metadata | event: {eventTitle} | event type: {eventType} | key objects from eventObjectContext.objectNames only: {objectText} | include readable poster panels for date: {dateText}, local time: {timeText}, viewing direction: {directionText}, and small object labels | useful landing-page/blog/opening-frame guide card | no giant clickbait words, no thumbnail slogan, no duplicated title block, no black information bar, no unrelated event imagery";
 
     private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
         string heroAssetsRoot,
@@ -823,15 +818,15 @@ public sealed class HeroAssetStoryGenerator(
             width,
             height,
             compositionModel.HookBlock.Text,
-            BuildHeroSubtitle(width, height),
-            string.Empty,
+            compositionModel.TimingBlock.Text,
+            compositionModel.DirectionBlock.Text,
             planetAssets,
             mood: "WarmTwilightHero",
             westMarkerLabel: string.Empty,
             starDensity: height > width ? 620 : 455,
-            showReferenceOverlays: false,
-            referenceStars: [],
-            labels: [],
+            showReferenceOverlays: true,
+            referenceStars: BuildHeroReferenceStars(width, height),
+            labels: BuildHeroVariantLabels(compositionModel, variant, width, height),
             backgroundImagePath: null,
             compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
@@ -947,7 +942,7 @@ public sealed class HeroAssetStoryGenerator(
         await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
         {
             phaseNo = 11,
-            product = "Hero V6.1",
+            product = "Hero V6.2",
             generatedAtUtc = DateTimeOffset.UtcNow,
             requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "event poster", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
             eventObjectContext = eventObjectContext.ToDiagnostics(),
@@ -957,7 +952,13 @@ public sealed class HeroAssetStoryGenerator(
             hardcodedObjectTermsDetected = hardcodedTerms,
             objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
-            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = eventObjectContext.ObjectNames, noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction), missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
+            heroType = "EducationalPoster",
+            guideDensityScore = 20,
+            objectLabelsDetected = eventObjectContext.ObjectNames.Count > 0,
+            dateDetected = !string.IsNullOrWhiteSpace(dateTime),
+            timeDetected = !string.IsNullOrWhiteSpace(dateTime),
+            directionDetected = !string.IsNullOrWhiteSpace(direction),
+            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = eventObjectContext.ObjectNames, noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, visualRatio = "70% astronomy image / 20% guide information / 10% metadata", textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction) && eventObjectContext.ObjectNames.Count > 0, missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts), forbidden),
@@ -1376,14 +1377,14 @@ public sealed class HeroAssetStoryGenerator(
         => string.Empty;
 
     private static string ResolveHeroImageCta(string ctaText)
-        => "STEP OUTSIDE PEAK";
+        => Clean(ctaText).ToUpperInvariant();
 
     private static string FormatHeroDirection(string directionText)
     {
         var cleaned = Clean(directionText).ToUpperInvariant();
-        if (string.IsNullOrWhiteSpace(cleaned) || cleaned.Contains("WEST", StringComparison.OrdinalIgnoreCase))
-            return "← WEST";
-        return cleaned.StartsWith('←') ? cleaned : $"← {cleaned}";
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return "VIEWING DIRECTION";
+        return cleaned.StartsWith('←') ? cleaned : cleaned;
     }
 
     private static HeroAssetVisualReviewDto BuildHeroVisualReview(

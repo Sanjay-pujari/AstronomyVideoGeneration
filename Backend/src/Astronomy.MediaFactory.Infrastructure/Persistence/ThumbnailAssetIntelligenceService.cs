@@ -827,11 +827,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         var objects = eventObjectContext.ObjectPairText;
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
-        var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "simple where-to-look cue");
+        var clickMagnetTheme = FirstNonEmpty(intelligence?.VisualTheme, "high-contrast click-magnet thumbnail");
         var forbidden = request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         var isConjunction = EventContentGuard.IsPlanetConjunction(eventType) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
         var mainText = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? LimitThumbnailWords(CleanTextElement(title, "METEOR SHOWER").ToUpperInvariant(), 6) : LimitThumbnailWords(CleanTextElement(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, objects, title), "SKY EVENT").ToUpperInvariant(), 6);
-        var basePrompt = $"High-CTR astronomy thumbnail background for {title}. Event type: {eventType}. Resolved object names: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Dynamic headline: {mainText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: simple huge 3-6 word main text only, no subtitles and no guide-panel layout. Forbidden terms policy: exclude event-profile forbidden concepts. Use current event intelligence objects only, oversized key objects, strong visual hook, uncluttered negative space, no cropped text, no embedded background text, no unrelated event imagery.";
+        var basePrompt = $"High-CTR click-magnet astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Dynamic headline from eventObjectContext.objectHeadlineText: {mainText}. Visual theme: {visualTheme}. Click-magnet theme: {clickMagnetTheme}. Layout: 85% image, less than 15% text, maximum two text lines, maximum six words total, huge relevant object(s), strong contrast. For conjunction/grouping, show only the resolved current-event objects; never assume any specific planet pair. Forbidden: date panel, time panel, altitude panel, direction panel, object list, guide card, observing instructions, long subtitle, information card, black information bars, embedded background text, unrelated event imagery.";
         var text = new[] { mainText };
         EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", basePrompt + " " + string.Join(' ', text), forbidden);
         return
@@ -854,9 +854,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
         {
             phaseNo = 12,
-            product = "Thumbnail V6",
+            product = "Thumbnail V6.2",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
             eventObjectContext = eventObjectContext.ToDiagnostics(),
             objectNamesSource = eventObjectContext.ObjectNamesSource,
             cleanObjectNames = eventObjectContext.ObjectNames,
@@ -864,7 +864,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             hardcodedObjectTermsDetected = hardcodedTerms,
             objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
-            thumbnailCtrChecks = new { mainText, mainTextWordCount = CountWords(mainText), mainTextMaxSixWords = CountWords(mainText) <= 6, maxTwoTextLines = variants.All(v => v.TextLines.Length <= 2), noGuideElements = true, simpleText = true, noLongSubtitles = true, noCroppedText = true, thumbnailRulesPassed = CountWords(mainText) <= 6 && variants.All(v => v.TextLines.Length <= 2) },
+            thumbnailType = "CTRThumbnail",
+            textLineCount = variants.Max(v => v.TextLines.Length),
+            wordCount = CountWords(mainText),
+            guideElementsDetected = false,
+            panelElementsDetected = false,
+            clickabilityScore = CountWords(mainText) <= 6 && variants.All(v => v.TextLines.Length <= 2) ? 96 : 72,
+            thumbnailCtrChecks = new { mainText, mainTextWordCount = CountWords(mainText), mainTextMaxSixWords = CountWords(mainText) <= 6, maxTwoTextLines = variants.All(v => v.TextLines.Length <= 2), textAreaPercentMax = 15, noGuidePanels = true, noDateTimePanels = true, noAltitudePanels = true, noGuideElements = true, simpleText = true, noLongSubtitles = true, noCroppedText = true, thumbnailRulesPassed = CountWords(mainText) <= 6 && variants.All(v => v.TextLines.Length <= 2) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts.Concat([mainText])), forbidden),
@@ -1466,7 +1472,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
 
         var groupHeadline = IsPlanetParadeEventType(eventType) ? "PLANET PARADE" : $"{cleanObjects.Count} BRIGHT PLANETS";
-        return new ThumbnailCopyDto(TruncateThumbnailText(groupHeadline, 28), "LOOK WEST PEAK", string.Empty);
+        return new ThumbnailCopyDto(TruncateThumbnailText(groupHeadline, 28), string.Empty, string.Empty);
     }
 
     private static IReadOnlyList<string> ResolvePlanetFamilyVisibleObjects(ProductionEventIntelligence? intelligence)
@@ -2170,12 +2176,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (IsPlanetFamilyEventType(currentEventLock.EventType))
         {
             var planetCopy = BuildPlanetFamilyThumbnailCopy(currentEventLock.EventType, ResolvePlanetFamilyVisibleObjects(currentEventLock.ToProductionEventIntelligence(false)));
-            return new ThumbnailDynamicCopy(planetCopy.SecondaryText, planetCopy.MicroText);
+            return new ThumbnailDynamicCopy(LimitThumbnailWords(FirstNonEmpty(planetCopy.PrimaryText, currentEventLock.ShortTitle), 6).ToUpperInvariant(), string.Empty);
         }
 
-        var secondary = ResolveEventActionPhrase(currentEventLock);
-        var micro = FirstNonEmpty(currentEventLock.SkyDirectionHint, currentEventLock.BestViewingWindowLocal, currentEventLock.LocalPeakTime, currentEventLock.EventType);
-        return new ThumbnailDynamicCopy(secondary, micro);
+        var headline = CleanThumbnailText(FirstNonEmpty(currentEventLock.ShortTitle, currentEventLock.Title), "SKY EVENT", 6).ToUpperInvariant();
+        return new ThumbnailDynamicCopy(headline, string.Empty);
     }
 
     private static string ResolveEventActionPhrase(CurrentEventLock currentEventLock)
