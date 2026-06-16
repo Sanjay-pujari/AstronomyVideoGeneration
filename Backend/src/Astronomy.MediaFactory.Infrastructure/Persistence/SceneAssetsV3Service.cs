@@ -131,7 +131,7 @@ public sealed class SceneAssetsV3Service(
                     providerName,
                     azureCallsCount
                 });
-                manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, beat.VisualIntent, beat.InformationDensity, beat.OverlayStyle, beat.CompositionType, beat.OverlayText, beat.SupportingText, await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
+                manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, beat.VisualIntent, beat.VisualSubjectCategory, beat.PrimaryVisualSubject, beat.CameraDistance, beat.OverlayDensity, beat.InformationDensity, beat.OverlayStyle, beat.CompositionType, beat.OverlayText, beat.SupportingText, await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
                 files.Add(imagePath);
             }
         }
@@ -238,6 +238,10 @@ public sealed class SceneAssetsV3Service(
             beat.SceneId,
             beat.RenderMode,
             beat.VisualIntent,
+            beat.VisualSubjectCategory,
+            beat.PrimaryVisualSubject,
+            beat.CameraDistance,
+            beat.OverlayDensity,
             beat.InformationDensity,
             beat.OverlayStyle,
             beat.PromptVariation,
