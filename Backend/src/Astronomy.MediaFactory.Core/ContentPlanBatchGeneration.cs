@@ -13,6 +13,14 @@ public enum ContentPlanExecutionMode
     RerunPhase
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum DependencyExpansionMode
+{
+    None,
+    ReadOnly,
+    Rebuild
+}
+
 public sealed record BatchGenerateFromPlansRequest(
     int Year,
     string RegionId,
@@ -36,7 +44,8 @@ public sealed record BatchGenerateFromPlansRequest(
     bool RebuildIntelligence = false,
     bool EnableSceneVariants = false,
     bool EnableSceneAssetsV3 = false,
-    bool PublishApproved = false);
+    bool PublishApproved = false,
+    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -231,7 +240,8 @@ public sealed record ContentPlanProductionExecutionRequest(
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
     bool EnableSceneAssetsV3 = false,
-    bool PublishApproved = false);
+    bool PublishApproved = false,
+    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,
@@ -304,7 +314,8 @@ public sealed record ProductionPipelineRequest(
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
     bool EnableSceneAssetsV3 = false,
-    bool PublishApproved = false);
+    bool PublishApproved = false,
+    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProductionPhaseStatus

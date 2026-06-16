@@ -124,6 +124,8 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
+        ValidatePartialPhaseExecutionContract(context, phaseResults, errors);
+
         var shortVideo = Path.Combine(outputRoot, "video", "short", "final-short.mp4");
         var longVideo = Path.Combine(outputRoot, "video", "long", "final-long.mp4");
         var shortScenesGenerated = DirectoryHasPng(Path.Combine(outputRoot, "scene-approval-v3", "short"))
@@ -5703,7 +5705,12 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
     {
         var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), requestedStartPhaseNo = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhaseNo = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo, requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedStartPhaseNo.Value != context.StartPhaseNo, startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(), executedPhaseNumbers = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray(), skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+        var requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo;
+        var requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo;
+        var dependencyExpansionApplied = requestedStartPhase != context.StartPhaseNo || requestedEndPhase != context.EndPhaseNo;
+        var filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
+        var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray();
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
 
@@ -5830,12 +5837,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
     {
         var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
-        var deleteStartPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
-            ? context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo
-            : context.StartPhaseNo;
-        var deleteEndPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
-            ? context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo
-            : context.EndPhaseNo;
+        var deleteStartPhaseNo = context.StartPhaseNo;
+        var deleteEndPhaseNo = context.EndPhaseNo;
 
         if (deleteStartPhaseNo <= 6 && deleteEndPhaseNo >= 6)
         {
@@ -5883,14 +5886,51 @@ public sealed partial class ProductionPipelineExecutionService(
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
     }
 
+    private static void ValidatePartialPhaseExecutionContract(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, List<string> errors)
+    {
+        var requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo;
+        var requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo;
+        if (requestedStartPhase != 12 || requestedEndPhase != 13) return;
+
+        var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).OrderBy(phaseNo => phaseNo).ToArray();
+        if (!phasesActuallyExecuted.SequenceEqual(new[] { 12, 13 }))
+            errors.Add($"Partial execution validation failed: phasesActuallyExecuted must be [12,13] for requested range 12-13; actual=[{string.Join(',', phasesActuallyExecuted)}].");
+
+        var forbiddenRoots = new[] { context.ExecutionContext.SceneRoot!, context.ExecutionContext.HeroRoot! }.Select(NormalizePath).ToArray();
+        var forbiddenOutput = phaseResults
+            .Where(phase => phase.OutputFiles.Any(output => forbiddenRoots.Any(root => NormalizePath(output).StartsWith(root, StringComparison.OrdinalIgnoreCase))))
+            .Select(phase => phase.PhaseNo)
+            .Distinct()
+            .OrderBy(phaseNo => phaseNo)
+            .ToArray();
+        if (forbiddenOutput.Length > 0)
+            errors.Add($"Partial execution validation failed: scene-assets-v3 or hero output was regenerated by phase(s) [{string.Join(',', forbiddenOutput)}] during requested range 12-13.");
+    }
+
+    private static IReadOnlyList<string> BuildOutputRootsDeletedDiagnostics(ProductionPhaseContext context)
+    {
+        var deleted = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>();
+        return ResolvePhaseOwnedOutputRoots(context, 1, 20)
+            .Where(root => deleted.Any(path => NormalizePath(path).StartsWith(NormalizePath(root), StringComparison.OrdinalIgnoreCase)))
+            .Select(NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildReadOnlyDependencyRootsDiagnostics(ProductionPhaseContext context)
+    {
+        if (context.PipelineRequest.DependencyExpansionMode != DependencyExpansionMode.ReadOnly) return Array.Empty<string>();
+        return ResolvePhaseOwnedOutputRoots(context, 1, context.StartPhaseNo - 1)
+            .Where(Directory.Exists)
+            .Select(NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     private static object BuildCleanupScopeDiagnostics(ProductionPhaseContext context)
     {
-        var deleteStartPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
-            ? context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo
-            : context.StartPhaseNo;
-        var deleteEndPhaseNo = context.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs
-            ? context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo
-            : context.EndPhaseNo;
+        var deleteStartPhaseNo = context.StartPhaseNo;
+        var deleteEndPhaseNo = context.EndPhaseNo;
 
         return new
         {
