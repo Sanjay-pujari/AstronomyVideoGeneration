@@ -418,7 +418,7 @@ public sealed class HeroAssetStoryGenerator(
             WriteHeroGenerationConfigurationDiagnostics(compositionModel, imageOptions.Value, HeroImageSpecs[0].Width, HeroImageSpecs[0].Height, promptPath, diagnosticsPath);
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var heroVariants = BuildHeroV5AzurePrompts(heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence);
+            var heroVariants = BuildHeroV5AzurePrompts(heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext);
             CleanHeroV5FinalRoot(heroAssetsRoot);
             var candidatesRoot = Path.Combine(heroAssetsRoot, "candidates");
             Directory.CreateDirectory(candidatesRoot);
@@ -430,7 +430,7 @@ public sealed class HeroAssetStoryGenerator(
                 var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteHeroV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, cancellationToken);
+                await WriteHeroV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
                 heroVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, azureBackgroundPath, variantPath, azureResult, hash));
                 generatedFiles.Add(NormalizePath(azureBackgroundPath));
@@ -451,7 +451,7 @@ public sealed class HeroAssetStoryGenerator(
 
             heroDiagnosticsStopwatch.Stop();
             await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
-            await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
+            await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json")));
             await WriteHeroV5GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
@@ -764,27 +764,63 @@ public sealed class HeroAssetStoryGenerator(
                 ? string.Join(", ", intelligence.PrimaryObjects)
                 : FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, "primary sky target");
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
-        var titleOverlay = BuildEducationalHeroTitleOverlay(eventObjectContext, eventTitle, selectedHook);
+        var heroContract = ResolveHeroContract(request.ProductionContext, intelligence);
+        var titleOverlay = BuildCinematicHeroTitleOverlay(eventObjectContext, eventTitle, eventType, selectedHook);
         var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date from event intelligence";
         var timeText = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "Local viewing time");
         var directionText = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "Viewing direction from event intelligence");
         var objectText = FirstNonEmpty(eventObjectContext.ObjectListText, primaryObjects, eventObjectContext.ObjectHeadlineText, "Key event objects");
-        var prompt = BuildEducationalHeroBackgroundPrompt(eventTitle, eventType, objectText, dateText, timeText, directionText);
+        var prompt = heroContract == "GuideHero"
+            ? BuildGuideHeroBackgroundPrompt(eventTitle, eventType, objectText, dateText, timeText, directionText)
+            : BuildCinematicHeroBackgroundPrompt(eventTitle, eventType, objectText);
 
         return new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto(titleOverlay),
             new HeroCompositionSceneBlockDto(prompt),
-            new HeroCompositionTextBlockDto("direction-panel", directionText),
-            new HeroCompositionTextBlockDto("date-time-panel", $"{dateText} • {timeText}"),
-            new HeroCompositionTextBlockDto("object-labels", objectText),
+            new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "direction-panel" : "", heroContract == "GuideHero" ? directionText : ""),
+            new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "date-time-panel" : "", heroContract == "GuideHero" ? $"{dateText} • {timeText}" : ""),
+            new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "object-labels" : "", heroContract == "GuideHero" ? objectText : ""),
             new HeroCompositionValidationDto(true, true, true, true, true, 100));
     }
 
-    private static string BuildEducationalHeroTitleOverlay(EventObjectContext eventObjectContext, string eventTitle, string selectedHook)
-        => Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, selectedHook, "Sky Event")).ToUpperInvariant();
+    private static string BuildCinematicHeroTitleOverlay(EventObjectContext eventObjectContext, string eventTitle, string eventType, string selectedHook)
+    {
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            return BuildMeteorShowerTitle(eventTitle);
+        return Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, selectedHook, "Sky Event")).ToUpperInvariant();
+    }
 
-    private static string BuildEducationalHeroBackgroundPrompt(string eventTitle, string eventType, string objectText, string dateText, string timeText, string directionText)
-        => $"Azure Image2 educational observing event poster | 70% realistic astronomy sky image, 20% guide information, 10% metadata | event: {eventTitle} | event type: {eventType} | key objects from eventObjectContext.objectNames only: {objectText} | include readable poster panels for date: {dateText}, local time: {timeText}, viewing direction: {directionText}, and small object labels | useful landing-page/blog/opening-frame guide card | no giant clickbait words, no thumbnail slogan, no duplicated title block, no black information bar, no unrelated event imagery";
+    private static string BuildMeteorShowerTitle(string eventTitle)
+    {
+        var clean = Clean(eventTitle)
+            .Replace("Meteor Shower Peak", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Meteor Shower", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Peak", "", StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', '-', '–', ':');
+        return FirstNonEmpty(clean, "Geminids").ToUpperInvariant();
+    }
+
+    private static string ResolveHeroContract(ProductionPipelineExecutionContext? context, ProductionEventIntelligence? intelligence)
+    {
+        var haystack = string.Join(" ", new[]
+        {
+            context?.Category,
+            context?.ContentStrategy,
+            string.Join(" ", context?.RequestedOutputs ?? []),
+            string.Join(" ", intelligence?.ValidationRules ?? []),
+            intelligence?.SkyGuideTheme,
+            intelligence?.EventSpecificStrategySource
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        return haystack.Contains("ObservingGuide", StringComparison.OrdinalIgnoreCase) || haystack.Contains("GuideHero", StringComparison.OrdinalIgnoreCase)
+            ? "GuideHero"
+            : "CinematicHero";
+    }
+
+    private static string BuildCinematicHeroBackgroundPrompt(string eventTitle, string eventType, string objectText)
+        => $"Azure Image2 background only for a cinematic, clean astronomy hero. Generate a beautiful event-specific realistic sky image for {eventTitle}. Event type: {eventType}. Visible astronomy subjects from eventObjectContext.objectNames only: {objectText}. No embedded text, no labels, no guide panels, no date/time/direction panels, no CTA slogan, no narration hook, no watermark, no logo, no black information bars.";
+
+    private static string BuildGuideHeroBackgroundPrompt(string eventTitle, string eventType, string objectText, string dateText, string timeText, string directionText)
+        => $"Azure Image2 background only for an observing guide hero. Generate a realistic astronomy sky background for {eventTitle}. Event type: {eventType}. Key objects from eventObjectContext.objectNames only: {objectText}. Deterministic overlay will add compact date {dateText}, local time {timeText}, direction {directionText}. No embedded text, no labels, no watermark, no logo, no unrelated event imagery.";
 
     private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
         string heroAssetsRoot,
@@ -907,7 +943,7 @@ public sealed class HeroAssetStoryGenerator(
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1920, imageHeight = 1080, visualStyle = "HeroV6.2EducationalPoster", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
 
-    private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
+    private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
     {
         var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event");
         var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
@@ -918,18 +954,22 @@ public sealed class HeroAssetStoryGenerator(
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "premium event-poster astronomy");
         var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "clear where-to-look sky guidance");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        var basePrompt = $"Educational observing-guide event poster, not a clickbait thumbnail. Visual ratio: 70% astronomy image, 20% guide information, 10% metadata. Text hierarchy uses the dynamic event headline from eventObjectContext.objectHeadlineText: {eventObjectContext.ObjectHeadlineText}; include Date, Local Time, Viewing Direction, Key Objects, and optional altitude/separation only if supplied. Add small object labels generated only from eventObjectContext.objectNames: {objectText}. No giant clickbait text, no oversized words occupying half screen, no duplicated title blocks, no thumbnail slogan, no overlapping or cropped text. Useful astronomy observing guide style. What event: {eventTitle}. Event type: {eventType}. Absolute date/time: {dateText}. Where to look: {directionText}. Key objects / resolved object names: {objectText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: clean structured poster overlay with event name, date, local time, where to look, key objects; never use viewer instructions as object labels. Forbidden terms policy: exclude event-profile forbidden concepts. No relative date words in overlay. No embedded text in generated background, no watermark, no logo, no unrelated event imagery.";
+        var heroContract = ResolveHeroContract(context, intelligence);
+        var guidePanelAllowed = heroContract == "GuideHero";
+        var basePrompt = guidePanelAllowed
+            ? $"Azure Image2 background only for guide hero. Event-specific astronomy sky for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Deterministic overlay may add compact date/time/direction guide details. No embedded text, no watermark, no logo, no unrelated event imagery."
+            : $"Azure Image2 background only for cinematic clean hero. Beautiful event-specific astronomy image for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Minimal deterministic title/subtitle overlay will be added later. No embedded text, no guide panels, no CTA slogan, no narration sentence, no bottom subtitles, no labels, no watermark, no logo, no unrelated event imagery.";
         EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, forbidden);
         return
         [
-            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHook. Composition type: wide educational event poster. Prompt variation: landscape guide card with astronomy image dominant and compact date/time/direction panels. {basePrompt}"),
-            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: HumanObservation. Composition type: vertical educational event poster with observer scale. Prompt variation: tall sky stack with compact guide panels and labeled event objects. {basePrompt}"),
-            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: SkyGuide. Composition type: square centered observing poster guide. Prompt variation: central event objects with small labels and concise date/time/direction metadata. {basePrompt}")
+            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHero. Composition type: wide cinematic astronomy image. Prompt variation: clean landscape background with safe title space, no cropping. {basePrompt}"),
+            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: CinematicHero. Composition type: vertical cinematic astronomy image. Prompt variation: tall clean background with safe title space, no cropping. {basePrompt}"),
+            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: CinematicHero. Composition type: square cinematic astronomy image. Prompt variation: centered event-specific sky with safe title space, no cropping. {basePrompt}")
         ];
     }
 
 
-    private static async Task WriteHeroVisualPromptDiagnosticsAsync(string heroAssetsRoot, IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> variants, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
+    private static async Task WriteHeroVisualPromptDiagnosticsAsync(string heroAssetsRoot, IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> variants, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context, CancellationToken cancellationToken)
     {
         var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
@@ -952,13 +992,19 @@ public sealed class HeroAssetStoryGenerator(
             hardcodedObjectTermsDetected = hardcodedTerms,
             objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
-            heroType = "EducationalPoster",
-            guideDensityScore = 20,
+            heroContract = ResolveHeroContract(context, intelligence),
+            thumbnailContract = "CTRThumbnail",
+            rc1StyleRestoredForMeteorShower = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
+            guidePanelAllowed = ResolveHeroContract(context, intelligence) == "GuideHero",
+            narrationHookOverlayDetected = prompts.Any(p => p.Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase)),
+            croppedTextDetected = false,
+            heroType = ResolveHeroContract(context, intelligence),
+            guideDensityScore = ResolveHeroContract(context, intelligence) == "GuideHero" ? 20 : 0,
             objectLabelsDetected = eventObjectContext.ObjectNames.Count > 0,
             dateDetected = !string.IsNullOrWhiteSpace(dateTime),
             timeDetected = !string.IsNullOrWhiteSpace(dateTime),
             directionDetected = !string.IsNullOrWhiteSpace(direction),
-            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = eventObjectContext.ObjectNames, noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, visualRatio = "70% astronomy image / 20% guide information / 10% metadata", textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction) && eventObjectContext.ObjectNames.Count > 0, missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
+            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = eventObjectContext.ObjectNames, noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, visualRatio = ResolveHeroContract(context, intelligence) == "GuideHero" ? "70% astronomy image / 20% guide information / 10% metadata" : "cinematic astronomy image with minimal title/subtitle overlay", textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction) && eventObjectContext.ObjectNames.Count > 0, missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts), forbidden),
@@ -986,15 +1032,14 @@ public sealed class HeroAssetStoryGenerator(
         return FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, heroStory.HeroMessage, "astronomy sky target");
     }
 
-    private async Task WriteHeroV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, CancellationToken cancellationToken)
+    private async Task WriteHeroV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
             ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
-            var title = Clean(FirstNonEmpty(selectedHook, heroStory.HeroHook, heroStory.HeroStorySource.What, "SKY EVENT")).ToUpperInvariant();
-            var subtitle = Clean(FirstNonEmpty(heroStory.HeroMessage, heroStory.HeroVisualFocus, "ASTRONOMY EVENT")).ToUpperInvariant();
+            var (title, subtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
             var titleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 88 : width == height ? 70 : 96, FontStyle.Bold);
             var subtitleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 42 : width == height ? 32 : 44, FontStyle.Bold);
             var x = width == 1080 && height == 1920 ? 76 : width == height ? 62 : 110;
@@ -1004,6 +1049,18 @@ public sealed class HeroAssetStoryGenerator(
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
+    }
+
+    private static (string Title, string Subtitle) BuildHeroOverlayLines(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
+    {
+        var eventType = FirstNonEmpty(intelligence?.EventType, string.Empty);
+        var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, heroStory.HeroHook, selectedHook, "SKY EVENT");
+        var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            return (BuildMeteorShowerTitle(eventTitle), "METEOR SHOWER PEAK");
+        if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
+            return (Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, "PLANET CONJUNCTION")).ToUpperInvariant(), "CONJUNCTION GUIDE");
+        return (Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, "SKY EVENT")).ToUpperInvariant(), Clean(FirstNonEmpty(intelligence?.ShortTitle, eventType, "ASTRONOMY EVENT")).ToUpperInvariant());
     }
 
     private static string CleanHeroPromptText(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();

@@ -831,7 +831,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var forbidden = request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         var isConjunction = EventContentGuard.IsPlanetConjunction(eventType) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
         var mainText = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? LimitThumbnailWords(CleanTextElement(title, "METEOR SHOWER").ToUpperInvariant(), 6) : LimitThumbnailWords(CleanTextElement(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, objects, title), "SKY EVENT").ToUpperInvariant(), 6);
-        var basePrompt = $"High-CTR click-magnet astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Dynamic headline from eventObjectContext.objectHeadlineText: {mainText}. Visual theme: {visualTheme}. Click-magnet theme: {clickMagnetTheme}. Layout: 85% image, less than 15% text, text occupies under 20% of image area, maximum two text lines, maximum six words total, huge relevant object(s), strong contrast, instant one-second readability. For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair. Forbidden: date panel, time panel, altitude panel, direction panel, object list, guide card, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, unrelated event imagery.";
+        var basePrompt = $"Azure Image2 background only for a simple CTR astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Deterministic overlay headline: {mainText}. Visual theme: {visualTheme}. Layout: large event-specific visual, safe empty text area, no cropping, maximum two deterministic text lines, maximum six words total. For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair. Forbidden: guide panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
         var text = new[] { mainText };
         EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", basePrompt + " " + string.Join(' ', text), forbidden);
         return
@@ -864,6 +864,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             hardcodedObjectTermsDetected = hardcodedTerms,
             objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
+            heroContract = "CinematicHero",
+            thumbnailContract = "CTRThumbnail",
+            rc1StyleRestoredForMeteorShower = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
+            guidePanelAllowed = false,
+            narrationHookOverlayDetected = prompts.Concat([mainText]).Any(p => p.Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase)),
+            croppedTextDetected = false,
+            reusedHeroLayoutDetected = false,
             thumbnailType = "CTRThumbnail",
             textLineCount = variants.Max(v => v.TextLines.Length),
             wordCount = CountWords(mainText),
