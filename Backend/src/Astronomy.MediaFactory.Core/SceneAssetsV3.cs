@@ -21,6 +21,10 @@ public sealed record SceneAssetsV3Beat(
     string RenderMode,
     string NarrationBeat,
     string VisualIntent,
+    string VisualSubjectCategory,
+    string PrimaryVisualSubject,
+    string CameraDistance,
+    string OverlayDensity,
     string InformationDensity,
     string OverlayStyle,
     string PromptVariation,
@@ -30,7 +34,10 @@ public sealed record SceneAssetsV3Beat(
     string VisualPrompt,
     int ExpectedDurationSec,
     string NarrationBeatSource = "generated",
-    string VisualPromptSource = "generated");
+    string VisualPromptSource = "generated")
+{
+    public string DeterministicOverlayText => OverlayText;
+}
 
 public sealed record SceneAssetsV3Manifest(
     string Version,
@@ -44,6 +51,10 @@ public sealed record SceneAssetsV3ManifestScene(
     string ImagePath,
     string NarrationBeat,
     string VisualIntent,
+    string VisualSubjectCategory,
+    string PrimaryVisualSubject,
+    string CameraDistance,
+    string OverlayDensity,
     string InformationDensity,
     string OverlayStyle,
     string CompositionType,
@@ -101,6 +112,10 @@ public sealed record SceneTimelineMetadata(
     string SceneId,
     string RenderMode,
     string VisualIntent,
+    string VisualSubjectCategory,
+    string PrimaryVisualSubject,
+    string CameraDistance,
+    string OverlayDensity,
     string InformationDensity,
     string OverlayStyle,
     string PromptVariation,
