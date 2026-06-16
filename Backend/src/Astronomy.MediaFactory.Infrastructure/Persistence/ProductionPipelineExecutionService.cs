@@ -5024,6 +5024,15 @@ public sealed partial class ProductionPipelineExecutionService(
             forbiddenObjectsDetected = phase12ThumbnailDiagnostics?.ForbiddenObjectsDetected,
             goldenPilotLeakageDetected = phase12ThumbnailDiagnostics?.GoldenPilotLeakageDetected,
             semanticValidationPassed = phase12ThumbnailDiagnostics?.SemanticValidationPassed,
+            eventFamily = phase12ThumbnailDiagnostics?.EventFamily,
+            validatorProfile = phase12ThumbnailDiagnostics?.ValidatorProfile,
+            moonPhaseName = phase12ThumbnailDiagnostics?.MoonPhaseName,
+            moonIlluminationPercent = phase12ThumbnailDiagnostics?.MoonIlluminationPercent,
+            moonriseLocal = phase12ThumbnailDiagnostics?.MoonriseLocal,
+            moonsetLocal = phase12ThumbnailDiagnostics?.MoonsetLocal,
+            moonGuideCardAdded = phase12ThumbnailDiagnostics?.MoonGuideCardAdded,
+            moonObjectRendered = phase12ThumbnailDiagnostics?.MoonObjectRendered,
+            moonForbiddenTermsDetected = phase12ThumbnailDiagnostics?.MoonForbiddenTermsDetected,
             phase10TitleDiagnostics,
             titleFoundInCaptionText = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInCaptionText"),
             titleFoundInViewerTakeaway = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInViewerTakeaway"),
@@ -5496,6 +5505,22 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
+        var validationPath = Path.Combine(context.ExecutionContext.ThumbnailRoot!, "phase-12-validation.json");
+        JsonElement? validation = null;
+        JsonDocument? validationDocument = null;
+        if (File.Exists(validationPath))
+        {
+            try
+            {
+                validationDocument = JsonDocument.Parse(File.ReadAllText(validationPath));
+                validation = validationDocument.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                validationDocument?.Dispose();
+            }
+        }
+
         return new Phase12ThumbnailDiagnostics(
             CurrentEventLock: GetFact(facts, "currentEventLock", string.Empty),
             ThumbnailRequestTitle: GetFact(facts, "thumbnailRequestTitle", context.ProductionEventIntelligence.Title),
@@ -5511,11 +5536,35 @@ public sealed partial class ProductionPipelineExecutionService(
             TextUsed: SplitFact(GetFact(facts, "textUsed", context.ProductionEventIntelligence.ShortTitle).Replace(" | ", ", ", StringComparison.OrdinalIgnoreCase)),
             ForbiddenObjectsDetected: SplitFact(GetFact(facts, "forbiddenObjectsDetected", string.Empty)),
             GoldenPilotLeakageDetected: bool.TryParse(GetFact(facts, "goldenPilotLeakageDetected", "false"), out var goldenLeakage) && goldenLeakage,
-            SemanticValidationPassed: bool.TryParse(GetFact(facts, "semanticValidationPassed", "false"), out var semanticPassed) && semanticPassed);
+            SemanticValidationPassed: bool.TryParse(GetFact(facts, "semanticValidationPassed", GetJsonString(validation, "semanticValidationPassed", "false")), out var semanticPassed) && semanticPassed,
+            EventFamily: GetJsonString(validation, "eventFamily", string.Empty),
+            ValidatorProfile: GetJsonString(validation, "validatorProfile", string.Empty),
+            MoonPhaseName: GetJsonString(validation, "moonPhaseName", string.Empty),
+            MoonIlluminationPercent: GetJsonString(validation, "moonIlluminationPercent", string.Empty),
+            MoonriseLocal: GetJsonString(validation, "moonriseLocal", string.Empty),
+            MoonsetLocal: GetJsonString(validation, "moonsetLocal", string.Empty),
+            MoonGuideCardAdded: bool.TryParse(GetJsonString(validation, "moonGuideCardAdded", "false"), out var moonGuideCardAdded) && moonGuideCardAdded,
+            MoonObjectRendered: bool.TryParse(GetJsonString(validation, "moonObjectRendered", "false"), out var moonObjectRendered) && moonObjectRendered,
+            MoonForbiddenTermsDetected: SplitFact(GetJsonString(validation, "moonForbiddenTermsDetected", string.Empty)));
     }
 
     private static string GetFact(IReadOnlyDictionary<string, string> facts, string key, string fallback)
         => facts.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : fallback;
+
+    private static string GetJsonString(JsonElement? root, string key, string fallback)
+    {
+        if (root is not JsonElement element || element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(key, out var value)) return fallback;
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? fallback,
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Number => value.ToString(),
+            JsonValueKind.Array => string.Join(", ", value.EnumerateArray().Select(item => item.ToString()).Where(item => !string.IsNullOrWhiteSpace(item))),
+            JsonValueKind.Null => fallback,
+            _ => value.ToString()
+        };
+    }
 
     private static IReadOnlyList<string> SplitFact(string value)
         => string.IsNullOrWhiteSpace(value)
@@ -5643,7 +5692,16 @@ public sealed partial class ProductionPipelineExecutionService(
         IReadOnlyList<string> TextUsed,
         IReadOnlyList<string> ForbiddenObjectsDetected,
         bool GoldenPilotLeakageDetected,
-        bool SemanticValidationPassed);
+        bool SemanticValidationPassed,
+        string EventFamily,
+        string ValidatorProfile,
+        string MoonPhaseName,
+        string MoonIlluminationPercent,
+        string MoonriseLocal,
+        string MoonsetLocal,
+        bool MoonGuideCardAdded,
+        bool MoonObjectRendered,
+        IReadOnlyList<string> MoonForbiddenTermsDetected);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
     {

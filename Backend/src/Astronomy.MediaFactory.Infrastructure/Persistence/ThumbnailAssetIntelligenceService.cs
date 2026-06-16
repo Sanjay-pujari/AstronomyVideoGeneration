@@ -564,6 +564,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var isPlanetary = IsPlanetaryEvent(current.EventType);
+        var isMoon = IsMoonEvent(current.EventType, current.Title);
         var textLines = BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: true);
         var primary = isPlanetary ? BuildPlanetaryCleanHeadline(current) : textLines.ElementAtOrDefault(0) ?? "SKY EVENT";
         var secondary = textLines.ElementAtOrDefault(1) ?? string.Empty;
@@ -580,9 +581,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             [new ThumbnailHookScoreDto(primary, 98, 98, 96, 96, 97)],
             "Urgency + Wonder",
             "High",
-            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A deterministic planetary sky-guide thumbnail with labels, direction, timing, and separation." : "A timely astronomy event with direct click-through text.",
+            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A deterministic planetary sky-guide thumbnail with labels, direction, timing, and separation." : isMoon ? "A deterministic Moon phase guide thumbnail with lunar phase, illumination, date/time, and moonrise cues when available." : "A timely astronomy event with direct click-through text.",
             BuildPureV3VisualFocus(current),
-            isPlanetary ? "PlanetaryEvent thumbnail: Azure Image2 generates background only; deterministic overlay adds guide card, object labels, direction cue, and separation." : "RC1 cinematic thumbnail: Azure Image2 generates background only; deterministic overlay adds clean title/subtitle.",
+            isPlanetary ? "PlanetaryEvent thumbnail: Azure Image2 generates background only; deterministic overlay adds guide card, object labels, direction cue, and separation." : isMoon ? "Moon thumbnail: Azure Image2 generates a realistic Moon background only; deterministic overlay adds title, phase, date/time, illumination, and moonrise/moonset cues when available." : "RC1 cinematic thumbnail: Azure Image2 generates background only; deterministic overlay adds clean title/subtitle.",
             "PureAzureImage2Prompt",
             "none",
             ["scene image selection", "approved scene assets", "hero-scene-manifest.json", "thumbnail-scene-manifest.json"],
@@ -591,7 +592,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             scores,
             [],
             DateTimeOffset.UtcNow,
-            EventFamily: isPlanetary ? "PlanetaryEvent" : isMeteor ? "MeteorEvent" : null,
+            EventFamily: isPlanetary ? "PlanetaryEvent" : isMeteor ? "MeteorEvent" : isMoon ? "Moon" : null,
             ThumbnailOverlayTemplate: ResolveThumbnailOverlayTemplate(request),
             GuideCard: isPlanetary ? BuildPlanetaryGuideCard(current) : null,
             ObjectLabels: isPlanetary ? ResolvePlanetaryObjectLabels(current) : null,
@@ -790,19 +791,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 selectedOverlayDiagnostics.BottomTipsBarAdded,
                 overlayEventFamily = selectedOverlayDiagnostics.EventFamily,
                 guideCardAdded = selectedOverlayDiagnostics.GuideCardAdded,
+                moonGuideCardAdded = selectedOverlayDiagnostics.MoonGuideCardAdded,
+                moonObjectRendered = selectedOverlayDiagnostics.MoonObjectRendered,
+                moonForbiddenTermsDetected = selectedOverlayDiagnostics.MoonForbiddenTermsDetected ?? [],
+                moonPhaseName = ResolveMoonPhaseName(BuildCurrentEventLock(request)),
+                moonIlluminationPercent = BuildCurrentEventLock(request).MoonIlluminationPercent,
+                moonriseLocal = (string?)null,
+                moonsetLocal = (string?)null,
                 objectLabelsAdded = selectedOverlayDiagnostics.ObjectLabelsAdded,
                 directionCueAdded = selectedOverlayDiagnostics.DirectionCueAdded,
                 separationAdded = selectedOverlayDiagnostics.SeparationAdded,
                 altitudeAdded = selectedOverlayDiagnostics.AltitudeAdded,
                 finalThumbnailPath = NormalizePath(finalPath),
-                thumbnailContract = selectedOverlayDiagnostics.ThumbnailOverlayTemplate == "PlanetarySkyGuideThumbnail" ? "PlanetarySkyGuideThumbnail" : isMeteorThumbnail ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
+                thumbnailContract = ResolveThumbnailContract(selectedOverlayDiagnostics, isMeteorThumbnail),
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
                 finalMainText = prompt.CtrOverlay,
-                thumbnailArchitecture = selectedOverlayDiagnostics.ThumbnailOverlayTemplate == "PlanetarySkyGuideThumbnail" ? "PlanetarySkyGuideThumbnail" : isMeteorThumbnail ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
+                thumbnailArchitecture = ResolveThumbnailContract(selectedOverlayDiagnostics, isMeteorThumbnail),
                 sceneManifestRequired = false,
                 heroSceneManifestRequired = false
             }, JsonOptions), cancellationToken);
@@ -819,7 +827,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 guideCardFieldsPresent = selectedOverlayDiagnostics.GuideCardAdded && selectedOverlayDiagnostics.DirectionCueAdded,
                 thumbnailProfileReady = selectedOverlayDiagnostics.EventFamily == "PlanetaryEvent"
                     ? selectedOverlayDiagnostics.GuideCardAdded && selectedOverlayDiagnostics.ObjectLabelsAdded && selectedOverlayDiagnostics.DirectionCueAdded
-                    : actualOutputsExist,
+                    : selectedOverlayDiagnostics.EventFamily == "Moon"
+                        ? selectedOverlayDiagnostics.MoonGuideCardAdded && selectedOverlayDiagnostics.MoonObjectRendered && selectedOverlayDiagnostics.DirectionCueAdded
+                        : actualOutputsExist,
                 forbiddenObjectsDetected = forbiddenObjects,
                 forbiddenTermsDetected,
                 goldenPilotLeakageDetected,
@@ -841,7 +851,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 bestTimeExists = isMeteorThumbnail,
                 directionExists = isMeteorThumbnail,
                 equipmentExists = isMeteorThumbnail,
-                moonExists = isMeteorThumbnail,
+                moonExists = isMeteorThumbnail || selectedOverlayDiagnostics.MoonObjectRendered,
                 radiantAnnotationExists = selectedOverlayDiagnostics.RadiantMarkerAdded,
                 bottomTipsExist = selectedOverlayDiagnostics.BottomTipsBarAdded,
                 thumbnailCompositionType,
@@ -854,11 +864,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 selectedOverlayDiagnostics.BottomTipsBarAdded,
                 overlayEventFamily = selectedOverlayDiagnostics.EventFamily,
                 finalThumbnailPath = NormalizePath(finalPath),
-                thumbnailContract = selectedOverlayDiagnostics.ThumbnailOverlayTemplate == "PlanetarySkyGuideThumbnail" ? "PlanetarySkyGuideThumbnail" : isMeteorThumbnail ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
+                thumbnailContract = ResolveThumbnailContract(selectedOverlayDiagnostics, isMeteorThumbnail),
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
-                guidePanelExists = isMeteorThumbnail || selectedOverlayDiagnostics.GuideCardAdded,
+                guidePanelExists = isMeteorThumbnail || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded,
                 duplicateTitleExists = false,
                 textAreaPercent = 24,
                 embeddedTextDetected = false,
@@ -882,6 +892,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 thumbnailSourceScenePath = string.Empty,
                 thumbnailEventFamily = selectedOverlayDiagnostics.EventFamily,
                 guideCardAdded = selectedOverlayDiagnostics.GuideCardAdded,
+                moonGuideCardAdded = selectedOverlayDiagnostics.MoonGuideCardAdded,
+                moonObjectRendered = selectedOverlayDiagnostics.MoonObjectRendered,
+                moonForbiddenTermsDetected = selectedOverlayDiagnostics.MoonForbiddenTermsDetected ?? [],
+                moonPhaseName = ResolveMoonPhaseName(BuildCurrentEventLock(request)),
+                moonIlluminationPercent = BuildCurrentEventLock(request).MoonIlluminationPercent,
+                moonriseLocal = (string?)null,
+                moonsetLocal = (string?)null,
                 objectLabelsAdded = selectedOverlayDiagnostics.ObjectLabelsAdded,
                 directionCueAdded = selectedOverlayDiagnostics.DirectionCueAdded,
                 separationAdded = selectedOverlayDiagnostics.SeparationAdded,
@@ -953,8 +970,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         if (IsMeteorEvent(current.EventType, current.Title)) return "RadiantBurstThumbnail";
         if (IsPlanetaryEvent(current.EventType)) return "PlanetarySkyGuideThumbnail";
+        if (IsMoonEvent(current.EventType, current.Title)) return "MoonPhaseGuideThumbnail";
         return "RC1CinematicThumbnail";
     }
+
+    private static string ResolveThumbnailContract(ThumbnailOverlayDiagnostics diagnostics, bool isMeteorThumbnail)
+        => diagnostics.ThumbnailOverlayTemplate == "PlanetarySkyGuideThumbnail" ? "PlanetarySkyGuideThumbnail"
+            : diagnostics.ThumbnailOverlayTemplate == "MoonPhaseGuideThumbnail" ? "MoonPhaseGuideThumbnail"
+            : isMeteorThumbnail ? "RadiantBurstThumbnail"
+            : "RC1CinematicThumbnail";
 
     private static void LogThumbnailRuntimeDiagnostics(ThumbnailRuntimeDiagnostics diagnostics)
     {
@@ -995,6 +1019,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         if (IsMeteorEvent(current.EventType, current.Title)) return "MeteorShowerRc1VisualGuide";
         if (IsPlanetaryEvent(current.EventType)) return "PlanetarySkyGuideThumbnail";
+        if (IsMoonEvent(current.EventType, current.Title)) return "MoonPhaseGuideThumbnail";
         return "RC1CinematicTitle";
     }
 
@@ -1089,7 +1114,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var objects = eventObjectContext.ObjectPairText;
         var isMeteor = IsMeteorEvent(eventType, title);
         var isPlanetary = IsPlanetaryEvent(eventType);
-        var compositionType = isMeteor ? "RadiantBurstThumbnail" : isPlanetary ? "PlanetarySkyGuideThumbnail" : "RC1CinematicThumbnail";
+        var isMoon = IsMoonEvent(eventType, title);
+        var compositionType = isMeteor ? "RadiantBurstThumbnail" : isPlanetary ? "PlanetarySkyGuideThumbnail" : isMoon ? "MoonPhaseGuideThumbnail" : "RC1CinematicThumbnail";
         var rc1TextLines = BuildRc1ThumbnailTextLines(BuildCurrentEventLock(request), includeDateWhenAvailable: !isMeteor);
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
         var clickMagnetTheme = FirstNonEmpty(intelligence?.VisualTheme, "high-contrast click-magnet thumbnail");
@@ -1101,7 +1127,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ? $"Azure Image2 BACKGROUND ONLY. thumbnailCompositionType = RadiantBurstThumbnail. Create dramatic cinematic meteor shower thumbnail background with visible radiant burst point, multiple bright meteor streaks spreading outward, deep blue star field, mountain/horizon silhouette, high contrast, clean safe space on left and along bottom for deterministic code overlay, no embedded text, no labels, no typography, no captions, no UI panels, no hero/gallery templates. Final deterministic overlay text and visual-guide elements added later by code only: {string.Join(" | ", rc1TextLines.Take(2))}."
             : isPlanetary
                 ? $"Azure Image2 BACKGROUND ONLY for PlanetaryEvent sky-guide thumbnail for {title}. Event type: {eventType}. Show two or more bright celestial objects close together in a realistic twilight sky using eventObjectContext.objectNames only: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Clear negative space for deterministic overlay, realistic sky guide composition, no embedded text, no labels, no watermark, no meteor streaks, no radiant, no typography, no UI panels, no cards, no captions, no hero/gallery template. Final code overlay adds title, guide card, object labels, direction cue, and separation. Visual theme: {FirstNonEmpty(intelligence?.SkyGuideTheme, visualTheme)}.{conjunctionInstruction}"
-                : $"Azure Image2 BACKGROUND ONLY for an RC1 cinematic astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Do not render any letters, words, typography, labels, UI, panels, cards, badges, boxes, captions, transparent giant title, or embedded text in the image. Leave natural negative space for a separate deterministic overlay. Final overlay text added later by code: {string.Join(" | ", rc1TextLines)}. Visual theme: {visualTheme}. Layout: cinematic event image, clean large title area, short subtitle area, no center-crop dependency; compose native aspect ratio.{conjunctionInstruction} Forbidden: guide card, hero-style information panel, object-pair info box, black object-pair panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
+                : isMoon
+                    ? $"Azure Image2 BACKGROUND ONLY for MoonPhaseGuideThumbnail for {title}. Event type: {eventType}. Show a large realistic Moon as the primary object, lunar phase illumination, subtle moonrise horizon atmosphere if appropriate, clean negative space for deterministic overlay, no embedded text, no labels, no typography, no UI panels, no cards, no captions, no cross-family streak effects, no pair labels. Final code overlay adds title, phase/date, and Moon guide card. Visual vocabulary: Moon, lunar phase, illumination, moonrise, moonset, eastern horizon, western horizon, full moon glow, supermoon size comparison, blue moon calendar rarity."
+                    : $"Azure Image2 BACKGROUND ONLY for an RC1 cinematic astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Do not render any letters, words, typography, labels, UI, panels, cards, badges, boxes, captions, transparent giant title, or embedded text in the image. Leave natural negative space for a separate deterministic overlay. Final overlay text added later by code: {string.Join(" | ", rc1TextLines)}. Visual theme: {visualTheme}. Layout: cinematic event image, clean large title area, short subtitle area, no center-crop dependency; compose native aspect ratio.{conjunctionInstruction} Forbidden: guide card, hero-style information panel, object-pair info box, black object-pair panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
         ValidateMeteorThumbnailRc1Contract(isMeteor, compositionType, basePrompt, rc1TextLines);
         var text = rc1TextLines.Take(isMeteor ? 2 : 3).ToArray();
         var forbiddenInOverlayText = DetectThumbnailForbiddenTerms(ResolveThumbnailValidatorProfile(request), text);
@@ -1145,7 +1173,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             phaseNo = 12,
             product = "Thumbnail V6.2",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : IsPlanetaryEvent(eventType) ? "PlanetarySkyGuideThumbnail" : "RC1CinematicThumbnail", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : IsPlanetaryEvent(eventType) ? "PlanetarySkyGuideThumbnail" : IsMoonEvent(eventType, intelligence?.Title) ? "MoonPhaseGuideThumbnail" : "RC1CinematicThumbnail", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
             eventType = validationProfile.EventType,
             eventFamily = validationProfile.ResolvedEventFamily,
             legacyEventFamily = validationProfile.EventFamily,
@@ -1301,6 +1329,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ctx.Fill(Color.Black.WithAlpha(0.16f), new RectangleF(0, 0, width, height));
                 diagnostics = DrawPlanetarySkyGuideThumbnail(ctx, current, width, height, textLines, outputPath);
             }
+            else if (IsMoonEvent(current.EventType, current.Title))
+            {
+                ctx.Fill(Color.Black.WithAlpha(0.14f), new RectangleF(0, 0, width, height));
+                diagnostics = DrawMoonPhaseGuideThumbnail(ctx, current, width, height, textLines, outputPath);
+            }
             else
             {
                 ctx.Fill(Color.FromRgba(0, 0, 0, 118), new RectangleF(0, Math.Max(0, boxY - height * .035f), width, Math.Min(height - boxY, boxHeight + height * .08f)));
@@ -1373,6 +1406,86 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var count = 7 + objects.Take(2).Count() + rows.Count + (!string.IsNullOrWhiteSpace(separation) ? 1 : 0);
         return new ThumbnailOverlayDiagnostics("PlanetarySkyGuideThumbnail", count, false, false, false, false, false, outputPath, "PlanetaryEvent", true, true, true, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
     }
+
+
+    private static ThumbnailOverlayDiagnostics DrawMoonPhaseGuideThumbnail(IImageProcessingContext ctx, CurrentEventLock current, int width, int height, IReadOnlyList<string> textLines, string outputPath)
+    {
+        var scale = width / 1280f;
+        var titleFont = ResolveThumbnailFont(Math.Max(44, 70 * scale), FontStyle.Bold);
+        var subFont = ResolveThumbnailFont(Math.Max(28, 38 * scale), FontStyle.Bold);
+        var smallFont = ResolveThumbnailFont(Math.Max(18, 24 * scale), FontStyle.Bold);
+        var microFont = ResolveThumbnailFont(Math.Max(16, 21 * scale), FontStyle.Regular);
+        var phaseName = ResolveMoonPhaseName(current);
+        var date = current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date";
+        var shortDate = current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture).ToUpperInvariant() ?? string.Empty;
+        var peak = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "Peak / Full Moon Time");
+        var illumination = current.MoonIlluminationPercent is decimal illum ? $"Illumination  {illum:0.#}%" : string.Empty;
+        var direction = FirstNonEmpty(current.SkyDirectionHint, InferMoonDirectionCue(current));
+
+        var titlePoint = width >= height ? new PointF(width * .055f, height * .075f) : new PointF(width * .06f, height * .055f);
+        ctx.Fill(Color.FromRgba(0, 0, 0, 142), new RectangleF(titlePoint.X - 18 * scale, titlePoint.Y - 18 * scale, width >= height ? width * .54f : width * .88f, width == height ? height * .18f : height * .14f));
+        ctx.DrawText(textLines.ElementAtOrDefault(0) ?? phaseName.ToUpperInvariant(), titleFont, Color.White, titlePoint);
+        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? (string.IsNullOrWhiteSpace(shortDate) ? "MOON PHASE" : shortDate), subFont, Color.FromRgb(210, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + 78 * scale));
+
+        var moonCenter = width >= height ? new PointF(width * .66f, height * .38f) : new PointF(width * .52f, height * .35f);
+        var moonRadius = (width >= height ? 104 : 128) * scale;
+        ctx.Fill(new RadialGradientBrush(moonCenter, moonRadius * 1.9f, GradientRepetitionMode.None,
+            new ColorStop(0f, Color.White.WithAlpha(0.38f)),
+            new ColorStop(.45f, Color.FromRgba(180, 205, 255, 70)),
+            new ColorStop(1f, Color.Transparent)), new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius * 1.9f));
+        ctx.Fill(Color.FromRgb(226, 228, 218), new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius));
+        ctx.Fill(Color.FromRgba(130, 135, 132, 56), new EllipsePolygon(moonCenter.X - moonRadius * .28f, moonCenter.Y - moonRadius * .18f, moonRadius * .13f));
+        ctx.Fill(Color.FromRgba(120, 125, 125, 48), new EllipsePolygon(moonCenter.X + moonRadius * .22f, moonCenter.Y + moonRadius * .10f, moonRadius * .18f));
+        ctx.DrawText("MOON", smallFont, Color.White, new PointF(moonCenter.X + moonRadius + 18 * scale, moonCenter.Y - 20 * scale));
+
+        var card = width > height
+            ? new RectangleF(width * .055f, height * .58f, width * .42f, height * .32f)
+            : width == height
+                ? new RectangleF(width * .08f, height * .70f, width * .84f, height * .23f)
+                : new RectangleF(width * .08f, height * .64f, width * .84f, height * .26f);
+        ctx.Fill(Color.FromRgba(2, 10, 24, 184), card);
+        ctx.Draw(Color.FromRgba(210, 230, 255, 165), 2, card);
+        var rows = new List<string> { $"PHASE  {phaseName}", $"DATE  {date}", $"TIME  {peak}" };
+        if (!string.IsNullOrWhiteSpace(illumination)) rows.Add(illumination);
+        if (!string.IsNullOrWhiteSpace(direction)) rows.Add(direction);
+        if (IsRareMoonEvent(current)) rows.Add(ResolveMoonRarityNote(current));
+        for (var i = 0; i < rows.Count; i++)
+            ctx.DrawText(rows[i], microFont, rows[i].Contains("Illumination", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 24 * scale, card.Y + (24 + i * 34) * scale));
+
+        var cue = width >= height ? new PointF(width * .72f, height * .82f) : new PointF(width * .10f, height * .53f);
+        DrawCompassCue(ctx, cue, 42 * scale, -0.05f);
+        ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
+
+        return new ThumbnailOverlayDiagnostics("MoonPhaseGuideThumbnail", 8 + rows.Count, false, false, false, true, false, outputPath, "Moon", true, false, true, false, false, MoonGuideCardAdded: true, MoonObjectRendered: true, MoonForbiddenTermsDetected: []);
+    }
+
+    private static string ResolveMoonPhaseName(CurrentEventLock current)
+    {
+        var token = NormalizeEventTypeToken(current.EventType);
+        if (token == "BLUEMOON") return "Blue Moon";
+        if (token == "SUPERMOON") return "Supermoon";
+        if (token == "MICROMOON") return "Micromoon";
+        if (token == "NEWMOON") return "New Moon";
+        if (token == "FIRSTQUARTER") return "First Quarter";
+        if (token == "LASTQUARTER") return "Last Quarter";
+        if (token == "FULLMOON") return "Full Moon";
+        return CleanHook(FirstNonEmpty(current.ShortTitle, current.Title, "Moon Phase"));
+    }
+
+    private static string InferMoonDirectionCue(CurrentEventLock current)
+        => IsFullMoonEvent(current.EventType, current.Title) ? "Look East after sunset" : "Find the Moon near the horizon";
+
+    private static bool IsRareMoonEvent(CurrentEventLock current)
+        => NormalizeEventTypeToken(current.EventType) is "BLUEMOON" or "SUPERMOON" or "MICROMOON";
+
+    private static string ResolveMoonRarityNote(CurrentEventLock current)
+        => NormalizeEventTypeToken(current.EventType) switch
+        {
+            "BLUEMOON" => "RARITY  calendar blue moon",
+            "SUPERMOON" => "RARITY  closer full moon",
+            "MICROMOON" => "RARITY  smaller full moon",
+            _ => string.Empty
+        };
 
     private static ThumbnailOverlayDiagnostics DrawMeteorShowerRc1VisualGuide(IImageProcessingContext ctx, CurrentEventLock current, int width, int height, IReadOnlyList<string> textLines, string outputPath)
     {
@@ -2158,16 +2271,20 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (IsPlanetaryEvent(current.EventType)) ValidatePlanetaryThumbnailProfile(current, current.ShortTitle);
         var overlay = BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: false).Take(2).ToArray();
         var badge = isMeteor ? string.Empty : BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: true).Skip(2).FirstOrDefault() ?? string.Empty;
+        var isMoon = IsMoonEvent(current.EventType, current.Title);
         var visualObjects = NormalizeObjectList(isMeteor
             ? ["Meteor", "Meteor shower", "Meteor streaks", "Dark sky"]
+            : isMoon ? ["Moon", "lunar phase", "illumination"]
             : current.PrimaryObjects.Concat(current.SecondaryObjects).DefaultIfEmpty(current.ShortTitle));
         var meteorPromptTitle = CleanThumbnailText(FirstNonEmpty(current.ShortTitle, current.Title), "Meteor shower", 18);
         var background = isMeteor
             ? "thumbnailCompositionType = RadiantBurstThumbnail. Create dramatic cinematic meteor shower thumbnail background with visible radiant burst point, multiple bright meteor streaks spreading outward, deep blue star field, mountain/horizon silhouette, high contrast, negative space on left for deterministic title overlay, no embedded text, no labels, no UI panels."
-            : $"Premium cinematic astronomy background for {current.Title}, focused on {string.Join(", ", visualObjects)}, no text, no labels, no panels, no typography.";
+            : isMoon
+                ? $"thumbnailCompositionType = MoonPhaseGuideThumbnail. Premium cinematic Moon background for {current.Title}, large realistic Moon as primary object, lunar phase and illumination visible, horizon glow when appropriate, no text, no labels, no cross-family streak effects, no pair labels, no typography."
+                : $"Premium cinematic astronomy background for {current.Title}, focused on {string.Join(", ", visualObjects)}, no text, no labels, no panels, no typography.";
         var promptSource = "currentEventLock.eventType";
-        var vocabularyProfile = isMeteor ? "MeteorShower" : AllowsConjunctionVocabulary(current.EventType, current.Category) ? "PlanetConjunction" : "CurrentEvent";
-        var eventTypeVocabularyUsed = isMeteor ? new[] { "meteor shower", "meteor streaks", "radiant burst", "dark sky" } : AllowsConjunctionVocabulary(current.EventType, current.Category) ? new[] { "conjunction", "planet pairing" } : new[] { current.EventType };
+        var vocabularyProfile = isMeteor ? "MeteorShower" : isMoon ? "Moon" : AllowsConjunctionVocabulary(current.EventType, current.Category) ? "PlanetConjunction" : "CurrentEvent";
+        var eventTypeVocabularyUsed = isMeteor ? new[] { "meteor shower", "meteor streaks", "radiant burst", "dark sky" } : isMoon ? new[] { "Moon", "lunar phase", "illumination", "moonrise", "moonset" } : AllowsConjunctionVocabulary(current.EventType, current.Category) ? new[] { "conjunction", "planet pairing" } : new[] { current.EventType };
         var thumbnailPrompt = background;
         var validationProfile = ResolveThumbnailValidatorProfile(request);
         var forbiddenTermsMatched = DetectThumbnailForbiddenTerms(validationProfile, visualObjects.Concat(overlay).Append(badge));
@@ -2189,7 +2306,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             overlay,
             badge,
             [],
-            isMeteor ? "Azure generates a RadiantBurstThumbnail background only with no embedded text. Deterministic overlay adds exactly two main text lines. Do not use cards, direction callouts, date/time boxes, hero/gallery templates, panels, boxes, or instructional details." : "Azure generates background only with no embedded text. Deterministic RC1 overlay adds at most two main text lines and an optional small date. Do not use guide cards, hero/gallery templates, panels, boxes, or object-pair info cards.",
+            isMeteor ? "Azure generates a RadiantBurstThumbnail background only with no embedded text. Deterministic overlay adds exactly two main text lines. Do not use cards, direction callouts, date/time boxes, hero/gallery templates, panels, boxes, or instructional details." : isMoon ? "Azure generates a realistic Moon background only with no embedded text. Deterministic MoonPhaseGuideThumbnail overlay adds title, phase/date, and safe Moon guide card fields when available." : "Azure generates background only with no embedded text. Deterministic RC1 overlay adds at most two main text lines and an optional small date. Do not use guide cards, hero/gallery templates, panels, boxes, or object-pair info cards.",
             thumbnailPrompt,
             promptSource,
             forbiddenTermsMatched,
@@ -2219,26 +2336,28 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .Concat(current.SecondaryObjects)
             .Concat(current.RequiredVisualObjects)
             .Concat(intelligence?.ResolvedObjectNames ?? []));
+        var familyResolution = ResolveEventFamily(current.EventType, request.ProductionContext?.Category, current.PrimaryObjects, current.SecondaryObjects);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
-            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : "CurrentEvent";
+            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == EventFamily.Moon ? "Moon" : "CurrentEvent";
         var validatorProfile = eventFamily == "MeteorShower"
             ? "MeteorShower"
             : IsPlanetaryEvent(current.EventType) ? NormalizeEventTypeToken(current.EventType) switch
             {
                 "PLANETGROUPING" => "PlanetGrouping",
                 _ => "PlanetConjunction"
-            } : "CurrentEvent";
+            } : familyProfile.ValidatorProfile;
 
         var candidates = eventFamily == "MeteorShower"
             ? NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []))
             : eventFamily == "PlanetaryEvent"
                 ? NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []).Concat(EventContentGuard.DefaultForbiddenTermsForEventType(current.EventType)))
-                : NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []));
+                : eventFamily == "Moon"
+                    ? NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []).Concat(familyProfile.ForbiddenTerms))
+                    : NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []));
         var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
         var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
-        var familyResolution = ResolveEventFamily(current.EventType, request.ProductionContext?.Category, current.PrimaryObjects, current.SecondaryObjects);
-        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
         return new ThumbnailValidatorProfile(
             current.EventType,
             eventFamily,
@@ -2258,23 +2377,25 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (current is null)
             return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent", EventFamily.Unknown.ToString(), EventFamilyResolver.ResolveWithDiagnostics(null, null, [], []).Input, "No current event lock was available.", nameof(EventFamilyProfileBase), EventFamilyProfiles.Version);
         var expectedObjects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects).Concat(current.RequiredVisualObjects));
+        var familyResolution = ResolveEventFamily(current.EventType, current.Category, current.PrimaryObjects, current.SecondaryObjects);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
-            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : "CurrentEvent";
+            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == EventFamily.Moon ? "Moon" : "CurrentEvent";
         var validatorProfile = eventFamily == "MeteorShower"
             ? "MeteorShower"
             : IsPlanetaryEvent(current.EventType) ? NormalizeEventTypeToken(current.EventType) switch
             {
                 "PLANETGROUPING" => "PlanetGrouping",
                 _ => "PlanetConjunction"
-            } : "CurrentEvent";
+            } : familyProfile.ValidatorProfile;
         var candidates = eventFamily == "PlanetaryEvent"
             ? NormalizeObjectList(current.ForbiddenObjectNames.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(current.EventType)))
-            : NormalizeObjectList(current.ForbiddenObjectNames);
+            : eventFamily == "Moon"
+                ? NormalizeObjectList(current.ForbiddenObjectNames.Concat(familyProfile.ForbiddenTerms))
+                : NormalizeObjectList(current.ForbiddenObjectNames);
         var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
         var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
-        var familyResolution = ResolveEventFamily(current.EventType, current.Category, current.PrimaryObjects, current.SecondaryObjects);
-        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
         return new ThumbnailValidatorProfile(current.EventType, eventFamily, expectedObjects, applied, skipped, validatorProfile, familyResolution.Family.ToString(), familyResolution.Input, familyResolution.Reason, familyProfile.GetType().Name, EventFamilyProfiles.Version);
     }
 
@@ -3201,6 +3322,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             BestViewingWindowLocal: intelligence?.BestViewingWindowLocal,
             AngularSeparationDegrees: intelligence?.AngularSeparationDegrees,
             AltitudeDegrees: intelligence?.AltitudeDegrees,
+            MoonIlluminationPercent: intelligence?.MoonIlluminationPercent,
             ContentStrategy: FirstNonEmpty(context?.ContentStrategy, intelligence?.StrategyId),
             RequiredVisualObjects: NormalizeObjectList(intelligence?.RequiredVisualObjects ?? []),
             ForbiddenObjectNames: NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? [])));
@@ -3211,6 +3333,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static bool IsPlanetaryEvent(string eventType)
         => NormalizeEventTypeToken(eventType) is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETPAIRING" or "PLANETPARADE" or "PLANETALIGNMENT" or "MOONPLANETPAIRING";
+
+    private static bool IsMoonEvent(string eventType, string? title = null)
+        => NormalizeEventTypeToken(eventType) is "FULLMOON" or "NEWMOON" or "BLUEMOON" or "SUPERMOON" or "MICROMOON" or "MOONPHASE" or "FIRSTQUARTER" or "LASTQUARTER"
+            || (!string.IsNullOrWhiteSpace(title) && (title.Contains("Moon", StringComparison.OrdinalIgnoreCase) || title.Contains("Lunar", StringComparison.OrdinalIgnoreCase)));
 
     private static string NormalizeEventTypeToken(string value)
         => new((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
@@ -3305,7 +3431,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         bool ObjectLabelsAdded = false,
         bool DirectionCueAdded = false,
         bool SeparationAdded = false,
-        bool AltitudeAdded = false);
+        bool AltitudeAdded = false,
+        bool MoonGuideCardAdded = false,
+        bool MoonObjectRendered = false,
+        IReadOnlyList<string>? MoonForbiddenTermsDetected = null);
 
     private sealed record ThumbnailOverlayDiagnostics(
         string ThumbnailOverlayTemplate,
@@ -3321,7 +3450,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         bool ObjectLabelsAdded = false,
         bool DirectionCueAdded = false,
         bool SeparationAdded = false,
-        bool AltitudeAdded = false)
+        bool AltitudeAdded = false,
+        bool MoonGuideCardAdded = false,
+        bool MoonObjectRendered = false,
+        IReadOnlyList<string>? MoonForbiddenTermsDetected = null)
     {
         public static ThumbnailOverlayDiagnostics None(string finalThumbnailPath, string template)
             => new(template, 0, false, false, false, false, false, finalThumbnailPath);
@@ -3380,6 +3512,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         string? BestViewingWindowLocal,
         decimal? AngularSeparationDegrees,
         decimal? AltitudeDegrees,
+        decimal? MoonIlluminationPercent,
         string? ContentStrategy,
         IReadOnlyList<string> RequiredVisualObjects,
         IReadOnlyList<string> ForbiddenObjectNames)
@@ -3400,7 +3533,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 SecondaryObjects,
                 null,
                 null,
-                null,
+                MoonIlluminationPercent,
                 "Current event thumbnail lock",
                 [],
                 [],
