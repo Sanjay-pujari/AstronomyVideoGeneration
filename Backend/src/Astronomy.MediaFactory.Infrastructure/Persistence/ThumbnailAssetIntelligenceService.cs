@@ -560,7 +560,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var eventTitle = ResolveMeteorThumbnailTitle(current);
         var primary = isMeteor ? eventTitle : CleanHook(current.ShortTitle).ToUpperInvariant();
-        var secondary = isMeteor ? CleanTextElement(FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "PEAK WINDOW"), "PEAK WINDOW").ToUpperInvariant() : CleanTextElement(current.EventType, "SKY EVENT").ToUpperInvariant();
+        var secondary = isMeteor ? "METEOR SHOWER PEAK" : CleanTextElement(current.EventType, "SKY EVENT").ToUpperInvariant();
         var micro = CleanTextElement(FirstNonEmpty(current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), current.LocalPeakTime, current.BestViewingWindowLocal, current.SkyDirectionHint, "PEAK WINDOW"), "PEAK WINDOW").ToUpperInvariant();
         var copy = new ThumbnailCopyDto(primary, secondary, micro);
         var scores = new ThumbnailReadinessScoresDto(98, 98, 96, 96, 98);
@@ -642,7 +642,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var candidatesRoot = Path.Combine(thumbnailRoot, "candidates");
             Directory.CreateDirectory(candidatesRoot);
             var thumbnailVariants = BuildThumbnailV5AzurePrompts(request);
-            var finalPromptText = JsonSerializer.Serialize(new { variants = thumbnailVariants }, JsonOptions);
+            var finalPromptText = JsonSerializer.Serialize(new { prompt, variants = thumbnailVariants }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
             var thumbnailTotalStopwatch = Stopwatch.StartNew();
             var thumbnailVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
@@ -681,6 +681,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 semanticValidationPassed = true,
                 forbiddenObjectsDetected = forbiddenObjects,
                 goldenPilotLeakageDetected,
+                thumbnailPrompt = prompt.ThumbnailPrompt,
+                thumbnailPromptSource = prompt.ThumbnailPromptSource,
+                forbiddenTermsMatched = prompt.ForbiddenTermsMatched,
+                eventTypeVocabularyUsed = prompt.EventTypeVocabularyUsed,
+                thumbnailVocabularyProfile = prompt.ThumbnailVocabularyProfile,
                 requiredOutputs = new[] { ThumbnailFinalFileName, ThumbnailReviewFileName, ThumbnailPromptFileName },
                 forbiddenTextDetected = false,
                 infographicOnlyLayoutDetected = false,
@@ -714,6 +719,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 visualObjectsUsed = prompt.VisualObjects,
                 labelsUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
                 textUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
+                thumbnailPrompt = prompt.ThumbnailPrompt,
+                thumbnailPromptSource = prompt.ThumbnailPromptSource,
+                forbiddenTermsMatched = prompt.ForbiddenTermsMatched,
+                eventTypeVocabularyUsed = prompt.EventTypeVocabularyUsed,
+                thumbnailVocabularyProfile = prompt.ThumbnailVocabularyProfile,
+                meteorVocabularyPresent = prompt.EventTypeVocabularyUsed.Any(term => term.Contains("meteor", StringComparison.OrdinalIgnoreCase)) && prompt.ThumbnailPrompt.Contains("meteor", StringComparison.OrdinalIgnoreCase),
+                conjunctionVocabularyAbsent = prompt.ForbiddenTermsMatched.Count == 0,
                 thumbnailSourceManifestPath = string.Empty,
                 thumbnailSourceScenePath = string.Empty
             }, JsonOptions), cancellationToken);
@@ -829,9 +841,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
         var clickMagnetTheme = FirstNonEmpty(intelligence?.VisualTheme, "high-contrast click-magnet thumbnail");
         var forbidden = request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        var isConjunction = EventContentGuard.IsPlanetConjunction(eventType) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+        var isConjunction = AllowsConjunctionVocabulary(eventType, request.ProductionContext?.Category);
         var mainText = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? LimitThumbnailWords(CleanTextElement(title, "METEOR SHOWER").ToUpperInvariant(), 6) : LimitThumbnailWords(CleanTextElement(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, objects, title), "SKY EVENT").ToUpperInvariant(), 6);
-        var basePrompt = $"Azure Image2 background only for a simple CTR astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Deterministic overlay headline: {mainText}. Visual theme: {visualTheme}. Layout: large event-specific visual, safe empty text area, no cropping, maximum two deterministic text lines, maximum six words total. For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair. Forbidden: guide panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
+        var conjunctionInstruction = isConjunction ? " For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair." : string.Empty;
+        var basePrompt = $"Azure Image2 background only for a simple CTR astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Deterministic overlay headline: {mainText}. Visual theme: {visualTheme}. Layout: large event-specific visual, safe empty text area, no cropping, maximum two deterministic text lines, maximum six words total.{conjunctionInstruction} Forbidden: guide panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
         var text = new[] { mainText };
         EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", basePrompt + " " + string.Join(' ', text), forbidden);
         return
@@ -1640,15 +1653,23 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var eventTitle = ResolveMeteorThumbnailTitle(current);
         var overlay = isMeteor
-            ? new[] { eventTitle, "PEAK NIGHT" }
+            ? new[] { eventTitle, "METEOR SHOWER PEAK" }
             : new[] { CleanThumbnailText(current.ShortTitle, current.Title, 18).ToUpperInvariant(), CleanThumbnailText(current.EventType, "SKY EVENT", 20).ToUpperInvariant() };
-        var badge = isMeteor ? "PEAK WINDOW" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "PEAK WINDOW", 18).ToUpperInvariant();
+        var badge = isMeteor ? "DARK SKY" : CleanThumbnailText(FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, current.SkyDirectionHint), "PEAK WINDOW", 18).ToUpperInvariant();
         var visualObjects = NormalizeObjectList(isMeteor
             ? ["Meteor", "Meteor shower", "Meteor streaks", "Dark sky"]
             : current.PrimaryObjects.Concat(current.SecondaryObjects).DefaultIfEmpty(current.ShortTitle));
+        var meteorPromptTitle = CleanThumbnailText(FirstNonEmpty(current.ShortTitle, current.Title), "Meteor shower", 18);
         var background = isMeteor
-            ? "High-CTR YouTube thumbnail. Dramatic meteor shower sky with bright streaks, deep contrast, cinematic color, mobile-readable composition. Clean marketing composition with only a huge CTR headline and one urgency badge."
+            ? $"{meteorPromptTitle} meteor shower peak, meteor streaks, radiant hint, dark sky, cinematic thumbnail."
             : $"High-impact astronomy YouTube thumbnail for {current.Title}. Premium cinematic astronomy background focused on {string.Join(", ", visualObjects)}.";
+        var promptSource = "currentEventLock.eventType";
+        var vocabularyProfile = isMeteor ? "MeteorShower" : AllowsConjunctionVocabulary(current.EventType, current.Category) ? "PlanetConjunction" : "CurrentEvent";
+        var eventTypeVocabularyUsed = isMeteor ? new[] { "meteor shower", "meteor streaks", "radiant hint", "dark sky" } : AllowsConjunctionVocabulary(current.EventType, current.Category) ? new[] { "conjunction", "planet pairing" } : new[] { current.EventType };
+        var thumbnailPrompt = background;
+        var forbiddenTermsMatched = DetectConjunctionVocabulary(thumbnailPrompt + " " + string.Join(' ', overlay) + " " + badge);
+        if (isMeteor && forbiddenTermsMatched.Count > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: MeteorShower thumbnail prompt contains conjunction vocabulary: " + string.Join(", ", forbiddenTermsMatched));
         return new PureV3ThumbnailPrompt(
             current.Title,
             current.EventType,
@@ -1665,7 +1686,23 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             overlay,
             badge,
             [],
-            "Generate the cinematic background with Azure Image2-style image generation, then composite large CTR text overlay and badge. Use only the current event concept; do not use scene assets or hero-scene-manifest.json.");
+            "Generate the cinematic background with Azure Image2-style image generation, then composite large CTR text overlay and badge. Use only the current event concept; do not use scene assets or hero-scene-manifest.json.",
+            thumbnailPrompt,
+            promptSource,
+            forbiddenTermsMatched,
+            eventTypeVocabularyUsed,
+            vocabularyProfile);
+    }
+
+
+    private static bool AllowsConjunctionVocabulary(string? eventType, string? contentCategoryCode)
+        => string.Equals(eventType, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(contentCategoryCode, "PlanetConjunction", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<string> DetectConjunctionVocabulary(string text)
+    {
+        string[] terms = ["conjunction", "planet conjunction", "planet pairing", "Jupiter", "Venus", "look west", "western sky after sunset"];
+        return terms.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static string BuildPureV3VisualFocus(CurrentEventLock current)
@@ -2610,7 +2647,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         IReadOnlyList<string> CtrOverlay,
         string Badge,
         IReadOnlyList<string> ForbiddenTerms,
-        string RenderingInstructions);
+        string RenderingInstructions,
+        string ThumbnailPrompt,
+        string ThumbnailPromptSource,
+        IReadOnlyList<string> ForbiddenTermsMatched,
+        IReadOnlyList<string> EventTypeVocabularyUsed,
+        string ThumbnailVocabularyProfile);
 
     private sealed record CurrentEventLock(
         string PlanId,

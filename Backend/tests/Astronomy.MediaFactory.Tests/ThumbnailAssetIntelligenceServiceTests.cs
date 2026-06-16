@@ -577,7 +577,12 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
         Assert.Contains("GEMINIDS", promptText);
         Assert.Contains("METEOR SHOWER", promptText);
-        Assert.Contains("PEAK NIGHT", promptText);
+        Assert.Contains("METEOR SHOWER PEAK", promptText);
+        Assert.Contains("radiant hint", promptText);
+        Assert.Contains("thumbnailPromptSource", promptText);
+        Assert.Contains("forbiddenTermsMatched", promptText);
+        Assert.Contains("eventTypeVocabularyUsed", promptText);
+        Assert.Contains("thumbnailVocabularyProfile", promptText);
         Assert.DoesNotContain("Jupiter", promptText);
         Assert.DoesNotContain("Venus", promptText);
         Assert.DoesNotContain("conjunction", promptText);
