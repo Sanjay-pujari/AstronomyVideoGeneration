@@ -495,6 +495,15 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(review.RootElement.GetProperty("semanticValidationPassed").GetBoolean());
         Assert.False(review.RootElement.GetProperty("goldenPilotLeakageDetected").GetBoolean());
         Assert.Empty(review.RootElement.GetProperty("forbiddenObjectsDetected").EnumerateArray());
+        Assert.Equal("RadiantBurstThumbnail", review.RootElement.GetProperty("thumbnailCompositionType").GetString());
+        Assert.Equal("MeteorShowerRc1VisualGuide", review.RootElement.GetProperty("thumbnailOverlayTemplate").GetString());
+        Assert.True(review.RootElement.GetProperty("overlayElementsCount").GetInt32() > 5);
+        Assert.True(review.RootElement.GetProperty("infoCardAdded").GetBoolean());
+        Assert.True(review.RootElement.GetProperty("radiantMarkerAdded").GetBoolean());
+        Assert.True(review.RootElement.GetProperty("meteorStreakLabelAdded").GetBoolean());
+        Assert.True(review.RootElement.GetProperty("lookDirectionCueAdded").GetBoolean());
+        Assert.True(review.RootElement.GetProperty("bottomTipsBarAdded").GetBoolean());
+        Assert.EndsWith("thumbnail-final.png", review.RootElement.GetProperty("finalThumbnailPath").GetString());
 
         var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
         Assert.Contains("Mars", promptText);

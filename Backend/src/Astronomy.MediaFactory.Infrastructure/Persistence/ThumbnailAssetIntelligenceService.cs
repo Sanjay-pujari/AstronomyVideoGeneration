@@ -650,12 +650,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 finalThumbnailPrompt: string.Empty,
                 thumbnailRenderer: "AzureImage2",
                 selectedThumbnailStrategy: "PureAzureImage2ThumbnailV3",
-                thumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode);
+                thumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode,
+                finalThumbnailPath: finalPath);
             ValidateRc1ThumbnailContract(prompt.CtrOverlay, thumbnailVariants.Select(v => v.Layout));
             var finalPromptText = JsonSerializer.Serialize(new { prompt, variants = thumbnailVariants }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
             var thumbnailTotalStopwatch = Stopwatch.StartNew();
             var thumbnailVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string TextLayout, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+            var overlayDiagnosticsByVariant = new List<(string Variant, ThumbnailOverlayDiagnostics Diagnostics)>();
             foreach (var variant in thumbnailVariants)
             {
                 var azureBackgroundPath = NormalizePath(Path.Combine(candidatesRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
@@ -665,7 +667,21 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, ResolveWorkingDirectoryRoot(), cancellationToken);
+                var overlayDiagnostics = await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, ResolveWorkingDirectoryRoot(), cancellationToken);
+                LogThumbnailRuntimeDiagnostics(runtimeDiagnostics with
+                {
+                    FinalThumbnailPrompt = variant.Prompt,
+                    ThumbnailOverlayTemplate = overlayDiagnostics.ThumbnailOverlayTemplate,
+                    OverlayElementsCount = overlayDiagnostics.OverlayElementsCount,
+                    InfoCardAdded = overlayDiagnostics.InfoCardAdded,
+                    RadiantMarkerAdded = overlayDiagnostics.RadiantMarkerAdded,
+                    MeteorStreakLabelAdded = overlayDiagnostics.MeteorStreakLabelAdded,
+                    LookDirectionCueAdded = overlayDiagnostics.LookDirectionCueAdded,
+                    BottomTipsBarAdded = overlayDiagnostics.BottomTipsBarAdded,
+                    FinalThumbnailPath = variantPath
+                });
+                ValidateMeteorThumbnailOverlay(currentEventType: BuildCurrentEventLock(request).EventType, currentTitle: BuildCurrentEventLock(request).Title, overlayDiagnostics);
+                overlayDiagnosticsByVariant.Add((variant.Variant, overlayDiagnostics));
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
                 thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
             }
@@ -686,6 +702,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 throw new InvalidOperationException("Thumbnail V6 variant validation failed: all variants use the same text layout.");
 
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
+            var selectedOverlayDiagnostics = overlayDiagnosticsByVariant.First().Diagnostics;
+            var isMeteorThumbnail = string.Equals(selectedOverlayDiagnostics.ThumbnailOverlayTemplate, "MeteorShowerRc1VisualGuide", StringComparison.OrdinalIgnoreCase);
             await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
             await WriteThumbnailVisualPromptDiagnosticsAsync(thumbnailRoot, thumbnailVariants, request, cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
@@ -702,14 +720,23 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 forbiddenTextDetected = false,
                 infographicOnlyLayoutDetected = false,
                 textCount = prompt.CtrOverlay.Count + (string.IsNullOrWhiteSpace(prompt.Badge) ? 0 : 1),
-                thumbnailContract = "RC1CinematicThumbnail",
+                thumbnailCompositionType,
+                thumbnailOverlayTemplate = selectedOverlayDiagnostics.ThumbnailOverlayTemplate,
+                selectedOverlayDiagnostics.OverlayElementsCount,
+                selectedOverlayDiagnostics.InfoCardAdded,
+                selectedOverlayDiagnostics.RadiantMarkerAdded,
+                selectedOverlayDiagnostics.MeteorStreakLabelAdded,
+                selectedOverlayDiagnostics.LookDirectionCueAdded,
+                selectedOverlayDiagnostics.BottomTipsBarAdded,
+                finalThumbnailPath = NormalizePath(finalPath),
+                thumbnailContract = isMeteorThumbnail ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
                 finalMainText = prompt.CtrOverlay,
-                thumbnailArchitecture = "RC1CinematicThumbnail",
+                thumbnailArchitecture = isMeteorThumbnail ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
                 sceneManifestRequired = false,
                 heroSceneManifestRequired = false
             }, JsonOptions), cancellationToken);
@@ -724,18 +751,27 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 forbiddenObjectsDetected = forbiddenObjects,
                 goldenPilotLeakageDetected,
                 titleExists = true,
-                dateExists = !string.IsNullOrWhiteSpace(prompt.Badge),
-                bestTimeExists = false,
-                directionExists = false,
-                equipmentExists = false,
-                moonExists = false,
-                radiantAnnotationExists = false,
-                bottomTipsExist = false,
-                thumbnailContract = "RC1CinematicThumbnail",
+                dateExists = isMeteorThumbnail || !string.IsNullOrWhiteSpace(prompt.Badge),
+                bestTimeExists = isMeteorThumbnail,
+                directionExists = isMeteorThumbnail,
+                equipmentExists = isMeteorThumbnail,
+                moonExists = isMeteorThumbnail,
+                radiantAnnotationExists = selectedOverlayDiagnostics.RadiantMarkerAdded,
+                bottomTipsExist = selectedOverlayDiagnostics.BottomTipsBarAdded,
+                thumbnailCompositionType,
+                thumbnailOverlayTemplate = selectedOverlayDiagnostics.ThumbnailOverlayTemplate,
+                selectedOverlayDiagnostics.OverlayElementsCount,
+                selectedOverlayDiagnostics.InfoCardAdded,
+                selectedOverlayDiagnostics.RadiantMarkerAdded,
+                selectedOverlayDiagnostics.MeteorStreakLabelAdded,
+                selectedOverlayDiagnostics.LookDirectionCueAdded,
+                selectedOverlayDiagnostics.BottomTipsBarAdded,
+                finalThumbnailPath = NormalizePath(finalPath),
+                thumbnailContract = isMeteorThumbnail ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
-                guidePanelExists = false,
+                guidePanelExists = isMeteorThumbnail,
                 duplicateTitleExists = false,
                 textAreaPercent = 24,
                 embeddedTextDetected = false,
@@ -786,7 +822,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         string finalThumbnailPrompt,
         string thumbnailRenderer,
         string selectedThumbnailStrategy,
-        string thumbnailVisualSourceMode)
+        string thumbnailVisualSourceMode,
+        string finalThumbnailPath)
     {
         var productionContextPresent = request.ProductionContext is not null;
         var photoCinematicRequested = ShouldUsePhotoCinematicThumbnailRenderer(request);
@@ -801,7 +838,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             FinalThumbnailPrompt: finalThumbnailPrompt,
             ThumbnailRenderer: thumbnailRenderer,
             SelectedThumbnailStrategy: selectedThumbnailStrategy,
-            ThumbnailVisualSourceMode: thumbnailVisualSourceMode);
+            ThumbnailVisualSourceMode: thumbnailVisualSourceMode,
+            ThumbnailOverlayTemplate: ResolveMeteorOverlayTemplate(request),
+            OverlayElementsCount: 0,
+            InfoCardAdded: false,
+            RadiantMarkerAdded: false,
+            MeteorStreakLabelAdded: false,
+            LookDirectionCueAdded: false,
+            BottomTipsBarAdded: false,
+            FinalThumbnailPath: finalThumbnailPath);
     }
 
     private static string ResolveThumbnailCompositionType(ThumbnailAssetGenerationRequest request)
@@ -815,13 +860,27 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Console.WriteLine("[ThumbnailRuntimeDiagnostics] " + JsonSerializer.Serialize(new
         {
             diagnostics.ThumbnailGenerationPath,
-            diagnostics.ThumbnailCompositionType,
+            thumbnailCompositionType = diagnostics.ThumbnailCompositionType,
+            thumbnailOverlayTemplate = diagnostics.ThumbnailOverlayTemplate,
+            overlayElementsCount = diagnostics.OverlayElementsCount,
+            infoCardAdded = diagnostics.InfoCardAdded,
+            radiantMarkerAdded = diagnostics.RadiantMarkerAdded,
+            meteorStreakLabelAdded = diagnostics.MeteorStreakLabelAdded,
+            lookDirectionCueAdded = diagnostics.LookDirectionCueAdded,
+            bottomTipsBarAdded = diagnostics.BottomTipsBarAdded,
             diagnostics.ThumbnailPromptBuilder,
             diagnostics.FinalThumbnailPrompt,
             diagnostics.ThumbnailRenderer,
             diagnostics.SelectedThumbnailStrategy,
-            diagnostics.ThumbnailVisualSourceMode
+            diagnostics.ThumbnailVisualSourceMode,
+            finalThumbnailPath = diagnostics.FinalThumbnailPath
         }, JsonOptions));
+    }
+
+    private static string ResolveMeteorOverlayTemplate(ThumbnailAssetGenerationRequest request)
+    {
+        var current = BuildCurrentEventLock(request);
+        return IsMeteorEvent(current.EventType, current.Title) ? "MeteorShowerRc1VisualGuide" : "RC1CinematicTitle";
     }
 
     private static void CleanThumbnailV5FinalRoot(string thumbnailRoot)
@@ -923,7 +982,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var mainText = string.Join(" / ", rc1TextLines.Take(2));
         var conjunctionInstruction = isConjunction ? " For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair." : string.Empty;
         var basePrompt = isMeteor
-            ? $"Azure Image2 BACKGROUND ONLY. thumbnailCompositionType = RadiantBurstThumbnail. Create dramatic cinematic meteor shower thumbnail background with visible radiant burst point, multiple bright meteor streaks spreading outward, deep blue star field, mountain/horizon silhouette, high contrast, negative space on left for deterministic title overlay, no embedded text, no labels, no UI panels. Final deterministic overlay text added later by code only: {string.Join(" | ", rc1TextLines.Take(2))}. Keep it purely cinematic: no cards, boxes, direction callouts, date/time modules, equipment modules, moon modules, tips modules, observing instructions, educational panels, captions, typography, embedded text, hero/gallery templates."
+            ? $"Azure Image2 BACKGROUND ONLY. thumbnailCompositionType = RadiantBurstThumbnail. Create dramatic cinematic meteor shower thumbnail background with visible radiant burst point, multiple bright meteor streaks spreading outward, deep blue star field, mountain/horizon silhouette, high contrast, clean safe space on left and along bottom for deterministic code overlay, no embedded text, no labels, no typography, no captions, no UI panels, no hero/gallery templates. Final deterministic overlay text and visual-guide elements added later by code only: {string.Join(" | ", rc1TextLines.Take(2))}."
             : $"Azure Image2 BACKGROUND ONLY for an RC1 cinematic astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Do not render any letters, words, typography, labels, UI, panels, cards, badges, boxes, captions, transparent giant title, or embedded text in the image. Leave natural negative space for a separate deterministic overlay. Final overlay text added later by code: {string.Join(" | ", rc1TextLines)}. Visual theme: {visualTheme}. Layout: cinematic event image, clean large title area, short subtitle area, no center-crop dependency; compose native aspect ratio.{conjunctionInstruction} Forbidden: guide card, hero-style information panel, object-pair info box, black object-pair panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
         ValidateMeteorThumbnailRc1Contract(isMeteor, compositionType, basePrompt, rc1TextLines);
         var text = rc1TextLines.Take(isMeteor ? 2 : 3).ToArray();
@@ -945,7 +1004,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (mainLines.Length > 2)
             throw new InvalidOperationException("MeteorShower thumbnail validation failed: more than two main text lines.");
         var combined = string.Join(" ", mainLines.Concat([prompt]));
-        var forbidden = new[] { "guide card", "radiant guide label", "info panel", "Look East", "date/time box", "equipment panel", "moon panel", "tips panel" };
+        var forbidden = new[] { "radiant guide label", "Look East", "date/time box", "equipment panel", "moon panel", "tips panel" };
         var detected = forbidden.Where(term => combined.Contains(term, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (detected.Length > 0)
             throw new InvalidOperationException("MeteorShower thumbnail validation failed: forbidden guide layout term(s) detected: " + string.Join(", ", detected));
@@ -989,8 +1048,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
             textLineCount = variants.Max(v => v.TextLines.Take(2).Count()),
             wordCount = CountWords(mainText),
-            guideElementsDetected = false,
-            panelElementsDetected = false,
+            guideElementsDetected = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
+            panelElementsDetected = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
             clickabilityScore = variants.All(v => v.TextLines.Take(2).Count() <= 2) ? 96 : 72,
             thumbnailCtrChecks = new { mainText, mainTextWordCount = CountWords(mainText), maxTwoMainTextLines = variants.All(v => v.TextLines.Take(2).Count() <= 2), textAreaPercent = 24, textAreaUnderThirtyPercent = true, noGuidePanels = true, noObjectPairBox = true, noHeroOrGalleryTemplate = true, noEmbeddedTypography = true, noDuplicateTitle = true, noCroppedText = true, thumbnailRulesPassed = variants.All(v => v.TextLines.Take(2).Count() <= 2) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
@@ -1032,9 +1091,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static int CountWords(string value) => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     private static string LimitThumbnailWords(string value, int maxWords) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => !new[] { "TODAY", "TONIGHT", "TOMORROW" }.Contains(w, StringComparer.OrdinalIgnoreCase)).Take(maxWords));
 
-    private static async Task WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
+    private static async Task<ThumbnailOverlayDiagnostics> WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
+        var diagnostics = ThumbnailOverlayDiagnostics.None(outputPath, ResolveMeteorOverlayTemplate(request));
         image.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Stretch });
@@ -1051,25 +1111,77 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var boxX = width == 1280 ? width * .055f : width * .08f;
             var boxY = width == 1280 ? height * .62f : height * .72f;
             if (width == 1080 && height == 1080) { boxWidth = width * .86f; boxHeight = height * .22f; boxY = height * .70f; }
+            var x = boxX;
+            var y = boxY;
             if (isMeteor)
             {
                 ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width * .62f, 0), GradientRepetitionMode.None,
                     new ColorStop(0f, Color.Black.WithAlpha(0.58f)),
                     new ColorStop(0.72f, Color.Black.WithAlpha(0.16f)),
                     new ColorStop(1f, Color.Transparent)), new RectangleF(0, 0, width * .68f, height));
+                diagnostics = DrawMeteorShowerRc1VisualGuide(ctx, current, width, height, textLines, outputPath);
             }
             else
             {
                 ctx.Fill(Color.FromRgba(0, 0, 0, 118), new RectangleF(0, Math.Max(0, boxY - height * .035f), width, Math.Min(height - boxY, boxHeight + height * .08f)));
+                ctx.DrawText(textLines[0], titleFont, Color.White, new PointF(x, y));
+                if (textLines.Count > 1) ctx.DrawText(textLines[1], subFont, Color.FromRgb(255, 222, 91), new PointF(x + 4, y + (width == 1280 ? 86 : 98)));
+                if (textLines.Count > 2) ctx.DrawText(textLines[2], dateFont, Color.FromRgb(200, 230, 255), new PointF(x + 6, y + (width == 1280 ? 140 : 158)));
             }
-            var x = boxX;
-            var y = boxY;
-            ctx.DrawText(textLines[0], titleFont, Color.White, new PointF(x, y));
-            if (textLines.Count > 1) ctx.DrawText(textLines[1], subFont, Color.FromRgb(255, 222, 91), new PointF(x + 4, y + (width == 1280 ? 86 : 98)));
-            if (!isMeteor && textLines.Count > 2) ctx.DrawText(textLines[2], dateFont, Color.FromRgb(200, 230, 255), new PointF(x + 6, y + (width == 1280 ? 140 : 158)));
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? workingDirectoryRoot);
         await image.SaveAsPngAsync(outputPath, cancellationToken);
+        return diagnostics;
+    }
+
+    private static ThumbnailOverlayDiagnostics DrawMeteorShowerRc1VisualGuide(IImageProcessingContext ctx, CurrentEventLock current, int width, int height, IReadOnlyList<string> textLines, string outputPath)
+    {
+        var scale = width / 1280f;
+        var titleFont = ResolveThumbnailFont(Math.Max(46, 70 * scale), FontStyle.Bold);
+        var subFont = ResolveThumbnailFont(Math.Max(30, 38 * scale), FontStyle.Bold);
+        var smallFont = ResolveThumbnailFont(Math.Max(18, 24 * scale), FontStyle.Bold);
+        var microFont = ResolveThumbnailFont(Math.Max(16, 20 * scale), FontStyle.Regular);
+        var card = width >= height
+            ? new RectangleF(width * .045f, height * .08f, width * .39f, height * .54f)
+            : new RectangleF(width * .06f, height * .07f, width * .70f, height * .36f);
+        ctx.Fill(Color.FromRgba(2, 10, 24, 178), card);
+        ctx.Draw(Color.FromRgba(110, 220, 255, 140), 2, card);
+        ctx.DrawText(textLines.ElementAtOrDefault(0) ?? "GEMINIDS", titleFont, Color.White, new PointF(card.X + 28 * scale, card.Y + 24 * scale));
+        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "METEOR SHOWER PEAK", subFont, Color.FromRgb(255, 222, 91), new PointF(card.X + 30 * scale, card.Y + 96 * scale));
+        var date = current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture).ToUpperInvariant() ?? "PEAK NIGHT";
+        var time = FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, "MIDNIGHT–PRE-DAWN");
+        var direction = FirstNonEmpty(current.SkyDirectionHint, "LOOK EAST");
+        var rows = new[] { $"DATE  {date}", $"BEST TIME  {time}", $"DIRECTION  {direction}", "EQUIPMENT  EYES ONLY", "MOON  LOW INTERFERENCE" };
+        for (var i = 0; i < rows.Length; i++)
+            ctx.DrawText(rows[i], microFont, i == 2 ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 32 * scale, card.Y + (154 + i * 38) * scale));
+
+        var radiant = width >= height ? new PointF(width * .70f, height * .32f) : new PointF(width * .64f, height * .48f);
+        DrawRadiantGuide(ctx, radiant, 22 * scale, 190 * scale, 9);
+        ctx.Fill(Color.FromRgba(126, 226, 255, 210), new EllipsePolygon(radiant.X, radiant.Y, 8 * scale));
+        ctx.DrawText("GEMINIDS RADIANT", smallFont, Color.FromRgb(180, 235, 255), new PointF(radiant.X + 28 * scale, radiant.Y - 24 * scale));
+        DrawLeaderLine(ctx, new PointF(radiant.X + 26 * scale, radiant.Y - 6 * scale), radiant, Color.FromRgb(180, 235, 255));
+
+        var streakLabel = width >= height ? new PointF(width * .72f, height * .60f) : new PointF(width * .52f, height * .63f);
+        ctx.DrawText("METEOR STREAKS", smallFont, Color.FromRgb(255, 255, 255), streakLabel);
+        DrawLeaderLine(ctx, streakLabel, new PointF(width * .82f, height * .43f), Color.White);
+
+        var look = width >= height ? new PointF(width * .70f, height * .82f) : new PointF(width * .12f, height * .83f);
+        DrawCompassCue(ctx, look, 46 * scale, -0.18f);
+        ctx.DrawText("LOOK EAST", smallFont, Color.FromRgb(255, 222, 91), new PointF(look.X + 58 * scale, look.Y - 18 * scale));
+
+        var tips = new RectangleF(0, height - Math.Max(70, 82 * scale), width, Math.Max(70, 82 * scale));
+        ctx.Fill(Color.FromRgba(0, 0, 0, 170), tips);
+        ctx.DrawText("TIPS  •  DARK SKY  •  20 MINUTES DARK ADAPTATION  •  SCAN WIDE", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 24 * scale));
+        return new ThumbnailOverlayDiagnostics("MeteorShowerRc1VisualGuide", 11, true, true, true, true, true, outputPath);
+    }
+
+    private static void ValidateMeteorThumbnailOverlay(string currentEventType, string currentTitle, ThumbnailOverlayDiagnostics diagnostics)
+    {
+        if (!IsMeteorEvent(currentEventType, currentTitle)) return;
+        if (diagnostics.OverlayElementsCount <= 2)
+            throw new InvalidOperationException("MeteorShower thumbnail validation failed: overlayElementsCount must be greater than 2; title/subtitle-only overlay is not allowed.");
+        if (!diagnostics.InfoCardAdded || !diagnostics.RadiantMarkerAdded || !diagnostics.MeteorStreakLabelAdded || !diagnostics.LookDirectionCueAdded || !diagnostics.BottomTipsBarAdded)
+            throw new InvalidOperationException("MeteorShower thumbnail validation failed: RC1 visual-guide overlay elements are missing.");
     }
 
     private static void DrawRadiantGuide(IImageProcessingContext ctx, PointF center, float innerRadius, float outerRadius, int rayCount)
@@ -2742,7 +2854,36 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private sealed record ThumbnailDynamicCopy(string SecondaryText, string MicroText);
 
-    private sealed record ThumbnailRuntimeDiagnostics(string ThumbnailGenerationPath, string ThumbnailCompositionType, string ThumbnailPromptBuilder, string FinalThumbnailPrompt, string ThumbnailRenderer, string SelectedThumbnailStrategy, string ThumbnailVisualSourceMode);
+    private sealed record ThumbnailRuntimeDiagnostics(
+        string ThumbnailGenerationPath,
+        string ThumbnailCompositionType,
+        string ThumbnailPromptBuilder,
+        string FinalThumbnailPrompt,
+        string ThumbnailRenderer,
+        string SelectedThumbnailStrategy,
+        string ThumbnailVisualSourceMode,
+        string ThumbnailOverlayTemplate,
+        int OverlayElementsCount,
+        bool InfoCardAdded,
+        bool RadiantMarkerAdded,
+        bool MeteorStreakLabelAdded,
+        bool LookDirectionCueAdded,
+        bool BottomTipsBarAdded,
+        string FinalThumbnailPath);
+
+    private sealed record ThumbnailOverlayDiagnostics(
+        string ThumbnailOverlayTemplate,
+        int OverlayElementsCount,
+        bool InfoCardAdded,
+        bool RadiantMarkerAdded,
+        bool MeteorStreakLabelAdded,
+        bool LookDirectionCueAdded,
+        bool BottomTipsBarAdded,
+        string FinalThumbnailPath)
+    {
+        public static ThumbnailOverlayDiagnostics None(string finalThumbnailPath, string template)
+            => new(template, 0, false, false, false, false, false, finalThumbnailPath);
+    }
 
     private sealed record PureV3ThumbnailPrompt(
         string EventTitle,
