@@ -642,6 +642,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var candidatesRoot = Path.Combine(thumbnailRoot, "candidates");
             Directory.CreateDirectory(candidatesRoot);
             var thumbnailVariants = BuildThumbnailV5AzurePrompts(request);
+            var thumbnailCompositionType = ResolveThumbnailCompositionType(request);
+            var runtimeDiagnostics = BuildThumbnailRuntimeDiagnostics(
+                request,
+                thumbnailCompositionType,
+                thumbnailPromptBuilder: "BuildThumbnailV5AzurePrompts",
+                finalThumbnailPrompt: string.Empty,
+                thumbnailRenderer: "AzureImage2",
+                selectedThumbnailStrategy: "PureAzureImage2ThumbnailV3",
+                thumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode);
             ValidateRc1ThumbnailContract(prompt.CtrOverlay, thumbnailVariants.Select(v => v.Layout));
             var finalPromptText = JsonSerializer.Serialize(new { prompt, variants = thumbnailVariants }, JsonOptions);
             WriteThumbnailGenerationConfigurationDiagnostics(finalPromptText, imageOptions.Value, 1280, 720, promptPath, diagnosticsPath);
@@ -651,6 +660,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             {
                 var azureBackgroundPath = NormalizePath(Path.Combine(candidatesRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
                 var variantPath = NormalizePath(Path.Combine(thumbnailRoot, variant.FileName));
+                var azureDiagnostics = runtimeDiagnostics with { FinalThumbnailPrompt = variant.Prompt };
+                LogThumbnailRuntimeDiagnostics(azureDiagnostics);
                 var azureResult = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
@@ -765,6 +776,52 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             photoCinematicRendererCompleted: true,
             outputWriteSource: "PureAzureImage2ThumbnailV3",
             thumbnailLayoutValidationPath: layoutPath);
+    }
+
+
+    private static ThumbnailRuntimeDiagnostics BuildThumbnailRuntimeDiagnostics(
+        ThumbnailAssetGenerationRequest request,
+        string thumbnailCompositionType,
+        string thumbnailPromptBuilder,
+        string finalThumbnailPrompt,
+        string thumbnailRenderer,
+        string selectedThumbnailStrategy,
+        string thumbnailVisualSourceMode)
+    {
+        var productionContextPresent = request.ProductionContext is not null;
+        var photoCinematicRequested = ShouldUsePhotoCinematicThumbnailRenderer(request);
+        return new ThumbnailRuntimeDiagnostics(
+            ThumbnailGenerationPath: productionContextPresent
+                ? "GenerateThumbnailImagesAsync -> GeneratePureV3ThumbnailImagesAsync"
+                : photoCinematicRequested
+                    ? "GenerateThumbnailImagesAsync -> GeneratePhotoCinematicThumbnailImagesAsync"
+                    : "GenerateThumbnailImagesAsync -> legacy/meteor branch",
+            ThumbnailCompositionType: thumbnailCompositionType,
+            ThumbnailPromptBuilder: thumbnailPromptBuilder,
+            FinalThumbnailPrompt: finalThumbnailPrompt,
+            ThumbnailRenderer: thumbnailRenderer,
+            SelectedThumbnailStrategy: selectedThumbnailStrategy,
+            ThumbnailVisualSourceMode: thumbnailVisualSourceMode);
+    }
+
+    private static string ResolveThumbnailCompositionType(ThumbnailAssetGenerationRequest request)
+    {
+        var current = BuildCurrentEventLock(request);
+        return IsMeteorEvent(current.EventType, current.Title) ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail";
+    }
+
+    private static void LogThumbnailRuntimeDiagnostics(ThumbnailRuntimeDiagnostics diagnostics)
+    {
+        Console.WriteLine("[ThumbnailRuntimeDiagnostics] " + JsonSerializer.Serialize(new
+        {
+            diagnostics.ThumbnailGenerationPath,
+            diagnostics.ThumbnailCompositionType,
+            diagnostics.ThumbnailPromptBuilder,
+            diagnostics.FinalThumbnailPrompt,
+            diagnostics.ThumbnailRenderer,
+            diagnostics.SelectedThumbnailStrategy,
+            diagnostics.ThumbnailVisualSourceMode
+        }, JsonOptions));
     }
 
     private static void CleanThumbnailV5FinalRoot(string thumbnailRoot)
@@ -2684,6 +2741,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
 
     private sealed record ThumbnailDynamicCopy(string SecondaryText, string MicroText);
+
+    private sealed record ThumbnailRuntimeDiagnostics(string ThumbnailGenerationPath, string ThumbnailCompositionType, string ThumbnailPromptBuilder, string FinalThumbnailPrompt, string ThumbnailRenderer, string SelectedThumbnailStrategy, string ThumbnailVisualSourceMode);
 
     private sealed record PureV3ThumbnailPrompt(
         string EventTitle,
