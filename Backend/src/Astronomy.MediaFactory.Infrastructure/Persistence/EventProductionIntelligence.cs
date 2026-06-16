@@ -75,11 +75,24 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
         if (objects.Any(o => o.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Contains("Venus", StringComparison.OrdinalIgnoreCase))) objects = ["Jupiter", "Venus"];
         var primary = objects.SequenceEqual(new[] { "Jupiter", "Venus" }) ? new[] { "Jupiter" } : seed.PrimaryObjects.Count > 0 ? seed.PrimaryObjects : objects.Take(1).ToArray();
         var secondary = objects.SequenceEqual(new[] { "Jupiter", "Venus" }) ? new[] { "Venus" } : seed.SecondaryObjects.Count > 0 ? seed.SecondaryObjects : objects.Skip(1).ToArray();
+        var cleanHeadline = BuildPlanetaryHeadline(primary.Concat(secondary).ToArray());
         var localPeak = seed.LocalPeakTime ?? FormatLocalTime(source.PeakUtc, source.TimeZone);
         var window = seed.BestViewingWindowLocal ?? BuildViewingWindow(source, localPeak);
         var direction = seed.SkyDirectionHint ?? ResolveConjunctionDirection(source, localPeak);
         var viewerInstructions = seed.ViewerInstructions.Concat([$"Look for {string.Join(" and ", objects.DefaultIfEmpty("the two planets"))} close together.", $"{direction}.", $"Best viewing: {window}."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        return seed with { LocalPeakTime = localPeak, BestViewingWindowLocal = window, SkyDirectionHint = direction, PrimaryObjects = primary, SecondaryObjects = secondary, VisibilityRegion = seed.VisibilityRegion ?? source.RegionId, ViewerInstructions = viewerInstructions, AngularSeparationDegrees = source.AngularSeparationDegrees };
+        return seed with { ShortTitle = cleanHeadline, LocalPeakTime = localPeak, BestViewingWindowLocal = window, SkyDirectionHint = direction, PrimaryObjects = primary, SecondaryObjects = secondary, VisibilityRegion = seed.VisibilityRegion ?? source.RegionId, ViewerInstructions = viewerInstructions, AngularSeparationDegrees = source.AngularSeparationDegrees };
+    }
+
+    private static string BuildPlanetaryHeadline(IReadOnlyList<string> objects)
+    {
+        var cleanObjects = objects
+            .Select(CleanObjectName)
+            .Where(IsCleanObjectName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .Select(o => o.ToUpperInvariant())
+            .ToArray();
+        return cleanObjects.Length >= 2 ? string.Join(" + ", cleanObjects) : cleanObjects.FirstOrDefault() ?? "PLANETARY EVENT";
     }
 
     private static string? FormatLocalTime(DateTimeOffset? utc, string? timeZone)

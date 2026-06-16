@@ -156,7 +156,8 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             "Jupiter and Venus conjunction over Udaipur, Rajasthan, India",
             "PLANET_CONJUNCTION",
             ["Jupiter"],
-            ["Venus"]);
+            ["Venus"],
+            angularSeparationDegrees: 1.63m);
 
         var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
         {
@@ -279,7 +280,8 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             "Jupiter and Venus conjunction over Udaipur, Rajasthan, India",
             "PLANET_CONJUNCTION",
             ["Jupiter"],
-            ["Venus"]);
+            ["Venus"],
+            angularSeparationDegrees: 1.63m);
 
         await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
         {
@@ -313,6 +315,49 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
         Assert.Contains("Jupiter", promptText);
         Assert.Contains("Venus", promptText);
+    }
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_PlanetConjunctionIntelligenceBuildsCleanVisualGuideProfile()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Jupiter and Venus conjunction over Udaipur; minimum angular separation 1.63 degrees; visibility window; consolidated from 8 detections",
+            "Jupiter and Venus conjunction over Udaipur; minimum angular separation 1.63 degrees; visibility window; consolidated from 8 detections",
+            "PLANET_CONJUNCTION",
+            ["Jupiter"],
+            ["Venus"],
+            angularSeparationDegrees: 1.63m);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var saved = JsonSerializer.Deserialize<ThumbnailIntelligenceDto>(await File.ReadAllTextAsync(Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-intelligence.json")), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal("PlanetaryEvent", saved!.EventFamily);
+        Assert.Equal("JUPITER + VENUS", saved.Headline);
+        Assert.Equal("JUPITER + VENUS", saved.ThumbnailCopy.PrimaryText);
+        Assert.Equal(["Jupiter", "Venus"], saved.ObjectLabels);
+        Assert.Equal(["1.63° APART"], saved.Callouts);
+        Assert.NotNull(saved.GuideCard);
+        Assert.Equal("10:00 PM", saved.GuideCard!.BestTime);
+        Assert.Equal("Evening", saved.GuideCard.ViewingWindow);
+        Assert.Equal("East", saved.GuideCard.Direction);
+        Assert.DoesNotContain("consolidated", saved.Headline, StringComparison.OrdinalIgnoreCase);
+        Assert.True(saved.Headline.Length <= 50);
     }
 
     [Fact]
@@ -627,7 +672,7 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     private static ThumbnailAssetIntelligenceService CreateService(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), new DefaultVisualSourceResolver());
 
-    private static ProductionPipelineExecutionContext BuildProductionContext(string workingDirectory, string title, string shortTitle, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, IReadOnlyList<string>? requiredVisualObjects = null, IReadOnlyList<string>? resolvedObjectNames = null)
+    private static ProductionPipelineExecutionContext BuildProductionContext(string workingDirectory, string title, string shortTitle, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, IReadOnlyList<string>? requiredVisualObjects = null, IReadOnlyList<string>? resolvedObjectNames = null, decimal? angularSeparationDegrees = null)
     {
         var intelligence = new ProductionEventIntelligence(
             "Astronomy",
@@ -653,7 +698,8 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             [],
             StrategyId: eventType,
             ResolvedObjectNames: resolvedObjectNames,
-            RequiredVisualObjects: requiredVisualObjects);
+            RequiredVisualObjects: requiredVisualObjects,
+            AngularSeparationDegrees: angularSeparationDegrees);
 
         var eventRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId);
         return new ProductionPipelineExecutionContext(

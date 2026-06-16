@@ -565,9 +565,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var isPlanetary = IsPlanetaryEvent(current.EventType);
         var textLines = BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: true);
-        var primary = textLines.ElementAtOrDefault(0) ?? "SKY EVENT";
+        var primary = isPlanetary ? BuildPlanetaryCleanHeadline(current) : textLines.ElementAtOrDefault(0) ?? "SKY EVENT";
         var secondary = textLines.ElementAtOrDefault(1) ?? string.Empty;
         var micro = textLines.ElementAtOrDefault(2) ?? string.Empty;
+        if (isPlanetary) ValidatePlanetaryThumbnailProfile(current, primary);
         var copy = new ThumbnailCopyDto(primary, secondary, micro);
         var scores = new ThumbnailReadinessScoresDto(98, 98, 96, 96, 98);
         var intelligence = new ThumbnailIntelligenceDto(
@@ -593,7 +594,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             EventFamily: isPlanetary ? "PlanetaryEvent" : isMeteor ? "MeteorEvent" : null,
             ThumbnailOverlayTemplate: ResolveThumbnailOverlayTemplate(request),
             GuideCard: isPlanetary ? BuildPlanetaryGuideCard(current) : null,
-            ObjectLabels: isPlanetary ? current.PrimaryObjects.Concat(current.SecondaryObjects).Take(4).ToArray() : null,
+            ObjectLabels: isPlanetary ? ResolvePlanetaryObjectLabels(current) : null,
             Callouts: isPlanetary ? BuildPlanetaryCallouts(current) : null,
             SkyGuideCue: isPlanetary ? NormalizeDirectionCue(current.SkyDirectionHint).ToUpperInvariant() : null);
 
@@ -788,6 +789,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 status = actualOutputsExist ? "Succeeded" : "Failed",
                 reason = actualOutputsExist ? "Validation passed" : "Expected output not found",
                 semanticValidationPassed = actualOutputsExist,
+                eventFamily = selectedOverlayDiagnostics.EventFamily,
+                cleanHeadline = prompt.ShortTitle,
+                guideCardFieldsPresent = selectedOverlayDiagnostics.GuideCardAdded && selectedOverlayDiagnostics.DirectionCueAdded,
+                thumbnailProfileReady = selectedOverlayDiagnostics.EventFamily == "PlanetaryEvent"
+                    ? selectedOverlayDiagnostics.GuideCardAdded && selectedOverlayDiagnostics.ObjectLabelsAdded && selectedOverlayDiagnostics.DirectionCueAdded
+                    : actualOutputsExist,
                 forbiddenObjectsDetected = forbiddenObjects,
                 goldenPilotLeakageDetected,
                 titleExists = true,
@@ -828,8 +835,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 squareExists = generatedRequiredOutputChecks["thumbnail-square.png"],
                 outputFiles = generatedRequiredOutputChecks,
                 visualObjectsUsed = prompt.VisualObjects,
-                labelsUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
-                textUsed = prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
+                labelsUsed = IsPlanetaryEvent(prompt.EventType) ? prompt.PrimaryObjects.Concat(prompt.SecondaryObjects).ToArray() : prompt.CtrOverlay.Append(prompt.Badge).ToArray(),
+                textUsed = prompt.CtrOverlay.Append(prompt.Badge).Where(text => !string.IsNullOrWhiteSpace(text)).ToArray(),
                 thumbnailPrompt = prompt.ThumbnailPrompt,
                 thumbnailPromptSource = prompt.ThumbnailPromptSource,
                 forbiddenTermsMatched = prompt.ForbiddenTermsMatched,
@@ -1382,10 +1389,39 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static IReadOnlyList<string> BuildPlanetaryCallouts(CurrentEventLock current)
     {
-        var callouts = new List<string> { "CLOSE PAIRING" };
+        var callouts = new List<string>();
         if (current.AngularSeparationDegrees is decimal sep) callouts.Add($"{sep:0.##}° APART");
         return callouts;
     }
+
+    private static string BuildPlanetaryCleanHeadline(CurrentEventLock current)
+        => BuildPlanetFamilyThumbnailCopy(current.EventType, ResolvePlanetaryObjectLabels(current)).PrimaryText;
+
+    private static IReadOnlyList<string> ResolvePlanetaryObjectLabels(CurrentEventLock current)
+    {
+        var labels = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects))
+            .Select(FormatThumbnailObjectLabel)
+            .Where(IsPlanetObjectName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return labels.Length > 0 ? labels : ExtractPlanetObjectNames(FirstNonEmpty(current.ShortTitle, current.Title));
+    }
+
+    private static void ValidatePlanetaryThumbnailProfile(CurrentEventLock current, string shortTitle)
+    {
+        if (shortTitle.Length > 50)
+            throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: shortTitle must not exceed 50 characters.");
+        if (!IsPlanetaryConjunctionEvent(current.EventType)) return;
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(current.LocalPeakTime)) missing.Add("localPeakTime");
+        if (string.IsNullOrWhiteSpace(current.SkyDirectionHint)) missing.Add("skyDirectionHint");
+        if (string.IsNullOrWhiteSpace(current.BestViewingWindowLocal)) missing.Add("bestViewingWindowLocal");
+        if (missing.Count > 0)
+            throw new InvalidOperationException("PlanetConjunction thumbnail validation failed: " + string.Join(", ", missing) + " are required for EventVisualGuideProfile.");
+    }
+
+    private static bool IsPlanetaryConjunctionEvent(string eventType)
+        => NormalizeEventTypeToken(eventType) is "PLANETCONJUNCTION" or "CONJUNCTION";
 
     private static void DrawRadiantGuide(IImageProcessingContext ctx, PointF center, float innerRadius, float outerRadius, int rayCount)
     {
@@ -2058,6 +2094,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
+        if (IsPlanetaryEvent(current.EventType)) ValidatePlanetaryThumbnailProfile(current, current.ShortTitle);
         var overlay = BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: false).Take(2).ToArray();
         var badge = isMeteor ? string.Empty : BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: true).Skip(2).FirstOrDefault() ?? string.Empty;
         var visualObjects = NormalizeObjectList(isMeteor

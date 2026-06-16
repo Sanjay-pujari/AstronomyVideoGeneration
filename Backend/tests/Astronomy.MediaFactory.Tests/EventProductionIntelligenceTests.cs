@@ -188,6 +188,8 @@ public sealed class EventProductionIntelligenceTests
         var result = adapter.Normalize(new ProductionPipelineRequest(planRequest, Guid.NewGuid(), "/tmp/out", false, true));
 
         Assert.Equal("Conjunction", result.StrategyId);
+        Assert.Equal("JUPITER + VENUS", result.ShortTitle);
+        Assert.True(result.ShortTitle.Length <= 50);
         Assert.Equal("Planetary conjunction", result.StoryTheme);
         Assert.Equal("two bright planets close together in twilight sky", result.VisualTheme);
         Assert.Equal("Venus and Jupiter markers with direction and altitude", result.SkyGuideTheme);
