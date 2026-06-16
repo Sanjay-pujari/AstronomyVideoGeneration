@@ -33,6 +33,8 @@ public sealed record SceneAssetsV3Beat(
     string? SupportingText,
     string VisualPrompt,
     int ExpectedDurationSec,
+    string SceneGuideType = "GenericObjectPair",
+    IReadOnlyList<string>? GuideElementsUsed = null,
     string NarrationBeatSource = "generated",
     string VisualPromptSource = "generated")
 {
@@ -60,6 +62,8 @@ public sealed record SceneAssetsV3ManifestScene(
     string CompositionType,
     string OverlayText,
     string? SupportingText,
+    string SceneGuideType,
+    IReadOnlyList<string> GuideElementsUsed,
     string Hash,
     bool ProviderCalled,
     bool ProviderSucceeded);
@@ -124,6 +128,8 @@ public sealed record SceneTimelineMetadata(
     string? SupportingText,
     string NarrationBeat,
     int EstimatedDurationSec,
+    string SceneGuideType,
+    IReadOnlyList<string> GuideElementsUsed,
     string RecommendedTransition,
     string RecommendedMotion);
 
