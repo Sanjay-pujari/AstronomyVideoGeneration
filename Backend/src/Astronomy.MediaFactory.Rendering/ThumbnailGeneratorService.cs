@@ -14,7 +14,6 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
 {
-    private static readonly HashSet<string> PriorityPlanets = new(StringComparer.OrdinalIgnoreCase) { "Venus", "Jupiter", "Saturn" };
     private readonly ThumbnailOptions _options;
     private readonly ILogger<ThumbnailGeneratorService> _logger;
 
@@ -36,9 +35,10 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
         var thumbnailsDirectory = System.IO.Path.Combine(outputDirectory, "thumbnails");
         Directory.CreateDirectory(thumbnailsDirectory);
 
-        var selection = SelectBaseScene(context.SceneObservationContexts);
+        var eventObjectContext = BuildEventObjectContext(context);
+        var selection = SelectBaseScene(context.SceneObservationContexts, eventObjectContext);
         var selectedImage = ResolveSelectedImage(selection.scene, context.SceneObservationContexts, candidates) ?? candidates[0];
-        var variants = BuildTextVariants(context, selection.objectName, narrationContext);
+        var variants = BuildTextVariants(context, eventObjectContext);
 
         var outputs = new List<string>(3);
         for (var i = 0; i < variants.Count; i++)
@@ -66,12 +66,12 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
             _options.Width,
             _options.Height,
             text,
-            "Look west after sunset",
-            "Tonight's sky guide",
+            string.Empty,
+            string.Empty,
             ResolvePlanetAssetsFromImage(sourcePath),
             mood: "WarmTwilightThumbnail",
             starDensity: 520,
-            showReferenceOverlays: true,
+            showReferenceOverlays: false,
             backgroundImagePath: sourcePath,
             compositionMode: AstronomyVisualCompositionMode.Thumbnail);
 
@@ -85,20 +85,39 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
         return [new AstronomyVisualPlanetAsset(ToSafeWords(label), sourcePath)];
     }
 
-    private static (SceneObservationContext? scene, string objectName) SelectBaseScene(IReadOnlyCollection<SceneObservationContext> scenes)
+    private static EventObjectContext BuildEventObjectContext(AstronomyContext context)
     {
-        var moon = scenes.FirstOrDefault(s => string.Equals(s.ObjectName, "Moon", StringComparison.OrdinalIgnoreCase));
-        if (moon is not null) return (moon, "Moon");
+        var eventType = context.SpecialEvent?.EventType ?? "AstronomyEvent";
+        var title = context.SpecialEvent?.EventTitle;
+        var sceneObjects = context.SceneObservationContexts
+            .Where(s => !IsGuideOnlyScene(s))
+            .Select(s => s.ObjectName);
+        var eventObjects = context.Events.Select(e => e.ObjectName);
+        return EventObjectContextBuilder.FromJsonValues(eventType, title, [], sceneObjects, eventObjects, []);
+    }
 
-        var brightPlanet = scenes.FirstOrDefault(s => PriorityPlanets.Contains(s.ObjectName));
-        if (brightPlanet is not null) return (brightPlanet, brightPlanet.ObjectName);
+    private static (SceneObservationContext? scene, string objectName) SelectBaseScene(IReadOnlyCollection<SceneObservationContext> scenes, EventObjectContext eventObjectContext)
+    {
+        var approvedObjects = eventObjectContext.ObjectNames;
+        var eventScene = scenes
+            .Where(s => !IsGuideOnlyScene(s))
+            .FirstOrDefault(s => approvedObjects.Contains(s.ObjectName, StringComparer.OrdinalIgnoreCase));
+        if (eventScene is not null) return (eventScene, eventScene.ObjectName);
 
-        var highestAltitude = scenes.OrderByDescending(s => s.AltitudeDegrees ?? double.MinValue).FirstOrDefault();
+        var highestAltitude = scenes
+            .Where(s => !IsGuideOnlyScene(s))
+            .OrderByDescending(s => s.AltitudeDegrees ?? double.MinValue)
+            .FirstOrDefault();
         if (highestAltitude is not null) return (highestAltitude, highestAltitude.ObjectName);
 
-        var overview = scenes.FirstOrDefault(s => string.Equals(s.ObjectType, "Overview", StringComparison.OrdinalIgnoreCase));
-        return (overview, overview?.ObjectName ?? "Overview");
+        return (scenes.FirstOrDefault(), eventObjectContext.PrimaryObjectName);
     }
+
+    private static bool IsGuideOnlyScene(SceneObservationContext scene)
+        => string.Equals(scene.ObjectType, "Overview", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.SceneType, "Overview", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.SceneType, "Tips", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.SceneType, "Closing", StringComparison.OrdinalIgnoreCase);
 
     private static string? ResolveSelectedImage(SceneObservationContext? selectedScene, List<SceneObservationContext> orderedScenes, List<string> images)
     {
@@ -109,27 +128,36 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
         return index >= 0 && index < images.Count ? images[index] : null;
     }
 
-    private static List<string> BuildTextVariants(AstronomyContext context, string objectName, string narrationContext)
+    private static List<string> BuildTextVariants(AstronomyContext context, EventObjectContext eventObjectContext)
     {
-        if (context.SpecialEvent is not null)
-        {
-            var eventTitle = ToSafeWords(context.SpecialEvent.EventTitle);
-            var eventType = ToSafeWords(context.SpecialEvent.EventType.Replace("_", " ", StringComparison.OrdinalIgnoreCase));
-            return [eventTitle, string.IsNullOrWhiteSpace(eventType) ? "SKY EVENT" : eventType, $"WATCH {ToSafeWords(objectName)}"];
-        }
+        var headline = ToThumbnailCopy(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, context.SpecialEvent?.EventTitle, eventObjectContext.ObjectListText, "SKY EVENT"));
+        var eventType = ToThumbnailCopy((context.SpecialEvent?.EventType ?? "").Replace("_", " ", StringComparison.OrdinalIgnoreCase));
+        var eventCopy = string.IsNullOrWhiteSpace(eventType) || eventType.Equals(headline, StringComparison.OrdinalIgnoreCase)
+            ? "RARE EVENT"
+            : eventType;
+        var objectCopy = ToThumbnailCopy(FirstNonEmpty(eventObjectContext.ObjectPairText, eventObjectContext.PrimaryObjectName, headline));
 
-        var planetCount = context.SceneObservationContexts.Count(s => PriorityPlanets.Contains(s.ObjectName));
-        var v1 = "TONIGHT'S SKY";
-        var v2 = planetCount > 0 ? $"{planetCount} PLANETS VISIBLE" : $"{ToSafeWords(objectName)} TONIGHT";
-        var direction = context.SceneObservationContexts.OrderByDescending(x => x.AltitudeDegrees ?? double.MinValue).FirstOrDefault()?.DirectionLabel;
-        var v3 = !string.IsNullOrWhiteSpace(direction) ? $"LOOK {direction.ToUpperInvariant()} TONIGHT" : "LOOK UP TONIGHT";
-
-        return [ToSafeWords(v1), ToSafeWords(v2), ToSafeWords(v3)];
+        return [headline, eventCopy, objectCopy]
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(ToThumbnailCopy)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .DefaultIfEmpty("SKY EVENT")
+            .ToList();
     }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static string ToThumbnailCopy(string text)
+        => LimitWords(ToSafeWords(text), 6);
+
+    private static string LimitWords(string text, int maxWords)
+        => string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(maxWords));
 
     private static string ToSafeWords(string text)
     {
-        var words = text.ToUpperInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(4);
+        var words = text.ToUpperInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(6);
         return string.Join(' ', words);
     }
 }
