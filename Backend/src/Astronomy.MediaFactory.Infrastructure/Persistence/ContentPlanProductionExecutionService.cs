@@ -49,7 +49,7 @@ public sealed class ContentPlanProductionExecutionService(
         var isCompletedPlanRerun = IsProductionCompleted(plan) && executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild;
         var requestedStartPhaseNo = ResolveStartPhaseNo(request);
         var requestedEndPhaseNo = request.EndPhaseNo ?? 20;
-        var resolvedRange = ResolveExecutionRange(executionMode, requestedStartPhaseNo, requestedEndPhaseNo);
+        var resolvedRange = ResolveExecutionRange(executionMode, requestedStartPhaseNo, requestedEndPhaseNo, request.DependencyExpansionMode);
         var startPhaseNo = resolvedRange.StartPhaseNo;
         var endPhaseNo = resolvedRange.EndPhaseNo;
         var executionContext = BuildExecutionContext(plan, intelligence, productionRequest);
@@ -57,7 +57,7 @@ public sealed class ContentPlanProductionExecutionService(
         logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
         var warnings = new List<string>(productionRequest.Warnings);
         if (resolvedRange.DependencyExpansionApplied)
-            warnings.Add($"Expanded rebuild range from {requestedStartPhaseNo}-{requestedEndPhaseNo} to {startPhaseNo}-{endPhaseNo} due to prerequisite dependencies.");
+            warnings.Add($"Expanded rebuild range from {requestedStartPhaseNo}-{requestedEndPhaseNo} to {startPhaseNo}-{endPhaseNo} because dependencyExpansionMode=Rebuild.");
         var errors = new List<string>();
         var generatedFiles = new List<string>();
 
@@ -103,7 +103,8 @@ public sealed class ContentPlanProductionExecutionService(
                 RequestedStartPhaseNo: requestedStartPhaseNo,
                 RequestedEndPhaseNo: requestedEndPhaseNo,
                 EnableSceneAssetsV3: request.EnableSceneAssetsV3,
-                PublishApproved: request.PublishApproved), cancellationToken);
+                PublishApproved: request.PublishApproved,
+                DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
             errors.AddRange(pipelineResult.Errors);
@@ -419,11 +420,11 @@ public sealed class ContentPlanProductionExecutionService(
         return request.StartPhaseNo ?? (request.ExecutionMode == ContentPlanExecutionMode.FullRebuild ? 1 : request.ExecutionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase ? 3 : 1);
     }
 
-    private static PhaseRangeResolution ResolveExecutionRange(ContentPlanExecutionMode executionMode, int requestedStartPhaseNo, int requestedEndPhaseNo)
+    private static PhaseRangeResolution ResolveExecutionRange(ContentPlanExecutionMode executionMode, int requestedStartPhaseNo, int requestedEndPhaseNo, DependencyExpansionMode dependencyExpansionMode)
     {
         var requestedStart = Math.Clamp(requestedStartPhaseNo, 1, 20);
         var requestedEnd = Math.Clamp(requestedEndPhaseNo, requestedStart, 20);
-        if (executionMode != ContentPlanExecutionMode.RebuildOutputs)
+        if (executionMode != ContentPlanExecutionMode.RebuildOutputs || dependencyExpansionMode != DependencyExpansionMode.Rebuild)
             return new(requestedStart, requestedEnd, false);
 
         var expandedStart = requestedStart;

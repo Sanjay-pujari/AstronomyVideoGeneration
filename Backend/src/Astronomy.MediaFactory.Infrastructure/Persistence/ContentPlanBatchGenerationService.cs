@@ -113,7 +113,8 @@ public sealed class ContentPlanBatchGenerationService(
                 request.RebuildIntelligence,
                 request.EnableSceneVariants,
                 EnableSceneAssetsV3: request.EnableSceneAssetsV3,
-                PublishApproved: request.PublishApproved), cancellationToken);
+                PublishApproved: request.PublishApproved,
+                DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
 
             ValidateExactPlanIdExecutionResult(request.PlanId, execution.PlanId, exactPlanIdMode);
 
