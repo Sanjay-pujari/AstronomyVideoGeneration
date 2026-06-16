@@ -904,7 +904,7 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine($"PromptPath: {promptPath}");
         Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
         Console.WriteLine();
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1920, imageHeight = 1080, visualStyle = "HeroV5CinematicPoster", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 11, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1920, imageHeight = 1080, visualStyle = "HeroV6.2EducationalPoster", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
 
     private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
@@ -918,13 +918,13 @@ public sealed class HeroAssetStoryGenerator(
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "premium event-poster astronomy");
         var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "clear where-to-look sky guidance");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        var basePrompt = $"Clean structured observer-guide event poster, not a clickbait thumbnail. Left panel text hierarchy uses the dynamic event headline: {eventObjectContext.ObjectHeadlineText}; include Date, Time, Where. Right side labeled markers generated only from these key objects: {objectText}; bottom small direction cue only if needed. No huge YouTube-style slogan, no duplicated title/subtitle, no overlapping or cropped text. Event poster style astronomy image. What event: {eventTitle}. Event type: {eventType}. Absolute date/time: {dateText}. Where to look: {directionText}. Key objects / resolved object names: {objectText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: clean structured poster overlay with event name, date, local time, where to look, key objects; never use viewer instructions as object labels. Forbidden terms policy: exclude event-profile forbidden concepts. No relative date words in overlay. No embedded text in generated background, no watermark, no logo, no unrelated event imagery.";
+        var basePrompt = $"Educational observing-guide event poster, not a clickbait thumbnail. Visual ratio: 70% astronomy image, 20% guide information, 10% metadata. Text hierarchy uses the dynamic event headline from eventObjectContext.objectHeadlineText: {eventObjectContext.ObjectHeadlineText}; include Date, Local Time, Viewing Direction, Key Objects, and optional altitude/separation only if supplied. Add small object labels generated only from eventObjectContext.objectNames: {objectText}. No giant clickbait text, no oversized words occupying half screen, no duplicated title blocks, no thumbnail slogan, no overlapping or cropped text. Useful astronomy observing guide style. What event: {eventTitle}. Event type: {eventType}. Absolute date/time: {dateText}. Where to look: {directionText}. Key objects / resolved object names: {objectText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: clean structured poster overlay with event name, date, local time, where to look, key objects; never use viewer instructions as object labels. Forbidden terms policy: exclude event-profile forbidden concepts. No relative date words in overlay. No embedded text in generated background, no watermark, no logo, no unrelated event imagery.";
         EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, forbidden);
         return
         [
-            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHook. Composition type: wide cinematic event poster. Prompt variation: landscape poster with large sky objects and horizon direction cue. {basePrompt}"),
-            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: HumanObservation. Composition type: vertical mobile event poster with observer scale. Prompt variation: tall sky stack, oversized key objects, safe top/bottom copy space. {basePrompt}"),
-            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: SkyGuide. Composition type: square centered poster guide. Prompt variation: bold central object pairing with simple directional horizon. {basePrompt}")
+            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHook. Composition type: wide educational event poster. Prompt variation: landscape guide card with astronomy image dominant and compact date/time/direction panels. {basePrompt}"),
+            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: HumanObservation. Composition type: vertical educational event poster with observer scale. Prompt variation: tall sky stack with compact guide panels and labeled event objects. {basePrompt}"),
+            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: SkyGuide. Composition type: square centered observing poster guide. Prompt variation: central event objects with small labels and concise date/time/direction metadata. {basePrompt}")
         ];
     }
 
@@ -1784,35 +1784,35 @@ public sealed class HeroAssetStoryGenerator(
                 "1280x720",
                 "YouTube",
                 new HeroLayoutBlueprintDto(
-                    $"Minimal title overlay: {selectedHook}",
-                    $"Cinematic background: {visualFocus}",
-                    "No supporting text block",
-                    "Premium documentary poster")),
+                    $"Educational poster overlay: event title, date, local time, viewing direction",
+                    $"Astronomy image background: {visualFocus}",
+                    "Compact guide information panels plus object labels",
+                    "Educational observing poster")),
             new(
                 "Square",
                 "1080x1080",
                 "Facebook/Instagram",
                 new HeroLayoutBlueprintDto(
-                    $"Minimal title overlay: {selectedHook}",
-                    $"Cinematic background: {visualFocus}",
-                    "No supporting text block",
-                    "Premium documentary poster")),
+                    $"Educational poster overlay: event title, date, local time, viewing direction",
+                    $"Astronomy image background: {visualFocus}",
+                    "Compact guide information panels plus object labels",
+                    "Educational observing poster")),
             new(
                 "Portrait",
                 "1080x1920",
                 "Stories/Reels/Shorts",
                 new HeroLayoutBlueprintDto(
-                    $"Minimal title overlay: {selectedHook}",
-                    $"Cinematic background: {visualFocus}",
-                    "No supporting text block",
-                    "Premium documentary poster"))
+                    $"Educational poster overlay: event title, date, local time, viewing direction",
+                    $"Astronomy image background: {visualFocus}",
+                    "Compact guide information panels plus object labels",
+                    "Educational observing poster"))
         ];
     }
 
     private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants, HeroAssetStoryDto heroStory)
         => new(
-            "Wonder",
-            "CinematicDocumentaryPoster",
+            "Education",
+            "EducationalObservingPoster",
             Clean(heroStory.HeroVisualFocus),
             Clean(heroStory.HeroMessage),
             platformVariants);
