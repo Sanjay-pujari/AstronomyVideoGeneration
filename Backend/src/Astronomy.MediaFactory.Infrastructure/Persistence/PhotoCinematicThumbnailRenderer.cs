@@ -177,19 +177,19 @@ internal static class PhotoCinematicThumbnailRenderer
         if (ContainsObject(visualObjects, "venus"))
         {
             DrawVenusStarPoint(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.2f);
-            DrawCleanLabel(ctx, "Venus", labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#FFF1A8"));
+            DrawCleanLabel(ctx, label, labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#FFF1A8"));
             return;
         }
         if (ContainsObject(visualObjects, "jupiter"))
         {
             DrawJupiterPlanet(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.2f);
-            DrawCleanLabel(ctx, "Jupiter", labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#D8EBFF"));
+            DrawCleanLabel(ctx, label, labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#D8EBFF"));
             return;
         }
         if (ContainsObject(visualObjects, "mars"))
         {
             DrawMars(ctx, spec.PrimaryObjectCenter, spec.PlanetScale * 1.2f);
-            DrawCleanLabel(ctx, "Mars", labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#FFB28A"));
+            DrawCleanLabel(ctx, label, labelFont, spec.PrimaryLabelOrigin, spec.PrimaryObjectCenter, Color.ParseHex("#FFB28A"));
             return;
         }
 
@@ -375,12 +375,8 @@ internal static class PhotoCinematicThumbnailRenderer
 
         if (IsPlanetFamilyEventType(request.EventType)) return;
 
-        var secondaryFont = ResolveFont(spec.SecondaryFontSize, FontStyle.Bold);
-        var microFont = ResolveFont(spec.MicroFontSize, FontStyle.Bold);
-        var secondary = CleanText(request.SecondaryText, request.EventType, "Current Event", 26);
-        var micro = CleanText(request.MicroText, request.LocalPeakTime, "Viewing Window", 30);
-        DrawTextWithShadow(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFD15E"), 0.92f);
-        DrawTextWithShadow(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#7FD6FF"), 0.90f);
+        // Thumbnail V6.2 deliberately avoids guide-card secondary/micro panels.
+        // All CTR copy is constrained to the hook text only.
     }
 
     private static string BuildHookText(PhotoCinematicThumbnailRenderRequest request)
@@ -389,14 +385,23 @@ internal static class PhotoCinematicThumbnailRenderer
         {
             var objectLine = CleanText(request.ShortTitle, request.Title, DefaultHookText, 28).ToUpperInvariant();
             objectLine = objectLine.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? objectLine;
-            var subheadline = CleanText(request.SecondaryText, string.Empty, ResolvePlanetFamilyFallbackSubheadline(request.EventType), 24).ToUpperInvariant();
-            return string.IsNullOrWhiteSpace(subheadline) ? objectLine : $"{objectLine}\n{subheadline}";
+            var subheadline = CleanText(request.SecondaryText, string.Empty, string.Empty, 24).ToUpperInvariant();
+            return LimitHookWords(string.IsNullOrWhiteSpace(subheadline) ? objectLine : $"{objectLine}\n{subheadline}", 6);
         }
 
         var text = CleanText(request.ShortTitle, request.Title, DefaultHookText, 24).ToUpperInvariant();
-        if (text.Contains('\n')) return text;
+        if (text.Contains('\n')) return LimitHookWords(text, 6);
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2));
+        return LimitHookWords(words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2)), 6);
+    }
+
+    private static string LimitHookWords(string value, int maxWords)
+    {
+        var lines = (value ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(2).ToArray();
+        var words = string.Join(' ', lines).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(maxWords).ToArray();
+        if (words.Length <= 3) return string.Join(' ', words);
+        var firstCount = (words.Length + 1) / 2;
+        return string.Join(' ', words.Take(firstCount)) + "\n" + string.Join(' ', words.Skip(firstCount));
     }
 
     private static bool IsPlanetFamilyEventType(string? eventType)
@@ -409,14 +414,6 @@ internal static class PhotoCinematicThumbnailRenderer
             || normalized.Equals("PLANETGROUPING", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("BRIGHTPLANETVISIBILITY", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("PLANETPARADE", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string ResolvePlanetFamilyFallbackSubheadline(string? eventType)
-    {
-        var normalized = string.IsNullOrWhiteSpace(eventType) ? string.Empty : new string(eventType.Where(char.IsLetterOrDigit).ToArray());
-        if (normalized.Contains("CONJUNCTION", StringComparison.OrdinalIgnoreCase) || normalized.Contains("PAIRING", StringComparison.OrdinalIgnoreCase)) return "CLOSEST APPROACH";
-        if (normalized.Contains("GROUPING", StringComparison.OrdinalIgnoreCase) || normalized.Contains("PARADE", StringComparison.OrdinalIgnoreCase)) return "LOOK WEST TONIGHT";
-        return string.Empty;
     }
 
     private static void DrawTextWithShadow(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color, float lineSpacing)
