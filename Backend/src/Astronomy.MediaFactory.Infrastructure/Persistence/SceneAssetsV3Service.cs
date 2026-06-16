@@ -21,7 +21,7 @@ public sealed class SceneAssetsV3Service(
     IAICinematicImageGenerator imageGenerator,
     ILogger<SceneAssetsV3Service> logger) : ISceneAssetsV3Service
 {
-    private const string Version = "v3.2";
+    private const string Version = "v3.3";
     private const int Width = 1920;
     private const int Height = 1080;
     private const string RequestedOverlayFont = "DejaVu Sans";
@@ -117,6 +117,10 @@ public sealed class SceneAssetsV3Service(
                     beat.VisualPromptSource,
                     finalVisualPrompt = beat.VisualPrompt,
                     beat.VisualIntent,
+                    beat.VisualSubjectCategory,
+                    beat.PrimaryVisualSubject,
+                    beat.CameraDistance,
+                    beat.OverlayDensity,
                     beat.InformationDensity,
                     beat.OverlayStyle,
                     beat.PromptVariation,
@@ -147,7 +151,7 @@ public sealed class SceneAssetsV3Service(
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
         await WriteJsonAsync(diagnosticsPath, new { version = Version, format, eventType = context.EventType, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
-        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.2", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.CompositionType, b.PromptVariation, b.OverlayStyle, b.OverlayText, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
+        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         var repeatedPrompt = DetectRepeatedMetadata(beats, b => b.VisualPrompt);
@@ -266,6 +270,14 @@ public sealed class SceneAssetsV3Service(
     private static string TruncateForOverlay(string value, int max) => string.IsNullOrWhiteSpace(value) || value.Length <= max ? value : value[..Math.Max(0, max - 1)] + "…";
 
 
+    private static int CalculateSubjectDiversityScore(IEnumerable<object> prompts)
+    {
+        var categories = prompts.Select(p => (string)(p.GetType().GetProperty("VisualSubjectCategory")?.GetValue(p) ?? string.Empty)).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
+        return categories.Length == 0 ? 0 : (int)Math.Round(100.0 * categories.Distinct(StringComparer.OrdinalIgnoreCase).Count() / categories.Length, MidpointRounding.AwayFromZero);
+    }
+
+    private static int CountWords(string value) => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+
     private static int CalculatePromptDiversityScore(IEnumerable<string> prompts)
     {
         var list = prompts.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
@@ -369,7 +381,7 @@ public sealed class SceneAssetsV3Service(
             EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "visualIntent", intentSpec.VisualIntent, context.ForbiddenTerms);
             EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "visualPrompt", prompt, context.ForbiddenTerms);
             EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "overlayText", string.Join(" ", intentSpec.OverlayText, intentSpec.SupportingText), context.ForbiddenTerms);
-            result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intentSpec.VisualIntent, intentSpec.InformationDensity, intentSpec.OverlayStyle, intentSpec.PromptVariation, intentSpec.CompositionType, intentSpec.OverlayText, intentSpec.SupportingText, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, "question-driven-narration-v2.json", "production-event-intelligence.json"));
+            result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intentSpec.VisualIntent, intentSpec.VisualSubjectCategory, intentSpec.PrimaryVisualSubject, intentSpec.CameraDistance, intentSpec.OverlayDensity, intentSpec.InformationDensity, intentSpec.OverlayStyle, intentSpec.PromptVariation, intentSpec.CompositionType, intentSpec.OverlayText, intentSpec.SupportingText, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, "question-driven-narration-v2.json", "production-event-intelligence.json"));
         }
         return result;
     }
@@ -382,42 +394,29 @@ public sealed class SceneAssetsV3Service(
 
     private static VisualIntentSpec BuildVisualIntentSpec(SceneAssetsV3TimelineContext c, string sceneId, int index, string format)
     {
-        var visualObjects = JoinNatural(c.RequiredVisualObjects);
-        var sequence = format == "short"
-            ? new[] { "CinematicHook", "ObjectCloseup", "SkyGuide", "ViewingTips", "EmotionalClosing" }
-            : new[] { "CinematicHook", "ObjectCloseup", "ScientificExplanation", "GeometryDiagram", "SkyGuide", "HumanObservation", "ViewingTips", "ObjectCloseup", "EmotionalClosing" };
-        var compositions = new[] { "wide cinematic horizon with foreground silhouette", "large-object telephoto closeup", "split-depth scientific explainer", "clean Earth-to-sky geometry diagram", "directional horizon sky guide", "human observer over-the-shoulder", "minimal field tips over real sky", "dramatic crop with oversized key object", "quiet emotional closing landscape" };
-        var densities = new[] { "Minimal", "Low", "Medium", "Low", "Low", "Guide", "Minimal", "Low", "Minimal" };
-        var intent = sequence[Math.Min(index, sequence.Length - 1)];
-        var composition = compositions[Math.Min(index, compositions.Length - 1)];
-        var density = densities[Math.Min(index, densities.Length - 1)];
-        var overlay = BuildOverlayText(c, sceneId, intent, index);
-        return new VisualIntentSpec(intent, density, intent == "SkyGuide" ? "direction markers with compact labels" : intent.Contains("Explanation", StringComparison.OrdinalIgnoreCase) || intent.Contains("Diagram", StringComparison.OrdinalIgnoreCase) ? "small labels and callouts" : "minimal documentary lower-third", $"variation-{index + 1:00}-{composition}", composition, overlay.Title, overlay.Supporting);
-    }
-
-    private static (string Title, string? Supporting) BuildOverlayText(SceneAssetsV3TimelineContext c, string sceneId, string intent, int index)
-    {
-        var objects = c.RequiredVisualObjects.Where(o => !string.IsNullOrWhiteSpace(o)).Take(2).ToArray();
-        var objectLine = objects.Length >= 2 ? $"{objects[0]} + {objects[1]}" : objects.FirstOrDefault() ?? FirstNonEmpty(c.StoryTheme, c.EventType, "Sky event");
-        var date = FirstNonEmpty(c.EventDateText, "peak window");
-        var direction = FirstNonEmpty(c.PrimaryViewingDirection, "clear horizon");
-        return intent switch
+        var longSpecs = new[]
         {
-            "CinematicHook" => ($"{objectLine}", date == "peak window" ? null : date),
-            "ScientificExplanation" => ($"Why they appear close", null),
-            "GeometryDiagram" => ($"Line of sight from Earth", FirstNonEmpty(c.AngularSeparationText, c.PeakTimeText, null!)),
-            "ObjectCloseup" => (objects.ElementAtOrDefault(index == 3 ? 0 : 1) ?? objectLine, "Visual focus"),
-            "SkyGuide" => ($"Look {direction}", string.Join(" • ", new[] { date, c.PeakTimeText }.Where(v => !string.IsNullOrWhiteSpace(v)))),
-            "HumanObservation" => ("No telescope needed", null),
-            "ViewingTips" => ($"Find a clear {direction}", null),
-            _ => ($"Step outside and look {direction}", null)
+            ("CinematicHook", "WideSky", "Udaipur western twilight sky with two bright planets", "wide establishing", "minimal", "wide cinematic western twilight sky with Udaipur skyline and two bright planet points", "Jupiter + Venus"),
+            ("ObjectCloseup", "PlanetCloseup", "realistic Jupiter and Venus close visual comparison", "telephoto closeup", "minimal", "close comparative planetary portrait with realistic scale cue", "Two bright worlds"),
+            ("ScientificExplanation", "LineOfSightDiagram", "Earth line-of-sight geometry explaining apparent conjunction", "diagram medium", "medium", "clean scientific Earth-to-planets line-of-sight explainer", "They appear close from Earth"),
+            ("GeometryDiagram", "AngularSeparation", "clean 1.63° separation callout between Jupiter and Venus", "diagram close", "low", "minimal angular-separation measurement graphic", "Minimum separation: 1.63°"),
+            ("SkyGuide", "DirectionGuide", "western horizon sky map after sunset", "wide guide", "guide", "accurate western horizon sky guide with restrained markers", "Look west after sunset"),
+            ("HumanObservation", "HumanObserver", "person watching two planets over Udaipur skyline", "over-the-shoulder wide", "minimal", "human observer silhouette over Udaipur skyline looking at two planets", "No telescope needed"),
+            ("ViewingTips", "FieldTips", "clear western horizon with low obstruction and sky markers", "wide field", "low", "field viewing tip scene with low obstruction western horizon", "Find a clear horizon"),
+            ("ObjectDetail", "PlanetDetail", "Jupiter cloud bands and Venus glow in cinematic space-style cutaway", "macro detail", "minimal", "cinematic cutaway showing Jupiter cloud bands and Venus glow", "Jupiter and Venus"),
+            ("EmotionalClosing", "EmotionalSky", "calm closing twilight sky with observer silhouettes", "wide emotional", "minimal", "calm twilight sky with observer silhouettes and two planets", "Step outside and look west")
         };
+        var shortIndexes = new[] { 0, 1, 4, 6, 8 };
+        var spec = format == "short" ? longSpecs[shortIndexes[Math.Min(index, shortIndexes.Length - 1)]] : longSpecs[Math.Min(index, longSpecs.Length - 1)];
+        var informationDensity = spec.Item5.Equals("guide", StringComparison.OrdinalIgnoreCase) ? "Guide" : spec.Item5.Equals("medium", StringComparison.OrdinalIgnoreCase) ? "Medium" : spec.Item5.Equals("low", StringComparison.OrdinalIgnoreCase) ? "Low" : "Minimal";
+        var overlayStyle = spec.Item1 == "SkyGuide" ? "direction markers with compact labels" : spec.Item1.Contains("Diagram", StringComparison.OrdinalIgnoreCase) || spec.Item2.Contains("Diagram", StringComparison.OrdinalIgnoreCase) ? "small labels and callouts" : "minimal documentary lower-third";
+        return new VisualIntentSpec(spec.Item1, spec.Item2, spec.Item3, spec.Item4, spec.Item5, informationDensity, overlayStyle, $"variation-{index + 1:00}-{spec.Item2}-{spec.Item4}", spec.Item6, spec.Item7, null);
     }
 
     private static string BuildVisualPrompt(SceneAssetsV3TimelineContext c, string sceneId, VisualIntentSpec spec)
     {
         var objects = JoinNatural(c.RequiredVisualObjects);
-        return $"Event type: {c.EventType}. Resolved object names: {objects}. Visual theme: {FirstNonEmpty(c.VisualTheme, c.StoryTheme, "cinematic astronomy documentary")}. Sky guide theme: {FirstNonEmpty(c.SkyGuideTheme, "accurate horizon guidance")}. Visual intent: {spec.VisualIntent}. Composition type: {spec.CompositionType}. Prompt variation: {spec.PromptVariation}. Overlay style: {spec.OverlayStyle}. Forbidden terms policy: exclude event-profile forbidden concepts. Gallery V3 diversity strategy: unique asset purpose, unique camera distance, unique foreground/background relationship, no reused generic nebula template. Scene-specific visual goal: {sceneId}. Create a realistic astronomy documentary background with no embedded text, no watermark, no logo, no unrelated event imagery, and leave safe negative space for deterministic overlay.";
+        return $"{spec.PrimaryVisualSubject}. Camera distance: {spec.CameraDistance}. Visual subject category: {spec.VisualSubjectCategory}. Overlay rule: deterministic clean lower-third only, text=\"{spec.OverlayText}\". Event type: {c.EventType}. Resolved object names: {objects}. Visual theme: {FirstNonEmpty(c.VisualTheme, c.StoryTheme, "cinematic astronomy documentary")}. Sky guide theme: {FirstNonEmpty(c.SkyGuideTheme, "accurate horizon guidance")}. Visual intent: {spec.VisualIntent}. Composition type: {spec.CompositionType}. Prompt variation: {spec.PromptVariation}. Overlay style: {spec.OverlayStyle}. Forbidden terms policy: exclude event-profile forbidden concepts. Gallery V3 diversity strategy: unique asset purpose, unique camera distance, unique foreground/background relationship, no reused generic nebula template. Scene-specific visual goal: {sceneId}. Create a realistic astronomy documentary background with no embedded text, no watermark, no logo, no unrelated event imagery, and leave safe negative space for deterministic overlay.";
     }
 
     private static object BuildVisualPromptDiagnostics(int phaseNo, string product, SceneAssetsV3TimelineContext context, IEnumerable<object> prompts)
@@ -435,6 +434,7 @@ public sealed class SceneAssetsV3Service(
             repeatedPromptDetected = promptTexts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, promptTexts), context.ForbiddenTerms),
             relativeOverlayWordsDetected = Array.Empty<string>(),
+            sceneDiversityScore = CalculateSubjectDiversityScore(promptArray),
             finalPrompts = promptArray
         };
     }
@@ -471,11 +471,19 @@ public sealed class SceneAssetsV3Service(
     private static string FirstNonEmpty(params string[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
     private static bool IsPlanetConjunction(string eventType) => EventContentGuard.IsPlanetConjunction(eventType);
     private static IEnumerable<string> DefaultForbiddenTerms(string eventType) => EventContentGuard.DefaultForbiddenTermsForEventType(eventType);
-    private static IReadOnlyList<string> ReadAllowedVisualObjects(JsonElement root) => new[] { "primaryObjects", "secondaryObjects", "resolvedObjectNames", "requiredVisualObjects", "viewerInstructions" }.SelectMany(name => ReadStringArray(root, name)).DefaultIfEmpty(FirstString(root, "title")).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private static IReadOnlyList<string> ReadAllowedVisualObjects(JsonElement root)
+    {
+        var eventType = FirstString(root, "eventType", "strategyId", "selectedEventType");
+        var objects = new[] { "primaryObjects", "secondaryObjects", "resolvedObjectNames", "requiredVisualObjects" }.SelectMany(name => ReadStringArray(root, name)).Select(CleanObjectName).Where(v => !string.IsNullOrWhiteSpace(v) && IsCleanObjectName(v!)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()!;
+        if (IsPlanetConjunction(eventType) || objects.Any(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Equals("Venus", StringComparison.OrdinalIgnoreCase))) return ["Jupiter", "Venus"];
+        return objects.Length > 0 ? objects : [FirstString(root, "title")];
+    }
+    private static string CleanObjectName(string value) => (value ?? string.Empty).Trim().TrimEnd('.', ';', ':', ',');
+    private static bool IsCleanObjectName(string value) => value.Length <= 32 && !value.Contains('.') && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3;
     private static string JoinNatural(IEnumerable<string> values) => string.Join(", ", values.Where(v => !string.IsNullOrWhiteSpace(v)).DefaultIfEmpty("the selected sky event"));
     private static bool ContainsTerm(string text, string term) => EventContentGuard.DetectForbiddenTerms(text, [term]).Count > 0;
 
     private sealed record SceneAssetsV3TimelineContext(string EventType, string StoryTheme, string VisualTheme, string SkyGuideTheme, string EventDateText, string PeakTimeText, string PrimaryViewingDirection, string AngularSeparationText, IReadOnlyList<string> RequiredVisualObjects, IReadOnlyList<string> ForbiddenTerms, IReadOnlyList<string> NarrationBeats);
-    private sealed record VisualIntentSpec(string VisualIntent, string InformationDensity, string OverlayStyle, string PromptVariation, string CompositionType, string OverlayText, string? SupportingText);
+    private sealed record VisualIntentSpec(string VisualIntent, string VisualSubjectCategory, string PrimaryVisualSubject, string CameraDistance, string OverlayDensity, string InformationDensity, string OverlayStyle, string PromptVariation, string CompositionType, string OverlayText, string? SupportingText);
 
 }

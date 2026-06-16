@@ -71,9 +71,10 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
     {
         if (!IsPlanetConjunction(seed.EventType, seed.Title)) return seed with { AngularSeparationDegrees = source.AngularSeparationDegrees };
         var objects = seed.PrimaryObjects.Concat(seed.SecondaryObjects).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (objects.Length == 0 && seed.Title.Contains("Venus", StringComparison.OrdinalIgnoreCase) && seed.Title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) objects = ["Venus", "Jupiter"];
-        var primary = seed.PrimaryObjects.Count > 0 ? seed.PrimaryObjects : objects.Take(1).ToArray();
-        var secondary = seed.SecondaryObjects.Count > 0 ? seed.SecondaryObjects : objects.Skip(1).ToArray();
+        if (objects.Length == 0 && seed.Title.Contains("Venus", StringComparison.OrdinalIgnoreCase) && seed.Title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) objects = ["Jupiter", "Venus"];
+        if (objects.Any(o => o.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Contains("Venus", StringComparison.OrdinalIgnoreCase))) objects = ["Jupiter", "Venus"];
+        var primary = objects.SequenceEqual(new[] { "Jupiter", "Venus" }) ? new[] { "Jupiter" } : seed.PrimaryObjects.Count > 0 ? seed.PrimaryObjects : objects.Take(1).ToArray();
+        var secondary = objects.SequenceEqual(new[] { "Jupiter", "Venus" }) ? new[] { "Venus" } : seed.SecondaryObjects.Count > 0 ? seed.SecondaryObjects : objects.Skip(1).ToArray();
         var localPeak = seed.LocalPeakTime ?? FormatLocalTime(source.PeakUtc, source.TimeZone);
         var window = seed.BestViewingWindowLocal ?? BuildViewingWindow(source, localPeak);
         var direction = seed.SkyDirectionHint ?? ResolveConjunctionDirection(source, localPeak);
@@ -117,7 +118,14 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
         => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? ["two bright planets close together", "twilight sky", "clean Venus and Jupiter labels", "horizon direction marker", "angular separation callout"] : definition.VisualMotifs;
 
     private static IReadOnlyList<string> ResolveObjectNames(string eventType, ProductionEventIntelligence intelligence)
-        => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    {
+        var names = intelligence.PrimaryObjects.Concat(intelligence.SecondaryObjects).Select(CleanObjectName).Where(IsCleanObjectName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) && names.Any(n => n.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && names.Any(n => n.Equals("Venus", StringComparison.OrdinalIgnoreCase))) return ["Jupiter", "Venus"];
+        return names;
+    }
+
+    private static string CleanObjectName(string value) => (value ?? string.Empty).Trim().TrimEnd('.', ';', ':', ',');
+    private static bool IsCleanObjectName(string value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 32 && !value.Contains('.') && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3;
 
     private static IReadOnlyList<string> ResolveRequiredVisualObjects(string eventType, MediaEventStrategyDefinition definition, ProductionEventIntelligence intelligence)
         => eventType.Equals("Conjunction", StringComparison.OrdinalIgnoreCase) ? ResolveObjectNames(eventType, intelligence) : definition.RequiredVisualObjects ?? intelligence.PrimaryObjects;

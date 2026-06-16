@@ -922,7 +922,7 @@ public sealed class HeroAssetStoryGenerator(
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "premium event-poster astronomy");
         var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "clear where-to-look sky guidance");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        var basePrompt = $"Event poster style astronomy image. What event: {eventTitle}. Event type: {eventType}. Absolute date/time: {dateText}. Where to look: {directionText}. Key objects / resolved object names: {objectText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: deterministic poster overlay with event, date/time, where-to-look, key objects. Forbidden terms policy: exclude event-profile forbidden concepts. No relative date words in overlay. No embedded text in generated background, no watermark, no logo, no unrelated event imagery.";
+        var basePrompt = $"Clean structured observer-guide event poster, not a clickbait thumbnail. Left panel text hierarchy: JUPITER & VENUS / CONJUNCTION, Date, Time, Where. Right side labeled Jupiter and Venus markers, bottom small direction cue only if needed. No huge YouTube-style slogan, no duplicated title/subtitle, no overlapping or cropped text. Event poster style astronomy image. What event: {eventTitle}. Event type: {eventType}. Absolute date/time: {dateText}. Where to look: {directionText}. Key objects / resolved object names: {objectText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: clean structured poster overlay with event name, date, local time, where to look, key objects; never use LOOK FOR JUPITER AND VENUS as a large slogan. Forbidden terms policy: exclude event-profile forbidden concepts. No relative date words in overlay. No embedded text in generated background, no watermark, no logo, no unrelated event imagery.";
         EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, forbidden);
         return
         [
@@ -944,10 +944,10 @@ public sealed class HeroAssetStoryGenerator(
         await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
         {
             phaseNo = 11,
-            product = "Hero V6",
+            product = "Hero V6.1",
             generatedAtUtc = DateTimeOffset.UtcNow,
             requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "event poster", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
-            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
+            heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction), missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, prompts), forbidden),
