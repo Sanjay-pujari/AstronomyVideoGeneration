@@ -1654,14 +1654,19 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(compositionModelPath));
             var root = doc.RootElement;
+            var scenePrompt = ReadNestedString(root, "visualBlock", "sourceScene");
+            var heroContract = scenePrompt.Contains("guide hero", StringComparison.OrdinalIgnoreCase) || scenePrompt.Contains("observing guide hero", StringComparison.OrdinalIgnoreCase) ? "GuideHero" : "CinematicHero";
+            var titleText = ReadNestedString(root, "hookBlock", "text");
             var visibleText = string.Join(" ", new[]
             {
                 ReadNestedString(root, "directionBlock", "text"),
                 ReadNestedString(root, "timingBlock", "text"),
                 ReadNestedString(root, "ctaBlock", "text")
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            if (!string.IsNullOrWhiteSpace(visibleText))
-                errors.Add("Hero V3 must use only a minimal title overlay; direction, timing, and CTA text blocks must be empty.");
+            if ((titleText + " " + visibleText).Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase))
+                errors.Add("Hero overlay must not use narration hook text such as LOOK FOR.");
+            if (heroContract != "GuideHero" && !string.IsNullOrWhiteSpace(visibleText))
+                errors.Add("CinematicHero must use only a minimal title/subtitle overlay; direction, timing, and CTA text blocks must be empty unless heroContract=GuideHero.");
         }
 
         if (File.Exists(layoutValidationPath))
