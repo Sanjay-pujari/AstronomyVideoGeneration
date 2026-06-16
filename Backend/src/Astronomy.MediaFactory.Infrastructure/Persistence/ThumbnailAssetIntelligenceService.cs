@@ -824,22 +824,21 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var title = FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, request.EventId, "selected sky event");
         var eventType = FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "AstronomyEvent");
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
-        var objects = string.Join(" + ", (intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).Take(2));
+        var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
+        var objects = eventObjectContext.ObjectPairText;
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
         var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "simple where-to-look cue");
         var forbidden = request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         var isConjunction = EventContentGuard.IsPlanetConjunction(eventType) || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
-        var mainText = isConjunction ? "JUPITER + VENUS JUN 9" : LimitThumbnailWords(CleanTextElement(FirstNonEmpty(objects, title), "SKY EVENT").ToUpperInvariant(), 6);
-        var basePrompt = isConjunction
-            ? $"High-CTR astronomy thumbnail only: huge Jupiter and glowing Venus as primary visual subject, dramatic close celestial pairing, one safe text block with max two lines, optional date only. Not an observing guide: no info cards, no date-time panels, no altitude labels, no direction guide, no subtitles, no black banner with long title. Event type: {eventType}. Resolved object names: Jupiter + Venus. Visual theme context only: {visualTheme}. Forbidden terms policy: exclude event-profile forbidden concepts. No embedded background text, no cropped text, no duplicated text, no unrelated event imagery."
-            : $"High-CTR astronomy thumbnail background for {title}. Event type: {eventType}. Resolved object names: {FirstNonEmpty(objects, title)}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: simple huge 3-6 word main text only, no subtitles. Forbidden terms policy: exclude event-profile forbidden concepts. Use current event intelligence objects only, oversized key objects, strong visual hook, uncluttered negative space, no cropped text, no embedded background text, no unrelated event imagery.";
-        var text = isConjunction ? new[] { "JUPITER + VENUS", "JUN 9" } : new[] { mainText };
+        var mainText = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? LimitThumbnailWords(CleanTextElement(title, "METEOR SHOWER").ToUpperInvariant(), 6) : LimitThumbnailWords(CleanTextElement(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, objects, title), "SKY EVENT").ToUpperInvariant(), 6);
+        var basePrompt = $"High-CTR astronomy thumbnail background for {title}. Event type: {eventType}. Resolved object names: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Dynamic headline: {mainText}. Visual theme: {visualTheme}. Sky guide theme: {skyGuideTheme}. Overlay style: simple huge 3-6 word main text only, no subtitles and no guide-panel layout. Forbidden terms policy: exclude event-profile forbidden concepts. Use current event intelligence objects only, oversized key objects, strong visual hook, uncluttered negative space, no cropped text, no embedded background text, no unrelated event imagery.";
+        var text = new[] { mainText };
         EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", basePrompt + " " + string.Join(' ', text), forbidden);
         return
         [
             ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: CinematicHook. Composition type: large-object YouTube thumbnail. Prompt variation: wide crop, object on right, text-safe left. {basePrompt}", text, "large-left-text"),
             ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: ObjectCloseup. Composition type: vertical story thumbnail with oversized object. Prompt variation: tall crop, object top, text-safe lower third. {basePrompt}", text, "stacked-lower-text"),
-            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: ObjectCloseup. Composition type: square high-contrast social thumbnail. Prompt variation: centered huge Jupiter and Venus with clear empty text band. {basePrompt}", text, "bold-bottom-text")
+            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: ObjectCloseup. Composition type: square high-contrast social thumbnail. Prompt variation: centered huge event-intelligence objects with clear empty text band. {basePrompt}", text, "bold-bottom-text")
         ];
     }
 
@@ -849,6 +848,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var eventType = FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, "AstronomyEvent");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         var prompts = variants.Select(v => v.Prompt).ToArray();
+        var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
+        var hardcodedTerms = EventObjectContextBuilder.DetectBannedHardcodedTerms(string.Join(Environment.NewLine, prompts.Concat(variants.SelectMany(v => v.TextLines))));
         var mainText = variants.FirstOrDefault().TextLines?.FirstOrDefault() ?? string.Empty;
         await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
         {
@@ -856,6 +857,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             product = "Thumbnail V6",
             generatedAtUtc = DateTimeOffset.UtcNow,
             requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
+            eventObjectContext = eventObjectContext.ToDiagnostics(),
+            objectNamesSource = eventObjectContext.ObjectNamesSource,
+            cleanObjectNames = eventObjectContext.ObjectNames,
+            removedInvalidObjectNameCandidates = eventObjectContext.RemovedInvalidObjectNameCandidates,
+            hardcodedObjectTermsDetected = hardcodedTerms,
+            objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
+            runtimeHardcodingDetected = hardcodedTerms.Count > 0,
             thumbnailCtrChecks = new { mainText, mainTextWordCount = CountWords(mainText), mainTextMaxSixWords = CountWords(mainText) <= 6, maxTwoTextLines = variants.All(v => v.TextLines.Length <= 2), noGuideElements = true, simpleText = true, noLongSubtitles = true, noCroppedText = true, thumbnailRulesPassed = CountWords(mainText) <= 6 && variants.All(v => v.TextLines.Length <= 2) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
@@ -892,12 +900,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var subFont = ResolveThumbnailFont(width == 1280 ? 24 : 32, FontStyle.Bold);
             var bodyFont = ResolveThumbnailFont(width == 1280 ? 21 : 27, FontStyle.Regular);
             var smallFont = ResolveThumbnailFont(width == 1280 ? 18 : 24, FontStyle.Regular);
-            var isConjunction = EventContentGuard.IsPlanetConjunction(FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType));
-            var eventTitle = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, "SKY EVENT"), "SKY EVENT").ToUpperInvariant();
+            var eventObjectContext = EventObjectContextBuilder.FromIntelligence(request.ProductionContext?.ProductionEventIntelligence);
+            var eventTitle = CleanTextElement(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, request.ProductionContext?.ProductionEventIntelligence?.Title, "SKY EVENT"), "SKY EVENT").ToUpperInvariant();
             var windowText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal, request.ProductionContext?.ProductionEventIntelligence?.PreferredViewingWindow, "Approved viewing window"), "Approved viewing window");
             var directionText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.SkyDirectionHint, "Approved sky direction"), "Approved sky direction");
             var moonText = CleanTextElement(FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.MoonInterference, "Check sky conditions"), "Check sky conditions");
-            var mainText = isConjunction ? "JUPITER + VENUS\nJUN 9" : LimitThumbnailWords(eventTitle, 6);
+            var mainText = LimitThumbnailWords(eventTitle, 6);
             var boxWidth = width == 1280 ? width * .52f : width * .82f;
             var boxHeight = width == 1280 ? height * .28f : height * .18f;
             var boxX = width == 1280 ? width * .055f : width * .08f;
@@ -905,22 +913,6 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ctx.Fill(Color.FromRgba(3, 8, 22, 218), new RectangleF(boxX, boxY, boxWidth, boxHeight));
             ctx.DrawText(mainText, titleFont, Color.FromRgb(255, 230, 92), new PointF(boxX + 28, boxY + 28));
             return;
-            if (isConjunction)
-            {
-                ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(width * .04f, height * .06f, width * .43f, height * .34f));
-                ctx.DrawText("JUPITER + VENUS", titleFont, Color.FromRgb(255, 218, 80), new PointF(width * .06f, height * .09f));
-                ctx.DrawText("CONJUNCTION", subFont, Color.White, new PointF(width * .06f, height * .18f));
-                var bodyLines = new[] { "Two bright planets", "Western sky after sunset", "Twilight sky", "1.63° angular separation" };
-                var y0 = height * .25f;
-                foreach (var line in bodyLines) { ctx.DrawText(line, bodyFont, Color.FromRgb(218, 235, 255), new PointF(width * .06f, y0)); y0 += Math.Max(42, height * .055f); }
-                var venus = new PointF(width * .68f, height * .36f);
-                var jupiter = new PointF(width * .78f, height * .32f);
-                ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(venus, Math.Max(10, width * .015f)));
-                ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(jupiter, Math.Max(9, width * .013f)));
-                ctx.DrawLine(Color.FromRgb(120, 210, 255), 3, venus, jupiter);
-                ctx.DrawText("1.63°", bodyFont, Color.FromRgb(120, 210, 255), new PointF((venus.X + jupiter.X) / 2, (venus.Y + jupiter.Y) / 2 - 55));
-                return;
-            }
             if (width == 1280 && height == 720)
             {
                 ctx.Fill(Color.FromRgba(5, 11, 28, 205), new RectangleF(40, 45, 370, 520));
