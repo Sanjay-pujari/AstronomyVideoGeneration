@@ -641,10 +641,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             VenusRenderedAsStarPoint: false,
             JupiterRenderedAsPlanet: false);
 
+        var semanticProfile = ResolveThumbnailValidatorProfile(request);
         var forbiddenObjects = DetectForbiddenObjects(request, prompt.VisualObjects.Concat(prompt.CtrOverlay).Append(prompt.Badge)).ToArray();
+        var forbiddenTermsDetected = DetectThumbnailForbiddenTerms(semanticProfile, prompt.VisualObjects.Concat(prompt.CtrOverlay).Append(prompt.Badge)).ToArray();
         var goldenPilotLeakageDetected = ContainsGoldenPilotLeakage(prompt);
-        if (forbiddenObjects.Length > 0)
-            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated object label(s) detected: " + string.Join(", ", forbiddenObjects));
+        if (forbiddenObjects.Length > 0 || forbiddenTermsDetected.Length > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated profile term(s) detected in thumbnail metadata/overlay text: " + string.Join(", ", forbiddenObjects.Concat(forbiddenTermsDetected).Distinct(StringComparer.OrdinalIgnoreCase)));
         if (goldenPilotLeakageDetected)
             throw new InvalidOperationException("Thumbnail semantic validation failed: golden pilot leakage detected.");
 
@@ -718,7 +720,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
             if (azureExceptionMessage is not null && thumbnailVariantResults.Count > 0)
             {
-                await WritePhase12FailureValidationAsync(validationPath, prompt, forbiddenObjects, goldenPilotLeakageDetected, thumbnailVariantResults.Select(v => v.ImagePath).ToArray(), azureCallsAttempted, azureCallsSucceeded, azureCallsFailed, azureExceptionMessage, cancellationToken);
+                await WritePhase12FailureValidationAsync(validationPath, prompt, semanticProfile, forbiddenObjects, forbiddenTermsDetected, goldenPilotLeakageDetected, thumbnailVariantResults.Select(v => v.ImagePath).ToArray(), azureCallsAttempted, azureCallsSucceeded, azureCallsFailed, azureExceptionMessage, cancellationToken);
                 return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed after partial thumbnail variants; successful variants were preserved."], "PureAzureImage2ThumbnailV3", "PureAzureImage2ThumbnailV3", "Partial PlanetaryEvent thumbnail variants preserved after Azure Image2 failure.", true, true, false, "PureAzureImage2ThumbnailV3", thumbnailLayoutValidationPath: layoutPath);
             }
             if (thumbnailVariantResults.Count(v => v.Result.ProviderCalled) < 3)
@@ -745,12 +747,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             {
                 semanticValidationPassed = true,
                 forbiddenObjectsDetected = forbiddenObjects,
+                forbiddenTermsDetected,
                 goldenPilotLeakageDetected,
                 thumbnailPrompt = prompt.ThumbnailPrompt,
                 thumbnailPromptSource = prompt.ThumbnailPromptSource,
                 forbiddenTermsMatched = prompt.ForbiddenTermsMatched,
                 eventTypeVocabularyUsed = prompt.EventTypeVocabularyUsed,
                 thumbnailVocabularyProfile = prompt.ThumbnailVocabularyProfile,
+                eventType = semanticProfile.EventType,
+                eventFamily = semanticProfile.EventFamily,
+                expectedObjects = semanticProfile.ExpectedObjects,
+                forbiddenTermsApplied = semanticProfile.ForbiddenTermsApplied,
+                forbiddenTermsSkippedBecauseExpected = semanticProfile.ForbiddenTermsSkippedBecauseExpected,
+                validatorProfile = semanticProfile.ValidatorProfile,
                 requiredOutputs = new[] { ThumbnailFinalFileName, ThumbnailReviewFileName, ThumbnailPromptFileName },
                 forbiddenTextDetected = false,
                 infographicOnlyLayoutDetected = false,
@@ -796,7 +805,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     ? selectedOverlayDiagnostics.GuideCardAdded && selectedOverlayDiagnostics.ObjectLabelsAdded && selectedOverlayDiagnostics.DirectionCueAdded
                     : actualOutputsExist,
                 forbiddenObjectsDetected = forbiddenObjects,
+                forbiddenTermsDetected,
                 goldenPilotLeakageDetected,
+                eventType = semanticProfile.EventType,
+                eventFamily = semanticProfile.EventFamily,
+                expectedObjects = semanticProfile.ExpectedObjects,
+                forbiddenTermsApplied = semanticProfile.ForbiddenTermsApplied,
+                forbiddenTermsSkippedBecauseExpected = semanticProfile.ForbiddenTermsSkippedBecauseExpected,
+                validatorProfile = semanticProfile.ValidatorProfile,
                 titleExists = true,
                 dateExists = isMeteorThumbnail || !string.IsNullOrWhiteSpace(prompt.Badge),
                 bestTimeExists = isMeteorThumbnail,
@@ -1059,7 +1075,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var rc1TextLines = BuildRc1ThumbnailTextLines(BuildCurrentEventLock(request), includeDateWhenAvailable: !isMeteor);
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
         var clickMagnetTheme = FirstNonEmpty(intelligence?.VisualTheme, "high-contrast click-magnet thumbnail");
-        var forbidden = request.ProductionContext?.ProductionEventIntelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var forbidden = ResolveThumbnailValidatorProfile(request).ForbiddenTermsApplied;
         var isConjunction = AllowsConjunctionVocabulary(eventType, request.ProductionContext?.Category);
         var mainText = string.Join(" / ", rc1TextLines.Take(2));
         var conjunctionInstruction = isConjunction ? " For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair." : string.Empty;
@@ -1070,7 +1086,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 : $"Azure Image2 BACKGROUND ONLY for an RC1 cinematic astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Do not render any letters, words, typography, labels, UI, panels, cards, badges, boxes, captions, transparent giant title, or embedded text in the image. Leave natural negative space for a separate deterministic overlay. Final overlay text added later by code: {string.Join(" | ", rc1TextLines)}. Visual theme: {visualTheme}. Layout: cinematic event image, clean large title area, short subtitle area, no center-crop dependency; compose native aspect ratio.{conjunctionInstruction} Forbidden: guide card, hero-style information panel, object-pair info box, black object-pair panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
         ValidateMeteorThumbnailRc1Contract(isMeteor, compositionType, basePrompt, rc1TextLines);
         var text = rc1TextLines.Take(isMeteor ? 2 : 3).ToArray();
-        EventContentGuard.ValidateNoForbiddenTerms("ThumbnailAssetIntelligenceService", "thumbnail prompt", basePrompt + " " + string.Join(' ', text), forbidden);
+        var forbiddenInOverlayText = DetectThumbnailForbiddenTerms(ResolveThumbnailValidatorProfile(request), text);
+        if (forbiddenInOverlayText.Count > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated profile term(s) detected in thumbnail overlay text: " + string.Join(", ", forbiddenInOverlayText));
         return
         [
             ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 composition, event image on right or center, clean dark negative space on left/lower-left. {basePrompt}", text, "rc1-left-title"),
@@ -1098,7 +1116,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
         var eventType = FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, "AstronomyEvent");
-        var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var validationProfile = ResolveThumbnailValidatorProfile(request);
+        var forbidden = validationProfile.ForbiddenTermsApplied;
         var prompts = variants.Select(v => v.Prompt).ToArray();
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         var hardcodedTerms = EventObjectContextBuilder.DetectBannedHardcodedTerms(string.Join(Environment.NewLine, prompts.Concat(variants.SelectMany(v => v.TextLines))));
@@ -1108,7 +1127,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             phaseNo = 12,
             product = "Thumbnail V6.2",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : IsPlanetaryEvent(eventType) ? "PlanetarySkyGuideThumbnail" : "RC1CinematicThumbnail", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
+            eventType = validationProfile.EventType,
+            eventFamily = validationProfile.EventFamily,
+            expectedObjects = validationProfile.ExpectedObjects,
+            forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
+            forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
+            validatorProfile = validationProfile.ValidatorProfile,
             eventObjectContext = eventObjectContext.ToDiagnostics(),
             objectNamesSource = eventObjectContext.ObjectNamesSource,
             cleanObjectNames = eventObjectContext.ObjectNames,
@@ -1163,7 +1188,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static async Task WritePhase12FailureValidationAsync(
         string validationPath,
         PureV3ThumbnailPrompt prompt,
+        ThumbnailValidatorProfile validationProfile,
         IReadOnlyList<string> forbiddenObjects,
+        IReadOnlyList<string> forbiddenTermsDetected,
         bool goldenPilotLeakageDetected,
         IReadOnlyList<string> finalThumbnailPaths,
         int azureCallsAttempted,
@@ -1178,8 +1205,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             reason = "Azure Image2 failed after one or more variants were generated; successful variants were preserved.",
             semanticValidationPassed = false,
             forbiddenObjectsDetected = forbiddenObjects,
+            forbiddenTermsDetected,
             goldenPilotLeakageDetected,
-            eventFamily = IsPlanetaryEvent(prompt.EventType) ? "PlanetaryEvent" : "GenericEvent",
+            eventType = validationProfile.EventType,
+            eventFamily = validationProfile.EventFamily,
+            expectedObjects = validationProfile.ExpectedObjects,
+            forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
+            forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
+            validatorProfile = validationProfile.ValidatorProfile,
             thumbnailOverlayTemplate = IsPlanetaryEvent(prompt.EventType) ? "PlanetarySkyGuideThumbnail" : "RC1CinematicTitle",
             azureCallsAttempted,
             azureCallsSucceeded,
@@ -2108,9 +2141,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var vocabularyProfile = isMeteor ? "MeteorShower" : AllowsConjunctionVocabulary(current.EventType, current.Category) ? "PlanetConjunction" : "CurrentEvent";
         var eventTypeVocabularyUsed = isMeteor ? new[] { "meteor shower", "meteor streaks", "radiant burst", "dark sky" } : AllowsConjunctionVocabulary(current.EventType, current.Category) ? new[] { "conjunction", "planet pairing" } : new[] { current.EventType };
         var thumbnailPrompt = background;
-        var forbiddenTermsMatched = DetectConjunctionVocabulary(thumbnailPrompt + " " + string.Join(' ', overlay) + " " + badge);
-        if (isMeteor && forbiddenTermsMatched.Count > 0)
-            throw new InvalidOperationException("Thumbnail semantic validation failed: MeteorShower thumbnail prompt contains conjunction vocabulary: " + string.Join(", ", forbiddenTermsMatched));
+        var validationProfile = ResolveThumbnailValidatorProfile(request);
+        var forbiddenTermsMatched = DetectThumbnailForbiddenTerms(validationProfile, visualObjects.Concat(overlay).Append(badge));
+        if (forbiddenTermsMatched.Count > 0)
+            throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated profile term(s) detected in thumbnail metadata/overlay text: " + string.Join(", ", forbiddenTermsMatched));
         return new PureV3ThumbnailPrompt(
             current.Title,
             current.EventType,
@@ -2142,8 +2176,76 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static IReadOnlyList<string> DetectConjunctionVocabulary(string text)
     {
-        string[] terms = ["conjunction", "planet conjunction", "planet pairing", "Jupiter", "Venus", "look west", "western sky after sunset"];
+        string[] terms = ["conjunction", "planet conjunction", "planet pairing", "look west", "western sky after sunset"];
         return terms.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static ThumbnailValidatorProfile ResolveThumbnailValidatorProfile(ThumbnailAssetGenerationRequest request)
+    {
+        var current = BuildCurrentEventLock(request);
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var expectedObjects = NormalizeObjectList(current.PrimaryObjects
+            .Concat(current.SecondaryObjects)
+            .Concat(current.RequiredVisualObjects)
+            .Concat(intelligence?.ResolvedObjectNames ?? []));
+        var eventFamily = IsMeteorEvent(current.EventType, current.Title)
+            ? "MeteorShower"
+            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : "CurrentEvent";
+        var validatorProfile = eventFamily == "MeteorShower"
+            ? "MeteorShower"
+            : IsPlanetaryEvent(current.EventType) ? NormalizeEventTypeToken(current.EventType) switch
+            {
+                "PLANETGROUPING" => "PlanetGrouping",
+                _ => "PlanetConjunction"
+            } : "CurrentEvent";
+
+        var candidates = eventFamily == "MeteorShower"
+            ? NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []))
+            : eventFamily == "PlanetaryEvent"
+                ? NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []).Concat(EventContentGuard.DefaultForbiddenTermsForEventType(current.EventType)))
+                : NormalizeObjectList((intelligence?.ForbiddenObjectNames ?? []).Concat(intelligence?.ForbiddenTerms ?? []));
+        var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
+        var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
+        return new ThumbnailValidatorProfile(
+            current.EventType,
+            eventFamily,
+            expectedObjects,
+            applied,
+            skipped,
+            validatorProfile);
+    }
+
+    private static ThumbnailValidatorProfile ResolveThumbnailValidatorProfile(CurrentEventLock? current)
+    {
+        if (current is null)
+            return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent");
+        var expectedObjects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects).Concat(current.RequiredVisualObjects));
+        var eventFamily = IsMeteorEvent(current.EventType, current.Title)
+            ? "MeteorShower"
+            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : "CurrentEvent";
+        var validatorProfile = eventFamily == "MeteorShower"
+            ? "MeteorShower"
+            : IsPlanetaryEvent(current.EventType) ? NormalizeEventTypeToken(current.EventType) switch
+            {
+                "PLANETGROUPING" => "PlanetGrouping",
+                _ => "PlanetConjunction"
+            } : "CurrentEvent";
+        var candidates = eventFamily == "PlanetaryEvent"
+            ? NormalizeObjectList(current.ForbiddenObjectNames.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(current.EventType)))
+            : NormalizeObjectList(current.ForbiddenObjectNames);
+        var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
+        var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
+        return new ThumbnailValidatorProfile(current.EventType, eventFamily, expectedObjects, applied, skipped, validatorProfile);
+    }
+
+    private static IReadOnlyList<string> DetectThumbnailForbiddenTerms(ThumbnailValidatorProfile profile, IEnumerable<string> thumbnailMetadataAndOverlayText)
+    {
+        var text = string.Join(" | ", thumbnailMetadataAndOverlayText.Where(value => !string.IsNullOrWhiteSpace(value)));
+        if (string.IsNullOrWhiteSpace(text)) return [];
+        return profile.ForbiddenTermsApplied
+            .Where(term => !string.IsNullOrWhiteSpace(term) && text.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string BuildPureV3VisualFocus(CurrentEventLock current)
@@ -2752,8 +2854,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static IEnumerable<string> DetectForbiddenObjects(ThumbnailAssetGenerationRequest request, IEnumerable<string> labels)
     {
-        var forbiddenCandidates = new[] { "Venus", "Jupiter", "Mars", "Saturn", "Mercury", "Uranus", "Neptune" };
-        var allowed = NormalizeObjectList((request.ProductionContext?.ProductionEventIntelligence?.PrimaryObjects ?? []).Concat(request.ProductionContext?.ProductionEventIntelligence?.SecondaryObjects ?? []));
+        var profile = ResolveThumbnailValidatorProfile(request);
+        var forbiddenCandidates = profile.ForbiddenTermsApplied;
+        var allowed = profile.ExpectedObjects;
         foreach (var candidate in forbiddenCandidates)
         {
             if (allowed.Any(value => LabelMatches(value, candidate))) continue;
@@ -2832,10 +2935,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var visualObjectsUsed = renderResult?.VisualObjectsUsed ?? renderRequest?.VisualObjects ?? Array.Empty<string>();
         var labelsUsed = renderResult?.LabelsUsed ?? renderRequest?.Labels ?? Array.Empty<string>();
         var textUsed = new[] { renderRequest?.ShortTitle, renderRequest?.SecondaryText, renderRequest?.MicroText }.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToArray();
+        var validationProfile = ResolveThumbnailValidatorProfile(renderRequest?.CurrentEventLock as CurrentEventLock);
+        var forbiddenTermsDetected = DetectThumbnailForbiddenTerms(validationProfile, visualObjectsUsed.Concat(labelsUsed).Concat(textUsed));
         var goldenPilotLeakageDetected = DetectGoldenPilotLeakage(renderRequest, renderResult);
         var semanticValidationPassed = string.Equals(GetDictionaryValue(facts, "semanticValidationPassed"), "True", StringComparison.OrdinalIgnoreCase)
             && !goldenPilotLeakageDetected
-            && forbiddenObjectsDetected.Count == 0;
+            && forbiddenObjectsDetected.Count == 0
+            && forbiddenTermsDetected.Count == 0;
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             currentEventLock = renderRequest?.CurrentEventLock,
@@ -2851,7 +2957,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             labelsUsed,
             textUsed,
             forbiddenObjectsDetected,
+            forbiddenTermsDetected,
             goldenPilotLeakageDetected,
+            eventType = validationProfile.EventType,
+            eventFamily = validationProfile.EventFamily,
+            expectedObjects = validationProfile.ExpectedObjects,
+            forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
+            forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
+            validatorProfile = validationProfile.ValidatorProfile,
             semanticValidationPassed
         }, JsonOptions), cancellationToken);
     }
@@ -3191,6 +3304,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         IReadOnlyList<string> ForbiddenTermsMatched,
         IReadOnlyList<string> EventTypeVocabularyUsed,
         string ThumbnailVocabularyProfile);
+
+    private sealed record ThumbnailValidatorProfile(
+        string EventType,
+        string EventFamily,
+        IReadOnlyList<string> ExpectedObjects,
+        IReadOnlyList<string> ForbiddenTermsApplied,
+        IReadOnlyList<string> ForbiddenTermsSkippedBecauseExpected,
+        string ValidatorProfile);
 
     private sealed record CurrentEventLock(
         string PlanId,
