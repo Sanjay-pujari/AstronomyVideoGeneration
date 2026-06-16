@@ -578,7 +578,11 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Contains("GEMINIDS", promptText);
         Assert.Contains("METEOR SHOWER", promptText);
         Assert.Contains("METEOR SHOWER PEAK", promptText);
-        Assert.Contains("radiant hint", promptText);
+        Assert.Contains("thumbnailCompositionType = RadiantBurstThumbnail", promptText);
+        Assert.Contains("visible radiant burst point", promptText);
+        Assert.DoesNotContain("radiant hint", promptText);
+        Assert.DoesNotContain("guide card", promptText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Look East", promptText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("thumbnailPromptSource", promptText);
         Assert.Contains("forbiddenTermsMatched", promptText);
         Assert.Contains("eventTypeVocabularyUsed", promptText);
