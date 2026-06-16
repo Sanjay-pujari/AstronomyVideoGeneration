@@ -127,11 +127,14 @@ public sealed class SceneAssetsV3Service(
                     beat.CompositionType,
                     beat.OverlayText,
                     beat.SupportingText,
+                    sceneGuideType = beat.SceneGuideType,
+                    guideRenderer = beat.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{beat.SceneGuideType}GuideRenderer" : string.Empty,
+                    guideElementsUsed = beat.GuideElementsUsed ?? Array.Empty<string>(),
                     forbiddenTermsDetected = forbiddenDetected,
                     providerName,
                     azureCallsCount
                 });
-                manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, beat.VisualIntent, beat.VisualSubjectCategory, beat.PrimaryVisualSubject, beat.CameraDistance, beat.OverlayDensity, beat.InformationDensity, beat.OverlayStyle, beat.CompositionType, beat.OverlayText, beat.SupportingText, await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
+                manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, beat.VisualIntent, beat.VisualSubjectCategory, beat.PrimaryVisualSubject, beat.CameraDistance, beat.OverlayDensity, beat.InformationDensity, beat.OverlayStyle, beat.CompositionType, beat.OverlayText, beat.SupportingText, beat.SceneGuideType, beat.GuideElementsUsed ?? Array.Empty<string>(), await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
                 files.Add(imagePath);
             }
         }
@@ -151,7 +154,7 @@ public sealed class SceneAssetsV3Service(
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
         await WriteJsonAsync(diagnosticsPath, new { version = Version, format, currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms, blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0, staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
-        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
+        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, sceneGuideType = b.SceneGuideType, guideRenderer = b.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{b.SceneGuideType}GuideRenderer" : string.Empty, eventType = context.EventType, guideElementsUsed = b.GuideElementsUsed ?? Array.Empty<string>(), b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         var repeatedPrompt = DetectRepeatedMetadata(beats, b => b.VisualPrompt);
@@ -170,6 +173,7 @@ public sealed class SceneAssetsV3Service(
         await WriteJsonAsync(reviewPath, review, ct); files.Add(reviewPath);
 
         errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, metadataPath, review, expectedCount));
+        errors.AddRange(BuildGuideValidationErrors(context.EventType, beats));
         var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, beats.All(b => !string.IsNullOrWhiteSpace(b.VisualIntent)), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, relativeDateWordsDetected, distinctCompositionTypes, errors, BuildFontDiagnostics());
         await WriteJsonAsync(validationPath, validation, ct); files.Add(validationPath);
         return validationPath;
@@ -217,6 +221,69 @@ public sealed class SceneAssetsV3Service(
         ctx.DrawText("Accurate sky guide", title, Color.FromRgb(238, 246, 255), new PointF(96, 80));
         ctx.DrawText(TruncateForOverlay(beat.NarrationBeat, 86), label, Color.FromRgb(185, 215, 245), new PointF(96, 132));
         ctx.DrawText(TruncateForOverlay(FirstNonEmpty(beat.SupportingText ?? string.Empty, beat.OverlayText), 86), label, Color.FromRgb(185, 215, 245), new PointF(96, 168));
+        DrawGuideElements(ctx, beat, label);
+        ctx.DrawText("horizon", label, Color.FromRgb(235, 242, 248), new PointF(448, 830));
+    }
+
+    private static void DrawGuideElements(IImageProcessingContext ctx, SceneAssetsV3Beat beat, Font label)
+    {
+        if (beat.SceneGuideType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase))
+        {
+            var radiant = new PointF(930, 360);
+            ctx.Draw(Color.FromRgb(255, 210, 92), 4, new EllipsePolygon(radiant, 42));
+            ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(radiant, 8));
+            ctx.DrawText("radiant", label, Color.FromRgb(255, 245, 190), new PointF(965, 328));
+            for (var i = 0; i < 7; i++)
+            {
+                var start = new PointF(610 + i * 125, 245 + (i % 3) * 80);
+                var end = new PointF(start.X + 145, start.Y + 105);
+                ctx.DrawLine(Color.FromRgba(145, 220, 255, 210), 5, start, end);
+            }
+            ctx.DrawText("meteor streak directions", label, Color.FromRgb(145, 220, 255), new PointF(1110, 545));
+            ctx.DrawText("viewing region", label, Color.FromRgb(190, 230, 255), new PointF(128, 742));
+            ctx.DrawText("viewing window", label, Color.FromRgb(190, 230, 255), new PointF(1280, 742));
+            ctx.DrawText("moonlight conditions", label, Color.FromRgb(220, 220, 235), new PointF(1280, 792));
+            return;
+        }
+
+        if (beat.SceneGuideType.Equals("PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+        {
+            var first = new PointF(900, 430);
+            var second = new PointF(1010, 400);
+            ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(first, 15));
+            ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(second, 13));
+            ctx.DrawLine(Color.FromRgb(120, 210, 255), 4, first, second);
+            ctx.DrawText("object labels", label, Color.FromRgb(255, 245, 190), new PointF(805, 462));
+            ctx.DrawText("separation", label, Color.FromRgb(120, 210, 255), new PointF(902, 342));
+            ctx.DrawText("altitude", label, Color.FromRgb(235, 242, 248), new PointF(1180, 625));
+            ctx.DrawText("direction", label, Color.FromRgb(235, 242, 248), new PointF(448, 830));
+            return;
+        }
+
+        if (beat.SceneGuideType.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase))
+        {
+            var points = new[] { new PointF(780, 450), new PointF(925, 370), new PointF(1080, 455) };
+            foreach (var point in points) ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(point, 13));
+            ctx.DrawLine(Color.FromRgb(120, 210, 255), 4, points);
+            ctx.DrawText("object positions", label, Color.FromRgb(235, 242, 255), new PointF(735, 500));
+            ctx.DrawText("scan path", label, Color.FromRgb(120, 210, 255), new PointF(930, 315));
+            ctx.DrawText("grouping geometry", label, Color.FromRgb(190, 230, 255), new PointF(1085, 490));
+            return;
+        }
+
+        if (beat.SceneGuideType.Equals("MoonPlanetPairing", StringComparison.OrdinalIgnoreCase))
+        {
+            var moon = new PointF(900, 420);
+            var paired = new PointF(1030, 405);
+            ctx.Draw(Color.FromRgb(235, 242, 255), 8, new EllipsePolygon(moon, 34));
+            ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(paired, 14));
+            ctx.DrawLine(Color.FromRgb(120, 210, 255), 4, moon, paired);
+            ctx.DrawText("moon", label, Color.FromRgb(235, 242, 255), new PointF(840, 462));
+            ctx.DrawText("paired object", label, Color.FromRgb(255, 245, 190), new PointF(1050, 425));
+            ctx.DrawText("separation", label, Color.FromRgb(120, 210, 255), new PointF(920, 342));
+            return;
+        }
+
         var first = new PointF(900, 430);
         var second = new PointF(1010, 400);
         ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(first, 15));
@@ -227,7 +294,6 @@ public sealed class SceneAssetsV3Service(
         ctx.DrawText("primary", label, Color.FromRgb(255, 245, 190), new PointF(815, 460));
         ctx.DrawText("secondary", label, Color.FromRgb(235, 242, 255), new PointF(1030, 418));
         ctx.DrawText("alignment", label, Color.FromRgb(120, 210, 255), new PointF(902, 342));
-        ctx.DrawText("horizon", label, Color.FromRgb(235, 242, 248), new PointF(448, 830));
     }
 
 
@@ -250,6 +316,8 @@ public sealed class SceneAssetsV3Service(
             beat.SupportingText,
             beat.NarrationBeat,
             beat.ExpectedDurationSec,
+            beat.SceneGuideType,
+            beat.GuideElementsUsed ?? Array.Empty<string>(),
             RecommendedTransition(beat),
             RecommendedMotion(beat))).ToList());
 
@@ -346,6 +414,24 @@ public sealed class SceneAssetsV3Service(
     private static string StyleFor(string mode) => mode == "ExplainerScene" ? "cinematic educational astronomy, realistic space documentary" : "Netflix science documentary, National Geographic astronomy, NASA campaign, realistic cinematic sky, minimal overlay";
     private static bool ReviewPassed(SceneAssetsV3Review r, int expected) => r.SceneCount == expected && r.AccurateSkyGuidePresent && !r.DuplicateHashDetected && !r.RepeatedBackgroundDetected && !r.SameBackgroundDetected && !r.SameCompositionDetected && !r.SameCameraAngleDetected && r.AllScenesHaveNarrationBeat && r.PromptDiversityScore >= 80 && !r.RepeatedPromptDetected && r.ForbiddenTermsDetected.Count == 0 && r.RelativeDateWordsDetected.Count == 0 && (expected < 9 || r.DistinctCompositionTypeCount >= 5);
     private static List<string> BuildValidationErrors(string timeline, string manifest, string metadata, SceneAssetsV3Review r, int expected) { var e = new List<string>(); if (!File.Exists(timeline)) e.Add("visual-timeline-v3.json is missing."); if (!File.Exists(manifest)) e.Add("scene-manifest-v3.json is missing."); if (!File.Exists(metadata)) e.Add("scene-timeline-metadata.json is missing."); if (r.SceneCount != expected) e.Add($"Expected {expected} scenes but found {r.SceneCount}."); if (!r.AccurateSkyGuidePresent) e.Add("AccurateSkyGuideScene is missing."); if (r.DuplicateHashDetected) e.Add("Duplicate image hashes detected."); if (r.RepeatedBackgroundDetected) e.Add("Repeated generic infographic background detected."); if (r.SameBackgroundDetected) e.Add("sameBackgroundDetected review check failed."); if (r.SameCompositionDetected) e.Add("sameCompositionDetected review check failed."); if (r.SameCameraAngleDetected) e.Add("sameCameraAngleDetected review check failed."); if (!r.AllScenesHaveNarrationBeat) e.Add("At least one scene is missing narrationBeat."); if (r.PromptDiversityScore < 80) e.Add("promptDiversityScore must be >= 80."); if (r.RepeatedPromptDetected) e.Add("Repeated image prompt detected."); if (r.ForbiddenTermsDetected.Count > 0) e.Add("Forbidden terms detected."); if (r.RelativeDateWordsDetected.Count > 0) e.Add("Relative date words detected in visual overlays."); if (expected >= 9 && r.DistinctCompositionTypeCount < 5) e.Add("Long video requires at least 5 distinct composition types."); return e; }
+    private static IReadOnlyList<string> BuildGuideValidationErrors(string eventType, IReadOnlyList<SceneAssetsV3Beat> beats)
+    {
+        var errors = new List<string>();
+        var guide = beats.FirstOrDefault(b => b.RenderMode == "AccurateSkyGuideScene");
+        if (guide is null) return errors;
+
+        if (IsMeteorShower(eventType))
+        {
+            var elements = guide.GuideElementsUsed ?? Array.Empty<string>();
+            if (!elements.Any(e => e.Contains("radiant", StringComparison.OrdinalIgnoreCase) || e.Contains("meteor streak", StringComparison.OrdinalIgnoreCase)))
+                errors.Add("MeteorShower AccurateSkyGuideScene must include radiant or meteor streak guidance.");
+
+            if (elements.Any(e => e.Equals("primary", StringComparison.OrdinalIgnoreCase) || e.Equals("secondary", StringComparison.OrdinalIgnoreCase) || e.Equals("alignment", StringComparison.OrdinalIgnoreCase)))
+                errors.Add("MeteorShower AccurateSkyGuideScene must not use primary/secondary/alignment guide elements.");
+        }
+
+        return errors;
+    }
     private static Task WriteJsonAsync<T>(string path, T value, CancellationToken ct) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), ct);
     private static async Task<string> Sha256Async(string path, CancellationToken ct) { await using var s = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
 
@@ -393,7 +479,9 @@ public sealed class SceneAssetsV3Service(
             EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", $"visualPrompt source=production-event-intelligence.json scene={ids[i]} prompt={prompt}", prompt, context.ForbiddenTerms);
             var overlayPrompt = string.Join(" ", intentSpec.OverlayText, intentSpec.SupportingText);
             EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", $"overlayText source=production-event-intelligence.json scene={ids[i]} prompt={overlayPrompt}", overlayPrompt, context.ForbiddenTerms);
-            result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intentSpec.VisualIntent, intentSpec.VisualSubjectCategory, intentSpec.PrimaryVisualSubject, intentSpec.CameraDistance, intentSpec.OverlayDensity, intentSpec.InformationDensity, intentSpec.OverlayStyle, intentSpec.PromptVariation, intentSpec.CompositionType, intentSpec.OverlayText, intentSpec.SupportingText, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, "question-driven-narration-v2.json", "production-event-intelligence.json"));
+            var sceneGuideType = modes[i] == "AccurateSkyGuideScene" ? ResolveSceneGuideType(context.EventType) : string.Empty;
+            var guideElementsUsed = modes[i] == "AccurateSkyGuideScene" ? ResolveGuideElements(context.EventType) : Array.Empty<string>();
+            result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intentSpec.VisualIntent, intentSpec.VisualSubjectCategory, intentSpec.PrimaryVisualSubject, intentSpec.CameraDistance, intentSpec.OverlayDensity, intentSpec.InformationDensity, intentSpec.OverlayStyle, intentSpec.PromptVariation, intentSpec.CompositionType, intentSpec.OverlayText, intentSpec.SupportingText, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, sceneGuideType, guideElementsUsed, "question-driven-narration-v2.json", "production-event-intelligence.json"));
         }
         return result;
     }
@@ -497,6 +585,24 @@ public sealed class SceneAssetsV3Service(
     private static string? ResolveFirstExisting(params string[] paths) => paths.FirstOrDefault(File.Exists);
     private static string FirstNonEmpty(params string[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
     private static bool IsPlanetConjunction(string eventType) => EventContentGuard.IsPlanetConjunction(eventType);
+    private static string ResolveSceneGuideType(string eventType)
+    {
+        if (IsMeteorShower(eventType)) return "MeteorShower";
+        if (IsPlanetConjunction(eventType)) return "PlanetConjunction";
+        if (eventType.Contains("group", StringComparison.OrdinalIgnoreCase) || eventType.Contains("parade", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+        if (eventType.Contains("moon", StringComparison.OrdinalIgnoreCase) && (eventType.Contains("pair", StringComparison.OrdinalIgnoreCase) || eventType.Contains("planet", StringComparison.OrdinalIgnoreCase))) return "MoonPlanetPairing";
+        return "GenericObjectPair";
+    }
+
+    private static string[] ResolveGuideElements(string eventType) => ResolveSceneGuideType(eventType) switch
+    {
+        "MeteorShower" => ["radiant", "meteor streak directions", "viewing region", "viewing window", "moonlight conditions"],
+        "PlanetConjunction" => ["object labels", "separation", "altitude", "direction"],
+        "PlanetGrouping" => ["object positions", "scan path", "grouping geometry"],
+        "MoonPlanetPairing" => ["moon", "paired object", "separation"],
+        _ => ["primary", "secondary", "alignment"]
+    };
+
     private static EventProfileForbiddenTerms BuildEventProfileForbiddenTerms(string eventType, JsonElement root, EventObjectContext objectContext, IReadOnlyList<string> allowedGuidanceTerms)
     {
         var currentText = string.Join(Environment.NewLine, new[] { eventType, FirstString(root, "title", "shortTitle"), FirstString(root, "storyTheme"), FirstString(root, "visualTheme"), FirstString(root, "skyGuideTheme"), FirstString(root, "skyDirectionHint", "primaryViewingDirection", "viewingDirection", "direction"), FirstString(root, "bestViewingWindow", "bestViewingWindowLocal", "peakTime", "absoluteTime") }.Concat(objectContext.ObjectNames).Concat(ReadStringArray(root, "requiredVisualObjects")));

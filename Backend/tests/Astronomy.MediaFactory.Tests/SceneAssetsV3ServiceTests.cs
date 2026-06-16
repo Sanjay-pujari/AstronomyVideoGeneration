@@ -162,11 +162,29 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         var diagnostics = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "visual-prompt-diagnostics.json"));
         Assert.Contains("currentPlanId", diagnostics);
         Assert.Contains("currentEventType", diagnostics);
+        Assert.Contains("\"sceneGuideType\": \"MeteorShower\"", diagnostics);
+        Assert.Contains("\"guideRenderer\": \"DeterministicMeteorShowerGuideRenderer\"", diagnostics);
+        Assert.Contains("\"eventType\": \"MeteorShower\"", diagnostics);
+        Assert.Contains("guideElementsUsed", diagnostics);
+        Assert.Contains("radiant", diagnostics);
+        Assert.Contains("meteor streak directions", diagnostics);
         Assert.Contains("forbiddenTermsSource", diagnostics);
         Assert.Contains("allowedGuidanceTerms", diagnostics);
         Assert.Contains("blockedTermsMatched", diagnostics);
         Assert.Contains("staleContextDetected", diagnostics);
         Assert.Contains("staleContextSource", diagnostics);
+
+        var metadata = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "scene-timeline-metadata.json"));
+        Assert.Contains("\"sceneGuideType\": \"MeteorShower\"", metadata);
+        Assert.Contains("radiant", metadata);
+        Assert.Contains("meteor streak directions", metadata);
+        using var metadataJson = System.Text.Json.JsonDocument.Parse(metadata);
+        var guideScene = metadataJson.RootElement.GetProperty("scenes").EnumerateArray().Single(s => s.GetProperty("renderMode").GetString() == "AccurateSkyGuideScene");
+        var guideElements = guideScene.GetProperty("guideElementsUsed").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains(guideElements, e => e == "radiant" || e == "meteor streak directions");
+        Assert.DoesNotContain("primary", guideElements);
+        Assert.DoesNotContain("secondary", guideElements);
+        Assert.DoesNotContain("alignment", guideElements);
     }
 
     public void Dispose()
