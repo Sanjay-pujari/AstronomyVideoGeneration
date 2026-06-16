@@ -392,7 +392,7 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
         [nameof(ProductionEventIntelligence.BestViewingWindowLocal), nameof(ProductionEventIntelligence.SkyDirectionHint), nameof(ProductionEventIntelligence.MoonInterference), nameof(ProductionEventIntelligence.MoonIlluminationPercent)],
         "urgent, wonder-led, practical, concise",
         ["Peak Night", "Midnight–Pre-dawn", "Low Moon", "Look East to Overhead"],
-        ["Venus", "Jupiter", "conjunction", "planet pairing", "look west", "after sunset"],
+        ["Venus", "Jupiter", "conjunction", "planet conjunction", "planet pairing", "western sky after sunset", "look west"],
         ["Use bestViewingWindowLocal instead of a daytime localPeakTime.", "Mention no telescope needed.", "Mention dark sky and moon interference."]);
 
     public override QuestionAnswerSetDto BuildQuestionAnswerSet(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)

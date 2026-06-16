@@ -103,6 +103,72 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         Assert.Contains("azureCallsCount", diagnostics);
     }
 
+
+    [Fact]
+    public async Task GenerateAsync_ForMeteorShower_UsesMeteorContextAndDoesNotFailOnConjunctionForbiddenList()
+    {
+        var planRoot = Path.Combine(_outputRoot, "geminids-plan");
+        Directory.CreateDirectory(Path.Combine(planRoot, "plan-input"));
+        Directory.CreateDirectory(Path.Combine(planRoot, "question-engine"));
+        await File.WriteAllTextAsync(Path.Combine(planRoot, "plan-input", "production-event-intelligence.json"), """
+        {
+          "planId": "geminids-2026-plan",
+          "eventType": "MeteorShower",
+          "title": "Geminids meteor shower",
+          "storyTheme": "Geminids peak night",
+          "visualTheme": "meteor streaks over dark open sky",
+          "skyGuideTheme": "East to overhead after 10 PM",
+          "skyDirectionHint": "East to overhead after 10 PM",
+          "bestViewingWindowLocal": "midnight to pre-dawn",
+          "eventDate": "Dec 13–14, 2026",
+          "requiredVisualObjects": ["Geminids", "meteor shower", "meteor streaks", "radiant guide", "East to overhead after 10 PM", "midnight to pre-dawn", "Dec 13–14, 2026"],
+          "forbiddenTerms": ["Venus", "Jupiter", "conjunction", "after sunset", "look west"]
+        }
+        """);
+        await File.WriteAllTextAsync(Path.Combine(planRoot, "question-engine", "question-driven-narration-v2.json"), """
+        {
+          "scenes": [
+            { "narrationText": "The Geminids meteor shower peaks on Dec 13–14, 2026 with bright meteor streaks." },
+            { "narrationText": "Use the radiant guide and scan east to overhead after 10 PM." },
+            { "narrationText": "The best window runs midnight to pre-dawn from a dark open sky." }
+          ]
+        }
+        """);
+
+        var service = new SceneAssetsV3Service(
+            Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot }),
+            new DisabledAICinematicImageGenerator(),
+            NullLogger<SceneAssetsV3Service>.Instance);
+
+        var result = await service.GenerateAsync(new SceneAssetsV3Request(planRoot, GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);
+
+        var timeline = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "visual-timeline-v3.json"));
+        Assert.Contains("Geminids", timeline);
+        Assert.Contains("meteor shower", timeline);
+        Assert.Contains("meteor streaks", timeline);
+        Assert.Contains("East to overhead after 10 PM", timeline);
+        Assert.Contains("midnight to pre-dawn", timeline);
+        Assert.Contains("Dec 13–14, 2026", timeline);
+        Assert.DoesNotContain("Jupiter", timeline, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Venus", timeline, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("planet conjunction", timeline, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("look west", timeline, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("western sky after sunset", timeline, StringComparison.OrdinalIgnoreCase);
+
+        var validation = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "scene-v3-validation.json"));
+        Assert.Contains("\"status\": \"Passed\"", validation);
+        Assert.Contains("\"forbiddenTermsDetected\": []", validation);
+
+        var diagnostics = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "visual-prompt-diagnostics.json"));
+        Assert.Contains("currentPlanId", diagnostics);
+        Assert.Contains("currentEventType", diagnostics);
+        Assert.Contains("forbiddenTermsSource", diagnostics);
+        Assert.Contains("allowedGuidanceTerms", diagnostics);
+        Assert.Contains("blockedTermsMatched", diagnostics);
+        Assert.Contains("staleContextDetected", diagnostics);
+        Assert.Contains("staleContextSource", diagnostics);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_outputRoot)) Directory.Delete(_outputRoot, recursive: true);

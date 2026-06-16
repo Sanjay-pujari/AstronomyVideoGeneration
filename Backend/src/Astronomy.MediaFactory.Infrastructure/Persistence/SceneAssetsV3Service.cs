@@ -150,7 +150,7 @@ public sealed class SceneAssetsV3Service(
         var manifest = new SceneAssetsV3Manifest(Version, format, manifestScenes.Count, manifestScenes);
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
-        await WriteJsonAsync(diagnosticsPath, new { version = Version, format, eventType = context.EventType, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
+        await WriteJsonAsync(diagnosticsPath, new { version = Version, format, currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms, blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0, staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
         await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
@@ -358,13 +358,20 @@ public sealed class SceneAssetsV3Service(
         using var narration = narrationPath is not null ? JsonDocument.Parse(await File.ReadAllTextAsync(narrationPath, ct)) : JsonDocument.Parse("{}");
         var root = intelligence.RootElement;
         var eventType = FirstString(root, "eventType", "strategyId", "selectedEventType");
-        var forbidden = ReadStringArray(root, "forbiddenTerms").Concat(DefaultForbiddenTerms(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var eventTitle = FirstString(root, "title", "shortTitle");
+        var objectContext = EventObjectContextBuilder.FromJsonValues(eventType, eventTitle, ReadStringArray(root, "resolvedObjectNames"), ReadStringArray(root, "primaryObjects"), ReadStringArray(root, "secondaryObjects"), ReadStringArray(root, "requiredVisualObjects"));
+        var allowedGuidanceTerms = BuildAllowedGuidanceTerms(root);
+        var forbidden = BuildEventProfileForbiddenTerms(eventType, root, objectContext, allowedGuidanceTerms);
         return new SceneAssetsV3TimelineContext(
+            FirstString(root, "planId", "id", "productionPlanId"),
             string.IsNullOrWhiteSpace(eventType) ? "Generic" : eventType,
+            eventTitle,
             FirstString(root, "storyTheme"), FirstString(root, "visualTheme"), FirstString(root, "skyGuideTheme"),
-            FirstString(root, "eventDate", "date", "peakDate", "absoluteDate"), FirstString(root, "peakTime", "bestViewingWindow", "absoluteTime"), FirstString(root, "primaryViewingDirection", "viewingDirection", "direction"), FirstString(root, "angularSeparation", "minimumSeparation", "separation"),
-            EventObjectContextBuilder.FromJsonValues(eventType, FirstString(root, "title", "shortTitle"), ReadStringArray(root, "resolvedObjectNames"), ReadStringArray(root, "primaryObjects"), ReadStringArray(root, "secondaryObjects"), ReadStringArray(root, "requiredVisualObjects")),
-            forbidden,
+            FirstString(root, "eventDate", "date", "peakDate", "absoluteDate"), FirstString(root, "peakTime", "bestViewingWindow", "bestViewingWindowLocal", "absoluteTime"), FirstString(root, "skyDirectionHint", "primaryViewingDirection", "viewingDirection", "direction"), FirstString(root, "angularSeparation", "minimumSeparation", "separation"),
+            objectContext,
+            forbidden.Terms,
+            forbidden.Source,
+            allowedGuidanceTerms,
             ExtractNarrationBeats(narration.RootElement));
     }
 
@@ -379,12 +386,13 @@ public sealed class SceneAssetsV3Service(
         {
             var narration = i < context.NarrationBeats.Count ? context.NarrationBeats[i] : BuildFallbackNarration(context, ids[i]);
             narration = EnsureRequiredNarrationContext(context, narration);
-            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "narrationBeat", narration, context.ForbiddenTerms);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", $"narrationBeat source=question-driven-narration-v2.json scene={ids[i]} prompt={narration}", narration, context.ForbiddenTerms);
             var intentSpec = BuildVisualIntentSpec(context, ids[i], i, format);
             var prompt = BuildVisualPrompt(context, ids[i], intentSpec);
-            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "visualIntent", intentSpec.VisualIntent, context.ForbiddenTerms);
-            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "visualPrompt", prompt, context.ForbiddenTerms);
-            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", "overlayText", string.Join(" ", intentSpec.OverlayText, intentSpec.SupportingText), context.ForbiddenTerms);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", $"visualIntent source=production-event-intelligence.json scene={ids[i]} prompt={intentSpec.VisualIntent}", intentSpec.VisualIntent, context.ForbiddenTerms);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", $"visualPrompt source=production-event-intelligence.json scene={ids[i]} prompt={prompt}", prompt, context.ForbiddenTerms);
+            var overlayPrompt = string.Join(" ", intentSpec.OverlayText, intentSpec.SupportingText);
+            EventContentGuard.ValidateNoForbiddenTerms("SceneAssetsV3Service", $"overlayText source=production-event-intelligence.json scene={ids[i]} prompt={overlayPrompt}", overlayPrompt, context.ForbiddenTerms);
             result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intentSpec.VisualIntent, intentSpec.VisualSubjectCategory, intentSpec.PrimaryVisualSubject, intentSpec.CameraDistance, intentSpec.OverlayDensity, intentSpec.InformationDensity, intentSpec.OverlayStyle, intentSpec.PromptVariation, intentSpec.CompositionType, intentSpec.OverlayText, intentSpec.SupportingText, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, "question-driven-narration-v2.json", "production-event-intelligence.json"));
         }
         return result;
@@ -400,15 +408,15 @@ public sealed class SceneAssetsV3Service(
     {
         var longSpecs = new[]
         {
-            ("CinematicHook", "WideSky", $"cinematic twilight sky featuring {c.EventObjectContext.ObjectListText}", "wide establishing", "minimal", "wide cinematic twilight sky with local skyline and event objects", c.EventObjectContext.ObjectHeadlineText),
-            ("ObjectCloseup", "ObjectCloseup", $"realistic close visual comparison of {c.EventObjectContext.ObjectListText}", "telephoto closeup", "minimal", "close comparative celestial portrait with realistic scale cue", c.EventObjectContext.ObjectPairText),
-            ("ScientificExplanation", "LineOfSightDiagram", "Earth line-of-sight geometry explaining apparent conjunction", "diagram medium", "medium", "clean scientific Earth-to-planets line-of-sight explainer", "They appear close from Earth"),
-            ("GeometryDiagram", "AngularSeparation", $"clean angular separation callout for {c.EventObjectContext.ObjectPairText}", "diagram close", "low", "minimal angular-separation measurement graphic", string.IsNullOrWhiteSpace(c.AngularSeparationText) ? c.EventObjectContext.ObjectPairText : $"Minimum separation: {c.AngularSeparationText}"),
-            ("SkyGuide", "DirectionGuide", "western horizon sky map after sunset", "wide guide", "guide", "accurate western horizon sky guide with restrained markers", "Look west after sunset"),
-            ("HumanObservation", "HumanObserver", "person watching two planets over Udaipur skyline", "over-the-shoulder wide", "minimal", "human observer silhouette over Udaipur skyline looking at two planets", "No telescope needed"),
-            ("ViewingTips", "FieldTips", "clear western horizon with low obstruction and sky markers", "wide field", "low", "field viewing tip scene with low obstruction western horizon", "Find a clear horizon"),
+            ("CinematicHook", "WideSky", $"cinematic dark-sky event view featuring {c.EventObjectContext.ObjectListText}", "wide establishing", "minimal", $"wide cinematic sky with local skyline and {c.EventObjectContext.ObjectListText}", c.EventObjectContext.ObjectHeadlineText),
+            ("ObjectCloseup", "ObjectCloseup", $"realistic close visual study of {c.EventObjectContext.ObjectListText}", "telephoto closeup", "minimal", $"close celestial portrait of {c.EventObjectContext.ObjectListText}", c.EventObjectContext.ObjectPairText),
+            ("ScientificExplanation", "EventMechanismDiagram", IsMeteorShower(c.EventType) ? "Earth crossing a debris stream creates meteor streaks" : "Earth line-of-sight geometry explaining the selected sky event", "diagram medium", "medium", IsMeteorShower(c.EventType) ? "clean meteor shower debris stream explainer" : "clean scientific sky-event explainer", IsMeteorShower(c.EventType) ? "Meteor streaks from debris" : "Apparent sky geometry"),
+            ("GeometryDiagram", "EventGeometry", $"clean event callout for {c.EventObjectContext.ObjectPairText}", "diagram close", "low", IsMeteorShower(c.EventType) ? "minimal radiant guide with meteor streak paths" : "minimal event geometry measurement graphic", IsMeteorShower(c.EventType) ? "Radiant guide; meteors cross the sky" : (string.IsNullOrWhiteSpace(c.AngularSeparationText) ? c.EventObjectContext.ObjectPairText : $"Minimum separation: {c.AngularSeparationText}")),
+            ("SkyGuide", "DirectionGuide", $"accurate sky map for {FirstNonEmpty(c.PrimaryViewingDirection, c.SkyGuideTheme, "current event direction")}", "wide guide", "guide", $"accurate sky guide with restrained markers for {FirstNonEmpty(c.PrimaryViewingDirection, c.SkyGuideTheme, "the current event")}", FirstNonEmpty(c.PrimaryViewingDirection, c.SkyGuideTheme, "Follow the current event guide")),
+            ("HumanObservation", "HumanObserver", $"person watching {c.EventObjectContext.ObjectListText} over Udaipur skyline", "over-the-shoulder wide", "minimal", $"human observer silhouette under {c.EventObjectContext.ObjectListText}", "No telescope needed"),
+            ("ViewingTips", "FieldTips", $"clear open sky viewing field for {c.EventObjectContext.ObjectListText}", "wide field", "low", "field viewing tip scene with low obstruction open sky", FirstNonEmpty(c.PeakTimeText, c.PrimaryViewingDirection, "Use the current event viewing window")),
             ("ObjectDetail", "ObjectDetail", $"cinematic detail study of {c.EventObjectContext.ObjectListText}", "macro detail", "minimal", "cinematic cutaway showing event objects from intelligence", c.EventObjectContext.ObjectPairText),
-            ("EmotionalClosing", "EmotionalSky", "calm closing twilight sky with observer silhouettes", "wide emotional", "minimal", "calm twilight sky with observer silhouettes and two planets", "Step outside and look west")
+            ("EmotionalClosing", "EmotionalSky", $"calm closing night sky with observer silhouettes and {c.EventObjectContext.ObjectListText}", "wide emotional", "minimal", $"calm night sky with observer silhouettes and {c.EventObjectContext.ObjectListText}", FirstNonEmpty(c.PeakTimeText, "Step outside for the current event"))
         };
         var shortIndexes = new[] { 0, 1, 4, 6, 8 };
         var spec = format == "short" ? longSpecs[shortIndexes[Math.Min(index, shortIndexes.Length - 1)]] : longSpecs[Math.Min(index, longSpecs.Length - 1)];
@@ -434,7 +442,11 @@ public sealed class SceneAssetsV3Service(
             phaseNo,
             product,
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = true, eventType = context.EventType, resolvedObjectNames = context.EventObjectContext.ObjectNames, visualTheme = context.VisualTheme, skyGuideTheme = context.SkyGuideTheme, forbiddenTerms = context.ForbiddenTerms },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = true, currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, resolvedObjectNames = context.EventObjectContext.ObjectNames, visualTheme = context.VisualTheme, skyGuideTheme = context.SkyGuideTheme, forbiddenTerms = context.ForbiddenTerms, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms },
+            currentPlanId = context.PlanId,
+            currentEventType = context.EventType,
+            forbiddenTermsSource = context.ForbiddenTermsSource,
+            allowedGuidanceTerms = context.AllowedGuidanceTerms,
             eventObjectContext = context.EventObjectContext.ToDiagnostics(),
             objectNamesSource = context.EventObjectContext.ObjectNamesSource,
             cleanObjectNames = context.EventObjectContext.ObjectNames,
@@ -445,6 +457,9 @@ public sealed class SceneAssetsV3Service(
             promptDiversityScore = score,
             repeatedPromptDetected = promptTexts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
             forbiddenTermsDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, promptTexts), context.ForbiddenTerms),
+            blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, promptTexts), context.ForbiddenTerms),
+            staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, promptTexts), context.ForbiddenTerms).Count > 0,
+            staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, promptTexts), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty,
             relativeOverlayWordsDetected = Array.Empty<string>(),
             sceneDiversityScore = CalculateSubjectDiversityScore(promptArray),
             finalPrompts = promptArray
@@ -482,6 +497,39 @@ public sealed class SceneAssetsV3Service(
     private static string? ResolveFirstExisting(params string[] paths) => paths.FirstOrDefault(File.Exists);
     private static string FirstNonEmpty(params string[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
     private static bool IsPlanetConjunction(string eventType) => EventContentGuard.IsPlanetConjunction(eventType);
+    private static EventProfileForbiddenTerms BuildEventProfileForbiddenTerms(string eventType, JsonElement root, EventObjectContext objectContext, IReadOnlyList<string> allowedGuidanceTerms)
+    {
+        var currentText = string.Join(Environment.NewLine, new[] { eventType, FirstString(root, "title", "shortTitle"), FirstString(root, "storyTheme"), FirstString(root, "visualTheme"), FirstString(root, "skyGuideTheme"), FirstString(root, "skyDirectionHint", "primaryViewingDirection", "viewingDirection", "direction"), FirstString(root, "bestViewingWindow", "bestViewingWindowLocal", "peakTime", "absoluteTime") }.Concat(objectContext.ObjectNames).Concat(ReadStringArray(root, "requiredVisualObjects")));
+        var terms = new List<string>();
+        var source = "event-profile-specific";
+        if (IsMeteorShower(eventType))
+        {
+            source = "MeteorShower contamination profile: planet-conjunction terms absent from current intelligence";
+            foreach (var term in new[] { "Jupiter", "Venus", "conjunction", "planet conjunction", "planet pairing", "western sky after sunset", "look west" })
+                if (!ContainsTerm(currentText, term) && !allowedGuidanceTerms.Any(a => a.Equals(term, StringComparison.OrdinalIgnoreCase))) terms.Add(term);
+        }
+        else if (IsPlanetConjunction(eventType))
+        {
+            source = "PlanetConjunction contamination profile: meteor terms";
+            terms.AddRange(EventContentGuard.DefaultForbiddenTermsForEventType(eventType));
+        }
+        else
+        {
+            source = "Generic profile: explicit current-event forbiddenTerms only";
+            terms.AddRange(ReadStringArray(root, "forbiddenTerms"));
+        }
+        return new EventProfileForbiddenTerms(terms.Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), source);
+    }
+
+    private static IReadOnlyList<string> BuildAllowedGuidanceTerms(JsonElement root)
+        => new[] { FirstString(root, "skyDirectionHint", "primaryViewingDirection", "viewingDirection", "direction"), FirstString(root, "bestViewingWindow", "bestViewingWindowLocal", "peakTime", "absoluteTime"), FirstString(root, "skyGuideTheme") }
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static bool IsMeteorShower(string? eventType)
+        => !string.IsNullOrWhiteSpace(eventType) && eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase);
+
     private static IEnumerable<string> DefaultForbiddenTerms(string eventType) => EventContentGuard.DefaultForbiddenTermsForEventType(eventType);
     private static IReadOnlyList<string> ReadAllowedVisualObjects(JsonElement root)
     {
@@ -495,7 +543,8 @@ public sealed class SceneAssetsV3Service(
     private static string JoinNatural(IEnumerable<string> values) => string.Join(", ", values.Where(v => !string.IsNullOrWhiteSpace(v)).DefaultIfEmpty("the selected sky event"));
     private static bool ContainsTerm(string text, string term) => EventContentGuard.DetectForbiddenTerms(text, [term]).Count > 0;
 
-    private sealed record SceneAssetsV3TimelineContext(string EventType, string StoryTheme, string VisualTheme, string SkyGuideTheme, string EventDateText, string PeakTimeText, string PrimaryViewingDirection, string AngularSeparationText, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms, IReadOnlyList<string> NarrationBeats);
+    private sealed record EventProfileForbiddenTerms(IReadOnlyList<string> Terms, string Source);
+    private sealed record SceneAssetsV3TimelineContext(string PlanId, string EventType, string Title, string StoryTheme, string VisualTheme, string SkyGuideTheme, string EventDateText, string PeakTimeText, string PrimaryViewingDirection, string AngularSeparationText, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms, string ForbiddenTermsSource, IReadOnlyList<string> AllowedGuidanceTerms, IReadOnlyList<string> NarrationBeats);
     private sealed record VisualIntentSpec(string VisualIntent, string VisualSubjectCategory, string PrimaryVisualSubject, string CameraDistance, string OverlayDensity, string InformationDensity, string OverlayStyle, string PromptVariation, string CompositionType, string OverlayText, string? SupportingText);
 
 }
