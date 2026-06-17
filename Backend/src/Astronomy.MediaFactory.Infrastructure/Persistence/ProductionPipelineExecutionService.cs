@@ -1758,6 +1758,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var unmatchedNarrationSections = new List<string>();
         var unmatchedScenes = new List<string>();
         var narrationDiagnostics = new List<NarrationSceneDiagnostic>();
+        var selectedShortNarrationSource = Path.Combine(planRoot, "narration", "short", "001-hook.txt");
+        var selectedLongNarrationSource = Path.Combine(planRoot, "narration", "long", "001-hook.txt");
 
         var shortRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
         var longRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
@@ -1781,6 +1783,13 @@ public sealed partial class ProductionPipelineExecutionService(
             var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, shortNarration, 5, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
             var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, longNarration, 9, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
 
+            var documentaryNarration = BuildPhase14DocumentaryNarration(context);
+            shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
+            longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
+            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, shortItems, longItems, documentaryNarration, cancellationToken);
+            selectedShortNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "short");
+            selectedLongNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "long");
+
             var missingShortScenes = shortItems.Where(i => i.SyncStatus != "Matched").Select(i => i.SceneId).ToArray();
             var missingLongScenes = longItems.Where(i => i.SyncStatus != "Matched").Select(i => i.SceneId).ToArray();
             var missingNarrationBeats = shortItems.Concat(longItems).Where(i => string.IsNullOrWhiteSpace(i.NarrationText)).Select(i => $"{i.Format}:{i.SceneId}").ToArray();
@@ -1797,21 +1806,16 @@ public sealed partial class ProductionPipelineExecutionService(
             errors.AddRange(unmatchedScenes.Distinct(StringComparer.OrdinalIgnoreCase).Select(scene => $"Unmatched scene: {scene}"));
             errors.AddRange(unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase).Select(section => $"Unmatched narration section: {section}"));
 
-            var documentaryNarration = BuildPhase14DocumentaryNarration(context);
-            shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
-            longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
-            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, shortItems, longItems, documentaryNarration, cancellationToken);
-
             var syncPath = Path.Combine(syncRoot, "scene-audio-sync.json");
             await File.WriteAllTextAsync(syncPath, JsonSerializer.Serialize(new
             {
                 version = "v1",
                 sourceSceneAssetsVersion = "V3.1",
-                sourceNarrationVersion = "V2",
-                matchingStrategy = "SceneTimelineNarrationBeat",
+                sourceNarrationVersion = EventStoryComposer.Version,
+                matchingStrategy = "EventStoryComposerNarrationFiles",
                 diagnostics = new
                 {
-                    matchingStrategy = "SceneTimelineNarrationBeat",
+                    matchingStrategy = "EventStoryComposerNarrationFiles",
                     narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                     sectionsExtracted = extractedSections,
                     matchedPairs,
@@ -1838,13 +1842,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 phaseName = "Scene Audio Sync V1",
                 status = errors.Count == 0 ? "Succeeded" : "Failed",
                 sceneAssetsVersion = "V3.1",
-                narrationVersion = "V2",
+                narrationVersion = EventStoryComposer.Version,
                 syncRoot = NormalizePath(syncRoot),
                 sceneAudioSyncPath = NormalizePath(syncPath),
                 shortSceneAssetsRoot = NormalizePath(shortRoot),
                 longSceneAssetsRoot = NormalizePath(longRoot),
-                shortNarrationSource = NormalizePath(shortNarration),
-                longNarrationSource = NormalizePath(longNarration),
+                shortNarrationSource = NormalizePath(selectedShortNarrationSource),
+                longNarrationSource = NormalizePath(selectedLongNarrationSource),
                 narrationRoot = NormalizePath(narrationOutput.Root),
                 narrationManifestPath = NormalizePath(narrationOutput.ManifestPath),
                 cleanupApplied = true,
@@ -1866,7 +1870,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 missingNarrationBeats,
                 oldPathUsed = false,
                 validationPassed = errors.Count == 0,
-                matchingStrategy = "SceneTimelineNarrationBeat",
+                matchingStrategy = "EventStoryComposerNarrationFiles",
                 narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                 sectionsExtracted = extractedSections,
                 matchedPairs,
@@ -1878,14 +1882,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, shortNarration, longNarration, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, "", "", oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
             throw;
         }
     }
@@ -1960,6 +1964,17 @@ public sealed partial class ProductionPipelineExecutionService(
         return new NarrationOutputLayerResult(narrationRoot, manifestPath, files);
     }
 
+    private static string SelectFirstNarrationOutputFile(IReadOnlyList<string> files, string format)
+    {
+        var marker = $"{Path.DirectorySeparatorChar}{format}{Path.DirectorySeparatorChar}";
+        var alternateMarker = $"/{format}/";
+        var selected = files
+            .Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(path => path.Contains(marker, StringComparison.OrdinalIgnoreCase) || path.Contains(alternateMarker, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(selected))
+            throw new InvalidOperationException($"Phase 14 EventStoryComposer did not write any {format} narration text files.");
+        return selected;
+    }
 
     private static IReadOnlyList<SceneAudioSyncItem> BuildLongDocumentaryNarrationV3Items(IReadOnlyList<SceneAudioSyncItem> longItems)
         => longItems;
@@ -2017,19 +2032,22 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         if (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned)
             throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");
-        var duplicates = shortTexts.Select(kv => $"short:{kv.Key}|{NormalizeNarrationForDuplicateCheck(kv.Value)}")
-            .Concat(longTexts.Select(kv => $"long:{kv.Key}|{NormalizeNarrationForDuplicateCheck(kv.Value)}"))
-            .GroupBy(x => x.Split('|', 2)[1], StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1)
-            .Select(g => string.Join(",", g.Select(v => v.Split('|', 2)[0])))
+        ValidatePhase14EventStoryNarrationFormat("short", shortTexts);
+        ValidatePhase14EventStoryNarrationFormat("long", longTexts);
+    }
+
+    private static void ValidatePhase14EventStoryNarrationFormat(string format, IReadOnlyDictionary<string, string> texts)
+    {
+        var duplicates = texts
+            .GroupBy(kv => NormalizeNarrationForDuplicateCheck(kv.Value), StringComparer.OrdinalIgnoreCase)
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+            .Select(g => string.Join(",", g.Select(kv => $"{format}:{kv.Key}")))
             .ToArray();
         if (duplicates.Length > 0)
-            throw new InvalidOperationException("Phase 14 EventStoryComposer duplicated scene narration: " + string.Join(" | ", duplicates));
+            throw new InvalidOperationException($"Phase 14 EventStoryComposer duplicated {format} scene narration: " + string.Join(" | ", duplicates));
 
-        var allScenes = shortTexts.Select(kv => ($"short:{kv.Key}", kv.Value))
-            .Concat(longTexts.Select(kv => ($"long:{kv.Key}", kv.Value)))
-            .ToArray();
-        var duplicateOpenings = allScenes
+        var scenes = texts.Select(kv => ($"{format}:{kv.Key}", kv.Value)).ToArray();
+        var duplicateOpenings = scenes
             .Select(item => new { item.Item1, FirstSentence = NormalizeNarrationForDuplicateCheck(FirstSentence(item.Value)) })
             .Where(item => !string.IsNullOrWhiteSpace(item.FirstSentence))
             .GroupBy(item => item.FirstSentence, StringComparer.OrdinalIgnoreCase)
@@ -2037,14 +2055,14 @@ public sealed partial class ProductionPipelineExecutionService(
             .Select(group => string.Join(",", group.Select(item => item.Item1)))
             .ToArray();
         if (duplicateOpenings.Length > 0)
-            throw new InvalidOperationException("Phase 14 EventStoryComposer duplicated first narration sentence: " + string.Join(" | ", duplicateOpenings));
+            throw new InvalidOperationException($"Phase 14 EventStoryComposer duplicated first {format} narration sentence: " + string.Join(" | ", duplicateOpenings));
 
-        for (var i = 0; i < allScenes.Length; i++)
-        for (var j = i + 1; j < allScenes.Length; j++)
+        for (var i = 0; i < scenes.Length; i++)
+        for (var j = i + 1; j < scenes.Length; j++)
         {
-            var similarity = NormalizedNarrationSimilarity(allScenes[i].Value, allScenes[j].Value);
+            var similarity = NormalizedNarrationSimilarity(scenes[i].Value, scenes[j].Value);
             if (similarity >= 0.82)
-                throw new InvalidOperationException($"Phase 14 EventStoryComposer narration similarity too high between {allScenes[i].Item1} and {allScenes[j].Item1}: {similarity:0.###}");
+                throw new InvalidOperationException($"Phase 14 EventStoryComposer narration similarity too high within {format} between {scenes[i].Item1} and {scenes[j].Item1}: {similarity:0.###}");
         }
     }
 
@@ -2248,7 +2266,6 @@ public sealed partial class ProductionPipelineExecutionService(
         AddNarrationDiagnostics(narrationDiagnostics, narrationBeats);
         var narrationBeatArray = narrationBeats.ToArray();
         var sectionMap = GetPhase14SectionSceneMap(format);
-        var v3LongSceneNarration = BuildNarrationV3LongSceneNarrationMap(format, expectedCount, narrationBeats);
         var usedNarration = new HashSet<int>();
         var items = new List<SceneAudioSyncItem>();
         for (var i = 0; i < expectedCount; i++)
@@ -2268,15 +2285,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var narration = string.IsNullOrWhiteSpace(sceneNarrationBeat)
                 ? BestSectionSemanticNarrationFallback(narrationBeats, visualIntent, renderMode, string.Empty)
                 : null;
-            var hasV3ExpandedNarration = v3LongSceneNarration.TryGetValue(sceneId, out var expandedNarration);
-            if (hasV3ExpandedNarration)
-            {
-                narration = FindNarrationBySection(narrationBeats, expandedNarration.Section) ?? narration;
-            }
-            var narrationText = hasV3ExpandedNarration
-                ? expandedNarration.Text
-                : !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? sceneNarrationBeat : narration?.Text ?? string.Empty;
-            var strategy = hasV3ExpandedNarration ? "NarrationV3SceneExpansion" : !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? "SceneTimelineNarrationBeat" : narration is null ? "Unmatched" : "NarrationV2SupportingFallback";
+            var narrationText = !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? sceneNarrationBeat : narration?.Text ?? string.Empty;
+            var strategy = !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? "SceneTimelineNarrationBeat" : narration is null ? "Unmatched" : "NarrationV2SupportingFallback";
             var imagePath = GetString(manifest, "imagePath") ?? Path.Combine(sceneRoot, sceneId + ".png");
             if (string.IsNullOrWhiteSpace(narrationText))
             {
@@ -2349,53 +2359,6 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private static IReadOnlyDictionary<string, ExpandedNarrationBeat> BuildNarrationV3LongSceneNarrationMap(string format, int expectedCount, IReadOnlyList<NarrationBeatCandidate> narrationBeats)
-    {
-        if (!string.Equals(format, "long", StringComparison.OrdinalIgnoreCase) || expectedCount <= narrationBeats.Count || !IsNarrationV3SectionSet(narrationBeats))
-        {
-            return new Dictionary<string, ExpandedNarrationBeat>(StringComparer.OrdinalIgnoreCase);
-        }
-
-        var sections = narrationBeats
-            .Where(beat => !string.IsNullOrWhiteSpace(beat.Section))
-            .GroupBy(beat => beat.Section, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First().Text, StringComparer.OrdinalIgnoreCase);
-
-        return new Dictionary<string, ExpandedNarrationBeat>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["001-hook"] = new("ColdOpen", BuildExpandedNarrationText(sections, "ColdOpen", "Hook", "Opening beat", "Begin with the event date, name, and why it matters.")),
-            ["002-what-is-it"] = new("Context", BuildExpandedNarrationText(sections, "Context", null, "What it is", "Define the event in plain spoken narration.")),
-            ["003-cause"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Cause", "Describe the astronomy that creates the event.")),
-            ["004-interesting-fact"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Interesting fact", "Add a distinct documentary detail about the event experience or sky geometry.")),
-            ["005-best-time"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Best time", "State the best local viewing period.")),
-            ["006-accurate-sky-guide"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Accurate sky guide", "Name the direction and expected appearance.")),
-            ["007-what-you-will-see"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "What you will see", "Describe the visible changes viewers should expect during the event.")),
-            ["008-viewing-tips"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Practical tips", "Include practical viewing preparation.")),
-            ["009-final-reminder"] = new("EmotionalClosing", BuildExpandedNarrationText(sections, "EmotionalClosing", null, "Final reminder", "End with a memorable skywatching reminder."))
-        };
-    }
-
-    private static bool IsNarrationV3SectionSet(IReadOnlyList<NarrationBeatCandidate> narrationBeats)
-    {
-        var sections = narrationBeats.Select(beat => beat.Section).Where(section => !string.IsNullOrWhiteSpace(section)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return new[] { "ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing" }.All(sections.Contains);
-    }
-
-    private static string BuildExpandedNarrationText(IReadOnlyDictionary<string, string> sections, string primarySection, string? fallbackSection, string beatLabel, string sceneContext)
-    {
-        var source = sections.TryGetValue(primarySection, out var primaryText) ? primaryText : fallbackSection is not null && sections.TryGetValue(fallbackSection, out var fallbackText) ? fallbackText : string.Empty;
-        source = NormalizeNarrationText(source);
-        if (string.IsNullOrWhiteSpace(source)) return $"{beatLabel}: {sceneContext}";
-
-        var sentences = Regex.Split(source, @"(?<=[.!?])\s+").Where(sentence => !string.IsNullOrWhiteSpace(sentence)).Select(sentence => sentence.Trim()).ToArray();
-        var sentenceIndex = sentences.Length == 0 ? 0 : beatLabel.Sum(ch => ch) % sentences.Length;
-        var selected = sentences.Length == 0 ? source : sentences[sentenceIndex];
-        return NormalizeNarrationText($"{beatLabel}: {selected} {sceneContext}");
-    }
-
-    private static NarrationBeatCandidate? FindNarrationBySection(IReadOnlyList<NarrationBeatCandidate> candidates, string section)
-        => candidates.FirstOrDefault(candidate => string.Equals(candidate.Section, section, StringComparison.OrdinalIgnoreCase));
-
     private static IReadOnlyDictionary<string, string[]> GetPhase14SectionSceneMap(string format)
         => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
             ? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -2456,7 +2419,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedLongNarrationSource = NormalizePath(longNarration),
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
-            matchingStrategy = "SceneTimelineNarrationBeat",
+            matchingStrategy = "EventStoryComposerNarrationFiles",
             narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
             sectionsExtracted = narrationDiagnostics.Select(n => n.Section).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase),
             narrationScenes = narrationDiagnostics,
@@ -2547,7 +2510,6 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
     private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, bool ValidationPassed, IReadOnlyList<string> Errors);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
-    private sealed record ExpandedNarrationBeat(string Section, string Text);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
 
