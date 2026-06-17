@@ -2236,8 +2236,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 GetDouble(item, "audioDurationSec") ?? 0,
                 GetDouble(item, "sceneDurationSec") ?? 0,
                 GetDouble(item, "transitionDurationSec") ?? 0,
-                GetString(item, "recommendedTransition") ?? "crossfade",
-                GetString(item, "recommendedMotion") ?? "slowZoomIn"))
+                "cut",
+                ResolveMotionProfile(GetString(item, "sceneId") ?? string.Empty, GetString(item, "recommendedMotion"))))
             .ToArray();
     }
 
@@ -2408,8 +2408,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 visualIntent,
                 renderMode,
                 GetInt(metadata, "estimatedDurationSec") ?? GetInt(beat, "expectedDurationSec") ?? 5,
-                GetString(metadata, "recommendedTransition") ?? "crossfade",
-                GetString(metadata, "recommendedMotion") ?? "slowZoomIn",
+                "cut",
+                ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion")),
                 string.IsNullOrWhiteSpace(narrationText) ? "Unmatched" : "Matched",
                 strategy));
         }
@@ -3080,12 +3080,22 @@ public sealed partial class ProductionPipelineExecutionService(
             if (audioDuration <= 0) missingDurationItems.Add($"{format}:{sceneId}");
             var metadata = metadataBySceneId.TryGetValue(sceneId, out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
             var sceneDuration = audioDuration;
-            items.Add(new SceneDurationPlanItem(format, sceneId, GetString(ttsItem, "audioPath") ?? string.Empty, RoundDuration(audioDuration), RoundDuration(sceneDuration), transitionPaddingSec, GetString(metadata, "recommendedTransition") ?? "crossfade", GetString(metadata, "recommendedMotion") ?? "slowZoomIn"));
+            items.Add(new SceneDurationPlanItem(format, sceneId, GetString(ttsItem, "audioPath") ?? string.Empty, RoundDuration(audioDuration), RoundDuration(sceneDuration), 0, "cut", ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion"))));
         }
         return items;
     }
 
     private static double? GetDouble(JsonNode? node, string name) => node?[name]?.GetValue<double>();
+    private static double? GetDouble(JsonNode? node, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = node?[name];
+            if (value is not null && double.TryParse(value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                return parsed;
+        }
+        return null;
+    }
     private static double RoundDuration(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
     private sealed record SceneDurationPlanItem(string Format, string SceneId, string AudioPath, double AudioDurationSec, double SceneDurationSec, double TransitionDurationSec, string RecommendedTransition, string RecommendedMotion);
 
@@ -3217,7 +3227,8 @@ public sealed partial class ProductionPipelineExecutionService(
             imagePath = Path.IsPathRooted(imagePath) ? imagePath : Path.Combine(sceneRoot, imagePath);
             var audioPath = GetString(durationItem, "audioPath") ?? string.Empty;
             var sceneDuration = GetDouble(durationItem, "sceneDurationSec") ?? 0;
-            var motionStyle = GetString(durationItem, "recommendedMotion") ?? "slowZoomIn";
+            var purpose = ResolveMotionPurpose(sceneId);
+            var motionStyle = ResolveMotionProfile(sceneId, GetString(durationItem, "recommendedMotion"));
             var motion = ResolveMotionDefaults(motionStyle);
             if (motion is null) unsupportedMotionStyles.Add($"{format}:{sceneId}:{motionStyle}");
             AddOldPathUsageReason(oldPathUsageReasons, $"selectedAudioSource[{format}:{sceneId}]", audioPath, oldPaths);
@@ -3225,7 +3236,7 @@ public sealed partial class ProductionPipelineExecutionService(
             if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
             if (sceneDuration <= 0) invalidDurations.Add($"{format}:{sceneId}");
             var m = motion ?? ResolveMotionDefaults("static")!;
-            items.Add(new MotionPlanItem(format, sceneId, NormalizePath(imagePath), NormalizePath(audioPath), RoundDuration(sceneDuration), GetDouble(durationItem, "transitionDurationSec") ?? 0.4, GetString(durationItem, "recommendedTransition") ?? "crossfade", motionStyle, m.ZoomStart, m.ZoomEnd, m.PanXStart, m.PanXEnd, m.PanYStart, m.PanYEnd, m.ParallaxStrength));
+            items.Add(new MotionPlanItem(format, sceneId, purpose, NormalizePath(imagePath), NormalizePath(audioPath), RoundDuration(sceneDuration), 0, "cut", motionStyle, m.ZoomStart, m.ZoomEnd, m.PanXStart, m.PanXEnd, m.PanYStart, m.PanYEnd, ResolveMotionEasing(motionStyle)));
         }
         return items;
     }
@@ -3247,17 +3258,41 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static MotionDefaults? ResolveMotionDefaults(string motionStyle) => motionStyle switch
     {
-        "slowZoomIn" => new MotionDefaults(100, 108, 0, 0, 0, 0, 0),
-        "slowZoomOut" => new MotionDefaults(108, 100, 0, 0, 0, 0, 0),
-        "panRight" => new MotionDefaults(104, 104, -2, 2, 0, 0, 0),
-        "panLeft" => new MotionDefaults(104, 104, 2, -2, 0, 0, 0),
-        "parallax" => new MotionDefaults(102, 110, 0, 0, 0, 0, 0.08),
-        "static" => new MotionDefaults(100, 100, 0, 0, 0, 0, 0),
+        "Hook" => new MotionDefaults(100, 115, 0, 0, 0, 0),
+        "Discovery" => new MotionDefaults(100, 108, -3, 3, 2, -2),
+        "SkyGuide" => new MotionDefaults(100, 100, -6, 6, 0, 0),
+        "ViewingTip" => new MotionDefaults(100, 100, -2, 2, -2, 2),
+        "Closing" => new MotionDefaults(110, 100, 0, 0, 0, 0),
+        "static" => new MotionDefaults(100, 100, 0, 0, 0, 0),
         _ => null
     };
 
-    private sealed record MotionDefaults(double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd, double ParallaxStrength);
-    private sealed record MotionPlanItem(string Format, string SceneId, string SceneImagePath, string AudioPath, double SceneDurationSec, double TransitionDurationSec, string Transition, string MotionStyle, double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd, double ParallaxStrength);
+    private sealed record MotionDefaults(double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd);
+    private sealed record MotionPlanItem(string Format, string SceneId, string Purpose, string SceneImagePath, string AudioPath, double SceneDurationSec, double TransitionDurationSec, string Transition, string MotionStyle, double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd, string Easing);
+
+    private static string ResolveMotionPurpose(string sceneId)
+    {
+        var normalized = sceneId.ToLowerInvariant();
+        if (normalized.Contains("001") || normalized.Contains("hook")) return "Hook";
+        if (normalized.Contains("002") || normalized.Contains("cause")) return "Discovery";
+        if (normalized.Contains("003") || normalized.Contains("sky") || normalized.Contains("guide")) return "SkyGuide";
+        if (normalized.Contains("004") || normalized.Contains("viewing") || normalized.Contains("tip")) return "ViewingTip";
+        if (normalized.Contains("005") || normalized.Contains("final") || normalized.Contains("reminder") || normalized.Contains("closing")) return "Closing";
+        return "Discovery";
+    }
+
+    private static string ResolveMotionProfile(string sceneId, string? requestedMotion)
+    {
+        var requested = (requestedMotion ?? string.Empty).Trim();
+        if (requested is "Hook" or "Discovery" or "SkyGuide" or "ViewingTip" or "Closing") return requested;
+        return ResolveMotionPurpose(sceneId);
+    }
+
+    private static string ResolveMotionEasing(string motionProfile)
+        => string.Equals(motionProfile, "Hook", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(motionProfile, "Discovery", StringComparison.OrdinalIgnoreCase)
+            ? "EaseOutCubic"
+            : "EaseInOutSine";
 
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
@@ -4321,6 +4356,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
             var shortItems = ReadVideoAssemblyItems(motionRoot, ttsRoot, "short", 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
             var longItems = ReadVideoAssemblyItems(motionRoot, ttsRoot, "long", 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
+            await WriteMotionDebugAsync(planRoot, shortItems.Concat(longItems).ToArray(), cancellationToken);
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
             var backgroundMusicConfig = ResolvePhase18BackgroundMusicConfig(planRoot);
@@ -4607,7 +4643,23 @@ public sealed partial class ProductionPipelineExecutionService(
                 oldPathUsageReasons.Add($"{format}:{sceneId}");
                 continue;
             }
-            items.Add(new VideoAssemblyItem(sceneId, imagePath, audioPath, GetDouble(item, "sceneDurationSec") ?? 3.0, GetString(item, "transition") ?? "crossfade", GetString(item, "motionStyle") ?? "static"));
+            var motionProfile = ResolveMotionProfile(sceneId, GetString(item, "motionStyle", "motionProfile"));
+            var defaults = ResolveMotionDefaults(motionProfile) ?? ResolveMotionDefaults("Hook")!;
+            items.Add(new VideoAssemblyItem(
+                sceneId,
+                imagePath,
+                audioPath,
+                GetDouble(item, "sceneDurationSec") ?? 3.0,
+                GetString(item, "transition") ?? "cut",
+                motionProfile,
+                GetString(item, "purpose") ?? ResolveMotionPurpose(sceneId),
+                GetDouble(item, "zoomStart", "startScale") ?? defaults.ZoomStart,
+                GetDouble(item, "zoomEnd", "endScale") ?? defaults.ZoomEnd,
+                GetDouble(item, "panXStart", "startPanX") ?? defaults.PanXStart,
+                GetDouble(item, "panXEnd", "endPanX") ?? defaults.PanXEnd,
+                GetDouble(item, "panYStart", "startPanY") ?? defaults.PanYStart,
+                GetDouble(item, "panYEnd", "endPanY") ?? defaults.PanYEnd,
+                GetString(item, "easing") ?? ResolveMotionEasing(motionProfile)));
         }
         return items;
     }
@@ -4624,6 +4676,51 @@ public sealed partial class ProductionPipelineExecutionService(
         }
 
         return index >= 0 && index < ttsItems.Count ? GetString(ttsItems[index], "audioPath") : null;
+    }
+
+    private static async Task WriteMotionDebugAsync(string planRoot, IReadOnlyList<VideoAssemblyItem> items, CancellationToken cancellationToken)
+    {
+        var debugRoot = Path.Combine(planRoot, "video-assembly");
+        Directory.CreateDirectory(debugRoot);
+        var scenes = items.Select(item =>
+        {
+            var totalFrames = Math.Max(15, (int)Math.Round(item.SceneDurationSec * 30.0));
+            var scale = FirstMotionValues(item.ZoomStart / 100.0, item.ZoomEnd / 100.0, item.Easing, totalFrames);
+            var panX = FirstMotionValues(item.PanXStart, item.PanXEnd, item.Easing, totalFrames);
+            var panY = FirstMotionValues(item.PanYStart, item.PanYEnd, item.Easing, totalFrames);
+            return new
+            {
+                sceneId = item.SceneId,
+                purpose = item.Purpose,
+                motionProfile = item.MotionStyle,
+                startScale = item.ZoomStart / 100.0,
+                endScale = item.ZoomEnd / 100.0,
+                startPanX = item.PanXStart,
+                endPanX = item.PanXEnd,
+                startPanY = item.PanYStart,
+                endPanY = item.PanYEnd,
+                easing = item.Easing,
+                durationSeconds = item.SceneDurationSec,
+                totalFrames,
+                first10ScaleValues = scale,
+                first10PanXValues = panX,
+                first10PanYValues = panY
+            };
+        }).ToArray();
+        await File.WriteAllTextAsync(Path.Combine(debugRoot, "motion-debug.json"), JsonSerializer.Serialize(new { outroDurationSeconds = 4.0, closingMotionContinues = true, fadeToBlackFinalSecond = true, scenes }, JsonOptions), cancellationToken);
+    }
+
+    private static IReadOnlyList<double> FirstMotionValues(double start, double end, string easing, int totalFrames)
+        => Enumerable.Range(0, Math.Min(10, totalFrames))
+            .Select(frame => start + (end - start) * EasedProgress(frame, totalFrames, easing))
+            .ToArray();
+
+    private static double EasedProgress(int frame, int totalFrames, string easing)
+    {
+        var t = totalFrames <= 1 ? 1.0 : frame / (double)(totalFrames - 1);
+        return string.Equals(easing, "EaseInOutSine", StringComparison.OrdinalIgnoreCase)
+            ? (1 - Math.Cos(Math.PI * t)) / 2
+            : 1 - Math.Pow(1 - t, 3);
     }
 
     private async Task RenderVideoAssemblyAsync(IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, CancellationToken cancellationToken)
@@ -4654,7 +4751,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
             var videoDuration = await ProbeAudioDurationSecondsAsync(videoOnlyPath, cancellationToken);
             var narrationDuration = await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken);
-            var finalDuration = Math.Max(videoDuration, narrationDuration);
+            var finalDuration = Math.Max(videoDuration, narrationDuration + 4.0);
             if (finalDuration <= 0) throw new InvalidOperationException("Phase 18 cannot determine final video/audio duration.");
 
             var finalMixedAudioPath = ResolvePhase18FinalMixedAudioPath(outputPath);
@@ -4682,7 +4779,8 @@ public sealed partial class ProductionPipelineExecutionService(
             }
 
             var videoExtension = Math.Max(0, finalDuration - videoDuration);
-            var videoFilter = $"tpad=stop_mode=clone:stop_duration={videoExtension.ToString("0.###", CultureInfo.InvariantCulture)},trim=duration={finalDurationText},setpts=PTS-STARTPTS";
+            var fadeToBlackStart = Math.Max(0, finalDuration - 1.0).ToString("0.###", CultureInfo.InvariantCulture);
+            var videoFilter = $"tpad=stop_mode=clone:stop_duration={videoExtension.ToString("0.###", CultureInfo.InvariantCulture)},trim=duration={finalDurationText},setpts=PTS-STARTPTS,fade=t=out:st={fadeToBlackStart}:d=1.0";
             var muxResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", finalMixedAudioPath, "-filter:v", videoFilter, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", finalDurationText, outputPath], cancellationToken);
             if (muxResult.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to mux mixed audio: {muxResult.Error}");
         }
@@ -4785,16 +4883,24 @@ public sealed partial class ProductionPipelineExecutionService(
             for (var i = 0; i < count; i++)
             {
                 var ttsItem = ttsItems is not null && i < ttsItems.Count ? ttsItems[i] : null;
+                var profile = ResolveMotionProfile(GetString(ttsItem, "sceneId") ?? $"{i + 1:000}", string.Empty);
+                var defaults = ResolveMotionDefaults(profile) ?? ResolveMotionDefaults("Hook")!;
                 items.Add(new JsonObject
                 {
                     ["sceneId"] = GetString(ttsItem, "sceneId") ?? $"{i + 1:000}",
                     ["sceneImagePath"] = i < images.Length ? images[i] : string.Empty,
                     ["audioPath"] = GetString(ttsItem, "audioPath") ?? string.Empty,
                     ["sceneDurationSec"] = GetDouble(ttsItem, "durationSec") ?? GetDouble(ttsItem, "sceneDurationSec") ?? 3.0,
-                    ["motionStyle"] = i % 2 == 0 ? "slowZoomIn" : "slowZoomOut",
-                    ["panDirection"] = (i % 4) switch { 0 => "right", 1 => "left", 2 => "down", _ => "up" },
-                    ["easing"] = "ease-in-out",
-                    ["transition"] = "crossfade"
+                    ["purpose"] = ResolveMotionPurpose(GetString(ttsItem, "sceneId") ?? $"{i + 1:000}"),
+                    ["motionStyle"] = profile,
+                    ["zoomStart"] = defaults.ZoomStart,
+                    ["zoomEnd"] = defaults.ZoomEnd,
+                    ["panXStart"] = defaults.PanXStart,
+                    ["panXEnd"] = defaults.PanXEnd,
+                    ["panYStart"] = defaults.PanYStart,
+                    ["panYEnd"] = defaults.PanYEnd,
+                    ["easing"] = ResolveMotionEasing(profile),
+                    ["transition"] = "cut"
                 });
             }
 
@@ -4810,12 +4916,19 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index)
     {
         var frameCount = Math.Max(15, (int)Math.Round(item.SceneDurationSec * 30.0));
-        var zoomExpression = string.Equals(item.MotionStyle, "slowZoomOut", StringComparison.OrdinalIgnoreCase)
-            ? $"max(1.08-on/{frameCount.ToString(CultureInfo.InvariantCulture)}*0.08,1.0)"
-            : $"min(1.0+on/{frameCount.ToString(CultureInfo.InvariantCulture)}*0.08,1.08)";
-        var xExpression = index % 2 == 0 ? $"iw/2-(iw/zoom/2)+((iw-iw/zoom)/2)*sin(on/{frameCount.ToString(CultureInfo.InvariantCulture)}*PI)" : $"iw/2-(iw/zoom/2)-((iw-iw/zoom)/2)*sin(on/{frameCount.ToString(CultureInfo.InvariantCulture)}*PI)";
-        var yExpression = index % 4 < 2 ? "ih/2-(ih/zoom/2)" : $"ih/2-(ih/zoom/2)+((ih-ih/zoom)/2)*sin(on/{frameCount.ToString(CultureInfo.InvariantCulture)}*PI)";
-        return $"scale=1536:864:force_original_aspect_ratio=increase,crop=1536:864,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d=1:s=1280x720:fps=30,fade=t=in:st=0:d=0.6,fade=t=out:st={Math.Max(0.0, item.SceneDurationSec - 0.8).ToString("0.###", CultureInfo.InvariantCulture)}:d=0.8,format=yuv420p";
+        var denom = Math.Max(1, frameCount - 1).ToString(CultureInfo.InvariantCulture);
+        var progress = string.Equals(item.Easing, "EaseInOutSine", StringComparison.OrdinalIgnoreCase) ? $"((1-cos((on/{denom})*PI))/2)" : $"(1-pow(1-(on/{denom}),3))";
+        var z0 = (item.ZoomStart / 100.0).ToString("0.####", CultureInfo.InvariantCulture);
+        var zd = ((item.ZoomEnd - item.ZoomStart) / 100.0).ToString("0.####", CultureInfo.InvariantCulture);
+        var px0 = item.PanXStart.ToString("0.####", CultureInfo.InvariantCulture);
+        var pxd = (item.PanXEnd - item.PanXStart).ToString("0.####", CultureInfo.InvariantCulture);
+        var py0 = item.PanYStart.ToString("0.####", CultureInfo.InvariantCulture);
+        var pyd = (item.PanYEnd - item.PanYStart).ToString("0.####", CultureInfo.InvariantCulture);
+        var zoomExpression = $"{z0}+({zd})*{progress}";
+        var xExpression = $"iw/2-(iw/zoom/2)+(({px0}+({pxd})*{progress})/100)*(iw-iw/zoom)";
+        var yExpression = $"ih/2-(ih/zoom/2)+(({py0}+({pyd})*{progress})/100)*(ih-ih/zoom)";
+        var fadeOutStart = Math.Max(0.0, item.SceneDurationSec - 1.0).ToString("0.###", CultureInfo.InvariantCulture);
+        return $"scale=1536:864:force_original_aspect_ratio=increase,crop=1536:864,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d=1:s=1280x720:fps=30,fade=t=in:st=0:d=0.4,fade=t=out:st={fadeOutStart}:d=1.0,format=yuv420p";
     }
 
     private static async Task CrossfadeSceneClipsAsync(IReadOnlyList<string> clipPaths, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string ffmpegPath, CancellationToken cancellationToken)
@@ -5070,17 +5183,29 @@ public sealed partial class ProductionPipelineExecutionService(
     private static Phase19VisualChecks BuildPhase19VisualChecks(string motionPlanPath, string sceneAssetsRoot)
     {
         var motionText = File.Exists(motionPlanPath) ? File.ReadAllText(motionPlanPath) : string.Empty;
+        var planRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(motionPlanPath) ?? string.Empty, ".."));
+        var motionDebugPath = Path.Combine(planRoot, "video-assembly", "motion-debug.json");
+        var motionDebugText = File.Exists(motionDebugPath) ? File.ReadAllText(motionDebugPath) : string.Empty;
         var sceneText = string.Join(" ", ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "short", "scene-timeline-metadata.json")).Concat(ReadPhase19TextValues(Path.Combine(sceneAssetsRoot, "long", "scene-timeline-metadata.json"))));
         bool Has(params string[] terms) => terms.Any(term => sceneText.Contains(term, StringComparison.OrdinalIgnoreCase));
-        var motion = motionText.Contains("motionStyle", StringComparison.OrdinalIgnoreCase) || motionText.Contains("zoom", StringComparison.OrdinalIgnoreCase) || motionText.Contains("pan", StringComparison.OrdinalIgnoreCase);
-        var transitions = motionText.Contains("transition", StringComparison.OrdinalIgnoreCase) || motionText.Contains("crossfade", StringComparison.OrdinalIgnoreCase);
+        var motionDebugExists = File.Exists(motionDebugPath);
+        var rc1ProfilesAssigned = new[] { "Hook", "Discovery", "SkyGuide", "ViewingTip", "Closing" }.All(profile => motionText.Contains(profile, StringComparison.OrdinalIgnoreCase) || motionDebugText.Contains(profile, StringComparison.OrdinalIgnoreCase));
+        var easingArraysPopulated = motionDebugText.Contains("first10ScaleValues", StringComparison.OrdinalIgnoreCase) && motionDebugText.Contains("first10PanXValues", StringComparison.OrdinalIgnoreCase) && motionDebugText.Contains("first10PanYValues", StringComparison.OrdinalIgnoreCase);
+        var rc2Disabled = !Regex.IsMatch(motionText + motionDebugText, "\\b(parallax|parallaxStrength|slowZoomIn|slowZoomOut|panRight)\\b", RegexOptions.IgnoreCase);
+        var motion = motionDebugExists && rc1ProfilesAssigned && easingArraysPopulated && rc2Disabled;
+        var transitions = !motionText.Contains("advanced", StringComparison.OrdinalIgnoreCase);
         var diversity = ReadPhase19SceneIds(motionPlanPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 6 || Regex.Matches(sceneText.ToLowerInvariant(), "guide|viewer|science|explanation|hook|tip|cause|final").Select(m => m.Value).Distinct().Count() >= 3;
         var guide = Has("guide", "sky", "horizon", "direction");
         var viewer = Has("viewer", "viewing", "watch", "look");
         var science = Has("science", "scientific", "explanation", "cause", "orbit", "astronom");
         var errors = new List<string>();
+        if (!motionDebugExists) errors.Add("motion-debug.json missing");
+        if (!rc1ProfilesAssigned) errors.Add("Motion RC1 profiles not fully assigned");
+        if (!easingArraysPopulated) errors.Add("Motion easing arrays not populated");
+        if (!rc2Disabled) errors.Add("RC2 or legacy motion features detected");
         if (!motion) errors.Add("Motion not detected");
-        if (!transitions) errors.Add("Transitions not detected");
+        if (!transitions) errors.Add("Advanced transitions detected");
+        if (!motionDebugText.Contains("outroDurationSeconds", StringComparison.OrdinalIgnoreCase) || !motionDebugText.Contains("fadeToBlackFinalSecond", StringComparison.OrdinalIgnoreCase)) errors.Add("outro duration >= 4 sec / fade-to-black evidence missing from motion diagnostics");
         if (!diversity) errors.Add("Scene diversity not detected");
         if (!guide) errors.Add("Guide scene not detected");
         if (!viewer) errors.Add("Viewer scene not detected");
@@ -5220,7 +5345,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static bool IsImageFile(string path) => IsImageExtension(Path.GetExtension(path));
 
-    private sealed record VideoAssemblyItem(string SceneId, string SceneImagePath, string AudioPath, double SceneDurationSec, string Transition, string MotionStyle);
+    private sealed record VideoAssemblyItem(string SceneId, string SceneImagePath, string AudioPath, double SceneDurationSec, string Transition, string MotionStyle, string Purpose, double ZoomStart, double ZoomEnd, double PanXStart, double PanXEnd, double PanYStart, double PanYEnd, string Easing);
 
     private async Task<IReadOnlyList<string>> PhaseAssembleVideoAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
