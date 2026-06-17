@@ -81,7 +81,13 @@ public sealed record QuestionDrivenNarrationDiagnosticsDto(
     int EstimatedRetentionScore,
     bool SubtitleFilesGenerated = false,
     string ShortSrtPath = "",
-    string LongSrtPath = "");
+    string LongSrtPath = "",
+    string ScriptComposerVersion = "",
+    string OpeningStyle = "",
+    bool EventDateMentioned = false,
+    bool EventNameMentioned = false,
+    int DocumentaryScore = 0,
+    int StorytellingScore = 0);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,
