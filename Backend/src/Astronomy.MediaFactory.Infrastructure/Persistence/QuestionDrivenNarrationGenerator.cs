@@ -511,6 +511,14 @@ public sealed class QuestionDrivenNarrationGenerator(
         return chunks;
     }
 
+    private static IReadOnlyList<string> WrapSubtitle(string text)
+    {
+        if (text.Length <= 42) return [text];
+        var cut = text.LastIndexOf(' ', Math.Min(42, text.Length - 1));
+        if (cut < 20) cut = Math.Min(42, text.Length);
+        return [text[..cut].Trim(), text[cut..].Trim()];
+    }
+
     private static string NormalizeSubtitleText(string text) => Regex.Replace(text.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
 
     private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
