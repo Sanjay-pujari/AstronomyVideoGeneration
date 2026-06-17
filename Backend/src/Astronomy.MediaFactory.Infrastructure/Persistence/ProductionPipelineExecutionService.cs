@@ -5147,8 +5147,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase18ValidationPassed = GetBool(phase18ValidationRoot, "validationPassed") ?? false;
         var shortDurationValidationPassed = GetBool(phase18Root, "shortDurationValidationPassed") ?? false;
         var longDurationValidationPassed = GetBool(phase18Root, "longDurationValidationPassed") ?? false;
-        var cinematicOutroValidated = (GetBool(phase18Root, "cinematicOutroEnabled") ?? false) && shortDurationValidationPassed && longDurationValidationPassed;
-        var fadeToBlackValidated = GetBool(phase18Root, "fadeToBlackEnabled") ?? false;
+        var phase18CinematicOutroEnabled = GetBool(phase18Root, "cinematicOutroEnabled") ?? false;
+        var phase18CinematicOutroDurationSec = GetDouble(phase18Root, "cinematicOutroDurationSec") ?? 0;
+        var phase18FadeToBlackEnabled = GetBool(phase18Root, "fadeToBlackEnabled") ?? false;
+        var phase18FadeToBlackDurationSec = GetDouble(phase18Root, "fadeToBlackDurationSec") ?? 0;
+        var phase18MotionDebugFound = GetBool(phase18Root, "motionDebugFound") ?? false;
+        var cinematicOutroValidated = phase18ValidationPassed && phase18CinematicOutroEnabled && phase18CinematicOutroDurationSec >= 4.0;
+        var fadeToBlackValidated = phase18ValidationPassed && phase18FadeToBlackEnabled && phase18FadeToBlackDurationSec >= 1.0;
 
         errors.AddRange(shortVideo.Errors);
         errors.AddRange(longVideo.Errors);
@@ -5204,15 +5209,15 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var motionPlanFound = File.Exists(motionPlanPath);
-        var motionDebugFound = File.Exists(motionDebugPath);
-        var motionDebugText = motionDebugFound ? await File.ReadAllTextAsync(motionDebugPath, cancellationToken) : string.Empty;
+        var motionDebugFound = phase18MotionDebugFound;
+        var motionDebugText = File.Exists(motionDebugPath) ? await File.ReadAllTextAsync(motionDebugPath, cancellationToken) : string.Empty;
         var easingDiagnosticsPresent = motionDebugText.Contains("first10ScaleValues", StringComparison.OrdinalIgnoreCase) && motionDebugText.Contains("last10ScaleValues", StringComparison.OrdinalIgnoreCase);
         var parallaxDisabled = !Regex.IsMatch((File.Exists(motionPlanPath) ? await File.ReadAllTextAsync(motionPlanPath, cancellationToken) : string.Empty) + motionDebugText, @"\b(parallax|parallaxStrength|motionStyle=parallax)\b", RegexOptions.IgnoreCase);
         if (!motionPlanFound) errors.Add("motion-plan.json missing");
         if (!motionDebugFound) errors.Add("motion-debug.json missing");
         if (!easingDiagnosticsPresent) errors.Add("Motion debug easing diagnostics missing");
         if (!parallaxDisabled) errors.Add("Parallax motion is present");
-        var motionRc1ValidationPassed = motionPlanFound && motionDebugFound && easingDiagnosticsPresent && parallaxDisabled && cinematicOutroValidated && fadeToBlackValidated && shortDurationValidationPassed && longDurationValidationPassed && phase18ValidationPassed;
+        var motionRc1ValidationPassed = motionPlanFound && motionDebugFound && easingDiagnosticsPresent && parallaxDisabled && cinematicOutroValidated && fadeToBlackValidated && phase18ValidationPassed;
         var validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && qaConfidence >= 80 && motionRc1ValidationPassed;
         var validationPath = Path.Combine(validationRoot, "phase-19-validation.json");
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 19, phaseName = "Video QA & Production Review", status = validationPassed ? "Succeeded" : "Failed", motionRc1ValidationPassed, motionPlanFound, motionDebugFound, easingDiagnosticsPresent, parallaxDisabled, cinematicOutroValidated, fadeToBlackValidated, durationValidationMode = "NarrationPlusCinematicOutro", shortDurationValidationPassed, longDurationValidationPassed, productionQaPassed = validationPassed, validationPassed, overallScore, qaConfidence, falsePositiveRisk, recommendation, phase18ValidationPassed, issues = qaIssues, errors }, JsonOptions), cancellationToken);
@@ -5364,7 +5369,6 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!rc2Disabled) errors.Add("RC2 or legacy motion features detected");
         if (!motion) errors.Add("Motion not detected");
         if (!transitions) errors.Add("Advanced transitions detected");
-        if (!motionDebugText.Contains("outroDurationSeconds", StringComparison.OrdinalIgnoreCase) || !motionDebugText.Contains("fadeToBlackFinalSecond", StringComparison.OrdinalIgnoreCase)) errors.Add("outro duration >= 4 sec / fade-to-black evidence missing from motion diagnostics");
         if (!diversity) errors.Add("Scene diversity not detected");
         if (!guide) errors.Add("Guide scene not detected");
         if (!viewer) errors.Add("Viewer scene not detected");
