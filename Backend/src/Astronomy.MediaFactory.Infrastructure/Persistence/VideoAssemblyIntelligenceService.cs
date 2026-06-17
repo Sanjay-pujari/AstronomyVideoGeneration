@@ -486,10 +486,12 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
         EnsureLongFormAzureTtsAvailable();
         var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, ScenePresentationProfile.LongForm, cancellationToken);
+        var narrationText = await ReadRequiredNarrationTextAsync(request, ScenePresentationProfile.LongForm, script, cancellationToken);
+        script = script with { FullNarrationText = narrationText };
         var voiceUsed = ResolveNeutralEducationalAzureVoice(script);
 
         Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
-        await WriteAzureLongFormTtsAudioAsync(script.FullNarrationText, audioPath, cancellationToken);
+        await WriteAzureLongFormTtsAudioAsync(narrationText, audioPath, cancellationToken);
 
         var audioValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: true, cancellationToken);
         if (!audioValidation.AudioValidationPassed)
