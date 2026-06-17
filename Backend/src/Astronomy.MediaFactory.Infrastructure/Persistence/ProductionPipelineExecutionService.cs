@@ -1968,10 +1968,10 @@ public sealed partial class ProductionPipelineExecutionService(
             ["002-what-is-it"] = script.Sections.Context,
             ["003-cause"] = script.Sections.MainStory,
             ["004-interesting-fact"] = script.Sections.Hook,
-            ["005-best-time"] = $"{script.Sections.ViewingGuide} The timing matters because the strongest view can be brief.",
-            ["006-accurate-sky-guide"] = $"{script.Sections.ViewingGuide} Use the horizon and the named direction as your anchor.",
+            ["005-best-time"] = script.Sections.ViewingGuide,
+            ["006-accurate-sky-guide"] = "Use the named direction as your anchor, and keep the view simple, open, and safe.",
             ["007-what-you-will-see"] = $"{script.Sections.MainStory} Watch for the scene to change gradually before the peak moment.",
-            ["008-viewing-tips"] = $"{script.Sections.ViewingGuide} Arrive prepared, choose an open view, and keep safety guidance in mind.",
+            ["008-viewing-tips"] = "Arrive prepared, choose an open view, and follow the safety guidance for this event.",
             ["009-final-reminder"] = script.Sections.EmotionalClosing
         };
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })

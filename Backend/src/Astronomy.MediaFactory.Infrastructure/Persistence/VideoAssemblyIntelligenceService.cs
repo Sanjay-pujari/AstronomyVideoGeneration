@@ -678,7 +678,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
         if (!request.DryRun)
         {
-            await RenderFinalVideoAsync(plan, renderMusicPlan, outputPath, cancellationToken);
+            await RenderFinalVideoAsync(plan, request, renderMusicPlan, outputPath, cancellationToken);
         }
 
         var validation = request.DryRun
@@ -2341,7 +2341,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
 
 
-    private async Task RenderFinalVideoAsync(VideoAssemblyPlanDto plan, VideoAssemblyRenderMusicPlanDto renderMusicPlan, string finalOutputPath, CancellationToken cancellationToken)
+    private async Task RenderFinalVideoAsync(VideoAssemblyPlanDto plan, VideoAssemblyGenerationRequest request, VideoAssemblyRenderMusicPlanDto renderMusicPlan, string finalOutputPath, CancellationToken cancellationToken)
     {
         var outputPath = finalOutputPath.Replace('/', Path.DirectorySeparatorChar);
         var outputDirectory = Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot();
@@ -2366,8 +2366,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             var silentVideoPath = Path.Combine(tempDirectory, "visual-track.mp4");
             await RenderCrossFadedVisualTrackAsync(segmentPaths, plan, silentVideoPath, cancellationToken);
 
-            var subtitlePath = ResolveBurnInSubtitlePath(plan);
-            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, renderMusicPlan, subtitlePath);
+            var subtitlePlan = ResolveBurnInSubtitlePlan(plan, request);
+            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, renderMusicPlan, subtitlePlan.AppliedPath);
             var muxOperation = renderMusicPlan.BackgroundMusic
                 ? "mux rendered video with narration audio and background music"
                 : "mux rendered video with narration audio";
@@ -2518,20 +2518,31 @@ public sealed partial class VideoAssemblyIntelligenceService(
     }
 
 
-    private string? ResolveBurnInSubtitlePath(VideoAssemblyPlanDto plan)
+    private SubtitleBurnInPlan ResolveBurnInSubtitlePlan(VideoAssemblyPlanDto plan, VideoAssemblyGenerationRequest request)
     {
         var subtitleOptions = videoAssemblyOptions?.Value.Subtitles ?? new VideoAssemblySubtitleOptions();
-        if (!subtitleOptions.Enabled || !subtitleOptions.EnableSubtitles || !subtitleOptions.BurnIn)
-            return null;
-        var folder = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
-        var fileStem = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
-        var srtPath = Path.Combine(BuildVideoAssemblyRoot(plan.EventId, plan.RegionId), "subtitles", folder, fileStem + ".srt");
-        return File.Exists(srtPath) ? srtPath : null;
+        var shortSrtPath = Path.Combine(BuildVideoAssemblyRoot(plan.EventId, plan.RegionId), "narration", "subtitles", "short.srt");
+        var longSrtPath = Path.Combine(BuildVideoAssemblyRoot(plan.EventId, plan.RegionId), "narration", "subtitles", "long.srt");
+        if (!File.Exists(shortSrtPath))
+            shortSrtPath = Path.Combine(BuildVideoAssemblyRoot(plan.EventId, plan.RegionId), "subtitles", "short", "short.srt");
+        if (!File.Exists(longSrtPath))
+            longSrtPath = Path.Combine(BuildVideoAssemblyRoot(plan.EventId, plan.RegionId), "subtitles", "long", "long.srt");
+
+        var enableSubtitles = request.EnableSubtitles;
+        if (!subtitleOptions.Enabled || !enableSubtitles)
+            return new SubtitleBurnInPlan(enableSubtitles, NormalizePath(shortSrtPath), NormalizePath(longSrtPath), null);
+
+        var appliedPath = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? shortSrtPath : longSrtPath;
+        return File.Exists(appliedPath)
+            ? new SubtitleBurnInPlan(enableSubtitles, NormalizePath(shortSrtPath), NormalizePath(longSrtPath), appliedPath)
+            : new SubtitleBurnInPlan(enableSubtitles, NormalizePath(shortSrtPath), NormalizePath(longSrtPath), null);
     }
 
     private static string EscapeSubtitleFilterPath(string path)
         => path.Replace("\\", "/").Replace("'", "\\'").Replace(":", "\\:");
 
+
+    private sealed record SubtitleBurnInPlan(bool EnableSubtitles, string ShortSrtPath, string LongSrtPath, string? AppliedPath);
 
     private static VideoAssemblyRenderMusicPlanDto ResolveRenderMusicPlan(VideoAssemblyRenderMusicPlanDto planRenderMusicPlan, VideoAssemblyGenerationRequest request)
     {
@@ -3068,6 +3079,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
                 && Math.Abs(hook.DurationSeconds - HookOptimizationDurationSeconds) <= 0.01);
         var musicVolumeMultiplier = ResolveMusicMixLevel(renderMusicPlan);
         var ffmpegAudioFilter = BuildFfmpegAudioFilter(renderMusicPlan);
+        var subtitlePlan = ResolveBurnInSubtitlePlan(plan, request);
+        var subtitleBurnInCommand = subtitlePlan.AppliedPath is null ? string.Empty : string.Join(" ", BuildFinalMuxArguments("<visual-track>", plan.AudioFilePath, outputPath ?? ResolveFinalVideoOutputPath(plan), plan.TotalDurationSeconds, renderMusicPlan, subtitlePlan.AppliedPath));
         var musicMixValidated = !renderMusicPlan.BackgroundMusic
             || (musicVolumeMultiplier > 0 && ffmpegAudioFilter.Contains("normalize=0", StringComparison.OrdinalIgnoreCase));
         var renderPolishScore = kenBurnsApplied && crossFadeApplied && hookOptimizationApplied && musicMixValidated ? 96 : 0;
@@ -3146,7 +3159,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
             renderValidation?.OutputResolution ?? resolution,
             renderValidation?.Fps ?? plan.RenderSettings.Fps,
             BuildDurationValidation(plan.ScenePresentationProfile, renderValidation?.FinalVideoDurationSeconds ?? (request.DryRun ? plan.TotalDurationSeconds : 0), useTargetRange: false, "actualDurationSeconds"),
-            warnings);
+            warnings,
+            subtitlePlan.EnableSubtitles,
+            subtitlePlan.ShortSrtPath,
+            subtitlePlan.LongSrtPath,
+            plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm && subtitlePlan.AppliedPath is not null,
+            plan.ScenePresentationProfile == ScenePresentationProfile.LongForm && subtitlePlan.AppliedPath is not null,
+            subtitleBurnInCommand,
+            subtitlePlan.AppliedPath is not null && (request.DryRun || renderSucceeded));
     }
 
     private void EnsureShortFormRenderValidationPassed(VideoRenderValidationDto validation)
