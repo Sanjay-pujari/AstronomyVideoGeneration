@@ -164,7 +164,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var isMeteorShower = intelligence is not null && IsMeteorShower(intelligence, request.ProductionContext);
         var family = ResolveNarrationFamily(request, enrichedPlan, isMeteorShower);
         var sourceScenes = enrichedPlan.Scenes.OrderBy(scene => scene.SceneNumber).ToArray();
-        var script = DocumentaryScriptComposer.Compose(family, intelligence, request.ProductionContext);
+        var script = EventStoryComposer.Compose(family, intelligence, request.ProductionContext);
         var scenes = ComposeDocumentaryNarrationScenes(family, sourceScenes, intelligence, request.ProductionContext, script.Sections).ToList();
 
         var diagnostics = BuildV3Diagnostics(scenes, script.Diagnostics);
@@ -286,7 +286,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         _ => "ColdOpenTwilightPlanets"
     };
 
-    private static QuestionDrivenNarrationDiagnosticsDto BuildV3Diagnostics(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, DocumentaryScriptComposerDiagnostics? composerDiagnostics = null)
+    private static QuestionDrivenNarrationDiagnosticsDto BuildV3Diagnostics(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, EventStoryComposerDiagnostics? composerDiagnostics = null)
     {
         var coldOpen = scenes.Any(s => string.Equals(s.Section, "ColdOpen", StringComparison.OrdinalIgnoreCase));
         var hook = scenes.Any(s => string.Equals(s.Section, "Hook", StringComparison.OrdinalIgnoreCase));
@@ -424,7 +424,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "documentaryOpeningAllowed", OpeningStartsCorrectly(narration), "opening must start with event/date language and not forbidden prompt-style openings.");
         AddCheck(checks, "openingContainsEventDate", narration.Diagnostics?.EventDateMentioned == true, "opening must contain the event date.");
         AddCheck(checks, "openingContainsEventName", narration.Diagnostics?.EventNameMentioned == true, "opening must contain the event name.");
-        AddCheck(checks, "scriptComposerVersion", string.Equals(narration.Diagnostics?.ScriptComposerVersion, DocumentaryScriptComposer.Version, StringComparison.OrdinalIgnoreCase), "documentary script composer V1 generated final spoken narration.");
+        AddCheck(checks, "scriptComposerVersion", string.Equals(narration.Diagnostics?.ScriptComposerVersion, EventStoryComposer.Version, StringComparison.OrdinalIgnoreCase), "event story composer V1 generated final spoken narration.");
         AddCheck(checks, "documentaryScore", (narration.Diagnostics?.DocumentaryScore ?? 0) >= 80, "documentaryScore must be at least 80.");
         AddCheck(checks, "storytellingScore", (narration.Diagnostics?.StorytellingScore ?? 0) >= 80, "storytellingScore must be at least 80.");
         AddCheck(checks, "noRawTimestamps", narration.Scenes.All(scene => !ContainsRawTimestamp(scene.NarrationText)), "narration must not speak raw timestamps.");
