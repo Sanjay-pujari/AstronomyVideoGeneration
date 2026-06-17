@@ -22,7 +22,7 @@ public static class EventFamilyResolver
         [EventFamily.Meteor] = ["MeteorShower", "METEOR_SHOWER", "MeteorShowerPeak"],
         [EventFamily.PlanetGrouping] = ["PLANET_CONJUNCTION", "PlanetConjunction", "PLANET_GROUPING", "PlanetGrouping", "PLANET_PAIRING", "PlanetPairing", "PLANET_PARADE", "PlanetParade", "PLANET_ALIGNMENT", "MoonPlanetPairing"],
         [EventFamily.Moon] = ["NamedFullMoon", "FULL_MOON", "FullMoon", "SpecialMoonPhase", "NEW_MOON", "NewMoon", "BLUE_MOON", "BlueMoon", "SUPERMOON", "Supermoon", "MICROMOON", "Micromoon", "MOON_PHASE", "MoonPhase", "FirstQuarter", "LastQuarter"],
-        [EventFamily.Eclipse] = ["SOLAR_ECLIPSE", "LUNAR_ECLIPSE", "TOTAL_SOLAR_ECLIPSE", "PARTIAL_SOLAR_ECLIPSE", "ANNULAR_SOLAR_ECLIPSE", "TOTAL_LUNAR_ECLIPSE", "PARTIAL_LUNAR_ECLIPSE", "PENUMBRAL_LUNAR_ECLIPSE"],
+        [EventFamily.Eclipse] = ["Eclipse", "SolarEclipse", "LunarEclipse", "TotalSolarEclipse", "PartialSolarEclipse", "AnnularSolarEclipse", "TotalLunarEclipse", "PartialLunarEclipse", "PenumbralLunarEclipse", "SOLAR_ECLIPSE", "LUNAR_ECLIPSE", "TOTAL_SOLAR_ECLIPSE", "PARTIAL_SOLAR_ECLIPSE", "ANNULAR_SOLAR_ECLIPSE", "TOTAL_LUNAR_ECLIPSE", "PARTIAL_LUNAR_ECLIPSE", "PENUMBRAL_LUNAR_ECLIPSE"],
         [EventFamily.SpecialEvent] = ["COMET", "DEEP_SKY_OBJECT", "CONSTELLATION", "OCCULTATION", "ASTERISM", "RARE_VISIBILITY_EVENT"]
     };
 
@@ -125,8 +125,12 @@ public sealed class MoonFamilyProfile : EventFamilyProfileBase
 public sealed class EclipseFamilyProfile : EventFamilyProfileBase
 {
     public override EventFamily Family => EventFamily.Eclipse;
-    public override string ValidatorProfile => "CurrentEvent";
-    public override string ThumbnailCompositionType => "RC1CinematicThumbnail";
+    public override string ValidatorProfile => "Eclipse";
+    public override string ThumbnailCompositionType => "EclipseGuideThumbnail";
+    public override IReadOnlyList<string> RequiredDiagnosticFields => base.RequiredDiagnosticFields.Concat(["validatorProfile", "eclipseType", "observationWarning", "directionCueAdded", "guideCardAdded"]).ToArray();
+    public override bool AllowsGuideCard => true;
+    public override bool AllowsObjectLabels => true;
+    public override bool AllowsDirectionCue => true;
 }
 
 public sealed class SpecialEventFamilyProfile : EventFamilyProfileBase
