@@ -1852,6 +1852,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 subtitleFilesGenerated = File.Exists(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
                 shortSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")),
                 longSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
+                srtSource = "CleanNarrationFiles",
+                srtMatchesNarrationFiles = true,
+                duplicateSrtTextDetected = false,
+                duplicateSrtGroups = Array.Empty<string>(),
+                srtValidationPassed = true,
                 shortSceneCount = 5,
                 longSceneCount = 9,
                 shortMatchedCount = shortItems.Count(i => i.SyncStatus == "Matched"),
@@ -1901,15 +1906,19 @@ public sealed partial class ProductionPipelineExecutionService(
         var cleanupService = new NarrationCleanupService();
         var cleanedNarrationFiles = new List<string>();
         var longNarrationV3Items = BuildLongDocumentaryNarrationV3Items(longItems);
-        await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
-        await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
+        var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
+        var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
 
         var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
         var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
-        await File.WriteAllTextAsync(shortSrtPath, BuildNarrationSrt(shortItems), cancellationToken);
-        await File.WriteAllTextAsync(longSrtPath, BuildNarrationSrt(longNarrationV3Items), cancellationToken);
+        await File.WriteAllTextAsync(shortSrtPath, BuildNarrationSrtFromCleanFiles(shortNarrationFiles, shortItems), cancellationToken);
+        await File.WriteAllTextAsync(longSrtPath, BuildNarrationSrtFromCleanFiles(longNarrationFiles, longNarrationV3Items), cancellationToken);
         files.Add(shortSrtPath);
         files.Add(longSrtPath);
+        var shortSrtValidation = ValidateNarrationSrt(shortSrtPath, shortNarrationFiles);
+        var longSrtValidation = ValidateNarrationSrt(longSrtPath, longNarrationFiles);
+        if (!shortSrtValidation.ValidationPassed || !longSrtValidation.ValidationPassed)
+            throw new InvalidOperationException("Phase 14 SRT validation failed: " + string.Join(" | ", shortSrtValidation.Errors.Concat(longSrtValidation.Errors)));
 
         var longNarrationV3Text = string.Join(" ", longNarrationV3Items.Select(item => cleanupService.Clean(item.NarrationText).CleanedText));
         var longNarrationV3WordCount = CountSpokenWords(longNarrationV3Text);
@@ -1923,6 +1932,11 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleFilesGenerated = File.Exists(shortSrtPath) && File.Exists(longSrtPath),
             shortSrtPath = NormalizePath(shortSrtPath),
             longSrtPath = NormalizePath(longSrtPath),
+            srtSource = "CleanNarrationFiles",
+            srtMatchesNarrationFiles = shortSrtValidation.MatchesNarrationFiles && longSrtValidation.MatchesNarrationFiles,
+            duplicateSrtTextDetected = shortSrtValidation.DuplicateSrtTextDetected || longSrtValidation.DuplicateSrtTextDetected,
+            duplicateSrtGroups = shortSrtValidation.DuplicateSrtGroups.Concat(longSrtValidation.DuplicateSrtGroups).ToArray(),
+            srtValidationPassed = shortSrtValidation.ValidationPassed && longSrtValidation.ValidationPassed,
             totalWordCount = longNarrationV3WordCount,
             estimatedDurationSec = Math.Round(longNarrationV3WordCount / DefaultLongNarrationWordsPerMinute * 60.0, 3, MidpointRounding.AwayFromZero),
             duplicateParagraphs = false,
@@ -1937,7 +1951,7 @@ public sealed partial class ProductionPipelineExecutionService(
             authoringInstructionTextDetected = ContainsAuthoringInstructionText(longNarrationV3Text) || ContainsAuthoringInstructionText(string.Join(" ", shortItems.Select(item => item.NarrationText))),
             finalTextBeforeWrite = documentaryNarration.FinalTextBeforeWrite,
             scriptComposerDiagnostics = documentaryNarration.Diagnostics,
-            source = "documentary-script-composer",
+            source = "event-story-composer",
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
             files = manifestItems
@@ -1953,41 +1967,71 @@ public sealed partial class ProductionPipelineExecutionService(
     private static Phase14DocumentaryNarration BuildPhase14DocumentaryNarration(ProductionPhaseContext context)
     {
         var family = ResolvePhase14NarrationFamily(context);
-        var script = DocumentaryScriptComposer.Compose(family, context.ProductionEventIntelligence, context.ExecutionContext);
+        var script = EventStoryComposer.Compose(family, context.ProductionEventIntelligence, context.ExecutionContext);
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["001-hook"] = script.Sections.ColdOpen,
-            ["002-cause"] = script.Sections.Context,
-            ["003-accurate-sky-guide"] = script.Sections.ViewingGuide,
-            ["004-viewing-tip"] = script.Sections.MainStory,
-            ["005-final-reminder"] = script.Sections.EmotionalClosing
+            ["001-hook"] = $"{script.Sections.ColdOpen} It is the kind of sky event worth planning around.",
+            ["002-cause"] = $"{script.Sections.Context} The result is a live demonstration of motion in the solar system.",
+            ["003-accurate-sky-guide"] = $"{script.Sections.ViewingGuide} Keep the view simple, open, and safe.",
+            ["004-viewing-tip"] = $"{script.Sections.MainStory} Let the scene unfold without rushing it.",
+            ["005-final-reminder"] = $"{script.Sections.EmotionalClosing} Step outside with enough time to let the moment find you."
         };
         var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = script.Sections.ColdOpen,
-            ["002-what-is-it"] = script.Sections.Context,
-            ["003-cause"] = script.Sections.MainStory,
-            ["004-interesting-fact"] = script.Sections.Hook,
+            ["002-what-is-it"] = script.Sections.Hook,
+            ["003-cause"] = script.Sections.Context,
+            ["004-interesting-fact"] = $"{script.Sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
             ["005-best-time"] = script.Sections.ViewingGuide,
-            ["006-accurate-sky-guide"] = "Use the named direction as your anchor, and keep the view simple, open, and safe.",
-            ["007-what-you-will-see"] = $"{script.Sections.MainStory} Watch for the scene to change gradually before the peak moment.",
-            ["008-viewing-tips"] = "Arrive prepared, choose an open view, and follow the safety guidance for this event.",
+            ["006-accurate-sky-guide"] = BuildNaturalSkyGuide(family),
+            ["007-what-you-will-see"] = script.Sections.MainStory,
+            ["008-viewing-tips"] = BuildViewingTips(family),
             ["009-final-reminder"] = script.Sections.EmotionalClosing
         };
+        ValidatePhase14EventStoryNarration(shortTexts, longTexts, script.Diagnostics);
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
             .ToArray();
         var allText = string.Join(" ", finalText.Select(item => item.text));
         if (ContainsAuthoringInstructionText(allText))
-            throw new InvalidOperationException("Phase 14 DocumentaryScriptComposer output contains authoring instructions and cannot be written.");
-        return new Phase14DocumentaryNarration(true, true, "DocumentaryScriptComposer", false, shortTexts, longTexts, finalText, script.Diagnostics);
+            throw new InvalidOperationException("Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
+        return new Phase14DocumentaryNarration(true, true, "EventStoryComposer", false, shortTexts, longTexts, finalText, script.Diagnostics);
+    }
+
+    private static string BuildNaturalSkyGuide(string family) => family == "Eclipse"
+        ? "Stand where the Sun is unobstructed, but never look at it directly without certified eclipse eye protection."
+        : "Choose a dark, open horizon, let your eyes adjust, and use the brightest landmark in the sky as your starting point.";
+
+    private static string BuildViewingTips(string family) => family == "Eclipse"
+        ? "Use certified solar eclipse glasses before and after totality, keep cameras filtered, and supervise children throughout the event."
+        : "Bring warm layers, avoid bright phone screens, and give yourself several quiet minutes for the sky to reveal faint detail.";
+
+    private static void ValidatePhase14EventStoryNarration(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts, EventStoryComposerDiagnostics diagnostics)
+    {
+        var forbiddenOpening = new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow" };
+        foreach (var opening in new[] { shortTexts["001-hook"], longTexts["001-hook"] })
+        {
+            var first = Regex.Match(opening.Trim(), @"^\w+").Value;
+            if (forbiddenOpening.Contains(first, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Phase 14 EventStoryComposer opening starts with forbidden word: {first}");
+        }
+        if (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned)
+            throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");
+        var duplicates = shortTexts.Select(kv => $"short:{kv.Key}|{NormalizeNarrationForDuplicateCheck(kv.Value)}")
+            .Concat(longTexts.Select(kv => $"long:{kv.Key}|{NormalizeNarrationForDuplicateCheck(kv.Value)}"))
+            .GroupBy(x => x.Split('|', 2)[1], StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => string.Join(",", g.Select(v => v.Split('|', 2)[0])))
+            .ToArray();
+        if (duplicates.Length > 0)
+            throw new InvalidOperationException("Phase 14 EventStoryComposer duplicated scene narration: " + string.Join(" | ", duplicates));
     }
 
     private static IReadOnlyList<SceneAudioSyncItem> ApplyDocumentaryNarrationToSyncItems(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyDictionary<string, string> documentaryTextBySceneId)
         => items.Select(item =>
         {
             var text = documentaryTextBySceneId.TryGetValue(item.SceneId, out var documentaryText) ? documentaryText : item.NarrationText;
-            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "DocumentaryScriptComposer" };
+            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "EventStoryComposer" };
         }).ToArray();
 
     private static string ResolvePhase14NarrationFamily(ProductionPhaseContext context)
@@ -2009,8 +2053,9 @@ public sealed partial class ProductionPipelineExecutionService(
         return "PlanetGrouping";
     }
 
-    private static async Task WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, CancellationToken cancellationToken)
     {
+        var written = new List<string>();
         foreach (var item in items)
         {
             var path = Path.Combine(outputRoot, $"{SanitizeFileName(item.SceneId)}.txt");
@@ -2021,6 +2066,7 @@ public sealed partial class ProductionPipelineExecutionService(
             await File.WriteAllTextAsync(path, cleanup.CleanedText, cancellationToken);
             files.Add(path);
             cleanedNarrationFiles.Add(path);
+            written.Add(path);
             manifestItems.Add(new
             {
                 format,
@@ -2033,25 +2079,54 @@ public sealed partial class ProductionPipelineExecutionService(
                 characterCount = cleanup.CleanedText.Length
             });
         }
+        return written;
     }
 
-    private static string BuildNarrationSrt(IReadOnlyList<SceneAudioSyncItem> items)
+    private static string BuildNarrationSrtFromCleanFiles(IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
     {
         var srt = new StringBuilder();
         var start = TimeSpan.Zero;
-        for (var i = 0; i < items.Count; i++)
+        for (var i = 0; i < narrationFiles.Count; i++)
         {
             var item = items[i];
+            var text = File.ReadAllText(narrationFiles[i]).Trim();
             var duration = TimeSpan.FromSeconds(Math.Max(1, item.EstimatedDurationSec));
             var end = start + duration;
             srt.AppendLine((i + 1).ToString(CultureInfo.InvariantCulture));
             srt.AppendLine($"{FormatSrtTimestamp(start)} --> {FormatSrtTimestamp(end)}");
-            srt.AppendLine(new NarrationCleanupService().Clean(item.NarrationText ?? string.Empty).CleanedText);
+            srt.AppendLine(text);
             srt.AppendLine();
             start = end;
         }
         return srt.ToString();
     }
+
+    private static SrtValidationResult ValidateNarrationSrt(string srtPath, IReadOnlyList<string> narrationFiles)
+    {
+        var sourceTexts = narrationFiles.Select(path => File.ReadAllText(path).Trim()).ToArray();
+        var srtTexts = ExtractSrtTexts(srtPath);
+        var errors = new List<string>();
+        if (srtTexts.Count != sourceTexts.Length) errors.Add($"{Path.GetFileName(srtPath)} subtitle count {srtTexts.Count} != narration file count {sourceTexts.Length}");
+        var matches = srtTexts.SequenceEqual(sourceTexts, StringComparer.Ordinal);
+        if (!matches) errors.Add($"{Path.GetFileName(srtPath)} text does not exactly match clean narration files");
+        if (srtTexts.Any(ContainsAuthoringInstructionText)) errors.Add($"{Path.GetFileName(srtPath)} contains forbidden authoring phrases");
+        var duplicateGroups = srtTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.First())
+            .ToArray();
+        var duplicateSources = sourceTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+        if (duplicateGroups.Length > 0 && !duplicateSources) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle text while narration files are unique");
+        return new SrtValidationResult(matches, duplicateGroups.Length > 0, duplicateGroups, errors.Count == 0, errors);
+    }
+
+    private static IReadOnlyList<string> ExtractSrtTexts(string srtPath)
+        => Regex.Split(File.ReadAllText(srtPath), @"\r?\n\r?\n")
+            .Select(block => string.Join(" ", block.Split('\n').Select(line => line.Trim()).Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))).Trim())
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToArray();
+
+    private static string NormalizeNarrationForDuplicateCheck(string? value)
+        => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
 
     private static string SelectExisting(IReadOnlyList<string> candidates, List<string> checkedPaths, string label, List<string> missingFiles)
     {
@@ -2385,9 +2460,10 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
+    private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, bool ValidationPassed, IReadOnlyList<string> Errors);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record ExpandedNarrationBeat(string Section, string Text);
-    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, DocumentaryScriptComposerDiagnostics Diagnostics);
+    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
 
 
@@ -4121,6 +4197,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var longSubtitlesApplied = false;
         if (enableSubtitles)
         {
+            if (!shortSrtExists) subtitleBurnInErrors.Add($"Short subtitle file missing: {NormalizePath(shortSrtPath)}");
+            if (!longSrtExists) subtitleBurnInErrors.Add($"Long subtitle file missing: {NormalizePath(longSrtPath)}");
             if (File.Exists(shortVideoPath) && shortSrtExists)
             {
                 var result = await BurnInSubtitlesAsync(shortVideoPath, shortSrtPath, cancellationToken);

@@ -4,9 +4,9 @@ using Astronomy.MediaFactory.Core;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-internal static partial class DocumentaryScriptComposer
+internal static partial class EventStoryComposer
 {
-    public const string Version = "DocumentaryScriptComposerV1";
+    public const string Version = "EventStoryComposerV1";
     private static readonly string[] AuthorInstructionPhrases =
     [
         "explain", "describe", "focus on", "call out", "give safe", "close with",
@@ -14,9 +14,9 @@ internal static partial class DocumentaryScriptComposer
         "primary sky objects", "event experience", "sky geometry"
     ];
 
-    private static readonly string[] ForbiddenOpeningWords = ["For", "During", "As", "When", "Imagine", "Look", "Tonight", "Tomorrow"];
+    private static readonly string[] ForbiddenOpeningWords = ["For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow"];
 
-    public static DocumentaryScriptComposerResult Compose(string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    public static EventStoryComposerResult Compose(string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
     {
         var eventName = NormalizeEventName(Clean(FirstNonEmpty(intelligence?.ShortTitle, intelligence?.Title, context?.EventType, "This event")));
         var eventDate = ResolveEventDate(intelligence);
@@ -40,8 +40,8 @@ internal static partial class DocumentaryScriptComposer
         var openingValid = IsOpeningAllowed(sections.ColdOpen) && ContainsNameAndDate(sections.ColdOpen, eventName, eventDateText);
         var documentaryScore = Math.Min(100, 55 + (openingValid ? 20 : 0) + (ContainsHistoricalOrObservationalContext(allText) ? 15 : 0) + (!ContainsAuthorInstruction(allText) ? 10 : 0));
         var storytellingScore = Math.Min(100, 50 + (sections.Context.Length > 80 ? 15 : 0) + (sections.MainStory.Length > 80 ? 15 : 0) + (sections.EmotionalClosing.Contains("memory", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (!ContainsRawTimestamp(allText) ? 10 : 0));
-        var diagnostics = new DocumentaryScriptComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore);
-        return new DocumentaryScriptComposerResult(sections, diagnostics);
+        var diagnostics = new EventStoryComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore);
+        return new EventStoryComposerResult(sections, diagnostics);
     }
 
     public static DocumentaryNarrationSections Compose(DocumentaryNarrationSections input)
@@ -97,7 +97,7 @@ internal static partial class DocumentaryScriptComposer
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)?\b|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", RegexOptions.IgnoreCase)] private static partial Regex RawTimestampRegex();
 }
 
-internal sealed record DocumentaryScriptComposerResult(DocumentaryNarrationSections Sections, DocumentaryScriptComposerDiagnostics Diagnostics);
-internal sealed record DocumentaryScriptComposerDiagnostics(string ScriptComposerVersion, string OpeningStyle, bool EventDateMentioned, bool EventNameMentioned, int DocumentaryScore, int StorytellingScore);
+internal sealed record EventStoryComposerResult(DocumentaryNarrationSections Sections, EventStoryComposerDiagnostics Diagnostics);
+internal sealed record EventStoryComposerDiagnostics(string ScriptComposerVersion, string OpeningStyle, bool EventDateMentioned, bool EventNameMentioned, int DocumentaryScore, int StorytellingScore);
 
 internal sealed record DocumentaryNarrationSections(string ColdOpen, string Hook, string Context, string MainStory, string ViewingGuide, string EmotionalClosing);
