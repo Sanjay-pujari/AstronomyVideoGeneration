@@ -247,6 +247,68 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
 
     [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormScriptConvertsAuthorGuidanceToSpokenNarration()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormIntelligence",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = BuildInstructionLeakageProductionContext(),
+            SourceNotes = ["Open with wonder. Explain why the alignment matters. Focus on the changing sky."],
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 150
+            }
+        }, CancellationToken.None);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormScript",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = BuildInstructionLeakageProductionContext(),
+            SourceNotes = ["Open with wonder. Explain why the alignment matters. Focus on the changing sky."],
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 150
+            }
+        }, CancellationToken.None);
+
+        var outputPath = Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-narration-script.json");
+        var saved = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.DoesNotContain("Open with", saved!.FullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Explain", saved.FullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Focus on", saved.FullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Describe", saved.FullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Give safe", saved.FullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("2026-08-12 23:30 +05:30", saved.FullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(saved.SceneScripts.Count, saved.SceneScripts.Select(scene => scene.Narration).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+
+    [Fact]
     public async Task GenerateVideoAssemblyAsync_LongFormTtsUsesAzureAndWritesActualSectionTimings()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -1145,6 +1207,46 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         var path = Path.Combine(Path.GetTempPath(), "video-assembly-intelligence-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+
+    private static ProductionPipelineExecutionContext BuildInstructionLeakageProductionContext()
+    {
+        var intelligence = new ProductionEventIntelligence(
+            Domain: "Astronomy",
+            EventType: "SolarEclipse",
+            Title: "Solar Eclipse",
+            ShortTitle: "Eclipse",
+            EventDate: DateTimeOffset.Parse("2026-08-12T18:00:00Z"),
+            PeakUtc: DateTimeOffset.Parse("2026-08-12T18:00:00Z"),
+            LocalPeakTime: "2026-08-12 23:30 +05:30",
+            BestViewingWindowLocal: "2026-08-12 23:30 +05:30",
+            SkyDirectionHint: "toward the Sun with certified eclipse glasses",
+            VisibilityRegion: RegionId,
+            PrimaryObjects: ["Sun", "Moon", "Earth"],
+            SecondaryObjects: [],
+            ViewingQuality: "Good",
+            MoonInterference: null,
+            MoonIlluminationPercent: null,
+            ScientificContext: "An eclipse is a shadow story. Explain what the sky event is. Focus on the Sun, Moon, and Earth alignment.",
+            ViewerInstructions: ["during 2026-08-12 23:30 +05:30. Describe where to look and give safe viewing guidance."],
+            VisualMotifs: ["eclipse shadow"],
+            SceneStrategy: [],
+            QualityWarnings: [],
+            ForbiddenTerms: [],
+            ResolvedObjectNames: ["Sun", "Moon", "Earth"],
+            ViewingSafetyRules: ["Use certified eclipse glasses."]);
+
+        return new ProductionPipelineExecutionContext(
+            UseProductionPipeline: true,
+            ContentGenerationPlanId: Guid.NewGuid(),
+            AstronomyEventIntelligenceId: Guid.NewGuid(),
+            SourceExternalEventId: "solar-eclipse",
+            IsDbApprovedPlanExecution: true,
+            RegionId: RegionId,
+            Language: "en",
+            EventType: "SolarEclipse",
+            ProductionEventIntelligence: intelligence);
     }
 
     private sealed class DurationAwareAzureSpeechClient : IAzureSpeechClient

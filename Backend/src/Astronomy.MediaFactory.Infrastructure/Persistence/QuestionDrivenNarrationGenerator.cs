@@ -164,7 +164,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var isMeteorShower = intelligence is not null && IsMeteorShower(intelligence, request.ProductionContext);
         var family = ResolveNarrationFamily(request, enrichedPlan, isMeteorShower);
         var sourceScenes = enrichedPlan.Scenes.OrderBy(scene => scene.SceneNumber).ToArray();
-        var scenes = DocumentaryNarrationComposer(family, sourceScenes, intelligence, request.ProductionContext).ToList();
+        var scenes = ComposeDocumentaryNarrationScenes(family, sourceScenes, intelligence, request.ProductionContext).ToList();
 
         var diagnostics = BuildV3Diagnostics(scenes);
         return new QuestionDrivenNarrationDto(
@@ -183,7 +183,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var source = sourceScenes.FirstOrDefault(s => string.Equals(s.QuestionType, questionType, StringComparison.OrdinalIgnoreCase))
             ?? sourceScenes.FirstOrDefault()
             ?? throw new ArgumentException("Enriched question-driven scene plan requires at least one source scene.");
-        var text = V3NarrationText(section, family, intelligence, context);
+        var text = DocumentaryNarrationComposer.ConvertGuidanceToNarration(V3NarrationText(section, family, intelligence, context), $"{Clean(intelligence?.ShortTitle, "This sky event")} is worth watching while the moment is still here.");
         return new QuestionDrivenNarrationSceneDto(
             sceneNumber,
             questionType,
@@ -201,7 +201,7 @@ public sealed class QuestionDrivenNarrationGenerator(
     }
 
 
-    private static QuestionDrivenNarrationSceneDto[] DocumentaryNarrationComposer(string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    private static QuestionDrivenNarrationSceneDto[] ComposeDocumentaryNarrationScenes(string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
     {
         string[] sections = ["ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing"];
         string[] questionTypes = [AstronomyQuestionTypes.ColdOpen, AstronomyQuestionTypes.What, AstronomyQuestionTypes.Why, AstronomyQuestionTypes.When, AstronomyQuestionTypes.Where, AstronomyQuestionTypes.Action];
