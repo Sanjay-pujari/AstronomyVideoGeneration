@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -1843,6 +1844,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 longNarrationSource = NormalizePath(longNarration),
                 narrationRoot = NormalizePath(narrationOutput.Root),
                 narrationManifestPath = NormalizePath(narrationOutput.ManifestPath),
+                cleanupApplied = true,
+                cleanedNarrationFiles = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath),
+                subtitleFilesGenerated = File.Exists(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
+                shortSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")),
+                longSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
                 shortSceneCount = 5,
                 longSceneCount = 9,
                 shortMatchedCount = shortItems.Count(i => i.SyncStatus == "Matched"),
@@ -1882,22 +1888,38 @@ public sealed partial class ProductionPipelineExecutionService(
         var narrationRoot = Path.Combine(planRoot, "narration");
         var shortRoot = Path.Combine(narrationRoot, "short");
         var longRoot = Path.Combine(narrationRoot, "long");
+        var subtitlesRoot = Path.Combine(narrationRoot, "subtitles");
         Directory.CreateDirectory(shortRoot);
         Directory.CreateDirectory(longRoot);
+        Directory.CreateDirectory(subtitlesRoot);
 
         var files = new List<string>();
         var manifestItems = new List<object>();
+        var cleanupService = new NarrationCleanupService();
+        var cleanedNarrationFiles = new List<string>();
         var longNarrationV3Items = BuildLongDocumentaryNarrationV3Items(longItems);
-        var longNarrationV3Text = string.Join(" ", longNarrationV3Items.Select(item => item.NarrationText));
-        var longNarrationV3WordCount = CountSpokenWords(longNarrationV3Text);
-        await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, files, manifestItems, cancellationToken);
-        await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, files, manifestItems, cancellationToken);
+        await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
+        await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
 
+        var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
+        var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
+        await File.WriteAllTextAsync(shortSrtPath, BuildNarrationSrt(shortItems), cancellationToken);
+        await File.WriteAllTextAsync(longSrtPath, BuildNarrationSrt(longNarrationV3Items), cancellationToken);
+        files.Add(shortSrtPath);
+        files.Add(longSrtPath);
+
+        var longNarrationV3Text = string.Join(" ", longNarrationV3Items.Select(item => cleanupService.Clean(item.NarrationText).CleanedText));
+        var longNarrationV3WordCount = CountSpokenWords(longNarrationV3Text);
         var manifestPath = Path.Combine(narrationRoot, "narration-manifest.json");
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new
         {
             version = "v1",
             longNarrationVersion = "V3",
+            cleanupApplied = true,
+            cleanedNarrationFiles = cleanedNarrationFiles.Select(NormalizePath),
+            subtitleFilesGenerated = File.Exists(shortSrtPath) && File.Exists(longSrtPath),
+            shortSrtPath = NormalizePath(shortSrtPath),
+            longSrtPath = NormalizePath(longSrtPath),
             totalWordCount = longNarrationV3WordCount,
             estimatedDurationSec = Math.Round(longNarrationV3WordCount / DefaultLongNarrationWordsPerMinute * 60.0, 3, MidpointRounding.AwayFromZero),
             duplicateParagraphs = false,
@@ -1916,22 +1938,46 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<SceneAudioSyncItem> BuildLongDocumentaryNarrationV3Items(IReadOnlyList<SceneAudioSyncItem> longItems)
         => longItems;
 
-    private static async Task WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, List<string> files, List<object> manifestItems, CancellationToken cancellationToken)
+    private static async Task WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, CancellationToken cancellationToken)
     {
         foreach (var item in items)
         {
             var path = Path.Combine(outputRoot, $"{SanitizeFileName(item.SceneId)}.txt");
-            await File.WriteAllTextAsync(path, item.NarrationText ?? string.Empty, cancellationToken);
+            var cleanup = cleanupService.Clean(item.NarrationText ?? string.Empty);
+            cleanupService.ValidateClean(cleanup.CleanedText);
+            await File.WriteAllTextAsync(path, cleanup.CleanedText, cancellationToken);
             files.Add(path);
+            cleanedNarrationFiles.Add(path);
             manifestItems.Add(new
             {
                 format,
                 sceneId = item.SceneId,
                 beatNo = item.BeatNo,
                 path = NormalizePath(path),
-                characterCount = item.NarrationText?.Length ?? 0
+                cleanupApplied = true,
+                labelsRemovedCount = cleanup.LabelsRemovedCount,
+                instructionsRemovedCount = cleanup.InstructionsRemovedCount,
+                characterCount = cleanup.CleanedText.Length
             });
         }
+    }
+
+    private static string BuildNarrationSrt(IReadOnlyList<SceneAudioSyncItem> items)
+    {
+        var srt = new StringBuilder();
+        var start = TimeSpan.Zero;
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var duration = TimeSpan.FromSeconds(Math.Max(1, item.EstimatedDurationSec));
+            var end = start + duration;
+            srt.AppendLine((i + 1).ToString(CultureInfo.InvariantCulture));
+            srt.AppendLine($"{FormatSrtTimestamp(start)} --> {FormatSrtTimestamp(end)}");
+            srt.AppendLine(new NarrationCleanupService().Clean(item.NarrationText ?? string.Empty).CleanedText);
+            srt.AppendLine();
+            start = end;
+        }
+        return srt.ToString();
     }
 
     private static string SelectExisting(IReadOnlyList<string> candidates, List<string> checkedPaths, string label, List<string> missingFiles)
@@ -2187,7 +2233,14 @@ public sealed partial class ProductionPipelineExecutionService(
             unmatchedScenes = unmatchedScenes.Distinct(StringComparer.OrdinalIgnoreCase),
             missingFiles,
             exceptions,
-            syncRoot = NormalizePath(syncRoot)
+            syncRoot = NormalizePath(syncRoot),
+            cleanupApplied = true,
+            cleanedNarrationFiles = Directory.Exists(Path.Combine(planRoot, "narration"))
+                ? Directory.EnumerateFiles(Path.Combine(planRoot, "narration"), "*.txt", SearchOption.AllDirectories).Select(NormalizePath).ToArray()
+                : Array.Empty<string>(),
+            subtitleFilesGenerated = File.Exists(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) && File.Exists(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
+            shortSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "short.srt")),
+            longSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))
         }, JsonOptions), ct);
         return path;
     }
@@ -2267,6 +2320,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var audioDiagnostics = new List<TtsAudioContentDiagnostics>();
         var missingNarrationFiles = new List<string>();
         var emptyNarrationFiles = new List<string>();
+        var ttsNarrationCleanupErrors = new List<string>();
         var selectedNarrationFiles = new List<string>();
         var errors = new List<string>();
         if (!File.Exists(syncPath)) errors.Add($"scene-audio-sync.json missing: {NormalizePath(syncPath)}");
@@ -2279,8 +2333,13 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var root = JsonNode.Parse(await File.ReadAllTextAsync(syncPath, cancellationToken)) ?? new JsonObject();
             sourceSyncVersion = GetString(root, "version") ?? "v1";
-            await BuildTtsTimelineItemsAsync(context, root, "short", shortRoot, Path.Combine(narrationRoot, "short"), 5, shortItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, cancellationToken);
-            await BuildTtsTimelineItemsAsync(context, root, "long", longRoot, Path.Combine(narrationRoot, "long"), 9, longItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, cancellationToken);
+            await ValidateTtsNarrationFilesCleanBeforeProviderAsync(root, "short", Path.Combine(narrationRoot, "short"), 5, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, ttsNarrationCleanupErrors, cancellationToken);
+            await ValidateTtsNarrationFilesCleanBeforeProviderAsync(root, "long", Path.Combine(narrationRoot, "long"), 9, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, ttsNarrationCleanupErrors, cancellationToken);
+            if (ttsNarrationCleanupErrors.Count == 0 && missingNarrationFiles.Count == 0 && emptyNarrationFiles.Count == 0)
+            {
+                await BuildTtsTimelineItemsAsync(context, root, "short", shortRoot, Path.Combine(narrationRoot, "short"), 5, shortItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, cancellationToken);
+                await BuildTtsTimelineItemsAsync(context, root, "long", longRoot, Path.Combine(narrationRoot, "long"), 9, longItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, cancellationToken);
+            }
         }
 
         if (shortItems.Count != 5) errors.Add($"short audio count != 5; actual={shortItems.Count}");
@@ -2292,6 +2351,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (duplicateNarrationTextDetected) errors.Add("Duplicate narrationText detected within a format");
         errors.AddRange(missingNarrationFiles.Select(p => $"Narration txt missing: {p}"));
         errors.AddRange(emptyNarrationFiles.Select(p => $"Narration txt empty: {p}"));
+        errors.AddRange(ttsNarrationCleanupErrors);
         errors.AddRange(shortItems.Concat(longItems).Where(i => string.IsNullOrWhiteSpace(i.NarrationText)).Select(i => $"Missing narrationText: {i.Format}:{i.SceneId}"));
         errors.AddRange(shortItems.Concat(longItems).Where(i => i.DurationSec <= 0).Select(i => $"durationSec = 0: {i.Format}:{i.SceneId}"));
         errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
@@ -2319,6 +2379,12 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedSyncPath = NormalizePath(syncPath),
             selectedNarrationDirectory = NormalizePath(narrationRoot),
             selectedNarrationFiles = selectedNarrationFiles.Select(NormalizePath),
+            cleanupApplied = true,
+            cleanedNarrationFiles = selectedNarrationFiles.Select(NormalizePath),
+            subtitleFilesGenerated = File.Exists(Path.Combine(narrationRoot, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationRoot, "subtitles", "long.srt")),
+            shortSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "short.srt")),
+            longSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "long.srt")),
+            ttsNarrationCleanupErrors,
             missingNarrationFiles,
             emptyNarrationFiles,
             narrationCharacterCount = shortItems.Concat(longItems).Sum(i => i.NarrationText?.Length ?? 0),
@@ -2366,30 +2432,61 @@ public sealed partial class ProductionPipelineExecutionService(
             isSyntheticTone = audioDiagnostics.Any(d => d.IsSyntheticTone),
             oldPathUsed = false,
             validationPassed,
+            cleanupApplied = true,
+            cleanedNarrationFiles = selectedNarrationFiles.Select(NormalizePath),
+            subtitleFilesGenerated = File.Exists(Path.Combine(narrationRoot, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationRoot, "subtitles", "long.srt")),
+            shortSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "short.srt")),
+            longSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "long.srt")),
             errors
         }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 15 TTS Timeline V1 failed: " + string.Join(" | ", errors));
         return [timelinePath, validationPath, diagnosticsPath, .. shortItems.Select(i => i.AudioPath), .. longItems.Select(i => i.AudioPath), .. audioDiagnostics.Select(d => d.RawResponsePath)];
     }
 
-    private async Task BuildTtsTimelineItemsAsync(ProductionPhaseContext context, JsonNode syncRoot, string format, string outputRoot, string narrationDirectory, int expectedCount, List<TtsTimelineItem> items, List<string> missingAudioFiles, List<string> durationReadFailures, List<TtsAudioContentDiagnostics> audioDiagnostics, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, CancellationToken cancellationToken)
+    private static async Task ValidateTtsNarrationFilesCleanBeforeProviderAsync(JsonNode syncRoot, string format, string narrationDirectory, int expectedCount, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, List<string> ttsNarrationCleanupErrors, CancellationToken cancellationToken)
+    {
+        var cleanupService = new NarrationCleanupService();
+        var syncItems = syncRoot[format]?["items"]?.AsArray() ?? [];
+        foreach (var item in syncItems.Take(expectedCount))
+        {
+            var sceneId = GetString(item, "sceneId") ?? "000";
+            var narrationPath = Path.Combine(narrationDirectory, $"{SanitizeFileName(sceneId)}.txt");
+            selectedNarrationFiles.Add(narrationPath);
+            if (!File.Exists(narrationPath))
+            {
+                missingNarrationFiles.Add(NormalizePath(narrationPath));
+                continue;
+            }
+
+            var narrationText = await File.ReadAllTextAsync(narrationPath, cancellationToken);
+            if (string.IsNullOrWhiteSpace(narrationText))
+            {
+                emptyNarrationFiles.Add(NormalizePath(narrationPath));
+                continue;
+            }
+
+            try
+            {
+                var cleanupCheck = cleanupService.Clean(narrationText);
+                if (!string.Equals(cleanupCheck.CleanedText, narrationText.Trim(), StringComparison.Ordinal))
+                    ttsNarrationCleanupErrors.Add($"TTS narrationText is not cleaned before provider call: {format}:{sceneId} {NormalizePath(narrationPath)}.");
+                cleanupService.ValidateClean(narrationText);
+            }
+            catch (InvalidOperationException ex)
+            {
+                ttsNarrationCleanupErrors.Add($"TTS narrationText contains section labels or instruction phrases before provider call: {format}:{sceneId} {NormalizePath(narrationPath)} ({ex.Message})");
+            }
+        }
+    }
+
+    private async Task BuildTtsTimelineItemsAsync(ProductionPhaseContext context, JsonNode syncRoot, string format, string outputRoot, string narrationDirectory, int expectedCount, List<TtsTimelineItem> items, List<string> missingAudioFiles, List<string> durationReadFailures, List<TtsAudioContentDiagnostics> audioDiagnostics, List<string> selectedNarrationFiles, CancellationToken cancellationToken)
     {
         var syncItems = syncRoot[format]?["items"]?.AsArray() ?? [];
         foreach (var item in syncItems.Take(expectedCount))
         {
             var sceneId = GetString(item, "sceneId") ?? $"{items.Count + 1:000}";
             var narrationPath = Path.Combine(narrationDirectory, $"{SanitizeFileName(sceneId)}.txt");
-            selectedNarrationFiles.Add(narrationPath);
-            var narrationText = string.Empty;
-            if (!File.Exists(narrationPath))
-            {
-                missingNarrationFiles.Add(NormalizePath(narrationPath));
-            }
-            else
-            {
-                narrationText = await File.ReadAllTextAsync(narrationPath, cancellationToken);
-                if (string.IsNullOrWhiteSpace(narrationText)) emptyNarrationFiles.Add(NormalizePath(narrationPath));
-            }
+            var narrationText = await File.ReadAllTextAsync(narrationPath, cancellationToken);
             var audioPath = Path.Combine(outputRoot, $"{SanitizeFileName(sceneId)}.mp3");
             var providerCalled = true;
             var generation = await GenerateAndValidateTtsAudioAsync(context, format, sceneId, narrationText, audioPath, cancellationToken);
