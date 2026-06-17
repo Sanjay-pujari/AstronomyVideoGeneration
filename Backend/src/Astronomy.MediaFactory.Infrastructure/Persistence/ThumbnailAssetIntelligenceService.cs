@@ -728,10 +728,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 }
             }
 
-            if (azureExceptionMessage is not null && thumbnailVariantResults.Count > 0)
+            if (azureExceptionMessage is not null)
             {
                 await WritePhase12FailureValidationAsync(validationPath, prompt, semanticProfile, forbiddenObjects, forbiddenTermsDetected, goldenPilotLeakageDetected, thumbnailVariantResults.Select(v => v.ImagePath).ToArray(), azureCallsAttempted, azureCallsSucceeded, azureCallsFailed, azureExceptionMessage, cancellationToken);
-                return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed after partial thumbnail variants; successful variants were preserved."], "PureAzureImage2ThumbnailV3", "PureAzureImage2ThumbnailV3", "Partial PlanetaryEvent thumbnail variants preserved after Azure Image2 failure.", true, true, false, "PureAzureImage2ThumbnailV3", thumbnailLayoutValidationPath: layoutPath);
+                if (thumbnailVariantResults.Count == 0)
+                    return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed before any thumbnail variants; phase 12 validation JSON was written."], "PureAzureImage2ThumbnailV3", "PureAzureImage2ThumbnailV3", "Thumbnail generation failed before first variant, preserving diagnostics.", true, true, false, "PureAzureImage2ThumbnailV3", thumbnailLayoutValidationPath: layoutPath);
+
+                return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed after partial thumbnail variants; successful variants were preserved."], "PureAzureImage2ThumbnailV3", "PureAzureImage2ThumbnailV3", "Partial thumbnail variants preserved after Azure Image2 failure.", true, true, false, "PureAzureImage2ThumbnailV3", thumbnailLayoutValidationPath: layoutPath);
             }
             if (thumbnailVariantResults.Count(v => v.Result.ProviderCalled) < 3)
                 throw new InvalidOperationException("Thumbnail V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
@@ -1417,25 +1420,29 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var microFont = ResolveThumbnailFont(Math.Max(16, 21 * scale), FontStyle.Regular);
         var phaseName = ResolveMoonPhaseName(current);
         var date = current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date";
-        var shortDate = current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture).ToUpperInvariant() ?? string.Empty;
-        var peak = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "Peak / Full Moon Time");
-        var illumination = current.MoonIlluminationPercent is decimal illum ? $"Illumination  {illum:0.#}%" : string.Empty;
-        var direction = FirstNonEmpty(current.SkyDirectionHint, InferMoonDirectionCue(current));
+        var peak = FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, "Local best visibility window");
+        var direction = ShortenMoonDirection(FirstNonEmpty(current.SkyDirectionHint, InferMoonDirectionCue(current)));
+        var overlayFields = new
+        {
+            title = CleanHook(FirstNonEmpty(current.ShortTitle, current.Title, ResolveMoonPhaseName(current))),
+            subtitle = ResolveMoonDisplaySubtitle(current),
+            date,
+            bestTime = peak,
+            direction,
+            observe = "Naked eye",
+            moonPhase = phaseName,
+            footerTips = "Watch moonrise • Use tripod for photos • Avoid bright foreground lights"
+        };
+        Console.WriteLine("[ThumbnailMoonOverlayFields] " + JsonSerializer.Serialize(overlayFields, JsonOptions));
 
         var titlePoint = width >= height ? new PointF(width * .055f, height * .075f) : new PointF(width * .06f, height * .055f);
         ctx.Fill(Color.FromRgba(0, 0, 0, 142), new RectangleF(titlePoint.X - 18 * scale, titlePoint.Y - 18 * scale, width >= height ? width * .54f : width * .88f, width == height ? height * .18f : height * .14f));
-        ctx.DrawText(textLines.ElementAtOrDefault(0) ?? phaseName.ToUpperInvariant(), titleFont, Color.White, titlePoint);
-        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? (string.IsNullOrWhiteSpace(shortDate) ? "MOON PHASE" : shortDate), subFont, Color.FromRgb(210, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + 78 * scale));
+        ctx.DrawText(overlayFields.title, titleFont, Color.White, titlePoint);
+        ctx.DrawText(overlayFields.subtitle, subFont, Color.FromRgb(210, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + 78 * scale));
 
         var moonCenter = width >= height ? new PointF(width * .66f, height * .38f) : new PointF(width * .52f, height * .35f);
         var moonRadius = (width >= height ? 104 : 128) * scale;
-        ctx.Fill(new RadialGradientBrush(moonCenter, moonRadius * 1.9f, GradientRepetitionMode.None,
-            new ColorStop(0f, Color.White.WithAlpha(0.38f)),
-            new ColorStop(.45f, Color.FromRgba(180, 205, 255, 70)),
-            new ColorStop(1f, Color.Transparent)), new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius * 1.9f));
-        ctx.Fill(Color.FromRgb(226, 228, 218), new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius));
-        ctx.Fill(Color.FromRgba(130, 135, 132, 56), new EllipsePolygon(moonCenter.X - moonRadius * .28f, moonCenter.Y - moonRadius * .18f, moonRadius * .13f));
-        ctx.Fill(Color.FromRgba(120, 125, 125, 48), new EllipsePolygon(moonCenter.X + moonRadius * .22f, moonCenter.Y + moonRadius * .10f, moonRadius * .18f));
+        ctx.Draw(Color.FromRgba(210, 230, 255, 185), 3, new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius));
         ctx.DrawText("MOON", smallFont, Color.White, new PointF(moonCenter.X + moonRadius + 18 * scale, moonCenter.Y - 20 * scale));
 
         var card = width > height
@@ -1445,16 +1452,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 : new RectangleF(width * .08f, height * .64f, width * .84f, height * .26f);
         ctx.Fill(Color.FromRgba(2, 10, 24, 184), card);
         ctx.Draw(Color.FromRgba(210, 230, 255, 165), 2, card);
-        var rows = new List<string> { $"PHASE  {phaseName}", $"DATE  {date}", $"TIME  {peak}" };
-        if (!string.IsNullOrWhiteSpace(illumination)) rows.Add(illumination);
-        if (!string.IsNullOrWhiteSpace(direction)) rows.Add(direction);
-        if (IsRareMoonEvent(current)) rows.Add(ResolveMoonRarityNote(current));
+        var rows = new List<string> { $"DATE: {date}", $"BEST TIME: {peak}", $"DIRECTION: {direction}", "OBSERVE: Naked eye", $"MOON PHASE: {phaseName}" };
         for (var i = 0; i < rows.Count; i++)
-            ctx.DrawText(rows[i], microFont, rows[i].Contains("Illumination", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 24 * scale, card.Y + (24 + i * 34) * scale));
+            ctx.DrawText(rows[i], microFont, i == 2 ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 24 * scale, card.Y + (24 + i * 34) * scale));
 
         var cue = width >= height ? new PointF(width * .72f, height * .82f) : new PointF(width * .10f, height * .53f);
         DrawCompassCue(ctx, cue, 42 * scale, -0.05f);
-        ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
+        ctx.DrawText("MOONRISE DIRECTION", smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
+        ctx.DrawText("EASTERN SKY", smallFont, Color.FromRgb(205, 235, 255), new PointF(cue.X + 58 * scale, cue.Y + 18 * scale));
+
+        var tips = new RectangleF(0, height - Math.Max(58, 68 * scale), width, Math.Max(58, 68 * scale));
+        ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
+        ctx.DrawText("Watch moonrise • Use tripod for photos • Avoid bright foreground lights", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 20 * scale));
 
         return new ThumbnailOverlayDiagnostics("MoonPhaseGuideThumbnail", 8 + rows.Count, false, false, false, true, false, outputPath, "Moon", true, false, true, false, false, MoonGuideCardAdded: true, MoonObjectRendered: true, MoonForbiddenTermsDetected: []);
     }
@@ -1468,12 +1477,28 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (token == "NEWMOON") return "New Moon";
         if (token == "FIRSTQUARTER") return "First Quarter";
         if (token == "LASTQUARTER") return "Last Quarter";
-        if (token == "FULLMOON") return "Full Moon";
+        if (token == "FULLMOON" || token == "NAMEDFULLMOON") return "Full Moon";
         return CleanHook(FirstNonEmpty(current.ShortTitle, current.Title, "Moon Phase"));
     }
 
     private static string InferMoonDirectionCue(CurrentEventLock current)
-        => IsFullMoonEvent(current.EventType, current.Title) ? "Look East after sunset" : "Find the Moon near the horizon";
+        => IsFullMoonEvent(current.EventType, current.Title) ? "Eastern sky near moonrise; overhead around local midnight when visible" : "Eastern sky near moonrise";
+
+
+    private static string ResolveMoonDisplaySubtitle(CurrentEventLock current)
+    {
+        var token = NormalizeEventTypeToken(current.EventType);
+        if (token is "NAMEDFULLMOON" or "FULLMOON" || current.Title.Contains("Full Moon", StringComparison.OrdinalIgnoreCase)) return "FULL MOON";
+        return ResolveMoonPhaseName(current).ToUpperInvariant();
+    }
+
+    private static string ShortenMoonDirection(string value)
+    {
+        var direction = FirstNonEmpty(value, "Eastern sky near moonrise; overhead around local midnight when visible");
+        if (direction.Contains("east", StringComparison.OrdinalIgnoreCase) || direction.Contains("moonrise", StringComparison.OrdinalIgnoreCase))
+            return "Eastern sky near moonrise; overhead around local midnight when visible";
+        return direction.Length <= 92 ? direction : direction[..89].TrimEnd() + "...";
+    }
 
     private static bool IsRareMoonEvent(CurrentEventLock current)
         => NormalizeEventTypeToken(current.EventType) is "BLUEMOON" or "SUPERMOON" or "MICROMOON";
@@ -2325,8 +2350,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return terms.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static EventFamilyResolution ResolveEventFamily(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects)
-        => EventFamilyResolver.ResolveWithDiagnostics(eventType, contentCategoryCode, primaryObjects, secondaryObjects);
+    private static EventFamilyResolution ResolveEventFamily(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects, string? title = null)
+        => EventFamilyResolver.ResolveWithDiagnostics(eventType, contentCategoryCode, primaryObjects, secondaryObjects, title);
 
     private static ThumbnailValidatorProfile ResolveThumbnailValidatorProfile(ThumbnailAssetGenerationRequest request)
     {
@@ -2336,8 +2361,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .Concat(current.SecondaryObjects)
             .Concat(current.RequiredVisualObjects)
             .Concat(intelligence?.ResolvedObjectNames ?? []));
-        var familyResolution = ResolveEventFamily(current.EventType, request.ProductionContext?.Category, current.PrimaryObjects, current.SecondaryObjects);
+        var familyResolution = ResolveEventFamily(current.EventType, request.ProductionContext?.Category, current.PrimaryObjects, current.SecondaryObjects, current.Title);
         var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
+        LogSelectedFamilyProfile("thumbnail", familyResolution, familyProfile);
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
             : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == EventFamily.Moon ? "Moon" : "CurrentEvent";
@@ -2377,8 +2403,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (current is null)
             return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent", EventFamily.Unknown.ToString(), EventFamilyResolver.ResolveWithDiagnostics(null, null, [], []).Input, "No current event lock was available.", nameof(EventFamilyProfileBase), EventFamilyProfiles.Version);
         var expectedObjects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects).Concat(current.RequiredVisualObjects));
-        var familyResolution = ResolveEventFamily(current.EventType, current.Category, current.PrimaryObjects, current.SecondaryObjects);
+        var familyResolution = ResolveEventFamily(current.EventType, current.Category, current.PrimaryObjects, current.SecondaryObjects, current.Title);
         var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
+        LogSelectedFamilyProfile("thumbnail", familyResolution, familyProfile);
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
             : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == EventFamily.Moon ? "Moon" : "CurrentEvent";
@@ -2397,6 +2424,23 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var skipped = candidates.Where(term => expectedObjects.Any(expected => LabelMatches(expected, term) || LabelMatches(term, expected))).ToArray();
         var applied = candidates.Except(skipped, StringComparer.OrdinalIgnoreCase).ToArray();
         return new ThumbnailValidatorProfile(current.EventType, eventFamily, expectedObjects, applied, skipped, validatorProfile, familyResolution.Family.ToString(), familyResolution.Input, familyResolution.Reason, familyProfile.GetType().Name, EventFamilyProfiles.Version);
+    }
+
+
+    private static void LogSelectedFamilyProfile(string surface, EventFamilyResolution resolution, IEventFamilyProfile profile)
+    {
+        var allowedConcepts = profile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>();
+        Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new
+        {
+            surface,
+            familyCode = profile.Family.ToString(),
+            profileName = profile.GetType().Name,
+            profileVersion = EventFamilyProfiles.Version,
+            resolverReason = resolution.Reason,
+            resolverInput = resolution.Input,
+            forbiddenConcepts = profile.ForbiddenTerms,
+            allowedConcepts
+        }, JsonOptions));
     }
 
     private static IReadOnlyList<string> DetectThumbnailForbiddenTerms(ThumbnailValidatorProfile profile, IEnumerable<string> thumbnailMetadataAndOverlayText)
@@ -3335,7 +3379,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         => NormalizeEventTypeToken(eventType) is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETPAIRING" or "PLANETPARADE" or "PLANETALIGNMENT" or "MOONPLANETPAIRING";
 
     private static bool IsMoonEvent(string eventType, string? title = null)
-        => NormalizeEventTypeToken(eventType) is "FULLMOON" or "NEWMOON" or "BLUEMOON" or "SUPERMOON" or "MICROMOON" or "MOONPHASE" or "FIRSTQUARTER" or "LASTQUARTER"
+        => NormalizeEventTypeToken(eventType) is "FULLMOON" or "NEWMOON" or "BLUEMOON" or "SUPERMOON" or "MICROMOON" or "MOONPHASE" or "SPECIALMOONPHASE" or "NAMEDFULLMOON" or "FIRSTQUARTER" or "LASTQUARTER"
             || (!string.IsNullOrWhiteSpace(title) && (title.Contains("Moon", StringComparison.OrdinalIgnoreCase) || title.Contains("Lunar", StringComparison.OrdinalIgnoreCase)));
 
     private static string NormalizeEventTypeToken(string value)
@@ -3375,6 +3419,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             lines.Add($"{eventObjectContext.ObjectNames[0]} + {eventObjectContext.ObjectNames[1]}".ToUpperInvariant());
             lines.Add("CONJUNCTION");
+        }
+        else if (IsMoonEvent(current.EventType, current.Title))
+        {
+            lines.Add(LimitThumbnailWords(CleanHook(FirstNonEmpty(current.ShortTitle, current.Title, "MOON")), 4));
+            lines.Add(ResolveMoonDisplaySubtitle(current));
         }
         else
         {

@@ -110,6 +110,10 @@ public sealed class QuestionDrivenVisualComposer(
         var phase8SceneDiagnostics = new List<Phase8SceneVisualSourceDiagnostic>();
         var isMeteorShowerPlan = scenes.Any(scene => IsMeteorText(scene.SourceAnswer) || IsMeteorText(scene.VisualIntent) || IsMeteorText(scene.ImagePromptIntent));
         var eventType = ResolveVisualEventType(request.ProductionContext, enrichedPlan, isMeteorShowerPlan, scenes);
+        var sceneGuideIntelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var familyResolution = EventFamilyResolver.ResolveWithDiagnostics(eventType, request.ProductionContext?.Category, sceneGuideIntelligence?.PrimaryObjects ?? [], sceneGuideIntelligence?.SecondaryObjects ?? [], sceneGuideIntelligence?.Title);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, eventType);
+        Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "scene guide", familyCode = familyProfile.Family.ToString(), profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenConcepts = familyProfile.ForbiddenTerms, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
         var usesLocalPlanetAssets = AllowsLocalPlanetAssets(eventType) && UsesExactLocalVenusJupiterAssets(request.ProductionContext?.ProductionEventIntelligence);
         var venusAsset = usesLocalPlanetAssets ? FindLocalAsset("venus") : null;
         var jupiterAsset = usesLocalPlanetAssets ? FindLocalAsset("jupiter") : null;
