@@ -21,15 +21,15 @@ public static class EventFamilyResolver
     {
         [EventFamily.Meteor] = ["MeteorShower", "METEOR_SHOWER", "MeteorShowerPeak"],
         [EventFamily.PlanetGrouping] = ["PLANET_CONJUNCTION", "PlanetConjunction", "PLANET_GROUPING", "PlanetGrouping", "PLANET_PAIRING", "PlanetPairing", "PLANET_PARADE", "PlanetParade", "PLANET_ALIGNMENT", "MoonPlanetPairing"],
-        [EventFamily.Moon] = ["FULL_MOON", "FullMoon", "NEW_MOON", "NewMoon", "BLUE_MOON", "BlueMoon", "SUPERMOON", "Supermoon", "MICROMOON", "Micromoon", "MOON_PHASE", "MoonPhase", "FirstQuarter", "LastQuarter"],
+        [EventFamily.Moon] = ["NamedFullMoon", "FULL_MOON", "FullMoon", "SpecialMoonPhase", "NEW_MOON", "NewMoon", "BLUE_MOON", "BlueMoon", "SUPERMOON", "Supermoon", "MICROMOON", "Micromoon", "MOON_PHASE", "MoonPhase", "FirstQuarter", "LastQuarter"],
         [EventFamily.Eclipse] = ["SOLAR_ECLIPSE", "LUNAR_ECLIPSE", "TOTAL_SOLAR_ECLIPSE", "PARTIAL_SOLAR_ECLIPSE", "ANNULAR_SOLAR_ECLIPSE", "TOTAL_LUNAR_ECLIPSE", "PARTIAL_LUNAR_ECLIPSE", "PENUMBRAL_LUNAR_ECLIPSE"],
         [EventFamily.SpecialEvent] = ["COMET", "DEEP_SKY_OBJECT", "CONSTELLATION", "OCCULTATION", "ASTERISM", "RARE_VISIBILITY_EVENT"]
     };
 
-    public static EventFamily Resolve(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects)
-        => ResolveWithDiagnostics(eventType, contentCategoryCode, primaryObjects, secondaryObjects).Family;
+    public static EventFamily Resolve(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects, string? title = null)
+        => ResolveWithDiagnostics(eventType, contentCategoryCode, primaryObjects, secondaryObjects, title).Family;
 
-    public static EventFamilyResolution ResolveWithDiagnostics(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects)
+    public static EventFamilyResolution ResolveWithDiagnostics(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects, string? title = null)
     {
         var values = new[] { (Name: "eventType", Value: eventType), (Name: "contentCategoryCode", Value: contentCategoryCode) };
         foreach (var (name, value) in values)
@@ -43,7 +43,10 @@ public static class EventFamilyResolver
             }
         }
 
-        return Build(EventFamily.Unknown, "No eventType or contentCategoryCode mapping matched.", eventType, contentCategoryCode, primaryObjects, secondaryObjects);
+        if (!string.IsNullOrWhiteSpace(title) && title.Contains("Moon", StringComparison.OrdinalIgnoreCase))
+            return Build(EventFamily.Moon, $"Matched title fallback '{title}' because it contains Moon.", eventType, contentCategoryCode, primaryObjects, secondaryObjects);
+
+        return Build(EventFamily.Unknown, "No eventType, contentCategoryCode, or title fallback mapping matched.", eventType, contentCategoryCode, primaryObjects, secondaryObjects);
     }
 
     private static bool MatchesToken(string value, string token)
@@ -112,7 +115,8 @@ public sealed class MoonFamilyProfile : EventFamilyProfileBase
     public override EventFamily Family => EventFamily.Moon;
     public override string ValidatorProfile => "Moon";
     public override string ThumbnailCompositionType => "MoonPhaseGuideThumbnail";
-    public override IReadOnlyList<string> ForbiddenTerms => ["meteor", "meteor shower", "radiant", "Geminids", "planet conjunction", "planet pairing", "Jupiter + Venus", "debris stream", "Phaethon"];
+    public override IReadOnlyList<string> ForbiddenTerms => ["Jupiter", "Venus", "Mars", "conjunction", "pairing", "alignment", "separation", "radiant", "meteor streaks", "meteor", "meteor shower", "Geminids", "planet conjunction", "planet pairing", "Jupiter + Venus", "debris stream", "Phaethon"];
+    public IReadOnlyList<string> AllowedConcepts => ["Moon", "full moon", "moonrise", "moon phase", "eastern sky", "visibility", "moonlight", "lunar disc", "craters"];
     public override IReadOnlyList<string> RequiredDiagnosticFields => base.RequiredDiagnosticFields.Concat(["validatorProfile", "moonPhaseName", "moonIlluminationPercent", "moonriseLocal", "moonsetLocal", "moonGuideCardAdded", "moonObjectRendered", "moonForbiddenTermsDetected"]).ToArray();
     public override bool AllowsGuideCard => true;
     public override bool AllowsDirectionCue => true;

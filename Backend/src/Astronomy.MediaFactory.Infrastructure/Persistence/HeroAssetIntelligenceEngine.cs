@@ -954,6 +954,9 @@ public sealed class HeroAssetStoryGenerator(
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "premium event-poster astronomy");
         var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "clear where-to-look sky guidance");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        var familyResolution = EventFamilyResolver.ResolveWithDiagnostics(eventType, context?.Category, intelligence?.PrimaryObjects ?? [], intelligence?.SecondaryObjects ?? [], eventTitle);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, eventType);
+        Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "hero", familyCode = familyProfile.Family.ToString(), profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenConcepts = familyProfile.ForbiddenTerms, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
         var heroContract = ResolveHeroContract(context, intelligence);
         var guidePanelAllowed = heroContract == "GuideHero";
         var basePrompt = guidePanelAllowed

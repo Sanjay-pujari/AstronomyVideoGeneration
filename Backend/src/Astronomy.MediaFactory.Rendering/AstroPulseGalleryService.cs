@@ -188,6 +188,9 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var title = FirstString(doc.RootElement, "title", "shortTitle");
         var forbidden = ReadStringArray(doc.RootElement, "forbiddenTerms").Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var eventObjectContext = EventObjectContextBuilder.FromJsonValues(eventType, title, ReadStringArray(doc.RootElement, "resolvedObjectNames"), ReadStringArray(doc.RootElement, "primaryObjects"), ReadStringArray(doc.RootElement, "secondaryObjects"), ReadStringArray(doc.RootElement, "requiredVisualObjects"));
+        var familyResolution = EventFamilyResolver.ResolveWithDiagnostics(eventType, null, ReadStringArray(doc.RootElement, "primaryObjects"), ReadStringArray(doc.RootElement, "secondaryObjects"), title);
+        var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, eventType);
+        Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "gallery", familyCode = familyProfile.Family.ToString(), profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenConcepts = familyProfile.ForbiddenTerms, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
         return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), eventObjectContext, forbidden);
     }
 
