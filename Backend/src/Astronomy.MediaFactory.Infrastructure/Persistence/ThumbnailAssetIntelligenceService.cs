@@ -797,6 +797,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 moonGuideCardAdded = selectedOverlayDiagnostics.MoonGuideCardAdded,
                 moonObjectRendered = selectedOverlayDiagnostics.MoonObjectRendered,
                 moonForbiddenTermsDetected = selectedOverlayDiagnostics.MoonForbiddenTermsDetected ?? [],
+                moonAspectRatioPreserved = selectedOverlayDiagnostics.MoonAspectRatioPreserved,
+                moonCalloutCircleDiameterPx = selectedOverlayDiagnostics.MoonCalloutCircleDiameterPx,
+                moonVisibleDiameterPx = selectedOverlayDiagnostics.MoonVisibleDiameterPx,
+                moonCalloutCirclePercentOfMoon = selectedOverlayDiagnostics.MoonCalloutCirclePercentOfMoon,
                 moonPhaseName = ResolveMoonPhaseName(BuildCurrentEventLock(request)),
                 moonIlluminationPercent = BuildCurrentEventLock(request).MoonIlluminationPercent,
                 moonriseLocal = (string?)null,
@@ -898,6 +902,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 moonGuideCardAdded = selectedOverlayDiagnostics.MoonGuideCardAdded,
                 moonObjectRendered = selectedOverlayDiagnostics.MoonObjectRendered,
                 moonForbiddenTermsDetected = selectedOverlayDiagnostics.MoonForbiddenTermsDetected ?? [],
+                moonAspectRatioPreserved = selectedOverlayDiagnostics.MoonAspectRatioPreserved,
+                moonCalloutCircleDiameterPx = selectedOverlayDiagnostics.MoonCalloutCircleDiameterPx,
+                moonVisibleDiameterPx = selectedOverlayDiagnostics.MoonVisibleDiameterPx,
+                moonCalloutCirclePercentOfMoon = selectedOverlayDiagnostics.MoonCalloutCirclePercentOfMoon,
                 moonPhaseName = ResolveMoonPhaseName(BuildCurrentEventLock(request)),
                 moonIlluminationPercent = BuildCurrentEventLock(request).MoonIlluminationPercent,
                 moonriseLocal = (string?)null,
@@ -1420,14 +1428,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var microFont = ResolveThumbnailFont(Math.Max(16, 21 * scale), FontStyle.Regular);
         var phaseName = ResolveMoonPhaseName(current);
         var date = current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date";
-        var peak = FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, "Local best visibility window");
-        var direction = ShortenMoonDirection(FirstNonEmpty(current.SkyDirectionHint, InferMoonDirectionCue(current)));
+        var rawPeak = FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, "Local best visibility window");
+        var peak = ResolveMoonThumbnailBestTime(rawPeak);
+        var direction = ResolveMoonThumbnailDirection(FirstNonEmpty(current.SkyDirectionHint, InferMoonDirectionCue(current)));
         var overlayFields = new
         {
             title = CleanHook(FirstNonEmpty(current.ShortTitle, current.Title, ResolveMoonPhaseName(current))),
             subtitle = ResolveMoonDisplaySubtitle(current),
             date,
             bestTime = peak,
+            rawBestTime = rawPeak,
             direction,
             observe = "Naked eye",
             moonPhase = phaseName,
@@ -1442,7 +1452,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         var moonCenter = width >= height ? new PointF(width * .66f, height * .38f) : new PointF(width * .52f, height * .35f);
         var moonRadius = (width >= height ? 104 : 128) * scale;
-        ctx.Draw(Color.FromRgba(210, 230, 255, 185), 3, new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius));
+        var moonVisibleDiameterPx = moonRadius * 2f;
+        var moonCalloutCircleDiameterPx = moonVisibleDiameterPx * 0.18f;
+        ctx.Draw(Color.FromRgba(210, 230, 255, 185), 3, new EllipsePolygon(moonCenter.X, moonCenter.Y, moonRadius, moonRadius));
+        ctx.Draw(Color.FromRgba(255, 222, 91, 220), Math.Max(2f, 3f * scale), new EllipsePolygon(moonCenter.X - moonRadius * 0.20f, moonCenter.Y - moonRadius * 0.12f, moonCalloutCircleDiameterPx / 2f, moonCalloutCircleDiameterPx / 2f));
         ctx.DrawText("MOON", smallFont, Color.White, new PointF(moonCenter.X + moonRadius + 18 * scale, moonCenter.Y - 20 * scale));
 
         var card = width > height
@@ -1458,14 +1471,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         var cue = width >= height ? new PointF(width * .72f, height * .82f) : new PointF(width * .10f, height * .53f);
         DrawCompassCue(ctx, cue, 42 * scale, -0.05f);
-        ctx.DrawText("MOONRISE DIRECTION", smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
-        ctx.DrawText("EASTERN SKY", smallFont, Color.FromRgb(205, 235, 255), new PointF(cue.X + 58 * scale, cue.Y + 18 * scale));
+        ctx.DrawText(direction, smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
+        ctx.DrawText(peak, smallFont, Color.FromRgb(205, 235, 255), new PointF(cue.X + 58 * scale, cue.Y + 18 * scale));
 
         var tips = new RectangleF(0, height - Math.Max(58, 68 * scale), width, Math.Max(58, 68 * scale));
         ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
         ctx.DrawText("Watch moonrise • Use tripod for photos • Avoid bright foreground lights", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 20 * scale));
 
-        return new ThumbnailOverlayDiagnostics("MoonPhaseGuideThumbnail", 8 + rows.Count, false, false, false, true, false, outputPath, "Moon", true, false, true, false, false, MoonGuideCardAdded: true, MoonObjectRendered: true, MoonForbiddenTermsDetected: []);
+        return new ThumbnailOverlayDiagnostics("MoonPhaseGuideThumbnail", 8 + rows.Count, false, false, false, true, false, outputPath, "Moon", true, false, true, false, false, MoonGuideCardAdded: true, MoonObjectRendered: true, MoonForbiddenTermsDetected: [], MoonAspectRatioPreserved: true, MoonCalloutCircleDiameterPx: moonCalloutCircleDiameterPx, MoonVisibleDiameterPx: moonVisibleDiameterPx);
     }
 
     private static string ResolveMoonPhaseName(CurrentEventLock current)
@@ -1492,12 +1505,27 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return ResolveMoonPhaseName(current).ToUpperInvariant();
     }
 
-    private static string ShortenMoonDirection(string value)
+    private static string ResolveMoonThumbnailDirection(string value)
     {
         var direction = FirstNonEmpty(value, "Eastern sky near moonrise; overhead around local midnight when visible");
-        if (direction.Contains("east", StringComparison.OrdinalIgnoreCase) || direction.Contains("moonrise", StringComparison.OrdinalIgnoreCase))
-            return "Eastern sky near moonrise; overhead around local midnight when visible";
-        return direction.Length <= 92 ? direction : direction[..89].TrimEnd() + "...";
+        if (direction.Contains("east", StringComparison.OrdinalIgnoreCase) || direction.Contains("moonrise", StringComparison.OrdinalIgnoreCase)) return "LOOK EAST AT MOONRISE";
+        if (direction.Contains("west", StringComparison.OrdinalIgnoreCase) || direction.Contains("moonset", StringComparison.OrdinalIgnoreCase)) return "LOOK WEST AT MOONSET";
+        return "WATCH NEAR MOONRISE";
+    }
+
+    private static string ResolveMoonThumbnailBestTime(string value)
+    {
+        var time = FirstNonEmpty(value, "After moonrise");
+        if (time.Contains("moonrise", StringComparison.OrdinalIgnoreCase)) return "AFTER MOONRISE";
+        if (time.Contains("evening", StringComparison.OrdinalIgnoreCase) || time.Contains("midnight", StringComparison.OrdinalIgnoreCase)) return "EVENING TO MIDNIGHT";
+        return "AFTER MOONRISE";
+    }
+
+    private static bool IsMoonFamilyEventType(string? eventType, string? title)
+    {
+        var token = NormalizeEventTypeToken(eventType ?? string.Empty);
+        return token.Contains("MOON", StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(title) && title.Contains("Moon", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsRareMoonEvent(CurrentEventLock current)
@@ -2974,6 +3002,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return new ThumbnailDynamicCopy(LimitThumbnailWords(FirstNonEmpty(planetCopy.PrimaryText, currentEventLock.ShortTitle), 6).ToUpperInvariant(), string.Empty);
         }
 
+        if (IsMoonFamilyEventType(currentEventLock.EventType, currentEventLock.Title))
+        {
+            var direction = ResolveMoonThumbnailDirection(FirstNonEmpty(currentEventLock.SkyDirectionHint, InferMoonDirectionCue(currentEventLock)));
+            var bestTime = ResolveMoonThumbnailBestTime(FirstNonEmpty(currentEventLock.BestViewingWindowLocal, currentEventLock.LocalPeakTime, "After moonrise"));
+            return new ThumbnailDynamicCopy(direction, bestTime);
+        }
+
         var headline = CleanThumbnailText(FirstNonEmpty(currentEventLock.ShortTitle, currentEventLock.Title), "SKY EVENT", 6).ToUpperInvariant();
         return new ThumbnailDynamicCopy(headline, string.Empty);
     }
@@ -3175,7 +3210,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTermsApplied = validationProfile.ForbiddenTermsApplied,
             forbiddenTermsSkippedBecauseExpected = validationProfile.ForbiddenTermsSkippedBecauseExpected,
             validatorProfile = validationProfile.ValidatorProfile,
-            semanticValidationPassed
+            semanticValidationPassed,
+            moonAspectRatioPreserved = renderResult?.MoonAspectRatioPreserved ?? false,
+            moonCalloutCircleDiameterPx = renderResult?.MoonCalloutCircleDiameterPx ?? 0,
+            moonVisibleDiameterPx = renderResult?.MoonVisibleDiameterPx ?? 0,
+            moonCalloutCirclePercentOfMoon = renderResult?.MoonCalloutCirclePercentOfMoon ?? 0,
+            thumbnailRulesPassed = semanticValidationPassed
         }, JsonOptions), cancellationToken);
     }
 
@@ -3483,7 +3523,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         bool AltitudeAdded = false,
         bool MoonGuideCardAdded = false,
         bool MoonObjectRendered = false,
-        IReadOnlyList<string>? MoonForbiddenTermsDetected = null);
+        IReadOnlyList<string>? MoonForbiddenTermsDetected = null,
+        bool MoonAspectRatioPreserved = false,
+        float MoonCalloutCircleDiameterPx = 0,
+        float MoonVisibleDiameterPx = 0)
+    {
+        public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
+    }
 
     private sealed record ThumbnailOverlayDiagnostics(
         string ThumbnailOverlayTemplate,
@@ -3502,8 +3548,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         bool AltitudeAdded = false,
         bool MoonGuideCardAdded = false,
         bool MoonObjectRendered = false,
-        IReadOnlyList<string>? MoonForbiddenTermsDetected = null)
+        IReadOnlyList<string>? MoonForbiddenTermsDetected = null,
+        bool MoonAspectRatioPreserved = false,
+        float MoonCalloutCircleDiameterPx = 0,
+        float MoonVisibleDiameterPx = 0)
     {
+        public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
+
         public static ThumbnailOverlayDiagnostics None(string finalThumbnailPath, string template)
             => new(template, 0, false, false, false, false, false, finalThumbnailPath);
     }
