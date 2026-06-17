@@ -35,7 +35,9 @@ public sealed record QuestionDrivenNarrationDto(
     string Language,
     IReadOnlyList<QuestionDrivenNarrationSceneDto> Scenes,
     int TotalEstimatedDurationSeconds,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    string NarrationVersion = "V3",
+    QuestionDrivenNarrationDiagnosticsDto? Diagnostics = null);
 
 public sealed record QuestionDrivenNarrationSceneDto(
     int SceneNumber,
@@ -65,7 +67,18 @@ public sealed record QuestionDrivenNarrationReviewDto(
     bool RequiredSectionsPresent = false,
     bool RepetitiveSentenceOpenings = true,
     bool StoryStructurePassed = false,
-    int CopiedSourceAnswers = 0);
+    int CopiedSourceAnswers = 0,
+    string NarrationVersion = "V3",
+    QuestionDrivenNarrationDiagnosticsDto? Diagnostics = null);
+
+public sealed record QuestionDrivenNarrationDiagnosticsDto(
+    bool ColdOpenPresent,
+    bool HookPresent,
+    bool StoryLayerPresent,
+    bool ViewingGuidePresent,
+    bool EmotionalClosingPresent,
+    string NarrationVersion,
+    int EstimatedRetentionScore);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,

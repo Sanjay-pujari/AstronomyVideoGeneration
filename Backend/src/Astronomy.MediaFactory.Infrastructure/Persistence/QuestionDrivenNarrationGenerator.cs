@@ -15,7 +15,8 @@ public sealed class QuestionDrivenNarrationGenerator(
     private const string ReviewFileName = "question-driven-narration-review-v2.json";
     private const string LegacyNarrationFileName = "question-driven-narration.json";
     private const string LegacyReviewFileName = "question-driven-narration-review.json";
-    private const string DiagnosticsFileName = "question-driven-narration-v2-diagnostics.json";
+    private const string DiagnosticsFileName = "question-driven-narration-v3-diagnostics.json";
+    private const string NarrationVersion = "V3";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InternalTerms = ["question engine", "scene purpose", "metadata", "json", "source answer"];
     private static readonly string[] MeteorShowerForbiddenLeakageTerms = ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST", "western horizon", "planet pairing", "object pairing"];
@@ -154,48 +155,123 @@ public sealed class QuestionDrivenNarrationGenerator(
     private static QuestionDrivenNarrationDto BuildNarration(EnrichedQuestionScenePlanDto enrichedPlan, QuestionDrivenNarrationRequest request)
     {
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
-        var isProductionStrategyDriven = request.ProductionContext is not null && intelligence is not null;
         var isMeteorShower = intelligence is not null && IsMeteorShower(intelligence, request.ProductionContext);
-        var scenes = enrichedPlan.Scenes.Select(scene =>
+        var family = ResolveNarrationFamily(request, enrichedPlan, isMeteorShower);
+        var sourceScenes = enrichedPlan.Scenes.OrderBy(scene => scene.SceneNumber).ToArray();
+        var scenes = new List<QuestionDrivenNarrationSceneDto>
         {
-            if (!Templates.TryGetValue(scene.QuestionType, out var template))
-                throw new ArgumentException($"No narration template exists for questionType '{scene.QuestionType}'.");
+            BuildV3Beat(0, AstronomyQuestionTypes.ColdOpen, "ColdOpen", "Cold Open", "What appears first?", family, sourceScenes, intelligence, request.ProductionContext),
+            BuildV3Beat(1, AstronomyQuestionTypes.What, "Hook", "Hook", "Why should I keep watching?", family, sourceScenes, intelligence, request.ProductionContext),
+            BuildV3Beat(2, AstronomyQuestionTypes.Why, "Context", "Context", "What makes this moment matter?", family, sourceScenes, intelligence, request.ProductionContext),
+            BuildV3Beat(3, AstronomyQuestionTypes.When, "MainStory", "Main Story", "What is the story behind it?", family, sourceScenes, intelligence, request.ProductionContext),
+            BuildV3Beat(4, AstronomyQuestionTypes.Where, "ViewingGuide", "Viewing Guide", "How can I see it?", family, sourceScenes, intelligence, request.ProductionContext),
+            BuildV3Beat(5, AstronomyQuestionTypes.Action, "EmotionalClosing", "Emotional Closing", "What should I remember?", family, sourceScenes, intelligence, request.ProductionContext)
+        };
 
-            var strategyNarration = isProductionStrategyDriven
-                ? BuildStrategyDrivenNarration(scene, intelligence!, request.ProductionContext!)
-                : null;
-            var sourceAnswer = Clean(strategyNarration?.SourceAnswer ?? scene.SourceAnswer);
-            var section = ResolveNarrationSection(scene.QuestionType, template, isMeteorShower);
-            var narrationText = EnsureNarrationIsParaphrased(
-                scene.QuestionType,
-                section,
-                Clean(strategyNarration?.NarrationText ?? template.NarrationText),
-                sourceAnswer,
-                isMeteorShower);
-
-            return new QuestionDrivenNarrationSceneDto(
-                scene.SceneNumber,
-                Clean(scene.QuestionType),
-                Clean(scene.ScenePurpose),
-                Clean(scene.ViewerQuestion),
-                Clean(strategyNarration?.ViewerTakeaway ?? scene.ViewerTakeaway),
-                sourceAnswer,
-                Clean(strategyNarration?.NarrationIntent ?? scene.NarrationIntent),
-                narrationText,
-                strategyNarration?.EstimatedDurationSeconds ?? template.EstimatedDurationSeconds,
-                strategyNarration?.VoiceDirection ?? template.VoiceDirection,
-                strategyNarration?.CaptionText ?? template.CaptionText,
-                section,
-                template.SceneType);
-        }).ToArray();
-
+        var diagnostics = BuildV3Diagnostics(scenes);
         return new QuestionDrivenNarrationDto(
             Clean(enrichedPlan.EventId) == string.Empty ? request.EventId : Clean(enrichedPlan.EventId),
             Clean(enrichedPlan.RegionId) == string.Empty ? request.RegionId : Clean(enrichedPlan.RegionId),
             string.IsNullOrWhiteSpace(enrichedPlan.Language) ? request.Language : enrichedPlan.Language,
             scenes,
             scenes.Sum(scene => scene.EstimatedDurationSeconds),
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            NarrationVersion,
+            diagnostics);
+    }
+
+    private static QuestionDrivenNarrationSceneDto BuildV3Beat(int sceneNumber, string questionType, string section, string purpose, string viewerQuestion, string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    {
+        var source = sourceScenes.FirstOrDefault(s => string.Equals(s.QuestionType, questionType, StringComparison.OrdinalIgnoreCase))
+            ?? sourceScenes.FirstOrDefault()
+            ?? throw new ArgumentException("Enriched question-driven scene plan requires at least one source scene.");
+        var text = V3NarrationText(section, family, intelligence, context);
+        return new QuestionDrivenNarrationSceneDto(
+            sceneNumber,
+            questionType,
+            purpose.Replace(" ", string.Empty),
+            viewerQuestion,
+            V3Caption(section, family),
+            Clean(source.SourceAnswer),
+            $"Narration V3 {purpose}: cinematic documentary storytelling beat.",
+            text,
+            section == "ColdOpen" ? 4 : section == "EmotionalClosing" ? 10 : 9,
+            section == "ColdOpen" ? "Music-forward, quiet, cinematic curiosity; no explanation." : "Documentary, conversational, wonder-led, and concise.",
+            V3Caption(section, family),
+            section,
+            section == "ColdOpen" ? V3ColdOpenSceneType(family) : purpose.Replace(" ", string.Empty));
+    }
+
+
+    private static string ResolveNarrationFamily(QuestionDrivenNarrationRequest request, EnrichedQuestionScenePlanDto plan, bool isMeteorShower)
+    {
+        var text = string.Join(' ', new[] { request.EventType, request.Title, request.ShortTitle, request.StrategyId, request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, request.ProductionContext?.ProductionEventIntelligence?.Title }.Where(v => !string.IsNullOrWhiteSpace(v)).Concat(plan.Scenes.SelectMany(s => new[] { s.QuestionType, s.SourceAnswer, s.VisualIntent, s.ImagePromptIntent })));
+        if (isMeteorShower || text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "Meteor";
+        if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
+        if (text.Contains("moon", StringComparison.OrdinalIgnoreCase) || text.Contains("lunar", StringComparison.OrdinalIgnoreCase)) return "Moon";
+        return "PlanetGrouping";
+    }
+
+    private static string V3NarrationText(string section, string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    {
+        var title = Clean(intelligence?.Title, "this sky event");
+        var window = FirstNonEmpty(intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, intelligence?.LocalPeakTime, "the best local viewing window");
+        var direction = FirstNonEmpty(intelligence?.SkyDirectionHint, "the clearest part of the sky");
+        return (family, section) switch
+        {
+            ("Meteor", "ColdOpen") => "Tonight, the sky may put on one of its most spectacular shows.",
+            ("Moon", "ColdOpen") => "The first full moon of the year rises tonight.",
+            ("Eclipse", "ColdOpen") => "For a few unforgettable minutes, daylight can fade into twilight.",
+            ("PlanetGrouping", "ColdOpen") => "Two brilliant worlds will appear almost side by side tonight.",
+            ("Meteor", "Hook") => "More than a hundred meteors could streak overhead every hour.",
+            ("Moon", "Hook") => "But why is it called the Wolf Moon?",
+            ("Eclipse", "Hook") => "Where will the eclipse be visible, and when should you look?",
+            ("PlanetGrouping", "Hook") => "Can you spot the pair before they disappear below the horizon?",
+            ("Meteor", "Context") => "Meteor showers begin as tiny trails left behind in space, and for one night Earth moves through that ancient dust like a ship crossing sparks.",
+            ("Moon", "Context") => "Moon names carry old seasonal memories, passed down from nights when the sky was both calendar and storyteller.",
+            ("Eclipse", "Context") => "An eclipse is a shadow story, with the Sun, Moon, and Earth lining up just precisely enough to change the daylight around us.",
+            ("PlanetGrouping", "Context") => "The planets are not truly close together; from Earth, their separate paths briefly overlap into one beautiful line of sight.",
+            ("Meteor", "MainStory") => "Each streak is a grain of cosmic debris burning high above us, gone in a heartbeat but bright enough to make the whole sky feel alive.",
+            ("Moon", "MainStory") => "As the Moon clears the horizon, its light turns familiar landscapes into something quieter, older, and easier to notice.",
+            ("Eclipse", "MainStory") => "The most dramatic moments arrive slowly, then all at once, as the shadow deepens and the sky reveals motion we usually cannot feel.",
+            ("PlanetGrouping", "MainStory") => "One world may be nearby by solar-system standards, the other vastly farther away, yet tonight perspective lets them share the same frame.",
+            (_, "ViewingGuide") => $"For the practical view, look toward {direction} during {window}. Choose an open horizon, give your eyes time to adjust, and use binoculars only if they help you settle on the scene.",
+            ("Meteor", "EmotionalClosing") => "Clear skies. Tonight may be your best chance to see nature's fireworks. Find a dark place, look up, and let the night surprise you.",
+            ("Moon", "EmotionalClosing") => "The Wolf Moon will rise again next year. Tonight, take a moment to look up. Some views are familiar because they are worth returning to.",
+            ("Eclipse", "EmotionalClosing") => "Moments like this remind us how dynamic our sky really is. The shadow passes quickly, but the memory can stay with you for years.",
+            ("PlanetGrouping", "EmotionalClosing") => "These worlds will drift apart again soon. Do not miss the view. For a short time, the solar system feels close enough to hold in one glance.",
+            _ => $"{title} is a brief sky story worth seeing while the moment is still here."
+        };
+    }
+
+    private static string V3Caption(string section, string family) => section switch
+    {
+        "ColdOpen" => family switch { "Meteor" => "Meteor burst", "Moon" => "Moonrise", "Eclipse" => "Eclipse silhouette", _ => "Twilight planets" },
+        "Hook" => "Stay with the sky story.",
+        "Context" => "The meaning behind the view.",
+        "MainStory" => "Perspective, motion, and wonder.",
+        "ViewingGuide" => "Where, when, and how to look.",
+        "EmotionalClosing" => "Take a moment to look up.",
+        _ => "Look up tonight."
+    };
+
+    private static string V3ColdOpenSceneType(string family) => family switch
+    {
+        "Meteor" => "ColdOpenMeteorBurst",
+        "Moon" => "ColdOpenMoonrise",
+        "Eclipse" => "ColdOpenEclipseSilhouette",
+        _ => "ColdOpenTwilightPlanets"
+    };
+
+    private static QuestionDrivenNarrationDiagnosticsDto BuildV3Diagnostics(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
+    {
+        var coldOpen = scenes.Any(s => string.Equals(s.Section, "ColdOpen", StringComparison.OrdinalIgnoreCase));
+        var hook = scenes.Any(s => string.Equals(s.Section, "Hook", StringComparison.OrdinalIgnoreCase));
+        var story = scenes.Any(s => string.Equals(s.Section, "Context", StringComparison.OrdinalIgnoreCase) || string.Equals(s.Section, "MainStory", StringComparison.OrdinalIgnoreCase));
+        var viewing = scenes.Any(s => string.Equals(s.Section, "ViewingGuide", StringComparison.OrdinalIgnoreCase));
+        var closing = scenes.Any(s => string.Equals(s.Section, "EmotionalClosing", StringComparison.OrdinalIgnoreCase));
+        var score = 40 + (coldOpen ? 12 : 0) + (hook ? 12 : 0) + (story ? 16 : 0) + (viewing ? 8 : 0) + (closing ? 12 : 0);
+        return new QuestionDrivenNarrationDiagnosticsDto(coldOpen, hook, story, viewing, closing, NarrationVersion, Math.Min(100, score));
     }
 
     private static string ResolveNarrationSection(string questionType, NarrationTemplate template, bool isMeteorShower)
@@ -297,21 +373,27 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "narrationTextNonEmpty", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.NarrationText)), "narrationText non-empty for every scene.");
         AddCheck(checks, "captionTextNonEmpty", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.CaptionText)), "captionText non-empty for every scene.");
         AddCheck(checks, "positiveDurations", narration.Scenes.All(scene => scene.EstimatedDurationSeconds > 0), "estimatedDurationSeconds > 0 for every scene.");
-        AddCheck(checks, "targetDuration", narration.TotalEstimatedDurationSeconds is >= 45 and <= 70, "total duration must be between 45 and 70 seconds.");
+        AddCheck(checks, "targetDuration", narration.TotalEstimatedDurationSeconds is >= 45 and <= 75, "total duration must be between 45 and 75 seconds for Narration V3.");
         AddCheck(checks, "noDuplicateNarration", narration.Scenes.Select(scene => Clean(scene.NarrationText)).Distinct(StringComparer.OrdinalIgnoreCase).Count() == narration.Scenes.Count, "no duplicate narration lines.");
         var copiedSourceAnswers = CountCopiedSourceAnswers(narration);
         AddCheck(checks, "notSourceAnswerCopies", copiedSourceAnswers == 0, "narrationText must not exactly copy sourceAnswer.");
         AddCheck(checks, "noInternalTerms", narration.Scenes.All(SceneHasNoInternalTerms), "narration and captions must not contain internal/debug terms.");
-        AddCheck(checks, "actionLast", string.Equals(narration.Scenes.LastOrDefault()?.QuestionType, AstronomyQuestionTypes.Action, StringComparison.OrdinalIgnoreCase), "action scene is last.");
-        AddCheck(checks, "whatFirst", string.Equals(narration.Scenes.FirstOrDefault()?.QuestionType, AstronomyQuestionTypes.What, StringComparison.OrdinalIgnoreCase), "what scene is first.");
+        AddCheck(checks, "emotionalClosingLast", string.Equals(narration.Scenes.LastOrDefault()?.Section, "EmotionalClosing", StringComparison.OrdinalIgnoreCase), "emotional closing is last.");
+        AddCheck(checks, "coldOpenFirst", string.Equals(narration.Scenes.FirstOrDefault()?.Section, "ColdOpen", StringComparison.OrdinalIgnoreCase), "cold open is first.");
         AddCheck(checks, "oneQuestionPerScene", narration.Scenes.Select(scene => scene.QuestionType).Distinct(StringComparer.OrdinalIgnoreCase).Count() == narration.Scenes.Count, "each scene focuses on exactly one question type.");
         AddCheck(checks, "captionsShorterThanNarration", narration.Scenes.All(scene => scene.CaptionText.Length < scene.NarrationText.Length), "caption text should be shorter than narration text.");
         AddCheck(checks, "noForbiddenUnrelatedTerms", !NarrationContainsForbiddenLeakage(narration, productionContext, out _), "narration plan must not contain forbidden unrelated event terms.");
-        AddCheck(checks, "hookExists", narration.Scenes.Any(scene => string.Equals(scene.Section, "Hook", StringComparison.OrdinalIgnoreCase)), "hook section exists.");
-        AddCheck(checks, "ctaExists", narration.Scenes.Any(scene => string.Equals(scene.Section, "CTA", StringComparison.OrdinalIgnoreCase)), "CTA section exists.");
+        AddCheck(checks, "coldOpenPresent", narration.Diagnostics?.ColdOpenPresent == true, "ColdOpen beat exists.");
+        AddCheck(checks, "hookPresent", narration.Diagnostics?.HookPresent == true, "Hook beat exists.");
+        AddCheck(checks, "storyLayerPresent", narration.Diagnostics?.StoryLayerPresent == true, "story layer exists before viewing guide.");
+        AddCheck(checks, "viewingGuidePresent", narration.Diagnostics?.ViewingGuidePresent == true, "viewing guide exists after hook and story.");
+        AddCheck(checks, "emotionalClosingPresent", narration.Diagnostics?.EmotionalClosingPresent == true, "emotional closing exists.");
+        AddCheck(checks, "narrationVersion", string.Equals(narration.NarrationVersion, NarrationVersion, StringComparison.OrdinalIgnoreCase), "narrationVersion is V3.");
+        AddCheck(checks, "notOnlyQuestionAnswerStyle", !IsOnlyQuestionAnswerStyle(narration), "narration is not only Q&A style.");
+        AddCheck(checks, "viewingGuideAfterHookStory", ViewingGuideAfterHookAndStory(narration), "viewing guide appears after hook and story layer.");
         var missingSections = MissingRequiredSections(narration);
-        AddCheck(checks, "requiredSectionsPresent", missingSections.Count == 0, missingSections.Count == 0 ? "required sections present: Hook, Curiosity, Explanation, ViewingAdvice, Reward, CTA." : "missing required narration section(s): " + string.Join(", ", missingSections) + ".");
-        AddCheck(checks, "storyStructureComplete", missingSections.Count == 0, missingSections.Count == 0 ? "story structure includes Hook, Curiosity, Explanation, ViewingAdvice, Reward, and CTA." : "story structure missing required section(s): " + string.Join(", ", missingSections) + ".");
+        AddCheck(checks, "requiredSectionsPresent", missingSections.Count == 0, missingSections.Count == 0 ? "required sections present: ColdOpen, Hook, Context, MainStory, ViewingGuide, EmotionalClosing." : "missing required narration section(s): " + string.Join(", ", missingSections) + ".");
+        AddCheck(checks, "storyStructureComplete", missingSections.Count == 0, missingSections.Count == 0 ? "story structure includes ColdOpen, Hook, Context, MainStory, ViewingGuide, and EmotionalClosing." : "story structure missing required section(s): " + string.Join(", ", missingSections) + ".");
         AddCheck(checks, "sceneTypeMapped", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.Section) && !string.IsNullOrWhiteSpace(scene.SceneType)), "every narration section maps to a scene type.");
         AddCheck(checks, "noRepetitiveSentenceOpenings", HasVariedSentenceOpenings(narration), "no repetitive sentence openings.");
         AddCheck(checks, "noRoboticPhrasing", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, new[] { "based on the current", "approved production", "source answer", "metadata" })), "narration avoids robotic or internal phrasing.");
@@ -329,7 +411,9 @@ public sealed class QuestionDrivenNarrationGenerator(
             RequiredSectionsPresent: missingSections.Count == 0,
             RepetitiveSentenceOpenings: !HasVariedSentenceOpenings(narration),
             StoryStructurePassed: missingSections.Count == 0,
-            CopiedSourceAnswers: copiedSourceAnswers);
+            CopiedSourceAnswers: copiedSourceAnswers,
+            NarrationVersion: NarrationVersion,
+            Diagnostics: narration.Diagnostics);
     }
 
     private static void ValidateNarrationHasNoForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext)
@@ -382,9 +466,22 @@ public sealed class QuestionDrivenNarrationGenerator(
     private static IReadOnlyList<string> MissingRequiredSections(QuestionDrivenNarrationDto narration)
     {
         var present = narration.Scenes.Select(scene => scene.Section).Where(section => !string.IsNullOrWhiteSpace(section)).ToHashSet(StringComparer.Ordinal);
-        return [.. new[] { "Hook", "Curiosity", "Explanation", "ViewingAdvice", "Reward", "CTA" }.Where(required => !present.Contains(required))];
+        return [.. new[] { "ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing" }.Where(required => !present.Contains(required))];
     }
 
+
+    private static bool IsOnlyQuestionAnswerStyle(QuestionDrivenNarrationDto narration)
+        => narration.Scenes.All(scene => scene.ViewerQuestion.Contains("?", StringComparison.OrdinalIgnoreCase)
+            && (scene.Section is "" || string.Equals(scene.Section, scene.QuestionType, StringComparison.OrdinalIgnoreCase)));
+
+    private static bool ViewingGuideAfterHookAndStory(QuestionDrivenNarrationDto narration)
+    {
+        var ordered = narration.Scenes.OrderBy(scene => scene.SceneNumber).ToArray();
+        var hook = Array.FindIndex(ordered, s => string.Equals(s.Section, "Hook", StringComparison.OrdinalIgnoreCase));
+        var story = Array.FindIndex(ordered, s => string.Equals(s.Section, "Context", StringComparison.OrdinalIgnoreCase) || string.Equals(s.Section, "MainStory", StringComparison.OrdinalIgnoreCase));
+        var guide = Array.FindIndex(ordered, s => string.Equals(s.Section, "ViewingGuide", StringComparison.OrdinalIgnoreCase));
+        return hook >= 0 && story > hook && guide > story;
+    }
     private static bool HasVariedSentenceOpenings(QuestionDrivenNarrationDto narration)
     {
         var openings = narration.Scenes
