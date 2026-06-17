@@ -60,6 +60,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const double SilenceRmsThresholdDb = -60.0;
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006"];
     private static readonly string[] RequiredAssemblySceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
+    private static readonly string[] NarrationAuthoringInstructionPhrases = ["Open with", "Explain", "Describe", "Focus on", "Call out", "Add a distinct", "Give safe", "Close with", "Viewer-friendly terms", "Timing window", "Primary sky objects", "Event experience", "Sky geometry"];
     private static readonly string[] LongFormSectionOrder = ["Hook", "WhatIsHappening", "WhyItMatters", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action"];
     private static readonly IReadOnlyDictionary<string, string> AssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -1465,18 +1466,18 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var sourceNote = context.SourceNotes.Count == 0 ? string.Empty : context.SourceNotes[round % context.SourceNotes.Count];
         return section switch
         {
-            "Hook" => $"For {context.ShortTitle}, keep the promise specific: viewers get the event name, the best time, and a simple way to recognize the sky without needing advanced equipment.",
-            "WhatIsHappening" => $"This is a {context.EventType} story involving {context.PrimaryObjectsText}, so explain the apparent sky geometry, the observing conditions, and what changes as the viewing window unfolds.",
-            "WhenToLook" => $"Use {context.BestViewingWindowText} as the planning anchor, mention {context.LocalPeakTimeText} when available, and remind viewers that clouds and horizon obstructions can shift the practical minute.",
-            "WhereToLook" => $"Point viewers toward {context.SkyDirectionText}, then have them sweep slowly around the approved scene area so the actual event remains the guide instead of a generic sky placeholder.",
-            "WhyItMatters" => $"The reason it matters is tied to this event context: {context.Title} is timely, observable for the selected audience, and connected to the source-backed plan.",
-            "HowToObserve" => $"Practical observing should stay simple: choose a safe open location, lower screen brightness, give your eyes time to adapt, and compare the sky with the generated scene plan.",
-            "WhatYouWillSee" => $"Set realistic expectations from the current event data: describe {context.PrimaryObjectsText} as viewers should actually look for it, not as an unrelated astronomy object.",
-            "InterestingFact" => string.IsNullOrWhiteSpace(sourceNote) ? $"A useful detail is that the same timing and direction checks help observers understand why {context.ShortTitle} is worth watching." : $"One source note to carry into the narration is: {sourceNote}.",
-            "ObservationTips" => string.IsNullOrWhiteSpace(sceneNote) ? "Use the approved scenes as a checklist: timing, direction, visibility, safety, then one final reminder before stepping outside." : $"The generated scene plan reinforces this viewer takeaway: {sceneNote}.",
-            "Recap" => $"Recap the dynamic facts together: {context.ShortTitle}, {context.EventType}, {context.PrimaryObjectsText}, {context.SkyDirectionText}, and {context.BestViewingWindowText}.",
-            "Action" => "Close with a calm call to action: save the viewing window, check the local forecast, share the plan with someone nearby, and step outside only when conditions are safe.",
-            _ => "Keep the observation simple, safe, and grounded in the visible sky."
+            "Hook" => $"For {context.ShortTitle}, the promise is simple: a real sky event, a narrow chance to see it, and a view that rewards anyone who steps outside at the right moment.",
+            "WhatIsHappening" => $"Behind the scene, {context.PrimaryObjectsText} follow separate paths that briefly line up from our point of view, turning ordinary motion into something visible and memorable.",
+            "WhenToLook" => $"The strongest opportunity gathers around {HumanizeViewingWindow(context.BestViewingWindowText)}, with {HumanizeViewingWindow(context.LocalPeakTimeText)} serving as a useful center point when the sky is clear.",
+            "WhereToLook" => $"Let {context.SkyDirectionText} be the starting cue, then move slowly across the nearby sky instead of searching at random.",
+            "WhyItMatters" => $"Its value comes from timing: {context.Title} is not just a fact on a calendar, but a visible reminder that the sky is constantly changing above us.",
+            "HowToObserve" => "A comfortable view matters as much as the science: stand somewhere safe, dim bright screens, and give the scene enough time to emerge.",
+            "WhatYouWillSee" => $"The view may be subtle at first, but {context.PrimaryObjectsText} can anchor the frame as the event slowly becomes easier to recognize.",
+            "InterestingFact" => string.IsNullOrWhiteSpace(sourceNote) ? $"That is part of the beauty of {context.ShortTitle}: the same simple checks of time, direction, and patience can turn a distant event into a personal memory." : $"One detail deepens the story: {CleanLongFormInstructionLeakage(sourceNote)}",
+            "ObservationTips" => string.IsNullOrWhiteSpace(sceneNote) ? "A small checklist is enough: clear sky, open view, safe footing, and a few quiet minutes away from glare." : $"The scene plan points to a simple takeaway: {CleanLongFormInstructionLeakage(sceneNote)}",
+            "Recap" => $"Put it together: {context.ShortTitle}, {context.PrimaryObjectsText}, {context.SkyDirectionText}, and {HumanizeViewingWindow(context.BestViewingWindowText)}.",
+            "Action" => "The closing step is quiet and practical: save the window, check the forecast, invite someone nearby, and let the sky do the rest.",
+            _ => "The observation remains simple, safe, and grounded in the visible sky."
         };
     }
 
@@ -1518,19 +1519,35 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private static string BuildLongFormNarration(string section, LongFormNarrationContext context)
         => section switch
         {
-            "Hook" => $"{context.ShortTitle} is the sky event to plan around, and this guide uses the current approved details for {context.EventType}, timing, direction, and source-backed viewing advice.",
-            "WhatIsHappening" => $"What is happening: {context.Title} centers on {context.PrimaryObjectsText}. {context.ScientificContextText}",
-            "WhyItMatters" => $"Why it matters: this event is relevant because the selected audience has a practical viewing plan, recognizable sky cues, and a reason to connect the science with tonight’s observation.",
-            "WhereToLook" => $"Where to look: use {context.SkyDirectionText} as the starting direction, then scan the surrounding sky slowly while matching the view to the generated scene plan.",
-            "WhenToLook" => $"When to watch: the best local viewing window is {context.BestViewingWindowText}. If a peak time is available, use {context.LocalPeakTimeText} as the center of the plan.",
-            "HowToObserve" => $"Viewing tips begin with safety and comfort. {context.ViewerInstructionsText}",
-            "WhatYouWillSee" => $"What you will see should be described from the event data: {context.PrimaryObjectsText}, the expected direction, the local timing, and the approved visual sequence.",
-            "InterestingFact" => $"A useful context note is that {context.ShortTitle} becomes easier to understand when the source notes, scene plan, and observing window all tell the same story.",
-            "ObservationTips" => $"Practical tips: check clouds, avoid bright lights, give your eyes time to adapt, and use the scene plan as a simple checklist rather than a script for a different event.",
-            "Recap" => $"Recap: {context.ShortTitle}; event type {context.EventType}; primary objects {context.PrimaryObjectsText}; direction {context.SkyDirectionText}; best window {context.BestViewingWindowText}.",
-            "Action" => "Closing CTA: save the time, share the viewing plan, check local conditions, and step outside when it is safe and comfortable.",
-            _ => "This section continues the astronomy viewing guide using only the available event details."
+            "Hook" => $"{context.ShortTitle} is the kind of sky moment that asks for a little planning and rewards a few minutes of attention.",
+            "WhatIsHappening" => $"{context.Title} centers on {context.PrimaryObjectsText}. {CleanLongFormInstructionLeakage(context.ScientificContextText)}",
+            "WhyItMatters" => "The reason it matters is not only rarity. It is the chance to feel celestial motion as something immediate, visible, and shared.",
+            "WhereToLook" => $"Begin with {context.SkyDirectionText}, then let the brightest landmarks guide your eyes through the surrounding sky.",
+            "WhenToLook" => $"The best viewing opportunities gather around {HumanizeViewingWindow(context.BestViewingWindowText)}, with conditions changing quickly as the window opens and fades.",
+            "HowToObserve" => $"Keep the setup simple. {CleanLongFormInstructionLeakage(context.ViewerInstructionsText)}",
+            "WhatYouWillSee" => $"Expect a real sky view, not a diagram: {context.PrimaryObjectsText} will be the anchor while timing, darkness, and horizon clarity shape what stands out.",
+            "InterestingFact" => $"A small astronomical alignment can feel large because it compresses distance, motion, and perspective into a view you can recognize with your own eyes.",
+            "ObservationTips" => "Check clouds, avoid bright lights, and arrive early enough for your eyes to settle before the most important minutes arrive.",
+            "Recap" => $"Remember the essentials: {context.ShortTitle}, {context.SkyDirectionText}, and {HumanizeViewingWindow(context.BestViewingWindowText)}.",
+            "Action" => "If the weather cooperates, step outside with patience. The sky will not hold the moment for long.",
+            _ => "The story continues in the visible sky, with timing and patience doing most of the work."
         };
+
+    private static string HumanizeViewingWindow(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "the local viewing window";
+        return Regex.IsMatch(value, @"\b\d{4}-\d{2}-\d{2}|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", RegexOptions.IgnoreCase)
+            ? "the local viewing window"
+            : value;
+    }
+
+    private static string CleanLongFormInstructionLeakage(string value)
+    {
+        var cleaned = value ?? string.Empty;
+        foreach (var phrase in new[] { "Open with", "Explain", "Describe", "Focus on", "Call out", "Add a distinct", "Give safe", "Close with", "Viewer-friendly terms", "Timing window", "Primary sky objects", "Event experience", "Sky geometry" })
+            cleaned = Regex.Replace(cleaned, Regex.Escape(phrase), string.Empty, RegexOptions.IgnoreCase);
+        return string.Join(' ', cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
+    }
 
     private LongFormNarrationContext BuildLongFormNarrationContext(VideoAssemblyGenerationRequest request)
     {
@@ -1607,7 +1624,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             outputs.Add(NormalizePath(path));
         }
         var diagnosticsPath = Path.Combine(root, "subtitle-validation.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "V1", srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count }, JsonOptions), cancellationToken);
+        var srtPath = Path.Combine(root, fileStem + ".srt");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "V1", srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count }, JsonOptions), cancellationToken);
         outputs.Add(NormalizePath(diagnosticsPath));
         return outputs;
     }
@@ -2314,7 +2332,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             var silentVideoPath = Path.Combine(tempDirectory, "visual-track.mp4");
             await RenderCrossFadedVisualTrackAsync(segmentPaths, plan, silentVideoPath, cancellationToken);
 
-            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, renderMusicPlan);
+            var subtitlePath = ResolveBurnInSubtitlePath(plan);
+            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, renderMusicPlan, subtitlePath);
             var muxOperation = renderMusicPlan.BackgroundMusic
                 ? "mux rendered video with narration audio and background music"
                 : "mux rendered video with narration audio";
@@ -2429,7 +2448,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             _ => (-0.006, -0.004)
         };
 
-    private IReadOnlyList<string> BuildFinalMuxArguments(string silentVideoPath, string narrationAudioPath, string outputPath, double durationSeconds, VideoAssemblyRenderMusicPlanDto renderMusicPlan)
+    private IReadOnlyList<string> BuildFinalMuxArguments(string silentVideoPath, string narrationAudioPath, string outputPath, double durationSeconds, VideoAssemblyRenderMusicPlanDto renderMusicPlan, string? subtitlePath = null)
     {
         var args = new List<string> { "-hide_banner", "-y", "-i", silentVideoPath, "-i", narrationAudioPath };
         var backgroundMusicSource = ResolveBackgroundMusicSource(renderMusicPlan);
@@ -2453,6 +2472,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
             args.AddRange(["-map", "0:v:0", "-map", "1:a:0"]);
         }
 
+        if (!string.IsNullOrWhiteSpace(subtitlePath))
+            args.AddRange(["-vf", $"subtitles=\'{EscapeSubtitleFilterPath(subtitlePath)}\'"]);
+
         args.AddRange([
             "-c:v", "libx264", "-preset", renderingOptions.Value.ShortsPreset, "-crf", renderingOptions.Value.ShortsCrf.ToString(CultureInfo.InvariantCulture),
             "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-b:a", renderingOptions.Value.ShortsAudioBitrate,
@@ -2460,6 +2482,21 @@ public sealed partial class VideoAssemblyIntelligenceService(
         ]);
         return args;
     }
+
+
+    private string? ResolveBurnInSubtitlePath(VideoAssemblyPlanDto plan)
+    {
+        var subtitleOptions = videoAssemblyOptions?.Value.Subtitles ?? new VideoAssemblySubtitleOptions();
+        if (!subtitleOptions.Enabled || !subtitleOptions.EnableSubtitles || !subtitleOptions.BurnIn)
+            return null;
+        var folder = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var fileStem = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var srtPath = Path.Combine(BuildVideoAssemblyRoot(plan.EventId, plan.RegionId), "subtitles", folder, fileStem + ".srt");
+        return File.Exists(srtPath) ? srtPath : null;
+    }
+
+    private static string EscapeSubtitleFilterPath(string path)
+        => path.Replace("\\", "/").Replace("'", "\\'").Replace(":", "\\:");
 
 
     private static VideoAssemblyRenderMusicPlanDto ResolveRenderMusicPlan(VideoAssemblyRenderMusicPlanDto planRenderMusicPlan, VideoAssemblyGenerationRequest request)
@@ -2648,11 +2685,26 @@ public sealed partial class VideoAssemblyIntelligenceService(
             if (Math.Abs(script.TotalEstimatedDurationSeconds - calculatedDurationSeconds) > 1.0)
                 throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be calculated from narration word count or TTS estimate.");
         }
+        var sceneNarrations = script.SceneScripts.Select(scene => scene.Narration).ToArray();
+        if (sceneNarrations.Select(n => n.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != sceneNarrations.Length)
+            throw new ArgumentException("Video narration script validation failed: duplicate scene narration is not allowed.");
+        if (sceneNarrations.Any(n => n.Trim().Length < 30))
+            throw new ArgumentException("Video narration script validation failed: every scene narration must be at least 30 characters.");
+        if (sceneNarrations.Any(ContainsNarrationAuthoringInstruction))
+            throw new ArgumentException("Video narration script validation failed: narration contains authoring instruction text.");
+        if (sceneNarrations.Any(ContainsRawSpokenTimestamp))
+            throw new ArgumentException("Video narration script validation failed: narration contains raw timestamps.");
         if (!script.TtsPlan.TtsRequired)
             throw new ArgumentException("Video narration script validation failed: ttsRequired must be true.");
         if (script.Scores.TtsReadinessScore < 90)
             throw new ArgumentException("Video narration script validation failed: ttsReadinessScore must be at least 90.");
     }
+
+    private static bool ContainsNarrationAuthoringInstruction(string value)
+        => NarrationAuthoringInstructionPhrases.Any(phrase => !string.IsNullOrWhiteSpace(value) && value.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+
+    private static bool ContainsRawSpokenTimestamp(string value)
+        => Regex.IsMatch(value ?? string.Empty, @"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", RegexOptions.IgnoreCase);
 
     private static void ValidateRecommendedSceneOrder(IEnumerable<string> sceneOrder, string fileName)
     {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,7 @@ public sealed class QuestionDrivenNarrationGenerator(
     private const string NarrationVersion = "V3";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] InternalTerms = ["question engine", "scene purpose", "metadata", "json", "source answer"];
+    private static readonly string[] AuthoringInstructionPhrases = ["Open with", "Explain", "Describe", "Focus on", "Call out", "Add a distinct", "Give safe", "Close with", "Viewer-friendly terms", "Timing window", "Primary sky objects", "Event experience", "Sky geometry"];
     private static readonly string[] MeteorShowerForbiddenLeakageTerms = ["Venus", "Jupiter", "conjunction", "after sunset", "look west", "7:23 PM IST", "western horizon", "planet pairing", "object pairing"];
     private static readonly IReadOnlyDictionary<string, string> MeteorShowerSectionsByQuestionType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -111,8 +113,10 @@ public sealed class QuestionDrivenNarrationGenerator(
                     await File.WriteAllTextAsync(legacyNarrationPath, JsonSerializer.Serialize(existingNarration, JsonOptions), cancellationToken);
                 if (!File.Exists(legacyReviewPath))
                     await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(existingReview, JsonOptions), cancellationToken);
+                var existingSubtitlePaths = await GenerateNarrationSubtitlesAsync(existingNarration, narrationPath, cancellationToken);
+                existingNarration = existingNarration with { Diagnostics = EnrichDiagnosticsWithSubtitles(existingNarration.Diagnostics, existingSubtitlePaths.Short, existingSubtitlePaths.Long) };
                 warnings.Add("Question-driven narration already exists; returning the existing files because overwriteExisting is false.");
-                return BuildResponse(existingNarration, existingReview, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
+                return BuildResponse(existingNarration, existingReview, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/'), existingSubtitlePaths.Short, existingSubtitlePaths.Long], warnings);
             }
 
             warnings.Add("Existing question-driven narration failed current Phase 7 validation; regenerating required narration files.");
@@ -123,6 +127,8 @@ public sealed class QuestionDrivenNarrationGenerator(
             ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
 
         var narration = BuildNarration(enrichedPlan, request);
+        var subtitlePaths = request.DryRun ? (Short: string.Empty, Long: string.Empty) : await GenerateNarrationSubtitlesAsync(narration, narrationPath, cancellationToken);
+        narration = narration with { Diagnostics = EnrichDiagnosticsWithSubtitles(narration.Diagnostics, subtitlePaths.Short, subtitlePaths.Long) };
         ValidateNarrationHasNoForbiddenLeakage(narration, request.ProductionContext);
         var review = BuildReview(narration, warnings, request.ProductionContext);
         if (!review.IsValid)
@@ -142,7 +148,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         await File.WriteAllTextAsync(legacyReviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(BuildDiagnostics(narration, request), JsonOptions), cancellationToken);
 
-        return BuildResponse(narration, review, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/')], warnings);
+        return BuildResponse(narration, review, [narrationPath.Replace('\\', '/'), reviewPath.Replace('\\', '/'), legacyNarrationPath.Replace('\\', '/'), legacyReviewPath.Replace('\\', '/'), subtitlePaths.Short, subtitlePaths.Long], warnings);
     }
 
     private static QuestionDrivenNarrationResponse BuildResponse(
@@ -158,15 +164,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var isMeteorShower = intelligence is not null && IsMeteorShower(intelligence, request.ProductionContext);
         var family = ResolveNarrationFamily(request, enrichedPlan, isMeteorShower);
         var sourceScenes = enrichedPlan.Scenes.OrderBy(scene => scene.SceneNumber).ToArray();
-        var scenes = new List<QuestionDrivenNarrationSceneDto>
-        {
-            BuildV3Beat(0, AstronomyQuestionTypes.ColdOpen, "ColdOpen", "Cold Open", "What appears first?", family, sourceScenes, intelligence, request.ProductionContext),
-            BuildV3Beat(1, AstronomyQuestionTypes.What, "Hook", "Hook", "Why should I keep watching?", family, sourceScenes, intelligence, request.ProductionContext),
-            BuildV3Beat(2, AstronomyQuestionTypes.Why, "Context", "Context", "What makes this moment matter?", family, sourceScenes, intelligence, request.ProductionContext),
-            BuildV3Beat(3, AstronomyQuestionTypes.When, "MainStory", "Main Story", "What is the story behind it?", family, sourceScenes, intelligence, request.ProductionContext),
-            BuildV3Beat(4, AstronomyQuestionTypes.Where, "ViewingGuide", "Viewing Guide", "How can I see it?", family, sourceScenes, intelligence, request.ProductionContext),
-            BuildV3Beat(5, AstronomyQuestionTypes.Action, "EmotionalClosing", "Emotional Closing", "What should I remember?", family, sourceScenes, intelligence, request.ProductionContext)
-        };
+        var scenes = DocumentaryNarrationComposer(family, sourceScenes, intelligence, request.ProductionContext).ToList();
 
         var diagnostics = BuildV3Diagnostics(scenes);
         return new QuestionDrivenNarrationDto(
@@ -203,6 +201,16 @@ public sealed class QuestionDrivenNarrationGenerator(
     }
 
 
+    private static QuestionDrivenNarrationSceneDto[] DocumentaryNarrationComposer(string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    {
+        string[] sections = ["ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing"];
+        string[] questionTypes = [AstronomyQuestionTypes.ColdOpen, AstronomyQuestionTypes.What, AstronomyQuestionTypes.Why, AstronomyQuestionTypes.When, AstronomyQuestionTypes.Where, AstronomyQuestionTypes.Action];
+        string[] purposes = ["Cold Open", "Hook", "Context", "Main Story", "Viewing Guide", "Emotional Closing"];
+        string[] questions = ["What appears first?", "Why should I keep watching?", "What makes this moment matter?", "What is the story behind it?", "How can I see it?", "What should I remember?"];
+        return sections.Select((section, i) => BuildV3Beat(i, questionTypes[i], section, purposes[i], questions[i], family, sourceScenes, intelligence, context)).ToArray();
+    }
+
+
     private static string ResolveNarrationFamily(QuestionDrivenNarrationRequest request, EnrichedQuestionScenePlanDto plan, bool isMeteorShower)
     {
         var text = string.Join(' ', new[] { request.EventType, request.Title, request.ShortTitle, request.StrategyId, request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, request.ProductionContext?.ProductionEventIntelligence?.Title }.Where(v => !string.IsNullOrWhiteSpace(v)).Concat(plan.Scenes.SelectMany(s => new[] { s.QuestionType, s.SourceAnswer, s.VisualIntent, s.ImagePromptIntent })));
@@ -215,7 +223,7 @@ public sealed class QuestionDrivenNarrationGenerator(
     private static string V3NarrationText(string section, string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
     {
         var title = Clean(intelligence?.Title, "this sky event");
-        var window = FirstNonEmpty(intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, intelligence?.LocalPeakTime, "the best local viewing window");
+        var window = HumanizeNarrationWindow(FirstNonEmpty(intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, intelligence?.LocalPeakTime, "the best local viewing window"));
         var direction = FirstNonEmpty(intelligence?.SkyDirectionHint, "the clearest part of the sky");
         return (family, section) switch
         {
@@ -243,6 +251,9 @@ public sealed class QuestionDrivenNarrationGenerator(
             _ => $"{title} is a brief sky story worth seeing while the moment is still here."
         };
     }
+
+    private static string HumanizeNarrationWindow(string value)
+        => ContainsRawTimestamp(value) ? "the local viewing window" : value;
 
     private static string V3Caption(string section, string family) => section switch
     {
@@ -397,6 +408,9 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "sceneTypeMapped", narration.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.Section) && !string.IsNullOrWhiteSpace(scene.SceneType)), "every narration section maps to a scene type.");
         AddCheck(checks, "noRepetitiveSentenceOpenings", HasVariedSentenceOpenings(narration), "no repetitive sentence openings.");
         AddCheck(checks, "noRoboticPhrasing", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, new[] { "based on the current", "approved production", "source answer", "metadata" })), "narration avoids robotic or internal phrasing.");
+        AddCheck(checks, "noAuthoringInstructions", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, AuthoringInstructionPhrases)), "narration must not contain prompt-template or authoring instruction phrases.");
+        AddCheck(checks, "noRawTimestamps", narration.Scenes.All(scene => !ContainsRawTimestamp(scene.NarrationText)), "narration must not speak raw timestamps.");
+        AddCheck(checks, "sceneTextMinimumLength", narration.Scenes.All(scene => Clean(scene.NarrationText).Length >= 30), "each scene narration must be at least 30 characters.");
 
         return new QuestionDrivenNarrationReviewDto(
             narration.EventId,
@@ -415,6 +429,40 @@ public sealed class QuestionDrivenNarrationGenerator(
             NarrationVersion: NarrationVersion,
             Diagnostics: narration.Diagnostics);
     }
+
+
+    private static async Task<(string Short, string Long)> GenerateNarrationSubtitlesAsync(QuestionDrivenNarrationDto narration, string narrationPath, CancellationToken cancellationToken)
+    {
+        var root = Path.Combine(Path.GetDirectoryName(narrationPath)!, "narration", "subtitles");
+        Directory.CreateDirectory(root);
+        var shortPath = Path.Combine(root, "short.srt");
+        var longPath = Path.Combine(root, "long.srt");
+        var scenes = narration.Scenes.Select(scene => scene.NarrationText).ToArray();
+        await File.WriteAllTextAsync(shortPath, BuildNarrationSrt(scenes.Take(6).ToArray()), cancellationToken);
+        await File.WriteAllTextAsync(longPath, BuildNarrationSrt(scenes), cancellationToken);
+        return (shortPath.Replace('\\', '/'), longPath.Replace('\\', '/'));
+    }
+
+    private static string BuildNarrationSrt(IReadOnlyList<string> lines)
+    {
+        var blocks = new List<string>();
+        var start = TimeSpan.Zero;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var seconds = Math.Max(3, CountWords(lines[i]) / 2.3);
+            var end = start.Add(TimeSpan.FromSeconds(seconds));
+            blocks.Add($"{i + 1}\n{FormatSrtTime(start)} --> {FormatSrtTime(end)}\n{Clean(lines[i])}");
+            start = end;
+        }
+        return string.Join("\n\n", blocks) + "\n";
+    }
+
+    private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
+    private static int CountWords(string value) => Regex.Matches(value ?? string.Empty, @"[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)?").Count;
+    private static bool ContainsRawTimestamp(string value) => Regex.IsMatch(value ?? string.Empty, @"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", RegexOptions.IgnoreCase);
+    private static QuestionDrivenNarrationDiagnosticsDto? EnrichDiagnosticsWithSubtitles(QuestionDrivenNarrationDiagnosticsDto? diagnostics, string shortPath, string longPath)
+        => diagnostics is null ? null : diagnostics with { SubtitleFilesGenerated = !string.IsNullOrWhiteSpace(shortPath) && !string.IsNullOrWhiteSpace(longPath), ShortSrtPath = shortPath, LongSrtPath = longPath };
+
 
     private static void ValidateNarrationHasNoForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext)
     {
