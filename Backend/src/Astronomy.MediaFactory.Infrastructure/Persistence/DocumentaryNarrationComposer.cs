@@ -98,6 +98,153 @@ internal static partial class EventStoryComposer
 }
 
 internal sealed record EventStoryComposerResult(DocumentaryNarrationSections Sections, EventStoryComposerDiagnostics Diagnostics);
-internal sealed record EventStoryComposerDiagnostics(string ScriptComposerVersion, string OpeningStyle, bool EventDateMentioned, bool EventNameMentioned, int DocumentaryScore, int StorytellingScore);
+internal sealed record EventStoryComposerDiagnostics(
+    string ScriptComposerVersion,
+    string OpeningStyle,
+    bool EventDateMentioned,
+    bool EventNameMentioned,
+    int DocumentaryScore,
+    int StorytellingScore,
+    int LongSceneCount = 0,
+    int ExtractedSectionCount = 0,
+    bool ExpansionApplied = false,
+    bool DuplicateFirstSentenceDetected = false,
+    IReadOnlyList<string>? DuplicatePairs = null,
+    IReadOnlyDictionary<string, string>? FirstSentenceByLongScene = null,
+    string? LongSceneNarrationExpansionStrategy = null);
+
+internal sealed record LongSceneNarrationExpansionContext(
+    string EventType,
+    string ShortTitle,
+    string? LocalPeakTime,
+    string? SkyDirectionHint,
+    string? ContentStrategy);
+
+internal sealed record LongSceneNarrationDraft(string SceneId, string ScenePurpose, string BodyText);
+
+internal static class LongSceneNarrationExpander
+{
+    private const int ExtractedNarrationSectionCount = 6;
+
+    public static IReadOnlyDictionary<string, string> Expand(
+        string family,
+        LongSceneNarrationExpansionContext context,
+        IReadOnlyList<LongSceneNarrationDraft> scenes,
+        out string strategy)
+    {
+        if (scenes.Count <= ExtractedNarrationSectionCount)
+        {
+            strategy = "NotApplied";
+            return scenes.ToDictionary(scene => scene.SceneId, scene => scene.BodyText, StringComparer.OrdinalIgnoreCase);
+        }
+
+        strategy = $"LongSceneNarrationExpander:purpose-templates:{ResolveTone($"{context.EventType} {context.ContentStrategy}", family)}";
+        var usedOpenings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return scenes.ToDictionary(
+            scene => scene.SceneId,
+            scene => BuildExpandedNarration(family, context, scene, usedOpenings),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string BuildExpandedNarration(string family, LongSceneNarrationExpansionContext context, LongSceneNarrationDraft scene, ISet<string> usedOpenings)
+    {
+        var first = UniqueFirstSentence(family, context, scene, usedOpenings);
+        var body = RemoveDuplicateOpening(scene.BodyText, first);
+        return string.IsNullOrWhiteSpace(body) ? first : $"{first} {body}";
+    }
+
+    private static string UniqueFirstSentence(string family, LongSceneNarrationExpansionContext context, LongSceneNarrationDraft scene, ISet<string> usedOpenings)
+    {
+        var baseSentence = TemplateForPurpose(family, context, scene.ScenePurpose);
+        var normalized = Normalize(baseSentence);
+        if (usedOpenings.Add(normalized)) return baseSentence;
+
+        var title = CleanTitle(context.ShortTitle);
+        var fallback = scene.ScenePurpose switch
+        {
+            "hook" => $"{title} gives this sky story a clear opening moment.",
+            "what-is-it" => $"{title} is the event at the center of this guide.",
+            "cause" => "The reason behind this event comes from predictable motion in the sky.",
+            "interesting-fact" => "One useful detail makes this event easier to understand before you watch.",
+            "best-time" => $"The best viewing time is tied to {CleanText(context.LocalPeakTime, "the local viewing window")}.",
+            "accurate-sky-guide" => $"Use {CleanText(context.SkyDirectionHint, "the approved sky direction")} as your starting guide.",
+            "what-you-will-see" => "The view itself should be simple enough to recognize with patient eyes.",
+            "viewing-tips" => "A little preparation will make the viewing experience calmer and clearer.",
+            "final-reminder" => $"{title} is worth one last careful look before the moment passes.",
+            _ => $"This scene adds a distinct part of the {title} story."
+        };
+        if (usedOpenings.Add(Normalize(fallback))) return EnsureTerminalPunctuation(fallback);
+        return EnsureTerminalPunctuation($"Scene {scene.SceneId} adds a separate {scene.ScenePurpose.Replace('-', ' ')} note for {title}");
+    }
+
+    private static string TemplateForPurpose(string family, LongSceneNarrationExpansionContext context, string purpose)
+    {
+        var tone = ResolveTone($"{context.EventType} {context.ContentStrategy}", family);
+        var title = CleanTitle(context.ShortTitle);
+        var time = CleanText(context.LocalPeakTime, "the best local viewing window");
+        var direction = CleanText(context.SkyDirectionHint, family == "Eclipse" ? "the Sun with certified eclipse eye protection" : "the clearest part of the sky");
+        return (tone, purpose) switch
+        {
+            ("SolarEclipse", "cause") => "A solar eclipse happens when the Moon moves between Earth and the Sun.",
+            ("SolarEclipse", "interesting-fact") => "Eclipse details matter because eye safety changes with each stage of the event.",
+            ("SolarEclipse", "accurate-sky-guide") => $"Use certified solar filters any time you look toward {direction}.",
+            ("SolarEclipse", "viewing-tips") => "Keep eclipse glasses on before and after totality, and supervise every viewer closely.",
+            ("NamedFullMoon", "hook") => "The first full moon of the year rises with a name many people recognize.",
+            ("NamedFullMoon", "what-is-it") => $"{title} is a traditional name for this full moon.",
+            ("NamedFullMoon", "cause") => "Full moons happen when the Moon is opposite the Sun in our sky.",
+            ("NamedFullMoon", "interesting-fact") => $"The name {title} comes from old seasonal traditions, not from a change in the Moon itself.",
+            ("NamedFullMoon", "best-time") => $"The best time to enjoy this full moon is during {time}.",
+            ("NamedFullMoon", "accurate-sky-guide") => $"Look toward {direction} first, then follow the Moon higher as the night continues.",
+            ("NamedFullMoon", "what-you-will-see") => "You will see a bright round Moon, often warmer near the horizon and whiter as it climbs.",
+            ("NamedFullMoon", "viewing-tips") => "Choose an open horizon and give your eyes a few minutes to settle into the night.",
+            ("NamedFullMoon", "final-reminder") => $"{title} is familiar, but that is exactly what makes it worth noticing.",
+            ("MeteorShower", "hook") => $"{title} can turn a quiet dark sky into sudden streaks of light.",
+            ("MeteorShower", "best-time") => $"Meteor watching is strongest during {time}, especially under darker skies.",
+            ("MeteorShower", "viewing-tips") => "Lie back, avoid bright screens, and scan a wide area of the night sky.",
+            ("PlanetGrouping", "accurate-sky-guide") => $"Start with {direction}, then compare the bright points one by one.",
+            ("PlanetGrouping", "what-you-will-see") => "You will see separate worlds appearing close together from our point of view.",
+            ("PlanetGrouping", "viewing-tips") => "Use the horizon and nearby bright objects as guideposts before reaching for binoculars.",
+            (_, "hook") => $"{title} opens with a sky moment worth noticing.",
+            (_, "what-is-it") => $"{title} is the event this guide is built around.",
+            (_, "cause") => "This event happens because familiar objects keep moving through predictable positions.",
+            (_, "interesting-fact") => "The most interesting detail is how ordinary motion can create an uncommon view.",
+            (_, "best-time") => $"The best time to watch is during {time}.",
+            (_, "accurate-sky-guide") => $"Use {direction} as your practical sky guide.",
+            (_, "what-you-will-see") => "You will see the event as a real change in the sky, not just a date on a calendar.",
+            (_, "viewing-tips") => "Give yourself a clear view, a few quiet minutes, and as little stray light as possible.",
+            (_, "final-reminder") => $"{title} is brief enough to miss, and memorable enough to plan for.",
+            _ => $"{title} deserves a distinct note for this part of the story."
+        };
+    }
+
+    private static string ResolveTone(string eventType, string family)
+    {
+        var text = $"{eventType} {family}";
+        if (text.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return "SolarEclipse";
+        if (text.Contains("Meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
+        if (text.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
+        if (text.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) || text.Contains("Planet", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+        return "Generic";
+    }
+
+    private static string RemoveDuplicateOpening(string body, string opening)
+    {
+        var trimmed = (body ?? string.Empty).Trim();
+        if (Normalize(FirstSentence(trimmed)) == Normalize(opening))
+            return trimmed[FirstSentence(trimmed).Length..].Trim();
+        return trimmed;
+    }
+
+    private static string FirstSentence(string text)
+    {
+        var match = Regex.Match(text.Trim(), @"^.+?[.!?](?:\s|$)");
+        return match.Success ? match.Value.Trim() : text.Trim();
+    }
+
+    private static string CleanTitle(string value) => string.IsNullOrWhiteSpace(value) ? "This sky event" : Regex.Replace(value, @"\s+", " ").Trim();
+    private static string CleanText(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : Regex.Replace(value, @"\s+", " ").Trim();
+    private static string Normalize(string value) => Regex.Replace(value ?? string.Empty, @"[^a-z0-9]+", " ", RegexOptions.IgnoreCase).Trim();
+    private static string EnsureTerminalPunctuation(string value) => Regex.IsMatch(value.Trim(), @"[.!?]$") ? value.Trim() : value.Trim() + ".";
+}
 
 internal sealed record DocumentaryNarrationSections(string ColdOpen, string Hook, string Context, string MainStory, string ViewingGuide, string EmotionalClosing);

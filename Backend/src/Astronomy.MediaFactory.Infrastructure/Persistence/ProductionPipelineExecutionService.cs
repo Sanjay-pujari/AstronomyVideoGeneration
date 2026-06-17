@@ -1996,26 +1996,45 @@ public sealed partial class ProductionPipelineExecutionService(
             ["004-viewing-tip"] = $"{script.Sections.MainStory} Let the scene unfold without rushing it.",
             ["005-final-reminder"] = $"{script.Sections.EmotionalClosing} Step outside with enough time to let the moment find you."
         };
-        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var longDrafts = new LongSceneNarrationDraft[]
         {
-            ["001-hook"] = script.Sections.ColdOpen,
-            ["002-what-is-it"] = script.Sections.Hook,
-            ["003-cause"] = family == "Eclipse" ? "A solar eclipse happens when the Moon passes directly between Earth and the Sun, casting its shadow onto our planet." : script.Sections.Context,
-            ["004-interesting-fact"] = family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{script.Sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
-            ["005-best-time"] = script.Sections.ViewingGuide,
-            ["006-accurate-sky-guide"] = BuildNaturalSkyGuide(family),
-            ["007-what-you-will-see"] = script.Sections.MainStory,
-            ["008-viewing-tips"] = BuildViewingTips(family),
-            ["009-final-reminder"] = script.Sections.EmotionalClosing
+            new("001-hook", "hook", script.Sections.ColdOpen),
+            new("002-what-is-it", "what-is-it", script.Sections.Hook),
+            new("003-cause", "cause", family == "Eclipse" ? "A solar eclipse happens when the Moon passes directly between Earth and the Sun, casting its shadow onto our planet." : script.Sections.Context),
+            new("004-interesting-fact", "interesting-fact", family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{script.Sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light."),
+            new("005-best-time", "best-time", script.Sections.ViewingGuide),
+            new("006-accurate-sky-guide", "accurate-sky-guide", BuildNaturalSkyGuide(family)),
+            new("007-what-you-will-see", "what-you-will-see", script.Sections.MainStory),
+            new("008-viewing-tips", "viewing-tips", BuildViewingTips(family)),
+            new("009-final-reminder", "final-reminder", script.Sections.EmotionalClosing)
         };
-        ValidatePhase14EventStoryNarration(shortTexts, longTexts, script.Diagnostics);
+        var expansionContext = new LongSceneNarrationExpansionContext(
+            FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.ExecutionContext?.EventType, family),
+            FirstNonEmpty(context.ProductionEventIntelligence.ShortTitle, context.Request.ShortTitle, context.ProductionEventIntelligence.Title),
+            FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime, context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal),
+            FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint),
+            FirstNonEmpty(context.ExecutionContext?.ContentStrategy, context.ProductionEventIntelligence.StrategyId, context.Request.ContentStrategy));
+        var expandedLongTexts = LongSceneNarrationExpander.Expand(family, expansionContext, longDrafts, out var expansionStrategy);
+        var longTexts = new Dictionary<string, string>(expandedLongTexts, StringComparer.OrdinalIgnoreCase);
+        var duplicatePairs = FindDuplicateFirstSentencePairs("long", longTexts);
+        var diagnostics = script.Diagnostics with
+        {
+            LongSceneCount = longTexts.Count,
+            ExtractedSectionCount = 6,
+            ExpansionApplied = longTexts.Count > 6,
+            DuplicateFirstSentenceDetected = duplicatePairs.Count > 0,
+            DuplicatePairs = duplicatePairs,
+            FirstSentenceByLongScene = longTexts.ToDictionary(kv => kv.Key, kv => FirstSentence(kv.Value), StringComparer.OrdinalIgnoreCase),
+            LongSceneNarrationExpansionStrategy = expansionStrategy
+        };
+        ValidatePhase14EventStoryNarration(shortTexts, longTexts, diagnostics);
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
             .ToArray();
         var allText = string.Join(" ", finalText.Select(item => item.text));
         if (ContainsAuthoringInstructionText(allText))
             throw new InvalidOperationException("Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
-        return new Phase14DocumentaryNarration(true, true, "EventStoryComposer", false, shortTexts, longTexts, finalText, script.Diagnostics);
+        return new Phase14DocumentaryNarration(true, true, "EventStoryComposer", false, shortTexts, longTexts, finalText, diagnostics);
     }
 
     private static string BuildNaturalSkyGuide(string family) => family == "Eclipse"
@@ -2071,6 +2090,17 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
+
+    private static IReadOnlyList<string> FindDuplicateFirstSentencePairs(string format, IReadOnlyDictionary<string, string> texts)
+    {
+        return texts
+            .Select(kv => new { Scene = $"{format}:{kv.Key}", FirstSentence = NormalizeNarrationForDuplicateCheck(FirstSentence(kv.Value)) })
+            .Where(item => !string.IsNullOrWhiteSpace(item.FirstSentence))
+            .GroupBy(item => item.FirstSentence, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => string.Join(",", group.Select(item => item.Scene)))
+            .ToArray();
+    }
 
     private static string FirstSentence(string text)
     {
