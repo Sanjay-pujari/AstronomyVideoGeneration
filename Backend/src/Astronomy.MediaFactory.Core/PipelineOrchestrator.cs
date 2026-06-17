@@ -588,6 +588,7 @@ public sealed class PipelineOrchestrator
                 }
 
                 script = CopyScriptWithSceneSections(script, alignedSectionsBySceneId);
+                ValidateCleanSceneNarration(sceneSections.Select((section, index) => (index + 1, section.Scene.SceneTitle, string.Empty, string.Empty, CleanSpokenNarrationText(section.SectionText))).ToArray());
 
                 var sceneNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
                 for (var i = 0; i < sceneSections.Count; i++)
@@ -596,8 +597,9 @@ public sealed class PipelineOrchestrator
                         ? Path.Combine(outputDir, $"scene-narration-{i + 1:000}")
                         : outputDir;
                     var sceneNumber = i + 1;
-                    ValidateNarrationLanguage(sceneSections[i].SectionText, context.Localization.ResolvedLanguage);
-                    var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].SectionText, sceneOutputDirectory, cancellationToken));
+                    var spokenSectionText = CleanSpokenNarrationText(sceneSections[i].SectionText);
+                    ValidateNarrationLanguage(spokenSectionText, context.Localization.ResolvedLanguage);
+                    var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(spokenSectionText, sceneOutputDirectory, cancellationToken));
 
                     if (string.IsNullOrWhiteSpace(perSceneAudioPath))
                     {
@@ -613,9 +615,9 @@ public sealed class PipelineOrchestrator
                     var sceneAudioPath = Path.Combine(outputDir, $"scene-audio-{sceneNumber:000}.mp3");
                     var sourceTextPath = Path.Combine(sceneOutputDirectory, "narration.txt");
 
-                    var sceneText = File.Exists(sourceTextPath)
+                    var sceneText = CleanSpokenNarrationText(File.Exists(sourceTextPath)
                         ? await File.ReadAllTextAsync(sourceTextPath, cancellationToken)
-                        : sceneSections[i].SectionText;
+                        : spokenSectionText);
 
                     await File.WriteAllTextAsync(sceneTextPath, sceneText, cancellationToken);
                     File.Copy(perSceneAudioPath, sceneAudioPath, overwrite: true);
@@ -2207,6 +2209,79 @@ public sealed class PipelineOrchestrator
         public required string whyInteresting { get; init; }
     }
 
+    private static readonly string[] ForbiddenNarrationSectionLabels =
+    [
+        "Opening beat", "Cold open", "Hook", "What it is", "Cause", "Interesting fact",
+        "Best time", "Accurate sky guide", "What you will see", "Practical tips", "Final reminder"
+    ];
+
+    private static readonly string[] ForbiddenNarrationInstructionPhrases =
+    [
+        "Explain", "Describe", "Focus on", "Call out", "Give", "Add a distinct", "Close with"
+    ];
+
+    private static string CleanSpokenNarrationText(string text)
+    {
+        var cleaned = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        foreach (var label in ForbiddenNarrationSectionLabels)
+        {
+            cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, $@"(?im)^\s*{System.Text.RegularExpressions.Regex.Escape(label)}\s*:\s*", string.Empty);
+        }
+
+        foreach (var phrase in ForbiddenNarrationInstructionPhrases)
+        {
+            cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, $@"(?im)^\s*{System.Text.RegularExpressions.Regex.Escape(phrase)}(?:\.\.\.|[^.!?]*[.!?])\s*", string.Empty);
+        }
+
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"(?i)\bduring\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[+-]\d{4}\b", "after moonrise, when the Moon climbs higher into the eastern sky");
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"[ \t]+", " ");
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\n{3,}", "\n\n");
+        return cleaned.Trim();
+    }
+
+    private static void ValidateCleanSceneNarration(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries)
+    {
+        var normalized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            var text = CleanSpokenNarrationText(entry.Text);
+            if (!string.Equals(text, entry.Text.Trim(), StringComparison.Ordinal))
+                throw new InvalidOperationException($"Narration cleanup validation failed for scene {entry.Index:000}: unclean narration text remains before TTS artifacts are finalized.");
+            if (ForbiddenNarrationSectionLabels.Any(label => System.Text.RegularExpressions.Regex.IsMatch(text, $@"(?im)^\s*{System.Text.RegularExpressions.Regex.Escape(label)}\s*:")))
+                throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: section label leaked into spoken narration.");
+            if (ForbiddenNarrationInstructionPhrases.Any(phrase => System.Text.RegularExpressions.Regex.IsMatch(text, $@"(?im)^\s*{System.Text.RegularExpressions.Regex.Escape(phrase)}(?:\.\.\.|\b)")))
+                throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: prompt instruction phrase leaked into spoken narration.");
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"(?i)^\s*during\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[+-]\d{4}\s*[.!?]?\s*$"))
+                throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: raw timestamp-only narration is not allowed.");
+            if (!normalized.Add(text))
+                throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: duplicate narration text is not allowed.");
+        }
+    }
+
+    private static async Task WriteSubtitleArtifactsAsync(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var subtitlesDirectory = Path.Combine(outputDirectory, "subtitles");
+        Directory.CreateDirectory(subtitlesDirectory);
+        var srt = new StringBuilder();
+        var start = TimeSpan.Zero;
+        foreach (var entry in entries)
+        {
+            var duration = TimeSpan.FromSeconds(Math.Max(2, Math.Ceiling(entry.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length / 2.6)));
+            var end = start + duration;
+            srt.AppendLine(entry.Index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            srt.AppendLine($"{FormatSrtTime(start)} --> {FormatSrtTime(end)}");
+            srt.AppendLine(entry.Text);
+            srt.AppendLine();
+            start = end;
+        }
+        var srtText = srt.ToString();
+        await File.WriteAllTextAsync(Path.Combine(subtitlesDirectory, "short.srt"), srtText, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(subtitlesDirectory, "long.srt"), srtText, cancellationToken);
+    }
+
+    private static string FormatSrtTime(TimeSpan value)
+        => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
+
 
     private async Task WriteSceneNarrationArtifactsAsync(
         IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> sceneNarrationEntries,
@@ -2215,6 +2290,9 @@ public sealed class PipelineOrchestrator
         string narrationAudioPath,
         CancellationToken cancellationToken)
     {
+        ValidateCleanSceneNarration(sceneNarrationEntries);
+        await WriteSubtitleArtifactsAsync(sceneNarrationEntries, outputDirectory, cancellationToken);
+
         var narrationTextPath = Path.Combine(outputDirectory, "narration.txt");
         var combinedText = string.Join(Environment.NewLine + Environment.NewLine,
             sceneNarrationEntries.Select(entry => $"[Scene {entry.Index}: {entry.Title}]" + Environment.NewLine + entry.Text));
