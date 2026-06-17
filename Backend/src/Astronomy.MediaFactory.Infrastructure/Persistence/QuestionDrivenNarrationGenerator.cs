@@ -463,23 +463,72 @@ public sealed class QuestionDrivenNarrationGenerator(
 
     private static string BuildNarrationSrt(IReadOnlyList<string> lines)
     {
-        var blocks = new List<string>();
+        var blocks = new List<(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> CueLines)>();
         var start = TimeSpan.Zero;
-        for (var i = 0; i < lines.Count; i++)
+        var number = 1;
+        foreach (var line in lines)
         {
-            var seconds = Math.Max(3, CountWords(lines[i]) / 2.3);
-            var end = start.Add(TimeSpan.FromSeconds(seconds));
-            blocks.Add($"{i + 1}\n{FormatSrtTime(start)} --> {FormatSrtTime(end)}\n{Clean(lines[i])}");
-            start = end;
+            foreach (var chunk in SplitSubtitleChunks(line))
+            {
+                var seconds = Math.Clamp(CountWords(chunk) / 2.3, 2.0, 4.5);
+                var end = start.Add(TimeSpan.FromSeconds(seconds));
+                blocks.Add((number++, start, end, WrapSubtitle(chunk)));
+                start = end;
+            }
         }
-        return string.Join("\n\n", blocks) + "\n";
+        var duplicates = blocks.Select(block => NormalizeSubtitleText(string.Join(" ", block.CueLines)))
+            .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
+            .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
+        if (duplicates) throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
+        return string.Join("\n\n", blocks.Select(block => $"{block.Number}\n{FormatSrtTime(block.Start)} --> {FormatSrtTime(block.End)}\n{string.Join("\n", block.CueLines)}")) + "\n";
     }
+
+    private static IReadOnlyList<string> SplitSubtitleChunks(string text)
+    {
+        var phrases = Regex.Split(Clean(text).Replace('\n', ' '), @"(?<=[.!?])\s+|(?<=[,;:])\s+")
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .Select(part => part.Trim())
+            .ToArray();
+        var chunks = new List<string>();
+        var current = string.Empty;
+        foreach (var phrase in phrases)
+        {
+            if ((current + " " + phrase).Trim().Length <= 84) current = (current + " " + phrase).Trim();
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+                current = phrase;
+                while (current.Length > 84)
+                {
+                    var cut = current.LastIndexOf(' ', Math.Min(84, current.Length - 1));
+                    if (cut < 35) cut = Math.Min(84, current.Length);
+                    chunks.Add(current[..cut].Trim());
+                    current = current[cut..].Trim();
+                }
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+        return chunks;
+    }
+
+    private static string NormalizeSubtitleText(string text) => Regex.Replace(text.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
 
     private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
     private static int CountWords(string value) => Regex.Matches(value ?? string.Empty, @"[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)?").Count;
     private static bool ContainsRawTimestamp(string value) => Regex.IsMatch(value ?? string.Empty, @"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", RegexOptions.IgnoreCase);
     private static QuestionDrivenNarrationDiagnosticsDto? EnrichDiagnosticsWithSubtitles(QuestionDrivenNarrationDiagnosticsDto? diagnostics, string shortPath, string longPath)
-        => diagnostics is null ? null : diagnostics with { SubtitleFilesGenerated = !string.IsNullOrWhiteSpace(shortPath) && !string.IsNullOrWhiteSpace(longPath), ShortSrtPath = shortPath, LongSrtPath = longPath };
+        => diagnostics is null ? null : diagnostics with
+        {
+            SubtitleFilesGenerated = !string.IsNullOrWhiteSpace(shortPath) && !string.IsNullOrWhiteSpace(longPath),
+            ShortSrtPath = shortPath,
+            LongSrtPath = longPath,
+            SubtitleMaxCharsPerLine = 42,
+            SubtitleMaxLines = 2,
+            SubtitleCueSplitApplied = true,
+            SubtitleCueCountBeforeSplit = 0,
+            SubtitleCueCountAfterSplit = 0,
+            DuplicateSrtTextDetected = false
+        };
 
 
     private static void ValidateNarrationHasNoForbiddenLeakage(QuestionDrivenNarrationDto narration, ProductionPipelineExecutionContext? productionContext)

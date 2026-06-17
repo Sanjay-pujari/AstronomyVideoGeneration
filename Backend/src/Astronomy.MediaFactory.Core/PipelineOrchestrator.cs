@@ -2242,6 +2242,8 @@ public sealed class PipelineOrchestrator
     private static void ValidateCleanSceneNarration(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries)
     {
         var normalized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var firstSentences = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var previous = new List<(int Index, string Text)>();
         foreach (var entry in entries)
         {
             var text = CleanSpokenNarrationText(entry.Text);
@@ -2255,29 +2257,121 @@ public sealed class PipelineOrchestrator
                 throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: raw timestamp-only narration is not allowed.");
             if (!normalized.Add(text))
                 throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: duplicate narration text is not allowed.");
+            var firstSentence = NormalizeSubtitleText(System.Text.RegularExpressions.Regex.Match(text, @"^.+?[.!?](?:\s|$)").Value.Trim());
+            if (!string.IsNullOrWhiteSpace(firstSentence) && !firstSentences.Add(firstSentence))
+                throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: duplicate first narration sentence is not allowed.");
+            foreach (var other in previous)
+            {
+                var similarity = NarrationTextSimilarity(text, other.Text);
+                if (similarity >= 0.82)
+                    throw new InvalidOperationException($"Narration validation failed for scene {entry.Index:000}: narration is too similar to scene {other.Index:000} ({similarity:0.###}).");
+            }
+            previous.Add((entry.Index, text));
         }
+    }
+
+
+    private static double NarrationTextSimilarity(string left, string right)
+    {
+        var a = System.Text.RegularExpressions.Regex.Matches(NormalizeSubtitleText(left), @"[a-z0-9]+", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var b = System.Text.RegularExpressions.Regex.Matches(NormalizeSubtitleText(right), @"[a-z0-9]+", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return a.Count == 0 || b.Count == 0 ? 0 : (double)a.Intersect(b).Count() / Math.Max(a.Count, b.Count);
     }
 
     private static async Task WriteSubtitleArtifactsAsync(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries, string outputDirectory, CancellationToken cancellationToken)
     {
         var subtitlesDirectory = Path.Combine(outputDirectory, "subtitles");
         Directory.CreateDirectory(subtitlesDirectory);
+        var blocks = BuildSplitSubtitleBlocks(entries);
+        var duplicateSrtTextDetected = blocks.Select(block => NormalizeSubtitleText(string.Join(" ", block.Lines)))
+            .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
+            .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
+        if (duplicateSrtTextDetected)
+            throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
         var srt = new StringBuilder();
-        var start = TimeSpan.Zero;
-        foreach (var entry in entries)
+        foreach (var block in blocks)
         {
-            var duration = TimeSpan.FromSeconds(Math.Max(2, Math.Ceiling(entry.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length / 2.6)));
-            var end = start + duration;
-            srt.AppendLine(entry.Index.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            srt.AppendLine($"{FormatSrtTime(start)} --> {FormatSrtTime(end)}");
-            srt.AppendLine(entry.Text);
+            srt.AppendLine(block.Number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            srt.AppendLine($"{FormatSrtTime(block.Start)} --> {FormatSrtTime(block.End)}");
+            foreach (var line in block.Lines) srt.AppendLine(line);
             srt.AppendLine();
-            start = end;
         }
         var srtText = srt.ToString();
         await File.WriteAllTextAsync(Path.Combine(subtitlesDirectory, "short.srt"), srtText, cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(subtitlesDirectory, "long.srt"), srtText, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(subtitlesDirectory, "subtitle-diagnostics.json"), JsonSerializer.Serialize(new
+        {
+            subtitleMaxCharsPerLine = 42,
+            subtitleMaxLines = 2,
+            subtitleCueSplitApplied = blocks.Count > entries.Count,
+            subtitleCueCountBeforeSplit = entries.Count,
+            subtitleCueCountAfterSplit = blocks.Count,
+            duplicateSrtTextDetected
+        }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
+
+
+    private sealed record SubtitleBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines);
+
+    private static IReadOnlyList<SubtitleBlock> BuildSplitSubtitleBlocks(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries)
+    {
+        var blocks = new List<SubtitleBlock>();
+        var start = TimeSpan.Zero;
+        var number = 1;
+        foreach (var entry in entries)
+        {
+            var chunks = SplitSubtitleChunks(entry.Text);
+            foreach (var chunk in chunks)
+            {
+                var seconds = Math.Clamp(chunk.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length / 2.6, 2.0, 4.5);
+                var end = start + TimeSpan.FromSeconds(seconds);
+                blocks.Add(new SubtitleBlock(number++, start, end, WrapSubtitleChunk(chunk)));
+                start = end;
+            }
+        }
+        return blocks;
+    }
+
+    private static IReadOnlyList<string> SplitSubtitleChunks(string text)
+    {
+        var cleaned = CleanSpokenNarrationText(text).Replace('\n', ' ');
+        var phrases = System.Text.RegularExpressions.Regex.Split(cleaned, @"(?<=[.!?])\s+|(?<=[,;:])\s+")
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToArray();
+        var chunks = new List<string>();
+        var current = string.Empty;
+        foreach (var phrase in phrases)
+        {
+            if ((current + " " + phrase).Trim().Length <= 84)
+                current = (current + " " + phrase).Trim();
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+                current = phrase;
+                while (current.Length > 84)
+                {
+                    var cut = current.LastIndexOf(' ', Math.Min(84, current.Length - 1));
+                    if (cut < 35) cut = Math.Min(84, current.Length);
+                    chunks.Add(current[..cut].Trim());
+                    current = current[cut..].Trim();
+                }
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+        return chunks;
+    }
+
+    private static IReadOnlyList<string> WrapSubtitleChunk(string text)
+    {
+        if (text.Length <= 42) return [text];
+        var cut = text.LastIndexOf(' ', Math.Min(42, text.Length - 1));
+        if (cut < 20) cut = Math.Min(42, text.Length);
+        return [text[..cut].Trim(), text[cut..].Trim()];
+    }
+
+    private static string NormalizeSubtitleText(string text)
+        => System.Text.RegularExpressions.Regex.Replace(text.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
 
     private static string FormatSrtTime(TimeSpan value)
         => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
