@@ -1545,14 +1545,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         if (solar)
         {
-            DrawGlow(ctx, center, radius * 2.2f, radius * 2.2f, Color.FromRgb(255, 209, 94), 0.22f, 16);
+            DrawThumbnailGlow(ctx, center, radius * 2.2f, radius * 2.2f, Color.FromRgb(255, 209, 94), 0.22f, 16);
             ctx.Fill(Color.FromRgb(255, 209, 94), new EllipsePolygon(center.X, center.Y, radius, radius));
             ctx.Fill(Color.FromRgba(0, 0, 0, 238), new EllipsePolygon(center.X + radius * 0.08f, center.Y, radius * 0.92f, radius * 0.92f));
             ctx.Draw(Color.FromRgb(255, 242, 165), Math.Max(2f, radius * 0.025f), new EllipsePolygon(center.X + radius * 0.08f, center.Y, radius * 0.96f, radius * 0.96f));
             return;
         }
 
-        DrawGlow(ctx, center, radius * 1.85f, radius * 1.85f, Color.FromRgb(179, 69, 46), 0.18f, 14);
+        DrawThumbnailGlow(ctx, center, radius * 1.85f, radius * 1.85f, Color.FromRgb(179, 69, 46), 0.18f, 14);
         ctx.Fill(Color.FromRgb(164, 65, 46), new EllipsePolygon(center.X, center.Y, radius, radius));
         ctx.Fill(Color.FromRgba(35, 10, 18, 112), new EllipsePolygon(center.X - radius * 0.38f, center.Y, radius * 0.72f, radius * 1.04f));
         ctx.Draw(Color.FromRgb(224, 123, 88), Math.Max(2f, radius * 0.018f), new EllipsePolygon(center.X, center.Y, radius, radius));
