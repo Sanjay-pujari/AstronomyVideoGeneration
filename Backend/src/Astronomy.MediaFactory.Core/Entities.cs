@@ -697,6 +697,7 @@ public sealed class AstronomyQuestionTemplate : EntityBase
 
 public static class AstronomyQuestionTypes
 {
+    public const string ColdOpen = "ColdOpen";
     public const string What = "What";
     public const string Where = "Where";
     public const string When = "When";
