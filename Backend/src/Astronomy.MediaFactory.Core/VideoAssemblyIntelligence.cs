@@ -37,6 +37,8 @@ public sealed class VideoAssemblyGenerationRequest
 
     public bool DuckMusicUnderNarration { get; set; } = true;
 
+    public bool EnableSubtitles { get; set; } = false;
+
     public ScenePresentationProfile? ScenePresentationProfile { get; set; }
 
     public VideoAssemblyFormRequest? ShortForm { get; set; }
@@ -409,4 +411,11 @@ public sealed record VideoRenderValidationDto(
     string OutputResolution = "",
     int Fps = 0,
     VideoDurationContractValidationDto? DurationValidation = null,
-    IReadOnlyList<string>? Warnings = null);
+    IReadOnlyList<string>? Warnings = null,
+    bool EnableSubtitles = false,
+    string ShortSrtPath = "",
+    string LongSrtPath = "",
+    bool ShortSubtitlesApplied = false,
+    bool LongSubtitlesApplied = false,
+    string SubtitleBurnInCommand = "",
+    bool SubtitleBurnInSucceeded = false);
