@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -15,6 +16,36 @@ public sealed class ProductionPipelineExecutionServiceTests
         var result = method!.Invoke(null, new object?[] { new string?[] { null, "", "   " } });
 
         Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public void Phase19CinematicDiagnostics_TrustsPhase18VideoDiagnostics()
+    {
+        var diagnostics = JsonNode.Parse(JsonSerializer.Serialize(new
+        {
+            cinematicOutroEnabled = true,
+            cinematicOutroDurationSec = 4.0,
+            fadeToBlackEnabled = true,
+            fadeToBlackDurationSec = 1.0
+        }));
+
+        Assert.True(InvokePhase18DiagnosticsValidator("IsPhase18CinematicOutroValidated", diagnostics));
+        Assert.True(InvokePhase18DiagnosticsValidator("IsPhase18FadeToBlackValidated", diagnostics));
+    }
+
+    [Fact]
+    public void Phase19CinematicDiagnostics_RejectsInsufficientPhase18Durations()
+    {
+        var diagnostics = JsonNode.Parse(JsonSerializer.Serialize(new
+        {
+            cinematicOutroEnabled = true,
+            cinematicOutroDurationSec = 3.99,
+            fadeToBlackEnabled = true,
+            fadeToBlackDurationSec = 0.99
+        }));
+
+        Assert.False(InvokePhase18DiagnosticsValidator("IsPhase18CinematicOutroValidated", diagnostics));
+        Assert.False(InvokePhase18DiagnosticsValidator("IsPhase18FadeToBlackValidated", diagnostics));
     }
 
     [Fact]
@@ -535,6 +566,13 @@ public sealed class ProductionPipelineExecutionServiceTests
             .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
             .Single(m => m.Name == "BuildRequestedOutputCompletion" && m.GetParameters().Length == 2);
         return (IReadOnlyList<RequestedOutputCompletion>)method.Invoke(null, [context, phaseResults])!;
+    }
+
+    private static bool InvokePhase18DiagnosticsValidator(string methodName, JsonNode? diagnostics)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method!.Invoke(null, [diagnostics])!;
     }
 
     private static void WritePhase10SceneAssets(string root, string profile, int count, int? skipFinalSceneNumber = null)
