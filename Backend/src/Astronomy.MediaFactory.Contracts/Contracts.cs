@@ -357,6 +357,7 @@ public sealed class VideoAssemblySubtitleOptions
 {
     public bool Enabled { get; set; } = true;
     public bool BurnIn { get; set; } = false;
+    public bool EnableSubtitles { get; set; } = false;
     public bool GenerateSrt { get; set; } = true;
     public bool GenerateAss { get; set; } = true;
 }
