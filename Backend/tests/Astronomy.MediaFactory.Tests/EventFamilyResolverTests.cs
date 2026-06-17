@@ -25,12 +25,58 @@ public sealed class EventFamilyResolverTests
     [InlineData("PenumbralLunarEclipse", EventFamily.Eclipse)]
     [InlineData("LUNAR_ECLIPSE", EventFamily.Eclipse)]
     [InlineData("COMET", EventFamily.SpecialEvent)]
+    [InlineData("Comet", EventFamily.SpecialEvent)]
+    [InlineData("DeepSkyObject", EventFamily.SpecialEvent)]
+    [InlineData("Deep Sky Object", EventFamily.SpecialEvent)]
+    [InlineData("Constellation", EventFamily.SpecialEvent)]
+    [InlineData("Occultation", EventFamily.SpecialEvent)]
     [InlineData("unknown", EventFamily.Unknown)]
     public void Resolve_MapsKnownEventTypesToExpectedFamily(string eventType, EventFamily expected)
     {
         var family = EventFamilyResolver.Resolve(eventType, contentCategoryCode: null, primaryObjects: [], secondaryObjects: []);
 
         Assert.Equal(expected, family);
+    }
+
+    [Theory]
+    [InlineData("Comet", "SpecialEvent:Comet", "comet tail", "dark-sky/binocular guidance")]
+    [InlineData("DeepSkyObject", "SpecialEvent:DeepSkyObject", "nebula, cluster, or galaxy style target", "telescope/binocular guidance")]
+    [InlineData("Constellation", "SpecialEvent:Constellation", "star pattern lines", "direction guide")]
+    [InlineData("Occultation", "SpecialEvent:Occultation", "foreground object crossing or covering background object", "occultation timing")]
+    public void Resolve_SpecialEventProfileUsesSubtypeGuidanceWithoutValidatedFamilyLeakage(
+        string eventType,
+        string selectedProfile,
+        string requiredVisualElement,
+        string requiredOverlayElement)
+    {
+        var family = EventFamilyResolver.Resolve(eventType, contentCategoryCode: null, primaryObjects: [], secondaryObjects: []);
+        var profile = EventFamilyProfiles.Resolve(family, eventType);
+
+        Assert.Equal(EventFamily.SpecialEvent, family);
+        Assert.Equal(EventFamily.SpecialEvent, profile.Family);
+        Assert.Equal(selectedProfile, profile.SelectedProfile);
+        Assert.Contains(requiredVisualElement, profile.RequiredVisualElements, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(requiredOverlayElement, profile.RequiredOverlayElements, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("detectedFamily", profile.RequiredDiagnosticFields);
+        Assert.Contains("primaryEventTypeCode", profile.RequiredDiagnosticFields);
+        Assert.Contains("selectedProfile", profile.RequiredDiagnosticFields);
+        Assert.Contains("forbiddenTerms", profile.RequiredDiagnosticFields);
+        Assert.Contains("requiredVisualElements", profile.RequiredDiagnosticFields);
+        Assert.Contains("requiredOverlayElements", profile.RequiredDiagnosticFields);
+        Assert.Contains("meteor radiant", profile.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("meteor streak", profile.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("solar eclipse safety", profile.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Resolve_SpecialEventNonOccultationForbidsPlanetGroupingSeparationLabels()
+    {
+        var comet = EventFamilyProfiles.Resolve(EventFamily.SpecialEvent, "Comet");
+        var occultation = EventFamilyProfiles.Resolve(EventFamily.SpecialEvent, "Occultation");
+
+        Assert.Contains("separation label", comet.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
+        Assert.True(occultation.AllowsSeparationCue);
+        Assert.DoesNotContain("separation label", occultation.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -71,7 +71,10 @@ public interface IEventFamilyProfile
     EventFamily Family { get; }
     string ValidatorProfile { get; }
     string ThumbnailCompositionType { get; }
+    string SelectedProfile { get; }
     IReadOnlyList<string> ForbiddenTerms { get; }
+    IReadOnlyList<string> RequiredVisualElements { get; }
+    IReadOnlyList<string> RequiredOverlayElements { get; }
     IReadOnlyList<string> RequiredDiagnosticFields { get; }
     bool AllowsGuideCard { get; }
     bool AllowsObjectLabels { get; }
@@ -84,7 +87,10 @@ public abstract class EventFamilyProfileBase : IEventFamilyProfile
     public abstract EventFamily Family { get; }
     public abstract string ValidatorProfile { get; }
     public abstract string ThumbnailCompositionType { get; }
+    public virtual string SelectedProfile => GetType().Name;
     public virtual IReadOnlyList<string> ForbiddenTerms => [];
+    public virtual IReadOnlyList<string> RequiredVisualElements => [];
+    public virtual IReadOnlyList<string> RequiredOverlayElements => [];
     public virtual IReadOnlyList<string> RequiredDiagnosticFields => ["eventFamily", "eventFamilyResolverInput", "eventFamilyResolverReason", "eventFamilyProfileName", "eventFamilyProfileVersion"];
     public virtual bool AllowsGuideCard => false;
     public virtual bool AllowsObjectLabels => false;
@@ -135,9 +141,80 @@ public sealed class EclipseFamilyProfile : EventFamilyProfileBase
 
 public sealed class SpecialEventFamilyProfile : EventFamilyProfileBase
 {
+    private readonly SpecialEventSubtype subtype;
+
+    public SpecialEventFamilyProfile(string? eventType = null)
+    {
+        subtype = SpecialEventSubtypeResolver.Resolve(eventType);
+    }
+
     public override EventFamily Family => EventFamily.SpecialEvent;
-    public override string ValidatorProfile => "CurrentEvent";
-    public override string ThumbnailCompositionType => "RC1CinematicThumbnail";
+    public override string ValidatorProfile => subtype switch
+    {
+        SpecialEventSubtype.Comet => "SpecialEventComet",
+        SpecialEventSubtype.DeepSkyObject => "SpecialEventDeepSkyObject",
+        SpecialEventSubtype.Constellation => "SpecialEventConstellation",
+        SpecialEventSubtype.Occultation => "SpecialEventOccultation",
+        _ => "SpecialEvent"
+    };
+    public override string ThumbnailCompositionType => subtype switch
+    {
+        SpecialEventSubtype.Comet => "CometSkyGuideThumbnail",
+        SpecialEventSubtype.DeepSkyObject => "DeepSkyObjectGuideThumbnail",
+        SpecialEventSubtype.Constellation => "ConstellationNavigationThumbnail",
+        SpecialEventSubtype.Occultation => "OccultationTimingThumbnail",
+        _ => "SpecialEventGuideThumbnail"
+    };
+    public override string SelectedProfile => $"SpecialEvent:{subtype}";
+    public override IReadOnlyList<string> ForbiddenTerms => subtype == SpecialEventSubtype.Occultation
+        ? ["meteor radiant", "radiant", "meteor streak", "meteor shower", "debris stream", "Phaethon", "solar eclipse safety", "eclipse glasses"]
+        : ["meteor radiant", "radiant", "meteor streak", "meteor shower", "debris stream", "Phaethon", "angular separation", "separation label", "planet grouping", "planet conjunction", "solar eclipse safety", "eclipse glasses"];
+    public override IReadOnlyList<string> RequiredVisualElements => subtype switch
+    {
+        SpecialEventSubtype.Comet => ["comet nucleus", "comet tail", "dark sky", "binocular viewing context"],
+        SpecialEventSubtype.DeepSkyObject => ["nebula, cluster, or galaxy style target", "deep-sky field", "telescope or binocular viewing context"],
+        SpecialEventSubtype.Constellation => ["star pattern lines", "recognizable star field", "easy sky navigation context"],
+        SpecialEventSubtype.Occultation => ["foreground object crossing or covering background object", "paired objects when relevant", "time-sensitive sky geometry"],
+        _ => ["special event sky target", "event-specific viewing context"]
+    };
+    public override IReadOnlyList<string> RequiredOverlayElements => subtype switch
+    {
+        SpecialEventSubtype.Comet => ["comet name label", "dark-sky/binocular guidance", "where-to-look cue"],
+        SpecialEventSubtype.DeepSkyObject => ["object type label", "telescope/binocular guidance", "where-to-look cue"],
+        SpecialEventSubtype.Constellation => ["constellation name label", "direction guide", "simple navigation steps"],
+        SpecialEventSubtype.Occultation => ["occultation timing", "foreground/background object labels", "event window emphasis"],
+        _ => ["special event label", "where-to-look cue"]
+    };
+    public override IReadOnlyList<string> RequiredDiagnosticFields => base.RequiredDiagnosticFields.Concat(["detectedFamily", "primaryEventTypeCode", "selectedProfile", "forbiddenTerms", "requiredVisualElements", "requiredOverlayElements"]).ToArray();
+    public override bool AllowsGuideCard => true;
+    public override bool AllowsObjectLabels => true;
+    public override bool AllowsDirectionCue => subtype is SpecialEventSubtype.Comet or SpecialEventSubtype.DeepSkyObject or SpecialEventSubtype.Constellation;
+    public override bool AllowsSeparationCue => subtype == SpecialEventSubtype.Occultation;
+}
+
+public enum SpecialEventSubtype
+{
+    Generic,
+    Comet,
+    DeepSkyObject,
+    Constellation,
+    Occultation
+}
+
+public static class SpecialEventSubtypeResolver
+{
+    public static SpecialEventSubtype Resolve(string? eventType)
+    {
+        var normalized = Normalize(eventType);
+        if (normalized.Contains("COMET", StringComparison.OrdinalIgnoreCase)) return SpecialEventSubtype.Comet;
+        if (normalized.Contains("DEEPSKYOBJECT", StringComparison.OrdinalIgnoreCase) || normalized.Contains("DSO", StringComparison.OrdinalIgnoreCase) || normalized.Contains("NEBULA", StringComparison.OrdinalIgnoreCase) || normalized.Contains("CLUSTER", StringComparison.OrdinalIgnoreCase) || normalized.Contains("GALAXY", StringComparison.OrdinalIgnoreCase)) return SpecialEventSubtype.DeepSkyObject;
+        if (normalized.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase)) return SpecialEventSubtype.Constellation;
+        if (normalized.Contains("OCCULTATION", StringComparison.OrdinalIgnoreCase)) return SpecialEventSubtype.Occultation;
+        return SpecialEventSubtype.Generic;
+    }
+
+    public static string Normalize(string? eventType)
+        => string.IsNullOrWhiteSpace(eventType) ? string.Empty : new string(eventType.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
 }
 
 public static class EventFamilyProfiles
@@ -151,7 +228,7 @@ public static class EventFamilyProfiles
             EventFamily.PlanetGrouping => new PlanetGroupingFamilyProfile(),
             EventFamily.Moon => new MoonFamilyProfile(),
             EventFamily.Eclipse => new EclipseFamilyProfile(),
-            EventFamily.SpecialEvent => new SpecialEventFamilyProfile(),
+            EventFamily.SpecialEvent => new SpecialEventFamilyProfile(eventType),
             _ => new UnknownFamilyProfile(eventType)
         };
 
