@@ -241,7 +241,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         {
             ("Meteor", "ColdOpen") => "Tonight, the sky may put on one of its most spectacular shows.",
             ("Moon", "ColdOpen") => "The first full moon of the year rises tonight.",
-            ("Eclipse", "ColdOpen") => "For a few unforgettable minutes, daylight can fade into twilight.",
+            ("Eclipse", "ColdOpen") => "On the eclipse date, the Moon can turn daylight into one of astronomy's most dramatic sky moments.",
             ("PlanetGrouping", "ColdOpen") => "Two brilliant worlds will appear almost side by side tonight.",
             ("Meteor", "Hook") => "More than a hundred meteors could streak overhead every hour.",
             ("Moon", "Hook") => "But why is it called the Wolf Moon?",
