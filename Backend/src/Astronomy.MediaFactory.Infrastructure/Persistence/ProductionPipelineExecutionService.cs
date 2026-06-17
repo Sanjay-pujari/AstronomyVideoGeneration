@@ -2860,6 +2860,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var scriptPath = profile == ScenePresentationProfile.ShortForm ? Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "short", "video-narration-script.json") : Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "long", "video-long-narration-script.json");
         var target = Path.Combine(context.ExecutionContext.NarrationRoot!, profile == ScenePresentationProfile.ShortForm ? "short" : "long", "narration.txt");
         CopyFile(scriptPath, target, outputs, jsonNarrationToText: true);
+        outputs.Add(await ApplyNarrationCleanupAsync(context, profile, scriptPath, target, cancellationToken));
         if (profile == ScenePresentationProfile.LongForm && (!File.Exists(target) || string.IsNullOrWhiteSpace(await File.ReadAllTextAsync(target, cancellationToken))))
             throw new InvalidOperationException("Long narration generation returned empty output.");
 
@@ -2920,6 +2921,79 @@ public sealed partial class ProductionPipelineExecutionService(
         return report.ValidationPath;
     }
 
+    private static async Task<string> ApplyNarrationCleanupAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    {
+        var service = new NarrationCleanupService();
+        var originalText = File.Exists(narrationPath)
+            ? await File.ReadAllTextAsync(narrationPath, cancellationToken)
+            : File.Exists(scriptPath)
+                ? ExtractNarrationText(await File.ReadAllTextAsync(scriptPath, cancellationToken))
+                : string.Empty;
+        var cleanup = service.Clean(originalText);
+        service.ValidateClean(cleanup.CleanedText);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
+        await File.WriteAllTextAsync(narrationPath, cleanup.CleanedText, cancellationToken);
+        await PersistCleanNarrationScriptAsync(scriptPath, cleanup.CleanedText, cleanup, cancellationToken);
+
+        var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var cleanPath = Path.Combine(context.ExecutionContext.NarrationRoot!, profileFolder, profile == ScenePresentationProfile.ShortForm ? "short-clean.json" : "long-clean.json");
+        await File.WriteAllTextAsync(cleanPath, JsonSerializer.Serialize(new
+        {
+            profile = profile.ToString(),
+            sourceNarrationPath = NormalizePath(narrationPath),
+            cleanedNarrationPath = NormalizePath(narrationPath),
+            cleanupApplied = cleanup.CleanupApplied,
+            labelsRemovedCount = cleanup.LabelsRemovedCount,
+            instructionsRemovedCount = cleanup.InstructionsRemovedCount,
+            subtitleFilesGenerated = true,
+            srtPathShort = NormalizePath(Path.Combine(context.OutputRoot, "subtitles", "short.srt")),
+            srtPathLong = NormalizePath(Path.Combine(context.OutputRoot, "subtitles", "long.srt")),
+            finalNarrationText = cleanup.CleanedText
+        }, JsonOptions), cancellationToken);
+        await WriteCleanNarrationSubtitleArtifactsAsync(context, profile, cleanup.CleanedText, cancellationToken);
+        return cleanPath;
+    }
+
+    private static async Task WriteCleanNarrationSubtitleArtifactsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string narrationText, CancellationToken cancellationToken)
+    {
+        var subtitlesRoot = Path.Combine(context.OutputRoot, "subtitles");
+        Directory.CreateDirectory(subtitlesRoot);
+        var fileName = profile == ScenePresentationProfile.ShortForm ? "short.srt" : "long.srt";
+        var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
+        var profileSrtPath = Path.Combine(context.ExecutionContext.NarrationRoot!, profileFolder, fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(profileSrtPath)!);
+        var wordCount = CountSpokenWords(narrationText);
+        var durationSeconds = profile == ScenePresentationProfile.ShortForm
+            ? Math.Max(2, EstimateShortNarrationSeconds(narrationText))
+            : Math.Max(2, EstimateLongNarrationSeconds(wordCount));
+        var srt = "1" + Environment.NewLine +
+            $"{FormatSrtTimestamp(TimeSpan.Zero)} --> {FormatSrtTimestamp(TimeSpan.FromSeconds(durationSeconds))}" + Environment.NewLine +
+            narrationText.Trim() + Environment.NewLine;
+        await File.WriteAllTextAsync(Path.Combine(subtitlesRoot, fileName), srt, cancellationToken);
+        await File.WriteAllTextAsync(profileSrtPath, srt, cancellationToken);
+    }
+
+    private static string FormatSrtTimestamp(TimeSpan value)
+        => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
+
+    private static async Task PersistCleanNarrationScriptAsync(string scriptPath, string narration, NarrationCleanupResult cleanup, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(scriptPath)) return;
+        try
+        {
+            var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions);
+            if (script is null) return;
+            var updated = script with
+            {
+                FullNarrationText = narration,
+                Warnings = script.Warnings.Concat([$"Narration cleanup applied before TTS. labelsRemovedCount={cleanup.LabelsRemovedCount}; instructionsRemovedCount={cleanup.InstructionsRemovedCount}."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            };
+            await File.WriteAllTextAsync(scriptPath, JsonSerializer.Serialize(updated, JsonOptions), cancellationToken);
+        }
+        catch (JsonException) { }
+    }
+
     private async Task<NarrationValidationReport> BuildNarrationValidationReportAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, bool expansionApplied, CancellationToken cancellationToken, ShortNarrationTrimDiagnostics? shortTrimDiagnostics = null)
     {
         var profileFolder = profile == ScenePresentationProfile.ShortForm ? "short" : "long";
@@ -2935,6 +3009,18 @@ public sealed partial class ProductionPipelineExecutionService(
             : EstimateLongNarrationSeconds(wordCount);
         var errors = new List<string>();
         var warnings = new List<string>();
+        var cleanupService = new NarrationCleanupService();
+        var cleanupCheck = cleanupService.Clean(text);
+        if (!string.Equals(cleanupCheck.CleanedText, text, StringComparison.Ordinal))
+            errors.Add("Narration cleanup was not fully applied before validation.");
+        try
+        {
+            cleanupService.ValidateClean(text);
+        }
+        catch (InvalidOperationException ex)
+        {
+            errors.Add(ex.Message);
+        }
         var forbiddenHits = BuildForbiddenTermsForStrategy(context).Where(term => ContainsToken(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var titlePresent = HasRequiredTitle(text, context.ProductionEventIntelligence);
         var viewingWindowPresent = HasRequiredViewingWindow(text, context.ProductionEventIntelligence);
@@ -2993,7 +3079,13 @@ public sealed partial class ProductionPipelineExecutionService(
             PostTrimWordCount: shortTrimDiagnostics?.PostTrimWordCount ?? wordCount,
             PreTrimDuration: shortTrimDiagnostics?.PreTrimDuration ?? estimatedDurationSeconds,
             PostTrimDuration: shortTrimDiagnostics?.PostTrimDuration ?? estimatedDurationSeconds,
-            TrimApplied: shortTrimDiagnostics?.TrimApplied ?? false);
+            TrimApplied: shortTrimDiagnostics?.TrimApplied ?? false,
+            CleanupApplied: File.Exists(Path.Combine(context.ExecutionContext.NarrationRoot!, profileFolder, profile == ScenePresentationProfile.ShortForm ? "short-clean.json" : "long-clean.json")),
+            LabelsRemovedCount: cleanupCheck.LabelsRemovedCount,
+            InstructionsRemovedCount: cleanupCheck.InstructionsRemovedCount,
+            SubtitleFilesGenerated: File.Exists(Path.Combine(context.OutputRoot, "subtitles", profile == ScenePresentationProfile.ShortForm ? "short.srt" : "long.srt")),
+            SrtPathShort: NormalizePath(Path.Combine(context.OutputRoot, "subtitles", "short.srt")),
+            SrtPathLong: NormalizePath(Path.Combine(context.OutputRoot, "subtitles", "long.srt")));
     }
 
     private static Task<bool> ExpandShortNarrationBeforeValidationAsync(ProductionPhaseContext context, string scriptPath, string narrationPath, CancellationToken cancellationToken)
@@ -3452,7 +3544,13 @@ public sealed partial class ProductionPipelineExecutionService(
         int PostTrimWordCount = 0,
         double PreTrimDuration = 0,
         double PostTrimDuration = 0,
-        bool TrimApplied = false);
+        bool TrimApplied = false,
+        bool CleanupApplied = false,
+        int LabelsRemovedCount = 0,
+        int InstructionsRemovedCount = 0,
+        bool SubtitleFilesGenerated = false,
+        string SrtPathShort = "",
+        string SrtPathLong = "");
 
     private sealed record ShortNarrationTrimDiagnostics(
         int PreTrimWordCount,
