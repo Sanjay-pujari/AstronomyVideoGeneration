@@ -5129,9 +5129,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var motionPlanPath = Path.Combine(planRoot, "motion", "motion-plan.json");
         var sceneAssetsRoot = Path.Combine(planRoot, "scene-assets-v3");
         var motionDebugPath = Path.Combine(planRoot, "motion", "motion-debug.json");
-        var phase18ValidationPath = Path.Combine(validationRoot, "phase-18-validation.json");
         var phase18DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
-        var inputs = new[] { shortVideoPath, longVideoPath, syncPath, ttsPath, durationPlanPath, motionPlanPath, motionDebugPath, phase18ValidationPath, phase18DiagnosticsPath, sceneAssetsRoot };
+        var inputs = new[] { shortVideoPath, longVideoPath, syncPath, ttsPath, durationPlanPath, motionPlanPath, motionDebugPath, phase18DiagnosticsPath, sceneAssetsRoot };
         var errors = new List<string>();
         foreach (var input in inputs)
             if (!File.Exists(input) && !Directory.Exists(input)) errors.Add($"Input missing: {NormalizePath(input)}");
@@ -5143,17 +5142,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var audioChecks = await BuildPhase19AudioChecksAsync(shortVideoPath, longVideoPath, cancellationToken);
         var visualChecks = BuildPhase19VisualChecks(motionPlanPath, sceneAssetsRoot);
         var phase18Root = File.Exists(phase18DiagnosticsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(phase18DiagnosticsPath, cancellationToken)) : null;
-        var phase18ValidationRoot = File.Exists(phase18ValidationPath) ? JsonNode.Parse(await File.ReadAllTextAsync(phase18ValidationPath, cancellationToken)) : null;
-        var phase18ValidationPassed = GetBool(phase18ValidationRoot, "validationPassed") ?? false;
+        var phase18ValidationPassed = GetBool(phase18Root, "validationPassed") ?? false;
         var shortDurationValidationPassed = GetBool(phase18Root, "shortDurationValidationPassed") ?? false;
         var longDurationValidationPassed = GetBool(phase18Root, "longDurationValidationPassed") ?? false;
-        var phase18CinematicOutroEnabled = GetBool(phase18Root, "cinematicOutroEnabled") ?? false;
-        var phase18CinematicOutroDurationSec = GetDouble(phase18Root, "cinematicOutroDurationSec") ?? 0;
-        var phase18FadeToBlackEnabled = GetBool(phase18Root, "fadeToBlackEnabled") ?? false;
-        var phase18FadeToBlackDurationSec = GetDouble(phase18Root, "fadeToBlackDurationSec") ?? 0;
         var phase18MotionDebugFound = GetBool(phase18Root, "motionDebugFound") ?? false;
-        var cinematicOutroValidated = phase18ValidationPassed && phase18CinematicOutroEnabled && phase18CinematicOutroDurationSec >= 4.0;
-        var fadeToBlackValidated = phase18ValidationPassed && phase18FadeToBlackEnabled && phase18FadeToBlackDurationSec >= 1.0;
+        var cinematicOutroValidated = IsPhase18CinematicOutroValidated(phase18Root);
+        var fadeToBlackValidated = IsPhase18FadeToBlackValidated(phase18Root);
 
         errors.AddRange(shortVideo.Errors);
         errors.AddRange(longVideo.Errors);
@@ -5217,13 +5211,22 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!motionDebugFound) errors.Add("motion-debug.json missing");
         if (!easingDiagnosticsPresent) errors.Add("Motion debug easing diagnostics missing");
         if (!parallaxDisabled) errors.Add("Parallax motion is present");
-        var motionRc1ValidationPassed = motionPlanFound && motionDebugFound && easingDiagnosticsPresent && parallaxDisabled && cinematicOutroValidated && fadeToBlackValidated && phase18ValidationPassed;
+        var productionQaPassed = phase18ValidationPassed && cinematicOutroValidated && fadeToBlackValidated;
+        var motionRc1ValidationPassed = motionPlanFound && motionDebugFound && easingDiagnosticsPresent && parallaxDisabled && productionQaPassed;
         var validationPassed = File.Exists(videoReviewPath) && File.Exists(qaReportPath) && qaConfidence >= 80 && motionRc1ValidationPassed;
         var validationPath = Path.Combine(validationRoot, "phase-19-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 19, phaseName = "Video QA & Production Review", status = validationPassed ? "Succeeded" : "Failed", motionRc1ValidationPassed, motionPlanFound, motionDebugFound, easingDiagnosticsPresent, parallaxDisabled, cinematicOutroValidated, fadeToBlackValidated, durationValidationMode = "NarrationPlusCinematicOutro", shortDurationValidationPassed, longDurationValidationPassed, productionQaPassed = validationPassed, validationPassed, overallScore, qaConfidence, falsePositiveRisk, recommendation, phase18ValidationPassed, issues = qaIssues, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 19, phaseName = "Video QA & Production Review", status = validationPassed ? "Succeeded" : "Failed", motionRc1ValidationPassed, motionPlanFound, motionDebugFound, easingDiagnosticsPresent, parallaxDisabled, cinematicOutroValidated, fadeToBlackValidated, durationValidationMode = "NarrationPlusCinematicOutro", shortDurationValidationPassed, longDurationValidationPassed, productionQaPassed, validationPassed, overallScore, qaConfidence, falsePositiveRisk, recommendation, phase18ValidationPassed, issues = qaIssues, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 19 Video QA & Production Review failed: " + string.Join(" | ", errors));
         return [videoReviewPath, qaReportPath, validationPath, diagnosticsPath];
     }
+
+    private static bool IsPhase18CinematicOutroValidated(JsonNode? phase18Diagnostics) =>
+        (GetBool(phase18Diagnostics, "cinematicOutroEnabled") ?? false) &&
+        (GetDouble(phase18Diagnostics, "cinematicOutroDurationSec") ?? 0) >= 4.0;
+
+    private static bool IsPhase18FadeToBlackValidated(JsonNode? phase18Diagnostics) =>
+        (GetBool(phase18Diagnostics, "fadeToBlackEnabled") ?? false) &&
+        (GetDouble(phase18Diagnostics, "fadeToBlackDurationSec") ?? 0) >= 1.0;
 
     private sealed record Phase19QaIssue(string IssueType, string SceneId, string Reason, int Confidence);
     private sealed record Phase19VideoChecks(string Profile, string VideoPath, bool VideoExists, bool AudioStreamExists, double VideoDurationSec, double AudioDurationSec, bool HasSilentSection, bool HasBlackFramesOver2Sec, bool HasFrozenFrameOver3Sec, IReadOnlyList<Phase19QaIssue> Issues, IReadOnlyList<string> Errors);
