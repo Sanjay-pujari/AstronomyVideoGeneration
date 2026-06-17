@@ -2497,7 +2497,17 @@ public sealed partial class ProductionPipelineExecutionService(
         return aa.Count == 0 || bb.Count == 0 ? 0 : aa.Intersect(bb).Count();
     }
 
-    private static string? GetString(JsonNode? node, string name) => node?[name]?.GetValue<string>();
+    private static string? GetString(JsonNode? node, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = node?[name];
+            if (value is null) continue;
+            var text = value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var stringValue) ? stringValue : value.ToJsonString();
+            if (!string.IsNullOrWhiteSpace(text)) return text;
+        }
+        return null;
+    }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
     private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
