@@ -2955,7 +2955,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return cleanPath;
     }
 
-    private static async Task WriteCleanNarrationSubtitleArtifactsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string narrationText, CancellationToken cancellationToken)
+    private async Task WriteCleanNarrationSubtitleArtifactsAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string narrationText, CancellationToken cancellationToken)
     {
         var subtitlesRoot = Path.Combine(context.OutputRoot, "subtitles");
         Directory.CreateDirectory(subtitlesRoot);
