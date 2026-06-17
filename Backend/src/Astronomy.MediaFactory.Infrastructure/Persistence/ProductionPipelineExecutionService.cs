@@ -1969,6 +1969,7 @@ public sealed partial class ProductionPipelineExecutionService(
         AddNarrationDiagnostics(narrationDiagnostics, narrationBeats);
         var narrationBeatArray = narrationBeats.ToArray();
         var sectionMap = GetPhase14SectionSceneMap(format);
+        var v3LongSceneNarration = BuildNarrationV3LongSceneNarrationMap(format, expectedCount, narrationBeats);
         var usedNarration = new HashSet<int>();
         var items = new List<SceneAudioSyncItem>();
         for (var i = 0; i < expectedCount; i++)
@@ -1988,8 +1989,15 @@ public sealed partial class ProductionPipelineExecutionService(
             var narration = string.IsNullOrWhiteSpace(sceneNarrationBeat)
                 ? BestSectionSemanticNarrationFallback(narrationBeats, visualIntent, renderMode, string.Empty)
                 : null;
-            var narrationText = !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? sceneNarrationBeat : narration?.Text ?? string.Empty;
-            var strategy = !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? "SceneTimelineNarrationBeat" : narration is null ? "Unmatched" : "NarrationV2SupportingFallback";
+            var hasV3ExpandedNarration = v3LongSceneNarration.TryGetValue(sceneId, out var expandedNarration);
+            if (hasV3ExpandedNarration)
+            {
+                narration = FindNarrationBySection(narrationBeats, expandedNarration.Section) ?? narration;
+            }
+            var narrationText = hasV3ExpandedNarration
+                ? expandedNarration.Text
+                : !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? sceneNarrationBeat : narration?.Text ?? string.Empty;
+            var strategy = hasV3ExpandedNarration ? "NarrationV3SceneExpansion" : !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? "SceneTimelineNarrationBeat" : narration is null ? "Unmatched" : "NarrationV2SupportingFallback";
             var imagePath = GetString(manifest, "imagePath") ?? Path.Combine(sceneRoot, sceneId + ".png");
             if (string.IsNullOrWhiteSpace(narrationText))
             {
@@ -2061,6 +2069,53 @@ public sealed partial class ProductionPipelineExecutionService(
             diagnostics.Add(new NarrationSceneDiagnostic(beat.BeatNo, beat.Section, beat.Text));
         }
     }
+
+    private static IReadOnlyDictionary<string, ExpandedNarrationBeat> BuildNarrationV3LongSceneNarrationMap(string format, int expectedCount, IReadOnlyList<NarrationBeatCandidate> narrationBeats)
+    {
+        if (!string.Equals(format, "long", StringComparison.OrdinalIgnoreCase) || expectedCount <= narrationBeats.Count || !IsNarrationV3SectionSet(narrationBeats))
+        {
+            return new Dictionary<string, ExpandedNarrationBeat>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var sections = narrationBeats
+            .Where(beat => !string.IsNullOrWhiteSpace(beat.Section))
+            .GroupBy(beat => beat.Section, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Text, StringComparer.OrdinalIgnoreCase);
+
+        return new Dictionary<string, ExpandedNarrationBeat>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = new("ColdOpen", BuildExpandedNarrationText(sections, "ColdOpen", "Hook", "Opening beat", "Open with the immediate sky moment and why this event deserves attention.")),
+            ["002-what-is-it"] = new("Context", BuildExpandedNarrationText(sections, "Context", null, "What it is", "Explain what the sky event is in clear viewer-friendly terms.")),
+            ["003-cause"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Cause", "Focus on the alignment or conditions that create the event.")),
+            ["004-interesting-fact"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Interesting fact", "Add a distinct documentary detail about the event experience or sky geometry.")),
+            ["005-best-time"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Best time", "Call out the timing window and when viewers should be ready.")),
+            ["006-accurate-sky-guide"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Accurate sky guide", "Describe where to look and how the primary sky objects will appear.")),
+            ["007-what-you-will-see"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "What you will see", "Describe the visible changes viewers should expect during the event.")),
+            ["008-viewing-tips"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Practical tips", "Give safe, practical viewing advice without repeating the timing beat.")),
+            ["009-final-reminder"] = new("EmotionalClosing", BuildExpandedNarrationText(sections, "EmotionalClosing", null, "Final reminder", "Close with a memorable reminder to pause, look up safely, and share the moment."))
+        };
+    }
+
+    private static bool IsNarrationV3SectionSet(IReadOnlyList<NarrationBeatCandidate> narrationBeats)
+    {
+        var sections = narrationBeats.Select(beat => beat.Section).Where(section => !string.IsNullOrWhiteSpace(section)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new[] { "ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing" }.All(sections.Contains);
+    }
+
+    private static string BuildExpandedNarrationText(IReadOnlyDictionary<string, string> sections, string primarySection, string? fallbackSection, string beatLabel, string sceneContext)
+    {
+        var source = sections.TryGetValue(primarySection, out var primaryText) ? primaryText : fallbackSection is not null && sections.TryGetValue(fallbackSection, out var fallbackText) ? fallbackText : string.Empty;
+        source = NormalizeNarrationText(source);
+        if (string.IsNullOrWhiteSpace(source)) return $"{beatLabel}: {sceneContext}";
+
+        var sentences = Regex.Split(source, @"(?<=[.!?])\s+").Where(sentence => !string.IsNullOrWhiteSpace(sentence)).Select(sentence => sentence.Trim()).ToArray();
+        var sentenceIndex = sentences.Length == 0 ? 0 : beatLabel.Sum(ch => ch) % sentences.Length;
+        var selected = sentences.Length == 0 ? source : sentences[sentenceIndex];
+        return NormalizeNarrationText($"{beatLabel}: {selected} {sceneContext}");
+    }
+
+    private static NarrationBeatCandidate? FindNarrationBySection(IReadOnlyList<NarrationBeatCandidate> candidates, string section)
+        => candidates.FirstOrDefault(candidate => string.Equals(candidate.Section, section, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyDictionary<string, string[]> GetPhase14SectionSceneMap(string format)
         => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
@@ -2183,6 +2238,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
+    private sealed record ExpandedNarrationBeat(string Section, string Text);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
 
 
