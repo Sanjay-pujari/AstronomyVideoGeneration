@@ -2921,7 +2921,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return report.ValidationPath;
     }
 
-    private static async Task<string> ApplyNarrationCleanupAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
+    private async Task<string> ApplyNarrationCleanupAsync(ProductionPhaseContext context, ScenePresentationProfile profile, string scriptPath, string narrationPath, CancellationToken cancellationToken)
     {
         var service = new NarrationCleanupService();
         var originalText = File.Exists(narrationPath)
