@@ -1543,10 +1543,44 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private static string CleanLongFormInstructionLeakage(string value)
     {
-        var cleaned = value ?? string.Empty;
-        foreach (var phrase in new[] { "Open with", "Explain", "Describe", "Focus on", "Call out", "Add a distinct", "Give safe", "Close with", "Viewer-friendly terms", "Timing window", "Primary sky objects", "Event experience", "Sky geometry" })
-            cleaned = Regex.Replace(cleaned, Regex.Escape(phrase), string.Empty, RegexOptions.IgnoreCase);
-        return string.Join(' ', cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var cleanedSentences = SplitNarrationSentences(value)
+            .Select(sentence => RemoveRawTimestampText(sentence).Trim())
+            .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
+            .Where(sentence => !ContainsNarrationAuthoringInstruction(sentence))
+            .Select(sentence => Regex.Replace(sentence, @"\b(?:during|at|around|on)\s*[,.]?\s*", string.Empty, RegexOptions.IgnoreCase).Trim())
+            .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
+            .Select(EnsureTerminalPunctuation)
+            .ToArray();
+
+        if (cleanedSentences.Length > 0)
+            return string.Join(" ", cleanedSentences);
+
+        var cleaned = RemoveRawTimestampText(value);
+        foreach (var phrase in NarrationAuthoringInstructionPhrases)
+            cleaned = Regex.Replace(cleaned, @"\b" + Regex.Escape(phrase) + @"\b\s*(?:[:\-–—]|that|what|where|when|why|how)?", string.Empty, RegexOptions.IgnoreCase);
+
+        cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim(' ', ',', ';', ':', '-', '–', '—');
+        return string.IsNullOrWhiteSpace(cleaned) ? string.Empty : EnsureTerminalPunctuation(cleaned);
+    }
+
+    private static IReadOnlyList<string> SplitNarrationSentences(string value)
+        => Regex.Split(value ?? string.Empty, @"(?<=[.!?])\s+")
+            .Select(part => part.Trim())
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .ToArray();
+
+    private static string RemoveRawTimestampText(string value)
+        => Regex.Replace(value ?? string.Empty, @"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)?\b|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", "the local viewing window", RegexOptions.IgnoreCase);
+
+    private static string EnsureTerminalPunctuation(string value)
+    {
+        var trimmed = (value ?? string.Empty).Trim();
+        return trimmed.EndsWith(".", StringComparison.Ordinal) || trimmed.EndsWith("!", StringComparison.Ordinal) || trimmed.EndsWith("?", StringComparison.Ordinal)
+            ? trimmed
+            : trimmed + ".";
     }
 
     private LongFormNarrationContext BuildLongFormNarrationContext(VideoAssemblyGenerationRequest request)
