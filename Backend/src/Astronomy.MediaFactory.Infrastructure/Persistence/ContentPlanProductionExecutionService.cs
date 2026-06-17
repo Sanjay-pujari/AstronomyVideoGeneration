@@ -52,7 +52,7 @@ public sealed class ContentPlanProductionExecutionService(
         var resolvedRange = ResolveExecutionRange(executionMode, requestedStartPhaseNo, requestedEndPhaseNo, request.DependencyExpansionMode);
         var startPhaseNo = resolvedRange.StartPhaseNo;
         var endPhaseNo = resolvedRange.EndPhaseNo;
-        var executionContext = BuildExecutionContext(plan, intelligence, productionRequest);
+        var executionContext = BuildExecutionContext(plan, intelligence, productionRequest, request);
         var outputRoot = BuildPlanOutputRoot(productionRequest);
         logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
         var warnings = new List<string>(productionRequest.Warnings);
@@ -103,6 +103,7 @@ public sealed class ContentPlanProductionExecutionService(
                 RequestedStartPhaseNo: requestedStartPhaseNo,
                 RequestedEndPhaseNo: requestedEndPhaseNo,
                 EnableSceneAssetsV3: request.EnableSceneAssetsV3,
+                EnableSubtitles: request.EnableSubtitles,
                 PublishApproved: request.PublishApproved,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
@@ -180,7 +181,7 @@ public sealed class ContentPlanProductionExecutionService(
     }
 
 
-    private static ProductionPipelineExecutionContext BuildExecutionContext(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest)
+    private static ProductionPipelineExecutionContext BuildExecutionContext(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, ContentPlanProductionExecutionRequest request)
         => new(
             UseProductionPipeline: true,
             ContentGenerationPlanId: plan.Id,
@@ -198,7 +199,8 @@ public sealed class ContentPlanProductionExecutionService(
             Language: plan.Language,
             RequestedOutputs: productionRequest.RequestedOutputs,
             Category: productionRequest.Category,
-            PlannedFormat: productionRequest.PlannedFormat);
+            PlannedFormat: productionRequest.PlannedFormat,
+            EnableSubtitles: request.EnableSubtitles);
 
     private static bool PhaseSucceeded(IReadOnlyList<ProductionPhaseResult>? phaseResults, int phaseNo)
         => phaseResults?.Any(p => p.PhaseNo == phaseNo && p.Status == ProductionPhaseStatus.Succeeded) == true;

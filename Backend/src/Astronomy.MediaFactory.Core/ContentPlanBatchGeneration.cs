@@ -44,6 +44,7 @@ public sealed record BatchGenerateFromPlansRequest(
     bool RebuildIntelligence = false,
     bool EnableSceneVariants = false,
     bool EnableSceneAssetsV3 = false,
+    bool EnableSubtitles = false,
     bool PublishApproved = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
@@ -240,6 +241,7 @@ public sealed record ContentPlanProductionExecutionRequest(
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
     bool EnableSceneAssetsV3 = false,
+    bool EnableSubtitles = false,
     bool PublishApproved = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
@@ -294,6 +296,7 @@ public sealed record ProductionPipelineExecutionContext(
     string? ValidationRoot = null,
     ProductionEventIntelligence? ProductionEventIntelligence = null,
     IMediaEventStrategy? MediaEventStrategy = null,
+    bool EnableSubtitles = false,
     ProductionExecutionContext? ProductionExecutionContext = null);
 
 public sealed record ProductionPipelineRequest(
@@ -314,6 +317,7 @@ public sealed record ProductionPipelineRequest(
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
     bool EnableSceneAssetsV3 = false,
+    bool EnableSubtitles = false,
     bool PublishApproved = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
