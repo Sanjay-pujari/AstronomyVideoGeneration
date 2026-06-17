@@ -15,6 +15,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private readonly IProcessRunner _processRunner;
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<FfmpegVideoRenderService> _logger;
+    private readonly MotionProfileSelector _motionProfileSelector = new();
+    private readonly SmoothMotionRenderer _motionRenderer = new();
+    private readonly CinematicEndingComposer _endingComposer = new();
     private const string EncodingReportFileName = "video-encoding-report.json";
     private const string RenderPerformanceReportFileName = "video-render-performance-report.json";
     private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -138,7 +141,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var isShort = IsShortManifest(manifest);
             var fps = isShort ? GetShortSafeFps() : Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
             var lockedDurationSeconds = audioDurationSeconds;
-            var motionProfile = ResolveMotionProfile(scene, isShort);
+            var motionProfile = ResolveMotionProfile(scene, i, plan.Scenes.Count);
             var effects = ResolveVideoEffects(lockedDurationSeconds, fps, outputWidth, outputHeight, isShort, motionProfile);
             var segmentPreset = ResolveIntermediateEncodingPreset(outputWidth, outputHeight);
             var segmentFilter = BuildSegmentVisualFilter(outputWidth, outputHeight, fps, effects, motionProfile, segmentPreset.ScaleFlags);
@@ -300,7 +303,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
             var (outputWidth, outputHeight) = GetOutputSize(manifest);
             var isShort = IsShortManifest(manifest);
-            var motionProfile = ResolveMotionProfile(scene, isShort);
+            var motionProfile = ResolveMotionProfile(scene, i, plan.Scenes.Count);
             var effects = ResolveVideoEffects(duration, fps, outputWidth, outputHeight, isShort, motionProfile);
             var segmentPreset = ResolveIntermediateEncodingPreset(outputWidth, outputHeight);
             var segmentFilter = BuildSegmentVisualFilter(outputWidth, outputHeight, fps, effects, motionProfile, segmentPreset.ScaleFlags);
@@ -372,10 +375,34 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             effectsReports.Add(CreateVideoEffectsReportEntry(scene, i, isShort, effects, duration, finalSegmentDurationSeconds));
         }
 
+        var (combinedWidth, combinedHeight) = GetOutputSize(manifest);
+        if (_endingComposer.ShouldAppendOutro(plan))
+        {
+            var outroScene = _endingComposer.ComposeOutro(plan);
+            var outroDuration = CinematicEndingComposer.DefaultOutroDurationSeconds;
+            var outroFps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
+            var outroFrameCount = Math.Max(1, (int)Math.Round(outroDuration * outroFps, MidpointRounding.AwayFromZero));
+            var outroPath = Path.Combine(outputDirectory, $"segment-{segmentPaths.Count + 1:000}-cinematic-ending.mp4");
+            var outroProfile = _motionProfileSelector.ClosingOutro();
+            var outroEffects = ResolveVideoEffects(outroDuration, outroFps, combinedWidth, combinedHeight, IsShortManifest(manifest), outroProfile);
+            var outroPreset = ResolveIntermediateEncodingPreset(combinedWidth, combinedHeight);
+            var outroFilter = BuildSegmentVisualFilter(combinedWidth, combinedHeight, outroFps, outroEffects, outroProfile, outroPreset.ScaleFlags, fadeToBlack: true);
+            var outroArguments = $"-y -nostdin -loop 1 -i \"{NormalizePath(outroScene.VisualPath)}\" -vf \"{outroFilter}\" -frames:v {outroFrameCount} {BuildVideoEncodeArguments(outroPreset)} -r {outroFps} -f mp4 \"{NormalizePath(outroPath)}\"";
+            var outroResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, outroArguments, cancellationToken, TimeSpan.FromSeconds(CalculateEffectiveSegmentTimeoutSeconds(_options.SegmentRenderTimeoutSeconds, outroDuration)));
+            AddSegmentRenderPerformanceReport(performanceReports, outroScene, segmentPaths.Count, outroDuration, outroPreset, outroArguments, outroResult, CalculateEffectiveSegmentTimeoutSeconds(_options.SegmentRenderTimeoutSeconds, outroDuration));
+            if (outroResult.ExitCode != 0 || !File.Exists(outroPath))
+            {
+                throw new InvalidOperationException("FFmpeg cinematic ending segment creation failed.");
+            }
+            segmentPaths.Add(outroPath);
+            segmentDurationsSeconds.Add(outroFrameCount / (double)outroFps);
+            effectsReports.Add(CreateVideoEffectsReportEntry(outroScene, segmentPaths.Count - 1, IsShortManifest(manifest), outroEffects, outroDuration, outroFrameCount / (double)outroFps));
+            motionDiagnostics.Add("{\"sceneId\":\"cinematic-ending\",\"motionProfile\":\"Closing\",\"musicOnlyOutroSeconds\":3.5,\"fadeToBlack\":true}");
+        }
+
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatBody = string.Join(Environment.NewLine, segmentPaths.Select(path => $"file '{NormalizePath(path).Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
-        var (combinedWidth, combinedHeight) = GetOutputSize(manifest);
         var concatArguments = BuildSegmentTransitionArguments(segmentPaths, segmentDurationsSeconds, segmentConcatPath, combinedPath, transitionsEnabled, transitionDurationSeconds, ResolveIntermediateEncodingPreset(combinedWidth, combinedHeight));
         await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {concatArguments}", cancellationToken);
         segmentDiagnostics.Add($"xfadeCommand: {_options.FfmpegPath} {concatArguments}");
@@ -386,18 +413,24 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException("FFmpeg concat of scene segments failed.");
         }
         var combinedDurationSeconds = await ProbeMediaDurationSecondsAsync(combinedPath, cancellationToken);
-        var combinedDurationDelta = Math.Abs(combinedDurationSeconds - narrationDurationSeconds);
+        var expectedFinalVisualDurationSeconds = narrationDurationSeconds + CinematicEndingComposer.DefaultOutroDurationSeconds;
+        var combinedDurationDelta = Math.Abs(combinedDurationSeconds - expectedFinalVisualDurationSeconds);
         segmentDiagnostics.Add($"actualCombinedDurationSeconds: {combinedDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        segmentDiagnostics.Add($"cinematicEndingOutroSeconds: {CinematicEndingComposer.DefaultOutroDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         if (combinedDurationDelta > 1.5d)
         {
-            var warningMessage = $"Combined scene duration ({combinedDurationSeconds:F3}s) differs from narration duration ({narrationDurationSeconds:F3}s) by {combinedDurationDelta:F3}s.";
+            var warningMessage = $"Combined scene duration ({combinedDurationSeconds:F3}s) differs from narration plus cinematic ending duration ({expectedFinalVisualDurationSeconds:F3}s) by {combinedDurationDelta:F3}s.";
             _logger.LogWarning("{Warning}", warningMessage);
             throw new InvalidOperationException($"{warningMessage} Refusing final mux to avoid trimmed/missing scenes.");
         }
 
         var finalPreset = ResolveFinalEncodingPreset(manifest);
         var finalFilter = BuildFinalOutputFilter(finalPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
-        var finalArguments = $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -vf \"{finalFilter}\" {BuildVideoEncodeArguments(finalPreset)} -r {(IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate))} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\"";
+        var hasBackgroundMusic = !string.IsNullOrWhiteSpace(_options.BackgroundMusicPath) && File.Exists(_options.BackgroundMusicPath);
+        var finalFps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
+        var finalArguments = hasBackgroundMusic
+            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -stream_loop -1 -i \"{NormalizePath(_options.BackgroundMusicPath!)}\" -filter_complex \"[0:v]{finalFilter}[vout];[2:a]volume=0.20[music];[1:a][music]amix=inputs=2:duration=longest:normalize=0[aout]\" -map \"[vout]\" -map \"[aout]\" -t {combinedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} {BuildVideoEncodeArguments(finalPreset)} -r {finalFps} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\""
+            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -vf \"{finalFilter}\" {BuildVideoEncodeArguments(finalPreset)} -r {finalFps} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
@@ -567,15 +600,15 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             FadeInApplied: fadeInApplied,
             FadeOutApplied: fadeOutApplied,
             FadeDuration: fadeInApplied ? fadeDuration : 0d,
-            ZoomStart: motionProfile.ZoomStart,
-            ZoomEnd: motionProfile.ZoomEnd,
+            ZoomStart: motionProfile.StartScale,
+            ZoomEnd: motionProfile.EndScale,
             DurationSeconds: safeDurationSeconds,
             Fps: fps,
             OutputWidth: outputWidth,
             OutputHeight: outputHeight);
     }
 
-    private string BuildSegmentVisualFilter(int outputWidth, int outputHeight, int fps, SegmentEffects effects, MotionProfile motionProfile, string scaleFlags)
+    private string BuildSegmentVisualFilter(int outputWidth, int outputHeight, int fps, SegmentEffects effects, MotionProfile motionProfile, string scaleFlags, bool fadeToBlack = false)
     {
         var filters = new List<string> { $"fps={fps}", BuildScaleBeforeMotionFilter(outputWidth, outputHeight, scaleFlags) };
         if (effects.KenBurnsApplied)
@@ -593,6 +626,11 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                     .ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
                 filters.Add($"fade=t=out:st={fadeOutStart}:d={fadeDuration}");
             }
+        }
+
+        if (fadeToBlack)
+        {
+            filters.Add("fade=t=out:st=2.75:d=0.75:color=black");
         }
 
         return string.Join(',', filters);
@@ -621,48 +659,11 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     }
 
     private string BuildKenBurnsFilter(double durationSeconds, int fps, int outputWidth, int outputHeight, MotionProfile motionProfile)
-    {
-        var zoomStart = Math.Max(1d, motionProfile.ZoomStart);
-        var zoomEnd = Math.Max(zoomStart, motionProfile.ZoomEnd);
-        var totalFrames = Math.Max(1, (int)Math.Round(durationSeconds * fps, MidpointRounding.AwayFromZero));
-        var zoomStartText = zoomStart.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        var zoomEndText = zoomEnd.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        var zoomDeltaText = (zoomEnd - zoomStart).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
-        var zoomExpression = _options.KenBurnsUseEasing
-            ? $"{zoomStartText} + ({zoomDeltaText})*pow(on/{totalFrames}.0,1.2)"
-            : $"{zoomStartText} + ({zoomDeltaText})*(on/{totalFrames}.0)";
-        var panOffsetExpression = $"{motionProfile.PanDirectionSign.ToString(System.Globalization.CultureInfo.InvariantCulture)}*{motionProfile.PanStrength.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)}*iw*(on/{totalFrames}.0)";
-        var xExpression = $"iw/2-(iw/zoom/2)+({panOffsetExpression})";
-        return $"zoompan=z='{zoomExpression}':x='{xExpression}':y='ih/2-(ih/zoom/2)':d={totalFrames}:s={outputWidth}x{outputHeight}";
-    }
+        => _motionRenderer.BuildZoomPanFilter(durationSeconds, fps, outputWidth, outputHeight, motionProfile);
 
-    private MotionProfile ResolveMotionProfile(RenderPlanScene scene, bool isShort)
-    {
-        var isOverview = string.Equals(scene.Segment, "intro", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(scene.Segment, "outro", StringComparison.OrdinalIgnoreCase);
-        var isPlanetary = string.Equals(scene.Segment, "main", StringComparison.OrdinalIgnoreCase);
+    private MotionProfile ResolveMotionProfile(RenderPlanScene scene, int sceneIndex, int sceneCount)
+        => _motionProfileSelector.Select(scene, sceneIndex, sceneCount);
 
-        if (!_options.EnableDirectionalMotion)
-        {
-            return new MotionProfile(_options.KenBurnsZoomStart, GetConfiguredZoomEnd(isShort), 0d, 0d, "none");
-        }
-
-        var zoomStart = _options.KenBurnsZoomStart;
-        var zoomEnd = GetConfiguredZoomEnd(isShort);
-        if (isOverview)
-        {
-            zoomEnd = Math.Max(1.0d, zoomStart + (zoomEnd - zoomStart) * 0.25d);
-        }
-        else if (isPlanetary)
-        {
-            zoomEnd = Math.Max(zoomEnd, zoomStart + 0.12d);
-        }
-
-        return new MotionProfile(zoomStart, zoomEnd, Math.Clamp(_options.DirectionalPanStrength, 0d, 0.08d), 0d, "none");
-    }
-
-    private double GetConfiguredZoomEnd(bool isShort)
-        => isShort && _options.ShortKenBurnsZoomEnd > 0d ? _options.ShortKenBurnsZoomEnd : _options.KenBurnsZoomEnd;
 
 
 
@@ -762,8 +763,6 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         double TempoFactor,
         double FinalSegmentDurationSeconds,
         IReadOnlyList<string> Warnings);
-
-    private sealed record MotionProfile(double ZoomStart, double ZoomEnd, double PanStrength, double PanDirectionSign, string PanDirection);
 
     private sealed record SegmentEffects(
         bool KenBurnsApplied,
