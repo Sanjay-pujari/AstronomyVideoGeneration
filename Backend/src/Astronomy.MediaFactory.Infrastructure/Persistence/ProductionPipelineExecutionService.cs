@@ -1980,8 +1980,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             ["001-hook"] = script.Sections.ColdOpen,
             ["002-what-is-it"] = script.Sections.Hook,
-            ["003-cause"] = script.Sections.Context,
-            ["004-interesting-fact"] = $"{script.Sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
+            ["003-cause"] = family == "Eclipse" ? "A solar eclipse happens when the Moon passes directly between Earth and the Sun, casting its shadow onto our planet." : script.Sections.Context,
+            ["004-interesting-fact"] = family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{script.Sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
             ["005-best-time"] = script.Sections.ViewingGuide,
             ["006-accurate-sky-guide"] = BuildNaturalSkyGuide(family),
             ["007-what-you-will-see"] = script.Sections.MainStory,
@@ -2025,6 +2025,41 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
         if (duplicates.Length > 0)
             throw new InvalidOperationException("Phase 14 EventStoryComposer duplicated scene narration: " + string.Join(" | ", duplicates));
+
+        var allScenes = shortTexts.Select(kv => ($"short:{kv.Key}", kv.Value))
+            .Concat(longTexts.Select(kv => ($"long:{kv.Key}", kv.Value)))
+            .ToArray();
+        var duplicateOpenings = allScenes
+            .Select(item => new { item.Item1, FirstSentence = NormalizeNarrationForDuplicateCheck(FirstSentence(item.Value)) })
+            .Where(item => !string.IsNullOrWhiteSpace(item.FirstSentence))
+            .GroupBy(item => item.FirstSentence, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => string.Join(",", group.Select(item => item.Item1)))
+            .ToArray();
+        if (duplicateOpenings.Length > 0)
+            throw new InvalidOperationException("Phase 14 EventStoryComposer duplicated first narration sentence: " + string.Join(" | ", duplicateOpenings));
+
+        for (var i = 0; i < allScenes.Length; i++)
+        for (var j = i + 1; j < allScenes.Length; j++)
+        {
+            var similarity = NormalizedNarrationSimilarity(allScenes[i].Value, allScenes[j].Value);
+            if (similarity >= 0.82)
+                throw new InvalidOperationException($"Phase 14 EventStoryComposer narration similarity too high between {allScenes[i].Item1} and {allScenes[j].Item1}: {similarity:0.###}");
+        }
+    }
+
+
+    private static string FirstSentence(string text)
+    {
+        var match = Regex.Match(text.Trim(), @"^.+?[.!?](?:\s|$)");
+        return match.Success ? match.Value.Trim() : text.Trim();
+    }
+
+    private static double NormalizedNarrationSimilarity(string left, string right)
+    {
+        var a = Regex.Matches(NormalizeNarrationForDuplicateCheck(left), @"[a-z0-9]+", RegexOptions.IgnoreCase).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var b = Regex.Matches(NormalizeNarrationForDuplicateCheck(right), @"[a-z0-9]+", RegexOptions.IgnoreCase).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return a.Count == 0 || b.Count == 0 ? 0 : (double)a.Intersect(b).Count() / Math.Max(a.Count, b.Count);
     }
 
     private static IReadOnlyList<SceneAudioSyncItem> ApplyDocumentaryNarrationToSyncItems(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyDictionary<string, string> documentaryTextBySceneId)
@@ -2084,21 +2119,69 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string BuildNarrationSrtFromCleanFiles(IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
     {
-        var srt = new StringBuilder();
+        var blocks = new List<(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines)>();
         var start = TimeSpan.Zero;
+        var number = 1;
         for (var i = 0; i < narrationFiles.Count; i++)
         {
-            var item = items[i];
             var text = File.ReadAllText(narrationFiles[i]).Trim();
-            var duration = TimeSpan.FromSeconds(Math.Max(1, item.EstimatedDurationSec));
-            var end = start + duration;
-            srt.AppendLine((i + 1).ToString(CultureInfo.InvariantCulture));
-            srt.AppendLine($"{FormatSrtTimestamp(start)} --> {FormatSrtTimestamp(end)}");
-            srt.AppendLine(text);
+            foreach (var chunk in SplitSubtitleChunks(text))
+            {
+                var duration = TimeSpan.FromSeconds(Math.Clamp(CountWords(chunk) / 2.6, 2.0, 4.5));
+                var end = start + duration;
+                blocks.Add((number++, start, end, WrapSubtitleChunk(chunk)));
+                start = end;
+            }
+        }
+        var duplicateBlocks = blocks.Select(block => NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)))
+            .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
+            .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
+        if (duplicateBlocks) throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
+        var srt = new StringBuilder();
+        foreach (var block in blocks)
+        {
+            srt.AppendLine(block.Number.ToString(CultureInfo.InvariantCulture));
+            srt.AppendLine($"{FormatSrtTimestamp(block.Start)} --> {FormatSrtTimestamp(block.End)}");
+            foreach (var line in block.Lines) srt.AppendLine(line);
             srt.AppendLine();
-            start = end;
         }
         return srt.ToString();
+    }
+
+    private static IReadOnlyList<string> SplitSubtitleChunks(string text)
+    {
+        var phrases = Regex.Split(NormalizeNarrationForDuplicateCheck(text), @"(?<=[.!?])\s+|(?<=[,;:])\s+")
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .Select(part => part.Trim())
+            .ToArray();
+        var chunks = new List<string>();
+        var current = string.Empty;
+        foreach (var phrase in phrases)
+        {
+            if ((current + " " + phrase).Trim().Length <= 84) current = (current + " " + phrase).Trim();
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+                current = phrase;
+                while (current.Length > 84)
+                {
+                    var cut = current.LastIndexOf(' ', Math.Min(84, current.Length - 1));
+                    if (cut < 35) cut = Math.Min(84, current.Length);
+                    chunks.Add(current[..cut].Trim());
+                    current = current[cut..].Trim();
+                }
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+        return chunks;
+    }
+
+    private static IReadOnlyList<string> WrapSubtitleChunk(string text)
+    {
+        if (text.Length <= 42) return [text];
+        var cut = text.LastIndexOf(' ', Math.Min(42, text.Length - 1));
+        if (cut < 20) cut = Math.Min(42, text.Length);
+        return [text[..cut].Trim(), text[cut..].Trim()];
     }
 
     private static SrtValidationResult ValidateNarrationSrt(string srtPath, IReadOnlyList<string> narrationFiles)
@@ -2106,9 +2189,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var sourceTexts = narrationFiles.Select(path => File.ReadAllText(path).Trim()).ToArray();
         var srtTexts = ExtractSrtTexts(srtPath);
         var errors = new List<string>();
-        if (srtTexts.Count != sourceTexts.Length) errors.Add($"{Path.GetFileName(srtPath)} subtitle count {srtTexts.Count} != narration file count {sourceTexts.Length}");
-        var matches = srtTexts.SequenceEqual(sourceTexts, StringComparer.Ordinal);
-        if (!matches) errors.Add($"{Path.GetFileName(srtPath)} text does not exactly match clean narration files");
+        var sourceCombined = NormalizeNarrationForDuplicateCheck(string.Join(" ", sourceTexts));
+        var srtCombined = NormalizeNarrationForDuplicateCheck(string.Join(" ", srtTexts));
+        var matches = string.Equals(srtCombined, sourceCombined, StringComparison.Ordinal);
+        if (!matches) errors.Add($"{Path.GetFileName(srtPath)} text does not preserve clean narration files after cue splitting");
+        if (srtTexts.Any(text => text.Length > 84)) errors.Add($"{Path.GetFileName(srtPath)} contains a cue longer than 84 characters");
         if (srtTexts.Any(ContainsAuthoringInstructionText)) errors.Add($"{Path.GetFileName(srtPath)} contains forbidden authoring phrases");
         var duplicateGroups = srtTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase)
             .Where(g => g.Count() > 1)
@@ -4195,23 +4280,25 @@ public sealed partial class ProductionPipelineExecutionService(
         var subtitleBurnInCommandLong = string.Empty;
         var shortSubtitlesApplied = false;
         var longSubtitlesApplied = false;
+        SubtitleBurnInResult? shortBurnInResult = null;
+        SubtitleBurnInResult? longBurnInResult = null;
         if (enableSubtitles)
         {
             if (!shortSrtExists) subtitleBurnInErrors.Add($"Short subtitle file missing: {NormalizePath(shortSrtPath)}");
             if (!longSrtExists) subtitleBurnInErrors.Add($"Long subtitle file missing: {NormalizePath(longSrtPath)}");
             if (File.Exists(shortVideoPath) && shortSrtExists)
             {
-                var result = await BurnInSubtitlesAsync(shortVideoPath, shortSrtPath, cancellationToken);
-                subtitleBurnInCommandShort = result.Command;
-                shortSubtitlesApplied = result.Succeeded;
-                if (!result.Succeeded) subtitleBurnInErrors.Add($"Short subtitle burn-in failed: {result.Error}");
+                shortBurnInResult = await BurnInSubtitlesAsync(shortVideoPath, shortSrtPath, cancellationToken);
+                subtitleBurnInCommandShort = shortBurnInResult.Command;
+                shortSubtitlesApplied = shortBurnInResult.Succeeded;
+                if (!shortBurnInResult.Succeeded) subtitleBurnInErrors.Add($"Short subtitle burn-in failed: {shortBurnInResult.Error}");
             }
             if (File.Exists(longVideoPath) && longSrtExists)
             {
-                var result = await BurnInSubtitlesAsync(longVideoPath, longSrtPath, cancellationToken);
-                subtitleBurnInCommandLong = result.Command;
-                longSubtitlesApplied = result.Succeeded;
-                if (!result.Succeeded) subtitleBurnInErrors.Add($"Long subtitle burn-in failed: {result.Error}");
+                longBurnInResult = await BurnInSubtitlesAsync(longVideoPath, longSrtPath, cancellationToken);
+                subtitleBurnInCommandLong = longBurnInResult.Command;
+                longSubtitlesApplied = longBurnInResult.Succeeded;
+                if (!longBurnInResult.Succeeded) subtitleBurnInErrors.Add($"Long subtitle burn-in failed: {longBurnInResult.Error}");
             }
         }
         var subtitleBurnInSucceeded = !enableSubtitles || subtitleBurnInErrors.Count == 0;
@@ -4305,6 +4392,13 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleBurnInCommandShort,
             subtitleBurnInCommandLong,
             subtitleBurnInSucceeded,
+            subtitleStyleApplied = subtitleBurnInSucceeded,
+            subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0),
+            subtitleMaxCharsPerLine = 42,
+            subtitleMaxLines = 2,
+            duplicateNarrationDetected = false,
+            duplicateNarrationFixed = false,
+            duplicateSrtTextDetected = false,
             subtitleBurnInErrors,
             finalShortVideoPath = NormalizePath(shortVideoPath),
             finalLongVideoPath = NormalizePath(longVideoPath),
@@ -4372,13 +4466,20 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleBurnInCommandShort,
             subtitleBurnInCommandLong,
             subtitleBurnInSucceeded,
+            subtitleStyleApplied = subtitleBurnInSucceeded,
+            subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0),
+            subtitleMaxCharsPerLine = 42,
+            subtitleMaxLines = 2,
+            duplicateNarrationDetected = false,
+            duplicateNarrationFixed = false,
+            duplicateSrtTextDetected = false,
             subtitleBurnInErrors,
             finalShortVideoPath = NormalizePath(shortVideoPath),
             finalLongVideoPath = NormalizePath(longVideoPath),
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Video Assembly V1", status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Video Assembly V1", status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Video Assembly V1 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath];
     }
@@ -4486,7 +4587,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
         => Path.Combine(Path.GetDirectoryName(outputPath)!, "final-mixed-audio.m4a");
 
-    private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error);
+    private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error, int FontSize = 0, int MaxCharsPerLine = 42, int MaxLines = 2);
 
     private async Task<SubtitleBurnInResult> BurnInSubtitlesAsync(string videoPath, string srtPath, CancellationToken cancellationToken)
     {
@@ -4495,17 +4596,41 @@ public sealed partial class ProductionPipelineExecutionService(
         var unsubtitledPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(videoPath) + "-without-subtitles" + Path.GetExtension(videoPath));
         var subtitledPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(videoPath) + "-subtitled" + Path.GetExtension(videoPath));
         File.Copy(videoPath, unsubtitledPath, true);
-        var filter = $"subtitles='{EscapeFfmpegSubtitlesPath(srtPath)}':force_style='{Phase18SubtitleStyle}'";
+        var style = await ResolvePhase18SubtitleStyleAsync(videoPath, cancellationToken);
+        var filter = $"subtitles='{EscapeFfmpegSubtitlesPath(srtPath)}':force_style='{style.ForceStyle}'";
         var args = new[] { "-y", "-i", unsubtitledPath, "-vf", filter, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "copy", subtitledPath };
         var result = await RunProcessAsync(ffmpegPath, args, cancellationToken);
         var command = BuildProcessCommand(ffmpegPath, args);
         if (result.ExitCode != 0 || !File.Exists(subtitledPath))
-            return new SubtitleBurnInResult(false, command, FirstNonEmpty(result.Error, result.Output, $"FFmpeg exited with code {result.ExitCode}"));
+            return new SubtitleBurnInResult(false, command, FirstNonEmpty(result.Error, result.Output, $"FFmpeg exited with code {result.ExitCode}"), style.FontSize, style.MaxCharsPerLine, style.MaxLines);
         File.Copy(subtitledPath, videoPath, true);
-        return new SubtitleBurnInResult(true, command, string.Empty);
+        return new SubtitleBurnInResult(true, command, string.Empty, style.FontSize, style.MaxCharsPerLine, style.MaxLines);
     }
 
-    private const string Phase18SubtitleStyle = "FontName=Arial,FontSize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=60,Alignment=2";
+    private sealed record Phase18SubtitleStyle(string ForceStyle, int FontSize, int MarginV, int MaxCharsPerLine, int MaxLines);
+
+    private async Task<Phase18SubtitleStyle> ResolvePhase18SubtitleStyleAsync(string videoPath, CancellationToken cancellationToken)
+    {
+        var (width, height) = await ProbeVideoDimensionsAsync(videoPath, cancellationToken);
+        var fontSize = 28;
+        var marginV = 55;
+        if (width == 1280 && height == 720) { fontSize = 22; marginV = 34; }
+        else if (width == 1920 && height == 1080) { fontSize = 36; marginV = 62; }
+        else if (width == 1080 && height == 1920) { fontSize = 34; marginV = 140; }
+        else if (height > width) { fontSize = Math.Clamp((int)Math.Round(height * 0.018), 32, 38); marginV = Math.Clamp((int)Math.Round(height * 0.073), 120, 160); }
+        else { fontSize = Math.Clamp((int)Math.Round(height * 0.031), 20, 40); marginV = Math.Clamp((int)Math.Round(height * 0.057), 28, 70); }
+        var forceStyle = $"FontName=Arial,FontSize={fontSize},PrimaryColour=&HFFFFFF&,BackColour=&H99000000&,OutlineColour=&H000000&,BorderStyle=3,Outline=1,Shadow=0,MarginV={marginV},Alignment=2";
+        return new Phase18SubtitleStyle(forceStyle, fontSize, marginV, 42, 2);
+    }
+
+    private async Task<(int Width, int Height)> ProbeVideoDimensionsAsync(string videoPath, CancellationToken cancellationToken)
+    {
+        var ffprobePath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfprobePath) ? "ffprobe" : renderingOptions.Value.FfprobePath;
+        var result = await RunProcessAsync(ffprobePath, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", videoPath], cancellationToken);
+        var text = FirstNonEmpty(result.Output, result.Error, string.Empty).Trim();
+        var parts = text.Split('x', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 2 && int.TryParse(parts[0], out var width) && int.TryParse(parts[1], out var height) ? (width, height) : (1280, 720);
+    }
 
     private static string EscapeFfmpegSubtitlesPath(string path)
     {

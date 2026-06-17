@@ -87,7 +87,17 @@ public sealed record QuestionDrivenNarrationDiagnosticsDto(
     bool EventDateMentioned = false,
     bool EventNameMentioned = false,
     int DocumentaryScore = 0,
-    int StorytellingScore = 0);
+    int StorytellingScore = 0,
+    bool SubtitleStyleApplied = false,
+    int SubtitleFontSize = 0,
+    int SubtitleMaxCharsPerLine = 42,
+    int SubtitleMaxLines = 2,
+    bool SubtitleCueSplitApplied = false,
+    int SubtitleCueCountBeforeSplit = 0,
+    int SubtitleCueCountAfterSplit = 0,
+    bool DuplicateNarrationDetected = false,
+    bool DuplicateNarrationFixed = false,
+    bool DuplicateSrtTextDetected = false);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,
