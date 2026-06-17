@@ -67,7 +67,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var outputRoot = request.OutputRoot;
         var productionIntelligence = intelligenceAdapter.Normalize(request);
         var strategy = strategyResolver.Resolve(productionIntelligence.EventType, productionIntelligence.Title);
-        var executionContext = BuildProductionExecutionContext(request.ExecutionContext, productionRequest, eventIdResolution.EventId ?? Guid.Empty, outputRoot, productionIntelligence, strategy);
+        var executionContext = BuildProductionExecutionContext(request, eventIdResolution.EventId ?? Guid.Empty, outputRoot, productionIntelligence, strategy);
         var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 20);
         var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 20, startPhaseNo, 20);
         var phaseResults = new List<ProductionPhaseResult>();
@@ -4108,6 +4108,35 @@ public sealed partial class ProductionPipelineExecutionService(
         var longHasAudioStream = File.Exists(longVideoPath) && await HasAudioStreamAsync(longVideoPath, cancellationToken);
         var shortAudioMuxed = File.Exists(shortAudioTrackPath) && shortHasAudioStream;
         var longAudioMuxed = File.Exists(longAudioTrackPath) && longHasAudioStream;
+        var enableSubtitles = context.ExecutionContext.EnableSubtitles;
+        var subtitleMode = enableSubtitles ? "BurnIn" : "Disabled";
+        var shortSrtPath = Path.Combine(planRoot, "narration", "subtitles", "short.srt");
+        var longSrtPath = Path.Combine(planRoot, "narration", "subtitles", "long.srt");
+        var shortSrtExists = File.Exists(shortSrtPath);
+        var longSrtExists = File.Exists(longSrtPath);
+        var subtitleBurnInErrors = new List<string>();
+        var subtitleBurnInCommandShort = string.Empty;
+        var subtitleBurnInCommandLong = string.Empty;
+        var shortSubtitlesApplied = false;
+        var longSubtitlesApplied = false;
+        if (enableSubtitles)
+        {
+            if (File.Exists(shortVideoPath) && shortSrtExists)
+            {
+                var result = await BurnInSubtitlesAsync(shortVideoPath, shortSrtPath, cancellationToken);
+                subtitleBurnInCommandShort = result.Command;
+                shortSubtitlesApplied = result.Succeeded;
+                if (!result.Succeeded) subtitleBurnInErrors.Add($"Short subtitle burn-in failed: {result.Error}");
+            }
+            if (File.Exists(longVideoPath) && longSrtExists)
+            {
+                var result = await BurnInSubtitlesAsync(longVideoPath, longSrtPath, cancellationToken);
+                subtitleBurnInCommandLong = result.Command;
+                longSubtitlesApplied = result.Succeeded;
+                if (!result.Succeeded) subtitleBurnInErrors.Add($"Long subtitle burn-in failed: {result.Error}");
+            }
+        }
+        var subtitleBurnInSucceeded = !enableSubtitles || subtitleBurnInErrors.Count == 0;
         var audioVideoDurationDeltaSec = Math.Max(Math.Abs(shortAudioDuration - shortVideoDuration), Math.Abs(longAudioDuration - longVideoDuration));
         var backgroundMusicConfigForDiagnostics = ResolvePhase18BackgroundMusicConfig(planRoot);
         var backgroundAudioPathForDiagnostics = backgroundMusicConfigForDiagnostics.ConfiguredPath;
@@ -4144,6 +4173,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var duckingFailureReason = string.Empty;
         if (backgroundMusicConfigForDiagnostics.Enabled && !backgroundAudioMixed) errors.Add("background music was enabled but was not mixed");
         if (backgroundMusicConfigForDiagnostics.Enabled && effectiveBackgroundVolume <= 0) errors.Add("background music was enabled but effective background volume is zero");
+        errors.AddRange(subtitleBurnInErrors);
         var narrationAudioMixed = shortAudioMuxed && longAudioMuxed;
         var finalVideoHasAudio = shortHasAudioStream && longHasAudioStream;
         var finalVideoHasMotion = scenesWithZoom >= totalScenes && scenesWithPan >= totalScenes && scenesWithTransitions >= Math.Max(0, totalScenes - 1);
@@ -4186,6 +4216,20 @@ public sealed partial class ProductionPipelineExecutionService(
             finalVideoHasAudio,
             finalVideoHasMotion,
             ffmpegCommandPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath,
+            enableSubtitles,
+            subtitleMode,
+            shortSrtPath = NormalizePath(shortSrtPath),
+            longSrtPath = NormalizePath(longSrtPath),
+            shortSrtExists,
+            longSrtExists,
+            shortSubtitlesApplied,
+            longSubtitlesApplied,
+            subtitleBurnInCommandShort,
+            subtitleBurnInCommandLong,
+            subtitleBurnInSucceeded,
+            subtitleBurnInErrors,
+            finalShortVideoPath = NormalizePath(shortVideoPath),
+            finalLongVideoPath = NormalizePath(longVideoPath),
             validationPassed
         }, JsonOptions), cancellationToken);
 
@@ -4239,10 +4283,24 @@ public sealed partial class ProductionPipelineExecutionService(
             missingSceneImages,
             missingAudioFiles,
             videoRendered,
+            enableSubtitles,
+            subtitleMode,
+            shortSrtPath = NormalizePath(shortSrtPath),
+            longSrtPath = NormalizePath(longSrtPath),
+            shortSrtExists,
+            longSrtExists,
+            shortSubtitlesApplied,
+            longSubtitlesApplied,
+            subtitleBurnInCommandShort,
+            subtitleBurnInCommandLong,
+            subtitleBurnInSucceeded,
+            subtitleBurnInErrors,
+            finalShortVideoPath = NormalizePath(shortVideoPath),
+            finalLongVideoPath = NormalizePath(longVideoPath),
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Video Assembly V1", status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Video Assembly V1", status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Video Assembly V1 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath];
     }
@@ -4349,6 +4407,43 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
         => Path.Combine(Path.GetDirectoryName(outputPath)!, "final-mixed-audio.m4a");
+
+    private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error);
+
+    private async Task<SubtitleBurnInResult> BurnInSubtitlesAsync(string videoPath, string srtPath, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var outputDirectory = Path.GetDirectoryName(videoPath)!;
+        var unsubtitledPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(videoPath) + "-without-subtitles" + Path.GetExtension(videoPath));
+        var subtitledPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(videoPath) + "-subtitled" + Path.GetExtension(videoPath));
+        File.Copy(videoPath, unsubtitledPath, true);
+        var filter = $"subtitles='{EscapeFfmpegSubtitlesPath(srtPath)}':force_style='{Phase18SubtitleStyle}'";
+        var args = new[] { "-y", "-i", unsubtitledPath, "-vf", filter, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "copy", subtitledPath };
+        var result = await RunProcessAsync(ffmpegPath, args, cancellationToken);
+        var command = BuildProcessCommand(ffmpegPath, args);
+        if (result.ExitCode != 0 || !File.Exists(subtitledPath))
+            return new SubtitleBurnInResult(false, command, FirstNonEmpty(result.Error, result.Output, $"FFmpeg exited with code {result.ExitCode}"));
+        File.Copy(subtitledPath, videoPath, true);
+        return new SubtitleBurnInResult(true, command, string.Empty);
+    }
+
+    private const string Phase18SubtitleStyle = "FontName=Arial,FontSize=36,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=3,Outline=2,Shadow=1,MarginV=60,Alignment=2";
+
+    private static string EscapeFfmpegSubtitlesPath(string path)
+    {
+        var normalized = Path.GetFullPath(path).Replace('\\', '/');
+        return normalized.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(":", "\\:", StringComparison.Ordinal)
+            .Replace("'", "\\'", StringComparison.Ordinal);
+    }
+
+    private static string BuildProcessCommand(string fileName, IReadOnlyList<string> arguments)
+        => string.Join(" ", new[] { QuoteProcessArgument(fileName) }.Concat(arguments.Select(QuoteProcessArgument)));
+
+    private static string QuoteProcessArgument(string value)
+        => string.IsNullOrEmpty(value) || value.Any(char.IsWhiteSpace) || value.Contains('\'') || value.Contains('"')
+            ? "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+            : value;
 
     private Phase18BackgroundMusicConfig ResolvePhase18BackgroundMusicConfig(string planRoot)
     {
@@ -4972,6 +5067,7 @@ public sealed partial class ProductionPipelineExecutionService(
             MusicMood = "WonderCuriosity",
             MusicLevelPercent = profile == ScenePresentationProfile.ShortForm ? 12 : 10,
             DuckMusicUnderNarration = true,
+            EnableSubtitles = context.ExecutionContext.EnableSubtitles,
             ProductionContext = context.ExecutionContext,
             SourceNotes = context.Request.SourceNotes ?? Array.Empty<string>()
         };
@@ -6180,8 +6276,10 @@ public sealed partial class ProductionPipelineExecutionService(
         return path;
     }
 
-    private ProductionPipelineExecutionContext BuildProductionExecutionContext(ProductionPipelineExecutionContext? baseContext, ContentPlanProductionPipelineRequest request, Guid eventId, string planRoot, ProductionEventIntelligence intelligence, IMediaEventStrategy strategy)
+    private ProductionPipelineExecutionContext BuildProductionExecutionContext(ProductionPipelineRequest pipelineRequest, Guid eventId, string planRoot, ProductionEventIntelligence intelligence, IMediaEventStrategy strategy)
     {
+        var request = pipelineRequest.Request;
+        var baseContext = pipelineRequest.ExecutionContext;
         var year = request.ScheduledUtc?.Year ?? request.PeakUtc?.Year ?? request.StartUtc?.Year ?? DateTimeOffset.UtcNow.Year;
         var questionRoot = Path.Combine(planRoot, "question-engine");
         var sceneRoot = Path.Combine(questionRoot, "scene-approval-v3");
@@ -6212,6 +6310,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ValidationRoot = validationRoot,
             ProductionEventIntelligence = intelligence,
             MediaEventStrategy = strategy,
+            EnableSubtitles = pipelineRequest.EnableSubtitles || baseContext?.EnableSubtitles == true,
             ProductionExecutionContext = contract
         };
     }
