@@ -57,7 +57,11 @@ internal static class PhotoCinematicThumbnailRenderer
             writtenFiles.Add(NormalizePath(outputPath));
         }
 
-        return new PhotoCinematicThumbnailRenderResult(true, true, writtenFiles, visualObjects, labels);
+        var moonRendered = ContainsObject(visualObjects, "moon") || ContainsObject(visualObjects, "full moon") || labels.Any(label => label.Contains("moon", StringComparison.OrdinalIgnoreCase));
+        var representativeRadius = 38f * Specs[0].PlanetScale * 1.35f;
+        var moonVisibleDiameterPx = moonRendered ? representativeRadius * 2f : 0f;
+        var moonCalloutCircleDiameterPx = moonRendered ? moonVisibleDiameterPx * 0.18f : 0f;
+        return new PhotoCinematicThumbnailRenderResult(true, true, writtenFiles, visualObjects, labels, moonRendered, moonRendered, moonCalloutCircleDiameterPx, moonVisibleDiameterPx);
     }
 
     private static bool TryDrawSourceImage(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, string? sourceImagePath)
@@ -293,6 +297,8 @@ internal static class PhotoCinematicThumbnailRenderer
         ctx.Fill(Color.ParseHex("#BFB9AA").WithAlpha(0.22f), new EllipsePolygon(center.X - radius * 0.30f, center.Y - radius * 0.18f, radius * 0.16f));
         ctx.Fill(Color.ParseHex("#AFA895").WithAlpha(0.18f), new EllipsePolygon(center.X + radius * 0.22f, center.Y + radius * 0.24f, radius * 0.22f));
         ctx.Fill(Color.White.WithAlpha(0.20f), new EllipsePolygon(center.X - radius * 0.20f, center.Y - radius * 0.35f, radius * 0.35f, radius * 0.18f));
+        var calloutRadius = radius * 0.18f;
+        ctx.Draw(Color.ParseHex("#FFDE5B").WithAlpha(0.86f), Math.Max(1.8f, radius * 0.025f), new EllipsePolygon(center.X - radius * 0.20f, center.Y - radius * 0.12f, calloutRadius, calloutRadius));
     }
 
     private static void DrawMars(IImageProcessingContext ctx, PointF center, float scale)
@@ -375,6 +381,17 @@ internal static class PhotoCinematicThumbnailRenderer
 
         if (IsPlanetFamilyEventType(request.EventType)) return;
 
+        if (IsMoonFamilyEventType(request.EventType))
+        {
+            var secondary = ResolveMoonThumbnailDirection(request.SecondaryText);
+            var micro = ResolveMoonThumbnailBestTime(request.MicroText);
+            var secondaryFont = ResolveFont(spec.SecondaryFontSize, FontStyle.Bold);
+            var microFont = ResolveFont(spec.MicroFontSize, FontStyle.Bold);
+            DrawTextWithShadow(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFDE5B"), 0.92f);
+            DrawTextWithShadow(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#D8EBFF"), 0.92f);
+            return;
+        }
+
         // Thumbnail V6.2 deliberately avoids guide-card secondary/micro panels.
         // All CTR copy is constrained to the hook text only.
     }
@@ -402,6 +419,28 @@ internal static class PhotoCinematicThumbnailRenderer
         if (words.Length <= 3) return string.Join(' ', words);
         var firstCount = (words.Length + 1) / 2;
         return string.Join(' ', words.Take(firstCount)) + "\n" + string.Join(' ', words.Skip(firstCount));
+    }
+
+    private static bool IsMoonFamilyEventType(string? eventType)
+    {
+        if (string.IsNullOrWhiteSpace(eventType)) return false;
+        var normalized = new string(eventType.Where(char.IsLetterOrDigit).ToArray());
+        return normalized.Contains("MOON", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveMoonThumbnailDirection(string? value)
+    {
+        var direction = value ?? string.Empty;
+        if (direction.Contains("east", StringComparison.OrdinalIgnoreCase) || direction.Contains("moonrise", StringComparison.OrdinalIgnoreCase)) return "LOOK EAST AT MOONRISE";
+        if (direction.Contains("west", StringComparison.OrdinalIgnoreCase) || direction.Contains("moonset", StringComparison.OrdinalIgnoreCase)) return "LOOK WEST AT MOONSET";
+        return "WATCH NEAR MOONRISE";
+    }
+
+    private static string ResolveMoonThumbnailBestTime(string? value)
+    {
+        var time = value ?? string.Empty;
+        if (time.Contains("evening", StringComparison.OrdinalIgnoreCase) || time.Contains("midnight", StringComparison.OrdinalIgnoreCase)) return "EVENING TO MIDNIGHT";
+        return "AFTER MOONRISE";
     }
 
     private static bool IsPlanetFamilyEventType(string? eventType)
@@ -491,7 +530,10 @@ internal static class PhotoCinematicThumbnailRenderer
         public static PhotoCinematicThumbnailRenderRequest Default { get; } = new("Current Astronomy Event", "Current Event", "Unknown", ["Current Event"], ["Current Event"], null, null, null);
     }
 
-    public sealed record PhotoCinematicThumbnailRenderResult(bool Entered, bool Completed, IReadOnlyList<string> WrittenFiles, IReadOnlyList<string> VisualObjectsUsed, IReadOnlyList<string> LabelsUsed);
+    public sealed record PhotoCinematicThumbnailRenderResult(bool Entered, bool Completed, IReadOnlyList<string> WrittenFiles, IReadOnlyList<string> VisualObjectsUsed, IReadOnlyList<string> LabelsUsed, bool MoonObjectRendered = false, bool MoonAspectRatioPreserved = false, float MoonCalloutCircleDiameterPx = 0, float MoonVisibleDiameterPx = 0)
+    {
+        public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
+    }
 
     private sealed record PhotoCinematicThumbnailSpec(string Variant, string FileName, int Width, int Height)
     {
