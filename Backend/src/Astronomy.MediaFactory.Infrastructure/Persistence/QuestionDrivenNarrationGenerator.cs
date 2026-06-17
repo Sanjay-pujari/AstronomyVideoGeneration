@@ -164,9 +164,10 @@ public sealed class QuestionDrivenNarrationGenerator(
         var isMeteorShower = intelligence is not null && IsMeteorShower(intelligence, request.ProductionContext);
         var family = ResolveNarrationFamily(request, enrichedPlan, isMeteorShower);
         var sourceScenes = enrichedPlan.Scenes.OrderBy(scene => scene.SceneNumber).ToArray();
-        var scenes = ComposeDocumentaryNarrationScenes(family, sourceScenes, intelligence, request.ProductionContext).ToList();
+        var script = DocumentaryScriptComposer.Compose(family, intelligence, request.ProductionContext);
+        var scenes = ComposeDocumentaryNarrationScenes(family, sourceScenes, intelligence, request.ProductionContext, script.Sections).ToList();
 
-        var diagnostics = BuildV3Diagnostics(scenes);
+        var diagnostics = BuildV3Diagnostics(scenes, script.Diagnostics);
         return new QuestionDrivenNarrationDto(
             Clean(enrichedPlan.EventId) == string.Empty ? request.EventId : Clean(enrichedPlan.EventId),
             Clean(enrichedPlan.RegionId) == string.Empty ? request.RegionId : Clean(enrichedPlan.RegionId),
@@ -178,12 +179,12 @@ public sealed class QuestionDrivenNarrationGenerator(
             diagnostics);
     }
 
-    private static QuestionDrivenNarrationSceneDto BuildV3Beat(int sceneNumber, string questionType, string section, string purpose, string viewerQuestion, string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    private static QuestionDrivenNarrationSceneDto BuildV3Beat(int sceneNumber, string questionType, string section, string purpose, string viewerQuestion, string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context, DocumentaryNarrationSections composedSections)
     {
         var source = sourceScenes.FirstOrDefault(s => string.Equals(s.QuestionType, questionType, StringComparison.OrdinalIgnoreCase))
             ?? sourceScenes.FirstOrDefault()
             ?? throw new ArgumentException("Enriched question-driven scene plan requires at least one source scene.");
-        var text = DocumentaryNarrationComposer.ConvertGuidanceToNarration(V3NarrationText(section, family, intelligence, context), $"{Clean(intelligence?.ShortTitle, "This sky event")} is worth watching while the moment is still here.");
+        var text = SectionText(composedSections, section);
         return new QuestionDrivenNarrationSceneDto(
             sceneNumber,
             questionType,
@@ -201,15 +202,26 @@ public sealed class QuestionDrivenNarrationGenerator(
     }
 
 
-    private static QuestionDrivenNarrationSceneDto[] ComposeDocumentaryNarrationScenes(string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    private static QuestionDrivenNarrationSceneDto[] ComposeDocumentaryNarrationScenes(string family, IReadOnlyList<EnrichedQuestionSceneDto> sourceScenes, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context, DocumentaryNarrationSections composedSections)
     {
         string[] sections = ["ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing"];
         string[] questionTypes = [AstronomyQuestionTypes.ColdOpen, AstronomyQuestionTypes.What, AstronomyQuestionTypes.Why, AstronomyQuestionTypes.When, AstronomyQuestionTypes.Where, AstronomyQuestionTypes.Action];
         string[] purposes = ["Cold Open", "Hook", "Context", "Main Story", "Viewing Guide", "Emotional Closing"];
         string[] questions = ["What appears first?", "Why should I keep watching?", "What makes this moment matter?", "What is the story behind it?", "How can I see it?", "What should I remember?"];
-        return sections.Select((section, i) => BuildV3Beat(i, questionTypes[i], section, purposes[i], questions[i], family, sourceScenes, intelligence, context)).ToArray();
+        return sections.Select((section, i) => BuildV3Beat(i, questionTypes[i], section, purposes[i], questions[i], family, sourceScenes, intelligence, context, composedSections)).ToArray();
     }
 
+
+    private static string SectionText(DocumentaryNarrationSections sections, string section) => section switch
+    {
+        "ColdOpen" => sections.ColdOpen,
+        "Hook" => sections.Hook,
+        "Context" => sections.Context,
+        "MainStory" => sections.MainStory,
+        "ViewingGuide" => sections.ViewingGuide,
+        "EmotionalClosing" => sections.EmotionalClosing,
+        _ => sections.Hook
+    };
 
     private static string ResolveNarrationFamily(QuestionDrivenNarrationRequest request, EnrichedQuestionScenePlanDto plan, bool isMeteorShower)
     {
@@ -274,7 +286,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         _ => "ColdOpenTwilightPlanets"
     };
 
-    private static QuestionDrivenNarrationDiagnosticsDto BuildV3Diagnostics(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
+    private static QuestionDrivenNarrationDiagnosticsDto BuildV3Diagnostics(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, DocumentaryScriptComposerDiagnostics? composerDiagnostics = null)
     {
         var coldOpen = scenes.Any(s => string.Equals(s.Section, "ColdOpen", StringComparison.OrdinalIgnoreCase));
         var hook = scenes.Any(s => string.Equals(s.Section, "Hook", StringComparison.OrdinalIgnoreCase));
@@ -282,7 +294,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var viewing = scenes.Any(s => string.Equals(s.Section, "ViewingGuide", StringComparison.OrdinalIgnoreCase));
         var closing = scenes.Any(s => string.Equals(s.Section, "EmotionalClosing", StringComparison.OrdinalIgnoreCase));
         var score = 40 + (coldOpen ? 12 : 0) + (hook ? 12 : 0) + (story ? 16 : 0) + (viewing ? 8 : 0) + (closing ? 12 : 0);
-        return new QuestionDrivenNarrationDiagnosticsDto(coldOpen, hook, story, viewing, closing, NarrationVersion, Math.Min(100, score));
+        return new QuestionDrivenNarrationDiagnosticsDto(coldOpen, hook, story, viewing, closing, NarrationVersion, Math.Min(100, score), ScriptComposerVersion: composerDiagnostics?.ScriptComposerVersion ?? string.Empty, OpeningStyle: composerDiagnostics?.OpeningStyle ?? string.Empty, EventDateMentioned: composerDiagnostics?.EventDateMentioned ?? false, EventNameMentioned: composerDiagnostics?.EventNameMentioned ?? false, DocumentaryScore: composerDiagnostics?.DocumentaryScore ?? 0, StorytellingScore: composerDiagnostics?.StorytellingScore ?? 0);
     }
 
     private static string ResolveNarrationSection(string questionType, NarrationTemplate template, bool isMeteorShower)
@@ -409,6 +421,12 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "noRepetitiveSentenceOpenings", HasVariedSentenceOpenings(narration), "no repetitive sentence openings.");
         AddCheck(checks, "noRoboticPhrasing", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, new[] { "based on the current", "approved production", "source answer", "metadata" })), "narration avoids robotic or internal phrasing.");
         AddCheck(checks, "noAuthoringInstructions", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, AuthoringInstructionPhrases)), "narration must not contain prompt-template or authoring instruction phrases.");
+        AddCheck(checks, "documentaryOpeningAllowed", OpeningStartsCorrectly(narration), "opening must start with event/date language and not forbidden prompt-style openings.");
+        AddCheck(checks, "openingContainsEventDate", narration.Diagnostics?.EventDateMentioned == true, "opening must contain the event date.");
+        AddCheck(checks, "openingContainsEventName", narration.Diagnostics?.EventNameMentioned == true, "opening must contain the event name.");
+        AddCheck(checks, "scriptComposerVersion", string.Equals(narration.Diagnostics?.ScriptComposerVersion, DocumentaryScriptComposer.Version, StringComparison.OrdinalIgnoreCase), "documentary script composer V1 generated final spoken narration.");
+        AddCheck(checks, "documentaryScore", (narration.Diagnostics?.DocumentaryScore ?? 0) >= 80, "documentaryScore must be at least 80.");
+        AddCheck(checks, "storytellingScore", (narration.Diagnostics?.StorytellingScore ?? 0) >= 80, "storytellingScore must be at least 80.");
         AddCheck(checks, "noRawTimestamps", narration.Scenes.All(scene => !ContainsRawTimestamp(scene.NarrationText)), "narration must not speak raw timestamps.");
         AddCheck(checks, "sceneTextMinimumLength", narration.Scenes.All(scene => Clean(scene.NarrationText).Length >= 30), "each scene narration must be at least 30 characters.");
 
@@ -543,6 +561,14 @@ public sealed class QuestionDrivenNarrationGenerator(
         var words = Clean(narrationText).Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length >= 2) yield return string.Join(' ', words.Take(2)).ToLowerInvariant();
         if (words.Length >= 3) yield return string.Join(' ', words.Take(3)).ToLowerInvariant();
+    }
+
+    private static bool OpeningStartsCorrectly(QuestionDrivenNarrationDto narration)
+    {
+        var opening = Clean(narration.Scenes.OrderBy(s => s.SceneNumber).FirstOrDefault()?.NarrationText);
+        if (string.IsNullOrWhiteSpace(opening)) return false;
+        if (Regex.IsMatch(opening, @"^(For|During|As|When|Imagine|Look up tonight|Tonight|Tomorrow)\b", RegexOptions.IgnoreCase)) return false;
+        return Regex.IsMatch(opening, @"^(On\s+\p{L}+\s+\d{1,2},\s+\d{4}|This event|Few sky events|The\s+)", RegexOptions.IgnoreCase);
     }
 
     private static bool SceneHasNoInternalTerms(QuestionDrivenNarrationSceneDto scene)
