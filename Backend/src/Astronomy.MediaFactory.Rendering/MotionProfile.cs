@@ -17,6 +17,7 @@ public enum MotionEasingKind
 
 public sealed record MotionProfile(
     MotionProfileKind Kind,
+    string SelectedMotion,
     MotionEasingKind Easing,
     double StartScale,
     double EndScale,

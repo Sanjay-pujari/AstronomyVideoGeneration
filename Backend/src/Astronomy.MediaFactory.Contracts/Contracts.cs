@@ -407,6 +407,7 @@ public sealed class RenderingOptions
     public int KenBurnsFps { get; set; } = 30;
     public bool KenBurnsUseEasing { get; set; } = true;
     public bool EnableDirectionalMotion { get; set; } = false;
+    public bool EnableMotionDebugWatermark { get; set; } = false;
     public double DirectionalPanStrength { get; set; } = 0.04d;
     public bool EnableYouTube1440pUpscale { get; set; } = true;
     public string IntermediatePreset { get; set; } = "veryfast";

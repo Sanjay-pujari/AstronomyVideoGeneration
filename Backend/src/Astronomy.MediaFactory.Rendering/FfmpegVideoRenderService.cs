@@ -116,6 +116,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var syncReports = new List<SegmentSyncReportEntry>();
         var effectsReports = new List<VideoEffectsReportEntry>();
         var performanceReports = new List<SegmentRenderPerformanceReportEntry>();
+        var motionDebugEntries = new List<MotionDebugEntry>();
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
@@ -182,6 +183,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             ValidateSegmentSynchronization(scene, i, audioDurationSeconds, visualDurationSeconds);
             syncReports.Add(CreateSegmentSyncReportEntry(scene, i, audioDurationSeconds, visualDurationSeconds));
             effectsReports.Add(CreateVideoEffectsReportEntry(scene, i, isShort, effects, audioDurationSeconds, visualDurationSeconds));
+            motionDebugEntries.Add(CreateMotionDebugEntry(scene, i, motionProfile, audioDurationSeconds, fps, outroDurationSeconds: 0d, fadeToBlackSeconds: 0d));
+            LogMotionSelection(i, scene, motionProfile, 0d);
             segmentClipPaths.Add(segmentOutputPath);
         }
 
@@ -196,6 +199,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await WriteSegmentSyncReportAsync(outputDirectory, syncReports, cancellationToken);
         await WriteVideoEffectsReportAsync(outputDirectory, effectsReports, cancellationToken);
         await WriteRenderPerformanceReportAsync(outputDirectory, performanceReports, cancellationToken);
+        await WriteMotionDebugAsync(outputDirectory, motionDebugEntries, cancellationToken);
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
@@ -247,6 +251,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentDurationsSeconds = new List<double>();
         var segmentDiagnostics = new List<string>();
         var motionDiagnostics = new List<string>();
+        var motionDebugEntries = new List<MotionDebugEntry>();
         var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
         var syncReports = new List<SegmentSyncReportEntry>();
         var effectsReports = new List<VideoEffectsReportEntry>();
@@ -341,6 +346,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 $"  \"isShort\": {(outputHeight > outputWidth ? "true" : "false")}",
                 "}"
             }));
+            motionDebugEntries.Add(CreateMotionDebugEntry(scene, i, motionProfile, duration, fps, outroDurationSeconds: 0d, fadeToBlackSeconds: 0d));
+            LogMotionSelection(i, scene, motionProfile, 0d);
             await _fileSystem.WriteAllTextAsync(segmentCommandPath, segmentDiagnosticsEntry, cancellationToken);
             _logger.LogInformation(
                 "Segment #{SegmentIndex} duration: {SegmentDurationSeconds} seconds. Configured segment timeout: {ConfiguredTimeoutSeconds} seconds. Effective segment timeout: {EffectiveTimeoutSeconds} seconds",
@@ -397,7 +404,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             segmentPaths.Add(outroPath);
             segmentDurationsSeconds.Add(outroFrameCount / (double)outroFps);
             effectsReports.Add(CreateVideoEffectsReportEntry(outroScene, segmentPaths.Count - 1, IsShortManifest(manifest), outroEffects, outroDuration, outroFrameCount / (double)outroFps));
-            motionDiagnostics.Add("{\"sceneId\":\"cinematic-ending\",\"motionProfile\":\"Closing\",\"musicOnlyOutroSeconds\":3.5,\"fadeToBlack\":true}");
+            motionDiagnostics.Add("{\"sceneId\":\"cinematic-ending\",\"motionProfile\":\"Closing\",\"musicOnlyOutroSeconds\":4,\"fadeToBlackSeconds\":1,\"fadeToBlack\":true}");
+            motionDebugEntries.Add(CreateMotionDebugEntry(outroScene, segmentPaths.Count - 1, outroProfile, outroDuration, outroFps, outroDurationSeconds: outroDuration, fadeToBlackSeconds: 1d));
+            LogMotionSelection(segmentPaths.Count - 1, outroScene, outroProfile, outroDuration);
         }
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
@@ -438,6 +447,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await WriteSegmentSyncReportAsync(outputDirectory, syncReports, cancellationToken);
         await WriteVideoEffectsReportAsync(outputDirectory, effectsReports, cancellationToken);
         await WriteRenderPerformanceReportAsync(outputDirectory, performanceReports, cancellationToken);
+        await WriteMotionDebugAsync(outputDirectory, motionDebugEntries, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
@@ -630,7 +640,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         if (fadeToBlack)
         {
-            filters.Add("fade=t=out:st=2.75:d=0.75:color=black");
+            var fadeOutStart = Math.Max(0d, effects.DurationSeconds - 1d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            filters.Add($"fade=t=out:st={fadeOutStart}:d=1:color=black");
+        }
+
+        if (_options.EnableMotionDebugWatermark)
+        {
+            filters.Add($"drawtext=text='[{EscapeDrawText(FormatScenePurpose(motionProfile.Kind))}\\: {EscapeDrawText(motionProfile.SelectedMotion)}]':x=w-tw-24:y=h-th-24:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.55");
         }
 
         return string.Join(',', filters);
@@ -666,6 +682,87 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
 
 
+
+    private Task WriteMotionDebugAsync(string outputDirectory, IReadOnlyCollection<MotionDebugEntry> entries, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(entries, DiagnosticJsonOptions);
+        return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "motion-debug.json"), json, cancellationToken);
+    }
+
+    private static MotionDebugEntry CreateMotionDebugEntry(RenderPlanScene scene, int sceneIndex, MotionProfile profile, double durationSeconds, int frameRate, double outroDurationSeconds, double fadeToBlackSeconds)
+    {
+        var totalFrames = Math.Max(1, (int)Math.Round(Math.Max(0d, durationSeconds) * frameRate, MidpointRounding.AwayFromZero));
+        var scaleValues = SampleMotionValues(profile.StartScale, profile.EndScale, profile.Easing, totalFrames);
+        var xValues = SampleMotionValues(profile.PanXStart * 100d, profile.PanXEnd * 100d, profile.Easing, totalFrames);
+        var yValues = SampleMotionValues(profile.PanYStart * 100d, profile.PanYEnd * 100d, profile.Easing, totalFrames);
+        return new MotionDebugEntry(
+            SceneIndex: sceneIndex,
+            ScenePurpose: FormatScenePurpose(profile.Kind),
+            EventType: ResolveEventType(scene),
+            SelectedMotion: profile.SelectedMotion,
+            StartScale: profile.StartScale,
+            EndScale: profile.EndScale,
+            StartXPercent: profile.PanXStart * 100d,
+            EndXPercent: profile.PanXEnd * 100d,
+            StartYPercent: profile.PanYStart * 100d,
+            EndYPercent: profile.PanYEnd * 100d,
+            Easing: profile.Easing.ToString(),
+            DurationSeconds: durationSeconds,
+            FrameRate: frameRate,
+            TotalFrames: totalFrames,
+            First10ScaleValues: scaleValues,
+            First10XValues: xValues,
+            First10YValues: yValues,
+            OutroDurationSeconds: outroDurationSeconds,
+            FadeToBlackSeconds: fadeToBlackSeconds);
+    }
+
+    private static IReadOnlyList<double> SampleMotionValues(double start, double end, MotionEasingKind easing, int totalFrames)
+    {
+        var values = new List<double>(Math.Min(10, totalFrames));
+        for (var frame = 0; frame < Math.Min(10, totalFrames); frame++)
+        {
+            var progress = frame / (double)totalFrames;
+            var eased = easing switch
+            {
+                MotionEasingKind.EaseOutCubic => 1d - Math.Pow(1d - progress, 3d),
+                MotionEasingKind.EaseInOutSine => -(Math.Cos(Math.PI * progress) - 1d) / 2d,
+                _ => progress
+            };
+            values.Add(start + (end - start) * eased);
+        }
+        return values;
+    }
+
+    private void LogMotionSelection(int sceneIndex, RenderPlanScene scene, MotionProfile profile, double outroDurationSeconds)
+    {
+        var purpose = FormatScenePurpose(profile.Kind);
+        var eventType = ResolveEventType(scene);
+        var outro = outroDurationSeconds > 0d ? $" | Outro={outroDurationSeconds:0.#}s" : string.Empty;
+        _logger.LogInformation("Scene {SceneIndex} | EventType={EventType} | Purpose={Purpose} | Motion={Motion} | Scale={StartScale:0.00}→{EndScale:0.00} | X={StartX:0.#}%→{EndX:0.#}% | Easing={Easing}{Outro}", sceneIndex, eventType, purpose, profile.SelectedMotion, profile.StartScale, profile.EndScale, profile.PanXStart * 100d, profile.PanXEnd * 100d, profile.Easing, outro);
+        Console.WriteLine($"Scene {sceneIndex} | EventType={eventType} | Purpose={purpose} | Motion={profile.SelectedMotion} | Scale={profile.StartScale:0.00}→{profile.EndScale:0.00} | Easing={profile.Easing}{outro}");
+    }
+
+    private static string ResolveEventType(RenderPlanScene scene)
+    {
+        var text = $"{scene.SceneType} {scene.Segment} {scene.Caption} {scene.ObjectName}";
+        return text.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("solareclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("corona", StringComparison.OrdinalIgnoreCase)
+            ? "SolarEclipse"
+            : "AstronomyEvent";
+    }
+
+    private static string FormatScenePurpose(MotionProfileKind kind) => kind switch
+    {
+        MotionProfileKind.Hook => "Hook",
+        MotionProfileKind.CauseExplanation => "Cause",
+        MotionProfileKind.SkyGuide => "SkyGuide",
+        MotionProfileKind.ViewingTip => "ViewingTip",
+        MotionProfileKind.Closing => "Closing",
+        _ => kind.ToString()
+    };
+
+    private static string EscapeDrawText(string value)
+        => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("'", "\\'", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal);
 
     private sealed record ShortRenderManifestEntry(
         int RenderOrder,
@@ -763,6 +860,27 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         double TempoFactor,
         double FinalSegmentDurationSeconds,
         IReadOnlyList<string> Warnings);
+
+    private sealed record MotionDebugEntry(
+        int SceneIndex,
+        string ScenePurpose,
+        string EventType,
+        string SelectedMotion,
+        double StartScale,
+        double EndScale,
+        double StartXPercent,
+        double EndXPercent,
+        double StartYPercent,
+        double EndYPercent,
+        string Easing,
+        double DurationSeconds,
+        int FrameRate,
+        int TotalFrames,
+        IReadOnlyList<double> First10ScaleValues,
+        IReadOnlyList<double> First10XValues,
+        IReadOnlyList<double> First10YValues,
+        double OutroDurationSeconds,
+        double FadeToBlackSeconds);
 
     private sealed record SegmentEffects(
         bool KenBurnsApplied,

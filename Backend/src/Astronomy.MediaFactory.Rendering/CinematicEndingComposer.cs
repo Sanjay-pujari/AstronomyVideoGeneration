@@ -2,7 +2,7 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class CinematicEndingComposer
 {
-    public const double DefaultOutroDurationSeconds = 3.5d;
+    public const double DefaultOutroDurationSeconds = 4.0d;
 
     public bool ShouldAppendOutro(RenderPlan plan)
         => plan.Scenes.Count > 0;
