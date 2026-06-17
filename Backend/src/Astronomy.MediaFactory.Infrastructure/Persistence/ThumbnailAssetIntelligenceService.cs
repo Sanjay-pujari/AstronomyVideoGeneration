@@ -2545,11 +2545,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             surface,
             familyCode = profile.Family.ToString(),
+            detectedFamily = profile.Family.ToString(),
+            primaryEventTypeCode = SpecialEventSubtypeResolver.Normalize(resolution.Input.TryGetValue("eventType", out var eventType) ? eventType?.ToString() : null),
+            selectedProfile = profile.SelectedProfile,
             profileName = profile.GetType().Name,
             profileVersion = EventFamilyProfiles.Version,
             resolverReason = resolution.Reason,
             resolverInput = resolution.Input,
+            forbiddenTerms = profile.ForbiddenTerms,
             forbiddenConcepts = profile.ForbiddenTerms,
+            requiredVisualElements = profile.RequiredVisualElements,
+            requiredOverlayElements = profile.RequiredOverlayElements,
             allowedConcepts
         }, JsonOptions));
     }
