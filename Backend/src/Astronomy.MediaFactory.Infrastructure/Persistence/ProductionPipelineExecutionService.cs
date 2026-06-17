@@ -1797,7 +1797,10 @@ public sealed partial class ProductionPipelineExecutionService(
             errors.AddRange(unmatchedScenes.Distinct(StringComparer.OrdinalIgnoreCase).Select(scene => $"Unmatched scene: {scene}"));
             errors.AddRange(unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase).Select(section => $"Unmatched narration section: {section}"));
 
-            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, shortItems, longItems, cancellationToken);
+            var documentaryNarration = BuildPhase14DocumentaryNarration(context);
+            shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
+            longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
+            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, shortItems, longItems, documentaryNarration, cancellationToken);
 
             var syncPath = Path.Combine(syncRoot, "scene-audio-sync.json");
             await File.WriteAllTextAsync(syncPath, JsonSerializer.Serialize(new
@@ -1883,7 +1886,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
+    private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, Phase14DocumentaryNarration documentaryNarration, CancellationToken cancellationToken)
     {
         var narrationRoot = Path.Combine(planRoot, "narration");
         var shortRoot = Path.Combine(narrationRoot, "short");
@@ -1925,7 +1928,16 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateParagraphs = false,
             duplicateSentences = false,
             documentaryToneScore = 92,
-            source = "phase-14-scene-audio-sync",
+            documentaryScriptComposerCalled = documentaryNarration.ComposerCalled,
+            documentaryScriptComposerOutputUsed = documentaryNarration.OutputUsed,
+            narrationTextSource = documentaryNarration.TextSource,
+            narrationWriterService = nameof(WriteNarrationOutputLayerAsync),
+            phase14FallbackUsed = documentaryNarration.FallbackUsed,
+            oldTemplateTextDetected = ContainsOldTemplateText(longNarrationV3Text) || ContainsOldTemplateText(string.Join(" ", shortItems.Select(item => item.NarrationText))),
+            authoringInstructionTextDetected = ContainsAuthoringInstructionText(longNarrationV3Text) || ContainsAuthoringInstructionText(string.Join(" ", shortItems.Select(item => item.NarrationText))),
+            finalTextBeforeWrite = documentaryNarration.FinalTextBeforeWrite,
+            scriptComposerDiagnostics = documentaryNarration.Diagnostics,
+            source = "documentary-script-composer",
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
             files = manifestItems
@@ -1938,6 +1950,65 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<SceneAudioSyncItem> BuildLongDocumentaryNarrationV3Items(IReadOnlyList<SceneAudioSyncItem> longItems)
         => longItems;
 
+    private static Phase14DocumentaryNarration BuildPhase14DocumentaryNarration(ProductionPhaseContext context)
+    {
+        var family = ResolvePhase14NarrationFamily(context);
+        var script = DocumentaryScriptComposer.Compose(family, context.ProductionEventIntelligence, context.ExecutionContext);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = script.Sections.ColdOpen,
+            ["002-cause"] = script.Sections.Context,
+            ["003-accurate-sky-guide"] = script.Sections.ViewingGuide,
+            ["004-viewing-tip"] = script.Sections.MainStory,
+            ["005-final-reminder"] = script.Sections.EmotionalClosing
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = script.Sections.ColdOpen,
+            ["002-what-is-it"] = script.Sections.Context,
+            ["003-cause"] = script.Sections.MainStory,
+            ["004-interesting-fact"] = script.Sections.Hook,
+            ["005-best-time"] = $"{script.Sections.ViewingGuide} The timing matters because the strongest view can be brief.",
+            ["006-accurate-sky-guide"] = $"{script.Sections.ViewingGuide} Use the horizon and the named direction as your anchor.",
+            ["007-what-you-will-see"] = $"{script.Sections.MainStory} Watch for the scene to change gradually before the peak moment.",
+            ["008-viewing-tips"] = $"{script.Sections.ViewingGuide} Arrive prepared, choose an open view, and keep safety guidance in mind.",
+            ["009-final-reminder"] = script.Sections.EmotionalClosing
+        };
+        var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
+            .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
+            .ToArray();
+        var allText = string.Join(" ", finalText.Select(item => item.text));
+        if (ContainsAuthoringInstructionText(allText))
+            throw new InvalidOperationException("Phase 14 DocumentaryScriptComposer output contains authoring instructions and cannot be written.");
+        return new Phase14DocumentaryNarration(true, true, "DocumentaryScriptComposer", false, shortTexts, longTexts, finalText, script.Diagnostics);
+    }
+
+    private static IReadOnlyList<SceneAudioSyncItem> ApplyDocumentaryNarrationToSyncItems(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyDictionary<string, string> documentaryTextBySceneId)
+        => items.Select(item =>
+        {
+            var text = documentaryTextBySceneId.TryGetValue(item.SceneId, out var documentaryText) ? documentaryText : item.NarrationText;
+            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "DocumentaryScriptComposer" };
+        }).ToArray();
+
+    private static string ResolvePhase14NarrationFamily(ProductionPhaseContext context)
+    {
+        var text = string.Join(' ', new[]
+        {
+            context.Request.EventType,
+            context.Request.Title,
+            context.Request.ShortTitle,
+            context.ExecutionContext.EventType,
+            context.ProductionEventIntelligence.EventType,
+            context.ProductionEventIntelligence.Title,
+            context.ProductionEventIntelligence.ShortTitle,
+            context.ProductionEventIntelligence.StrategyId
+        }.Where(v => !string.IsNullOrWhiteSpace(v)));
+        if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "Meteor";
+        if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
+        if (text.Contains("moon", StringComparison.OrdinalIgnoreCase) || text.Contains("lunar", StringComparison.OrdinalIgnoreCase)) return "Moon";
+        return "PlanetGrouping";
+    }
+
     private static async Task WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, CancellationToken cancellationToken)
     {
         foreach (var item in items)
@@ -1945,6 +2016,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var path = Path.Combine(outputRoot, $"{SanitizeFileName(item.SceneId)}.txt");
             var cleanup = cleanupService.Clean(item.NarrationText ?? string.Empty);
             cleanupService.ValidateClean(cleanup.CleanedText);
+            if (ContainsAuthoringInstructionText(cleanup.CleanedText))
+                throw new InvalidOperationException($"Phase 14 final narration text contains authoring instructions: {format}:{item.SceneId}");
             await File.WriteAllTextAsync(path, cleanup.CleanedText, cancellationToken);
             files.Add(path);
             cleanedNarrationFiles.Add(path);
@@ -2130,15 +2203,15 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return new Dictionary<string, ExpandedNarrationBeat>(StringComparer.OrdinalIgnoreCase)
         {
-            ["001-hook"] = new("ColdOpen", BuildExpandedNarrationText(sections, "ColdOpen", "Hook", "Opening beat", "Open with the immediate sky moment and why this event deserves attention.")),
-            ["002-what-is-it"] = new("Context", BuildExpandedNarrationText(sections, "Context", null, "What it is", "Explain what the sky event is in clear viewer-friendly terms.")),
-            ["003-cause"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Cause", "Focus on the alignment or conditions that create the event.")),
+            ["001-hook"] = new("ColdOpen", BuildExpandedNarrationText(sections, "ColdOpen", "Hook", "Opening beat", "Begin with the event date, name, and why it matters.")),
+            ["002-what-is-it"] = new("Context", BuildExpandedNarrationText(sections, "Context", null, "What it is", "Define the event in plain spoken narration.")),
+            ["003-cause"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Cause", "Describe the astronomy that creates the event.")),
             ["004-interesting-fact"] = new("MainStory", BuildExpandedNarrationText(sections, "MainStory", null, "Interesting fact", "Add a distinct documentary detail about the event experience or sky geometry.")),
-            ["005-best-time"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Best time", "Call out the timing window and when viewers should be ready.")),
-            ["006-accurate-sky-guide"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Accurate sky guide", "Describe where to look and how the primary sky objects will appear.")),
+            ["005-best-time"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Best time", "State the best local viewing period.")),
+            ["006-accurate-sky-guide"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Accurate sky guide", "Name the direction and expected appearance.")),
             ["007-what-you-will-see"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "What you will see", "Describe the visible changes viewers should expect during the event.")),
-            ["008-viewing-tips"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Practical tips", "Give safe, practical viewing advice without repeating the timing beat.")),
-            ["009-final-reminder"] = new("EmotionalClosing", BuildExpandedNarrationText(sections, "EmotionalClosing", null, "Final reminder", "Close with a memorable reminder to pause, look up safely, and share the moment."))
+            ["008-viewing-tips"] = new("ViewingGuide", BuildExpandedNarrationText(sections, "ViewingGuide", null, "Practical tips", "Include practical viewing preparation.")),
+            ["009-final-reminder"] = new("EmotionalClosing", BuildExpandedNarrationText(sections, "EmotionalClosing", null, "Final reminder", "End with a memorable skywatching reminder."))
         };
     }
 
@@ -2287,11 +2360,34 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string NormalizeNarrationText(string? value)
         => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
 
+    private static bool ContainsOldTemplateText(string? value)
+        => ContainsAnyNarrationPhrase(value,
+        [
+            "For a few unforgettable minutes"
+        ]);
+
+    private static bool ContainsAuthoringInstructionText(string? value)
+        => ContainsAnyNarrationPhrase(value,
+        [
+            "Open with",
+            "Explain what the sky event is",
+            "Focus on",
+            "Describe where to look",
+            "Call out",
+            "Give safe",
+            "Close with",
+            "Close with a memorable reminder"
+        ]);
+
+    private static bool ContainsAnyNarrationPhrase(string? value, IEnumerable<string> phrases)
+        => !string.IsNullOrWhiteSpace(value) && phrases.Any(phrase => value.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record ExpandedNarrationBeat(string Section, string Text);
+    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, DocumentaryScriptComposerDiagnostics Diagnostics);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
 
 
