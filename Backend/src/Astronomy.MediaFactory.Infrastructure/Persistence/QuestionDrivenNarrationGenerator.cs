@@ -501,7 +501,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             {
                 var seconds = Math.Clamp(CountWords(chunk) / 2.3, 2.0, 4.5);
                 var end = start.Add(TimeSpan.FromSeconds(seconds));
-                blocks.Add(new SubtitleBlock(number++, start, end, WrapSubtitle(chunk), sourceSceneId, NormalizePath(narrationFile), chunk, nameof(BuildNarrationSrt)));
+                blocks.Add(new SubtitleBlock(number++, start, end, WrapSubtitle(chunk), sourceSceneId, NormalizePath(narrationFile), chunk, "NarrationFile", "QuestionDrivenNarrationGenerator.BuildNarrationSrt", DateTimeOffset.UtcNow));
                 start = end;
             }
         }
@@ -510,7 +510,9 @@ public sealed class QuestionDrivenNarrationGenerator(
             .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
         if (duplicates) throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
         var srt = string.Join("\n\n", blocks.Select(block => $"{block.Number}\n{FormatSrtTime(block.Start)} --> {FormatSrtTime(block.End)}\n{string.Join("\n", block.Lines)}")) + "\n";
-        var subtitleBlocks = blocks.Select(block => new { blockId = $"{format}:cue-{block.Number}", sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).Cast<object>().ToArray();
+        var subtitleBlocks = blocks.Select(block => new { format, cueId = block.Number, blockId = $"{format}:cue-{block.Number}", sceneId = block.SourceSceneId, text = string.Join(" ", block.Lines), normalizedText = NormalizeSubtitleText(string.Join(" ", block.Lines)), sourceType = block.SourceType, sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent, createdUtc = block.CreatedUtc }).Cast<object>().ToArray();
+        var nonNarrationSubtitleCues = blocks.Where(block => !string.Equals(block.SourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (nonNarrationSubtitleCues.Length > 0) throw new InvalidOperationException("Non-narration subtitle cue detected");
         return (srt, subtitleBlocks);
     }
 
@@ -524,7 +526,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. format={format}; sourceFile={NormalizePath(narrationFile)}; generatorComponent={generatorComponent}");
     }
 
-    private sealed record SubtitleBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SourceSceneId, string SourceFile, string SourceText, string GeneratorComponent);
+    private sealed record SubtitleBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SourceSceneId, string SourceFile, string SourceText, string SourceType, string GeneratorComponent, DateTimeOffset CreatedUtc);
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
 
