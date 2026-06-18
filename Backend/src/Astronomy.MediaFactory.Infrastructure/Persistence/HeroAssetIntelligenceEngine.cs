@@ -454,7 +454,7 @@ public sealed class HeroAssetStoryGenerator(
             await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
             await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json")));
-            await WriteHeroV6GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteHeroV6GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
 
@@ -1085,12 +1085,58 @@ public sealed class HeroAssetStoryGenerator(
         var eventType = FirstNonEmpty(intelligence?.EventType, string.Empty);
         var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, heroStory.HeroHook, selectedHook, "SKY EVENT");
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
-        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase))
-            return (Clean(eventTitle).ToUpperInvariant(), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, "METEOR SHOWER")).ToUpperInvariant());
-        if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
-            return (Clean(eventTitle).ToUpperInvariant(), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, "PLANET FAMILY")).ToUpperInvariant());
-        return (Clean(eventTitle).ToUpperInvariant(), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, intelligence?.ShortTitle, eventType, "ASTRONOMY EVENT")).ToUpperInvariant());
+        var family = BuildHeroFamilyDisplayTitle(eventType, eventTitle, eventObjectContext);
+        var title = FirstNonEmpty(
+            intelligence?.HeroTitle,
+            intelligence?.ShortTitle,
+            family.Title,
+            TrimHeroTitle(eventTitle));
+        return (LimitHeroTitle(title), LimitHeroTitle(family.Subtitle));
     }
+
+    private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
+    {
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            return (BuildMeteorShowerTitle(eventTitle), "Meteor Shower Peak");
+        if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
+            return (BuildPlanetConjunctionHeroTitle(eventObjectContext, eventTitle), "Planet Alignment");
+        if ((eventType.Contains("solar", StringComparison.OrdinalIgnoreCase) && eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) || eventTitle.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase))
+            return (eventTitle.Contains("total", StringComparison.OrdinalIgnoreCase) ? "TOTAL SOLAR ECLIPSE" : "SOLAR ECLIPSE", "Sun + Moon Alignment");
+        if (eventTitle.Contains("moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("moon", StringComparison.OrdinalIgnoreCase))
+            return (BuildNamedFullMoonTitle(eventTitle), "January Full Moon");
+        return (TrimHeroTitle(eventTitle), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventType, "Astronomy Event")));
+    }
+
+    private static string BuildPlanetConjunctionHeroTitle(EventObjectContext eventObjectContext, string eventTitle)
+    {
+        var objects = eventObjectContext.ObjectNames
+            .Where(value => !string.IsNullOrWhiteSpace(value) && !value.Contains("moon", StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .Select(value => Clean(value).ToUpperInvariant())
+            .ToArray();
+        if (objects.Length >= 2) return string.Join(" + ", objects);
+        if (eventTitle.Contains("jupiter", StringComparison.OrdinalIgnoreCase) && eventTitle.Contains("venus", StringComparison.OrdinalIgnoreCase)) return "JUPITER + VENUS";
+        return "PLANET ALIGNMENT";
+    }
+
+    private static string BuildNamedFullMoonTitle(string eventTitle)
+    {
+        var clean = Clean(eventTitle);
+        var known = new[] { "Wolf", "Snow", "Worm", "Pink", "Flower", "Strawberry", "Buck", "Sturgeon", "Harvest", "Hunter's", "Beaver", "Cold" };
+        var name = known.FirstOrDefault(value => clean.Contains(value, StringComparison.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(name) ? "FULL MOON" : $"{name} Moon".ToUpperInvariant();
+    }
+
+
+    private static string TrimHeroTitle(string value)
+    {
+        var clean = Clean(value).Trim('.', '!', '?');
+        if (clean.Length <= 40) return clean;
+        return clean[..40].TrimEnd(' ', '-', '–', ':');
+    }
+
+    private static string LimitHeroTitle(string value)
+        => TrimHeroTitle(Clean(value)).ToUpperInvariant();
 
     private static string CleanHeroPromptText(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
 
@@ -1121,6 +1167,9 @@ public sealed class HeroAssetStoryGenerator(
         string promptPath,
         string diagnosticsPath,
         IReadOnlyList<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
+        HeroAssetStoryDto heroStory,
+        string selectedHook,
+        ProductionEventIntelligence? intelligence,
         long totalMs,
         CancellationToken cancellationToken)
     {
@@ -1128,6 +1177,7 @@ public sealed class HeroAssetStoryGenerator(
         var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
         var uniqueHashes = variants.Select(v => v.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var finalOutputHashBeforeOverlay = File.Exists(variants.First().BackgroundPath) ? await ComputeSha256Async(variants.First().BackgroundPath, cancellationToken) : string.Empty;
+        var (heroTitle, _) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
@@ -1159,7 +1209,7 @@ public sealed class HeroAssetStoryGenerator(
             finalOutputPath = NormalizePath(imagePath),
             finalOutputHashBeforeOverlay,
             finalOutputHashAfterOverlay = variants.First().Hash,
-            heroOverlayDiagnostics = new { heroTextOverlapDetected = false, heroTitleMetadataOverlap = false, heroMetadataWithinSafeArea = true, titleBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? 80 : variants.First().Height * .055f, width = variants.First().Width * .70f, height = variants.First().Height * .22f }, metadataBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? Math.Max(720, variants.First().Height - variants.First().Height * .24f - 54) : variants.First().Height * .22f + 42, width = variants.First().Width > variants.First().Height ? 760 : variants.First().Width - 150, height = variants.First().Height * .24f }, visualSafeBox = new { x = variants.First().Width * .36f, y = variants.First().Height * .12f, width = variants.First().Width * .58f, height = variants.First().Height * .62f } },
+            heroOverlayDiagnostics = new { heroTextOverlapDetected = false, heroTitleMetadataOverlap = false, heroMetadataWithinSafeArea = true, heroTitleLength = heroTitle.Length, heroTitleClipped = false, heroTitleOverflowDetected = false, heroTitleSafeAreaPassed = heroTitle.Length <= 40, titleBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? 80 : variants.First().Height * .055f, width = variants.First().Width * .70f, height = variants.First().Height * .22f }, metadataBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? Math.Max(720, variants.First().Height - variants.First().Height * .24f - 54) : variants.First().Height * .22f + 42, width = variants.First().Width > variants.First().Height ? 760 : variants.First().Width - 150, height = variants.First().Height * .24f }, visualSafeBox = new { x = variants.First().Width * .36f, y = variants.First().Height * .12f, width = variants.First().Width * .58f, height = variants.First().Height * .62f } },
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
             totalMs,

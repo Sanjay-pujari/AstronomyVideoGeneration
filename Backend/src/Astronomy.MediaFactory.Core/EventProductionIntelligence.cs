@@ -43,7 +43,8 @@ public sealed record ProductionEventIntelligence(
     string? NarrationTheme = null,
     string? EventSpecificStrategySource = null,
     bool DownstreamHardcodingDetected = false,
-    IReadOnlyList<string>? RelativeObjectOrder = null);
+    IReadOnlyList<string>? RelativeObjectOrder = null,
+    string? HeroTitle = null);
 
 public sealed record MediaEventStrategyDefinition(
     string EventType,
