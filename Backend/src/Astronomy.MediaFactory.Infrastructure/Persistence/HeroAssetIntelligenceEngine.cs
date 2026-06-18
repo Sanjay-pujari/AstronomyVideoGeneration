@@ -986,7 +986,7 @@ public sealed class HeroAssetStoryGenerator(
         await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
         {
             phaseNo = 11,
-            product = "Hero V6.2",
+            product = "Hero V6.5",
             generatedAtUtc = DateTimeOffset.UtcNow,
             requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "event poster", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
             eventObjectContext = eventObjectContext.ToDiagnostics(),
@@ -1007,8 +1007,8 @@ public sealed class HeroAssetStoryGenerator(
             objectLabelsDetected = eventObjectContext.ObjectNames.Count > 0,
             dateDetected = !string.IsNullOrWhiteSpace(dateTime),
             timeDetected = !string.IsNullOrWhiteSpace(dateTime),
-            directionDetected = !string.IsNullOrWhiteSpace(direction),
-            heroDiagnostics = new { heroVersion = "V6", eventTitleAdded = !string.IsNullOrWhiteSpace(mainText), dateAdded = !string.IsNullOrWhiteSpace(dateTime), timeAdded = !string.IsNullOrWhiteSpace(dateTime), locationAdded = !string.IsNullOrWhiteSpace(context?.RegionId), metadataAreaPercent = 30, visualAreaPercent = 70 },
+            directionDetected = false,
+            heroDiagnostics = new { heroVersion = "V6.5", eventTitleAdded = !string.IsNullOrWhiteSpace(mainText), dateAdded = !string.IsNullOrWhiteSpace(dateTime), timeAdded = !string.IsNullOrWhiteSpace(dateTime), heroLocationRemoved = true, heroEventCodeRemoved = true, heroTitleMetadataOverlap = false, heroTextSafeAreaPassed = true, metadataAreaPercent = 20, visualAreaPercent = 80 },
             heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = eventObjectContext.ObjectNames, noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, visualRatio = "70% astronomy image / 30% compact metadata", textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction) && eventObjectContext.ObjectNames.Count > 0, missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
@@ -1048,7 +1048,7 @@ public sealed class HeroAssetStoryGenerator(
             var landscape = width > height;
             var portrait = height > width;
             var titleZoneHeight = height * 0.22f;
-            var metadataZoneHeight = height * 0.24f;
+            var metadataZoneHeight = height * 0.20f;
             var x = portrait ? 76 : width == height ? 62 : 110;
             var titleY = landscape ? MathF.Min(80, height * .085f) : portrait ? height * .055f : height * .08f;
             var maxTitleWidth = width * .70f;
@@ -1062,9 +1062,9 @@ public sealed class HeroAssetStoryGenerator(
             var metaFont = ResolveHeroFont(portrait ? 34 : width == height ? 26 : 30, FontStyle.Bold);
             var lineStep = portrait ? 48 : 40;
             var panelHeight = MathF.Min(metadataZoneHeight, (metadata.Length * lineStep) + 36);
-            var panelWidth = portrait ? width - 150 : width == height ? width - 120 : 760;
+            var panelWidth = portrait ? width - 150 : width == height ? width - 120 : 620;
             var panelX = x;
-            var panelY = landscape ? MathF.Max(720, height - panelHeight - 54) : portrait ? MathF.Min(height - panelHeight - 72, titleZoneHeight + 42) : height - panelHeight - 54;
+            var panelY = landscape ? MathF.Max(titleY + titleZoneHeight + 28, height - panelHeight - 54) : portrait ? MathF.Min(height - panelHeight - 72, titleZoneHeight + 42) : height - panelHeight - 54;
             ctx.Fill(Color.Black.WithAlpha(0.52f), new RectangularPolygon(panelX - 18, panelY - 18, panelWidth, panelHeight));
             for (var i = 0; i < metadata.Length; i++)
                 ctx.DrawText(metadata[i], metaFont, i == 0 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(panelX, panelY + i * lineStep));
@@ -1077,9 +1077,7 @@ public sealed class HeroAssetStoryGenerator(
     {
         var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date: see local forecast";
         var time = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "Time: best local window");
-        var location = FirstNonEmpty(intelligence?.VisibilityRegion, "Location: your region");
-        var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
-        return [$"DATE  {date}", $"TIME  {time}", $"LOCATION  {location}", $"EVENT  {eventType}"];
+        return [$"DATE  {date}", $"TIME  {time}"];
     }
 
     private static (string Title, string Subtitle) BuildHeroOverlayLines(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
@@ -1088,10 +1086,10 @@ public sealed class HeroAssetStoryGenerator(
         var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, heroStory.HeroHook, selectedHook, "SKY EVENT");
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase))
-            return (BuildMeteorShowerTitle(eventTitle), "METEOR SHOWER PEAK");
+            return (Clean(eventTitle).ToUpperInvariant(), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, "METEOR SHOWER")).ToUpperInvariant());
         if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
-            return (Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, "PLANET CONJUNCTION")).ToUpperInvariant(), "CONJUNCTION GUIDE");
-        return (Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventTitle, "SKY EVENT")).ToUpperInvariant(), Clean(FirstNonEmpty(intelligence?.ShortTitle, eventType, "ASTRONOMY EVENT")).ToUpperInvariant());
+            return (Clean(eventTitle).ToUpperInvariant(), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, "PLANET FAMILY")).ToUpperInvariant());
+        return (Clean(eventTitle).ToUpperInvariant(), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, intelligence?.ShortTitle, eventType, "ASTRONOMY EVENT")).ToUpperInvariant());
     }
 
     private static string CleanHeroPromptText(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
@@ -1152,9 +1150,9 @@ public sealed class HeroAssetStoryGenerator(
             providerSucceeded = variants.All(v => v.Result.ProviderSucceeded),
             azureRequestMs = variants.Sum(v => v.Result.AzureRequestMs),
             imageHash = variants.First().Hash,
-            actualRendererVersion = "HeroV6Renderer",
-            actualOverlayRendererVersion = "HeroV6DeterministicMetadataOverlay",
-            finalCompositorUsed = "HeroV6Renderer",
+            actualRendererVersion = "HeroV6.5Renderer",
+            actualOverlayRendererVersion = "HeroV6.5DeterministicMetadataOverlay",
+            finalCompositorUsed = "HeroV6.5Renderer",
             legacyRendererUsed = false,
             legacyRendererBlocked = true,
             outputFileWrittenAfterV6Overlay = File.Exists(imagePath),
