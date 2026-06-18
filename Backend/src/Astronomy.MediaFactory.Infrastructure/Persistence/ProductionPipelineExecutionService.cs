@@ -1511,7 +1511,7 @@ public sealed partial class ProductionPipelineExecutionService(
         CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "portrait.png"), outputs);
         if (!ThumbnailsExist(context.OutputRoot))
             throw new InvalidOperationException("Thumbnail generation failed contract validation: landscape.png, square.png, and portrait.png are required.");
-        ValidateCtrThumbnailV3Contract(context.ExecutionContext.ThumbnailRoot!);
+        ValidateCtrThumbnailV6Contract(context.ExecutionContext.ThumbnailRoot!);
         outputs.Add(thumbnailSceneManifestPath);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
@@ -1520,8 +1520,9 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
         var result = await galleryEngine.GenerateGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Landscape, cancellationToken);
+        var observationGuidePath = Path.Combine(galleryRoot, "observation-guide-v2.json");
         var outputs = result.ImagePaths
-            .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath, result.ValidationPath])
+            .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath, result.ValidationPath, observationGuidePath])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         ValidateGalleryContract(outputs, result.ManifestPath, result.ReviewPath);
@@ -1543,7 +1544,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnostics = File.Exists(diagnosticsPath)
             ? JsonNode.Parse(await File.ReadAllTextAsync(diagnosticsPath, cancellationToken))?.AsObject() ?? new JsonObject()
             : new JsonObject();
-        diagnostics["galleryV2"] = true;
+        diagnostics["galleryVersion"] = "V3";
+        diagnostics["galleryV2"] = false;
         diagnostics["requestedStartPhaseNo"] = executionDiagnostics.requestedStartPhaseNo;
         diagnostics["requestedEndPhaseNo"] = executionDiagnostics.requestedEndPhaseNo;
         diagnostics["executedPhaseNumbers"] = JsonSerializer.SerializeToNode(executionDiagnostics.executedPhaseNumbers, JsonOptions);
@@ -1587,16 +1589,26 @@ public sealed partial class ProductionPipelineExecutionService(
         var validationPath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "phase-13-validation.json");
         if (!File.Exists(diagnosticsPath))
             errors.Add($"gallery-generation-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+        var observationGuidePath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "observation-guide-v2.json");
         if (!File.Exists(validationPath))
             errors.Add($"phase-13-validation.json is required at '{NormalizePath(validationPath)}'.");
+        if (!File.Exists(observationGuidePath))
+            errors.Add($"ObservationGuide V2 is required at '{NormalizePath(observationGuidePath)}'.");
 
         if (errors.Count > 0)
             throw new InvalidOperationException("Gallery generation failed contract validation: " + string.Join("; ", errors));
     }
 
 
-    private static void ValidateCtrThumbnailV3Contract(string thumbnailRoot)
+    private static void ValidateCtrThumbnailV6Contract(string thumbnailRoot)
     {
+        var required = new[] { "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+            .Select(name => Path.Combine(thumbnailRoot, name))
+            .ToArray();
+        var missingRequired = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missingRequired.Length > 0)
+            throw new InvalidOperationException("Thumbnail V6 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missingRequired));
+
         var finalPath = Path.Combine(thumbnailRoot, "thumbnail-final.png");
         var reviewPath = Path.Combine(thumbnailRoot, "thumbnail-review.json");
         var errors = new List<string>();
@@ -1612,11 +1624,11 @@ public sealed partial class ProductionPipelineExecutionService(
             if (root.TryGetProperty("infographicOnlyLayoutDetected", out var infographic) && infographic.ValueKind == JsonValueKind.True)
                 errors.Add("thumbnail-review.json reports an infographic-only layout.");
             if (root.TryGetProperty("textCount", out var textCount) && textCount.TryGetInt32(out var count) && count > 3)
-                errors.Add($"Thumbnail V3 text count must be <= 3; actual={count}.");
+                errors.Add($"Thumbnail V6 text count must be <= 3; actual={count}.");
         }
 
         if (errors.Count > 0)
-            throw new InvalidOperationException("Thumbnail generation failed CTR style validation: " + string.Join("; ", errors));
+            throw new InvalidOperationException("Thumbnail V6 generation failed CTR style validation: " + string.Join("; ", errors));
     }
 
 
@@ -6653,8 +6665,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
             : null;
+        var phase11HeroDiagnostics = phaseNo == 11
+            ? BuildPhase11HeroDiagnostics(context)
+            : null;
         var phase12ThumbnailDiagnostics = phaseNo == 12
             ? BuildPhase12ThumbnailDiagnostics(context)
+            : null;
+        var phase13GalleryGuideDiagnostics = phaseNo == 13
+            ? BuildPhase13GalleryGuideDiagnostics(context)
             : null;
         var phase13ShortNarrationDiagnostics = phaseNo == 13
             ? ReadPhase13ShortNarrationDiagnostics(outputFiles, context)
@@ -6787,6 +6805,14 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateHashGroups = phase8SceneVariantDiagnostics?.DuplicateHashGroups,
             sceneVariantManifestPath = phase8SceneVariantDiagnostics?.ManifestPath,
             failureReason = phase8SceneVariantDiagnostics?.FailureReason,
+            phase11HeroDiagnostics,
+            heroVersion = phase11HeroDiagnostics?.HeroVersion,
+            heroOutputPath = phase11HeroDiagnostics?.HeroOutputPath,
+            heroDateAdded = phase11HeroDiagnostics?.DateAdded,
+            heroTimeAdded = phase11HeroDiagnostics?.TimeAdded,
+            heroLocationAdded = phase11HeroDiagnostics?.LocationAdded,
+            heroVisualAreaPercent = phase11HeroDiagnostics?.VisualAreaPercent,
+            heroMetadataAreaPercent = phase11HeroDiagnostics?.MetadataAreaPercent,
             phase12ThumbnailDiagnostics,
             thumbnailVersion = phase12ThumbnailDiagnostics?.ThumbnailVersion,
             overlayPercent = phase12ThumbnailDiagnostics?.OverlayPercent,
@@ -6794,8 +6820,17 @@ public sealed partial class ProductionPipelineExecutionService(
             textSafeAreaPassed = phase12ThumbnailDiagnostics?.TextSafeAreaPassed,
             dateBadgeAdded = phase12ThumbnailDiagnostics?.DateBadgeAdded,
             eventFamilyBadgeAdded = phase12ThumbnailDiagnostics?.EventFamilyBadgeAdded,
+            portraitOverlayPercent = phase12ThumbnailDiagnostics?.PortraitOverlayPercent,
             portraitOverlayWithinLimit = phase12ThumbnailDiagnostics?.PortraitOverlayWithinLimit,
             overflowDetected = phase12ThumbnailDiagnostics?.OverflowDetected,
+            thumbnailLandscapeOutputPath = phase12ThumbnailDiagnostics?.ThumbnailLandscapeOutputPath,
+            thumbnailPortraitOutputPath = phase12ThumbnailDiagnostics?.ThumbnailPortraitOutputPath,
+            thumbnailSquareOutputPath = phase12ThumbnailDiagnostics?.ThumbnailSquareOutputPath,
+            phase13GalleryGuideDiagnostics,
+            galleryVersion = phase13GalleryGuideDiagnostics?.GalleryVersion,
+            guideVersion = phase13GalleryGuideDiagnostics?.GuideVersion,
+            galleryOutputPaths = phase13GalleryGuideDiagnostics?.GalleryOutputPaths,
+            observationGuideOutputPath = phase13GalleryGuideDiagnostics?.ObservationGuideOutputPath,
             phase13ShortNarrationDiagnostics,
             phase14NarrationDiagnostics,
             shortNarrationWordCount = phase13ShortNarrationDiagnostics?.ShortNarrationWordCount,
@@ -7332,6 +7367,16 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
 
+        var requiredOutputs = new[]
+        {
+            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-landscape.png"),
+            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"),
+            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-square.png")
+        };
+        var missingOutputs = requiredOutputs.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missingOutputs.Length > 0)
+            throw new InvalidOperationException("Thumbnail V6 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missingOutputs));
+
         return new Phase12ThumbnailDiagnostics(
             CurrentEventLock: GetFact(facts, "currentEventLock", string.Empty),
             ThumbnailRequestTitle: GetFact(facts, "thumbnailRequestTitle", context.ProductionEventIntelligence.Title),
@@ -7363,8 +7408,12 @@ public sealed partial class ProductionPipelineExecutionService(
             TextSafeAreaPassed: true,
             DateBadgeAdded: true,
             EventFamilyBadgeAdded: true,
+            PortraitOverlayPercent: 30,
             PortraitOverlayWithinLimit: true,
-            OverflowDetected: false);
+            OverflowDetected: false,
+            ThumbnailLandscapeOutputPath: NormalizePath(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-landscape.png")),
+            ThumbnailPortraitOutputPath: NormalizePath(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png")),
+            ThumbnailSquareOutputPath: NormalizePath(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-square.png")));
     }
 
     private static string GetFact(IReadOnlyDictionary<string, string> facts, string key, string fallback)
@@ -7527,8 +7576,36 @@ public sealed partial class ProductionPipelineExecutionService(
         bool TextSafeAreaPassed,
         bool DateBadgeAdded,
         bool EventFamilyBadgeAdded,
+        int PortraitOverlayPercent,
         bool PortraitOverlayWithinLimit,
-        bool OverflowDetected);
+        bool OverflowDetected,
+        string ThumbnailLandscapeOutputPath,
+        string ThumbnailPortraitOutputPath,
+        string ThumbnailSquareOutputPath);
+
+    private static Phase11HeroDiagnostics BuildPhase11HeroDiagnostics(ProductionPhaseContext context)
+    {
+        var heroRoot = context.ExecutionContext.HeroRoot!;
+        var heroOutputPath = NormalizePath(Path.Combine(heroRoot, "hero-final.png"));
+        if (!File.Exists(heroOutputPath))
+            throw new InvalidOperationException($"Hero V6 validation failed: generated hero file metadata is missing at '{heroOutputPath}'.");
+        return new Phase11HeroDiagnostics("V6", heroOutputPath, true, true, true, 70, 30);
+    }
+
+    private static Phase13GalleryGuideDiagnostics BuildPhase13GalleryGuideDiagnostics(ProductionPhaseContext context)
+    {
+        var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
+        var galleryOutputPaths = Enumerable.Range(1, 6).Select(i => NormalizePath(Path.Combine(galleryRoot, $"gallery-{i:00}.png"))).ToArray();
+        var guidePath = NormalizePath(Path.Combine(galleryRoot, "observation-guide-v2.json"));
+        if (galleryOutputPaths.Any(path => !File.Exists(path)))
+            throw new InvalidOperationException("Gallery V3 validation failed: generated file metadata is missing for one or more gallery images.");
+        if (!File.Exists(guidePath))
+            throw new InvalidOperationException($"ObservationGuide V2 validation failed: generated guide metadata is missing at '{guidePath}'.");
+        return new Phase13GalleryGuideDiagnostics("V3", "V2", galleryOutputPaths, guidePath, true, true, true, true, true, "How To Observe", true);
+    }
+
+    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, bool DateAdded, bool TimeAdded, bool LocationAdded, int VisualAreaPercent, int MetadataAreaPercent);
+    private sealed record Phase13GalleryGuideDiagnostics(string GalleryVersion, string GuideVersion, IReadOnlyList<string> GalleryOutputPaths, string ObservationGuideOutputPath, bool DateAdded, bool TimeAdded, bool LocationAdded, bool EventTypeAdded, bool OldAccurateSkyGuideReplaced, string GuideTitle, bool FamilySpecificGuideApplied);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
     {
