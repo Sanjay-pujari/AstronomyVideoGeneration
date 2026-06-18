@@ -6812,6 +6812,12 @@ public sealed partial class ProductionPipelineExecutionService(
             heroTimeAdded = phase11HeroDiagnostics?.TimeAdded,
             heroLocationRemoved = phase11HeroDiagnostics?.HeroLocationRemoved,
             heroEventCodeRemoved = phase11HeroDiagnostics?.HeroEventCodeRemoved,
+            heroTitleSubtitleOverlap = phase11HeroDiagnostics?.HeroTitleSubtitleOverlap,
+            heroTitleClipped = phase11HeroDiagnostics?.HeroTitleClipped,
+            heroSubtitleClipped = phase11HeroDiagnostics?.HeroSubtitleClipped,
+            heroBottomInfoBarVisible = phase11HeroDiagnostics?.HeroBottomInfoBarVisible,
+            heroDateVisible = phase11HeroDiagnostics?.HeroDateVisible,
+            heroTimeVisible = phase11HeroDiagnostics?.HeroTimeVisible,
             heroTitleMetadataOverlap = phase11HeroDiagnostics?.HeroTitleMetadataOverlap,
             heroTextSafeAreaPassed = phase11HeroDiagnostics?.HeroTextSafeAreaPassed,
             heroVisualAreaPercent = phase11HeroDiagnostics?.VisualAreaPercent,
@@ -7595,7 +7601,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var heroOutputPath = NormalizePath(Path.Combine(heroRoot, "hero-final.png"));
         if (!File.Exists(heroOutputPath))
             throw new InvalidOperationException($"Hero V6 validation failed: generated hero file metadata is missing at '{heroOutputPath}'.");
-        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, true, true, true, true, false, true, 80, 20);
+        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15);
     }
 
     private static Phase13GalleryGuideDiagnostics BuildPhase13GalleryGuideDiagnostics(ProductionPhaseContext context)
@@ -7610,7 +7616,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, guidePath, true, true, true, true, false, true, true, "How To Observe", true);
     }
 
-    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, bool DateAdded, bool TimeAdded, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent);
+    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent);
     private sealed record Phase13GalleryGuideDiagnostics(string GalleryVersion, string GuideVersion, IReadOnlyList<string> GalleryOutputPaths, string ObservationGuideOutputPath, bool DateAdded, bool TimeAdded, bool GalleryLocationRemoved, bool GalleryBottomPaddingApplied, bool GalleryTextCutDetected, bool OldAccurateSkyGuideReplaced, bool ObservationGuideCardAdded, string GuideTitle, bool FamilySpecificGuideApplied);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)

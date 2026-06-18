@@ -1008,7 +1008,7 @@ public sealed class HeroAssetStoryGenerator(
             dateDetected = !string.IsNullOrWhiteSpace(dateTime),
             timeDetected = !string.IsNullOrWhiteSpace(dateTime),
             directionDetected = false,
-            heroDiagnostics = new { heroVersion = "V6.5", eventTitleAdded = !string.IsNullOrWhiteSpace(mainText), dateAdded = !string.IsNullOrWhiteSpace(dateTime), timeAdded = !string.IsNullOrWhiteSpace(dateTime), heroLocationRemoved = true, heroEventCodeRemoved = true, heroTitleMetadataOverlap = false, heroTextSafeAreaPassed = true, metadataAreaPercent = 20, visualAreaPercent = 80 },
+            heroDiagnostics = new { heroVersion = "V6.5", eventTitleAdded = !string.IsNullOrWhiteSpace(mainText), dateAdded = !string.IsNullOrWhiteSpace(dateTime), timeAdded = !string.IsNullOrWhiteSpace(dateTime), heroTitleSubtitleOverlap = false, heroTitleClipped = false, heroSubtitleClipped = false, heroLocationRemoved = true, heroEventCodeRemoved = true, heroBottomInfoBarVisible = true, heroDateVisible = true, heroTimeVisible = true, heroTitleMetadataOverlap = false, heroTextSafeAreaPassed = true, metadataAreaPercent = 15, visualAreaPercent = 85 },
             heroEventPosterChecks = new { whatEvent = mainText, dateTime, whereToLook = direction, keyObjects = eventObjectContext.ObjectNames, noHugeThumbnailSlogan = true, noDuplicatedTitleSubtitle = true, visualRatio = "70% astronomy image / 30% compact metadata", textOverlapRisk = "low", croppedTextRisk = "low", heroRulesPassed = !string.IsNullOrWhiteSpace(dateTime) && !string.IsNullOrWhiteSpace(direction) && eventObjectContext.ObjectNames.Count > 0, missingDateTime = string.IsNullOrWhiteSpace(dateTime), missingViewingDirection = string.IsNullOrWhiteSpace(direction) },
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
             repeatedPromptDetected = prompts.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1),
@@ -1044,40 +1044,74 @@ public sealed class HeroAssetStoryGenerator(
         {
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
             ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
+
             var (title, subtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
             var landscape = width > height;
+            var square = width == height;
             var portrait = height > width;
-            var titleZoneHeight = height * 0.22f;
-            var metadataZoneHeight = height * 0.20f;
-            var x = portrait ? 76 : width == height ? 62 : 110;
-            var titleY = landscape ? MathF.Min(80, height * .085f) : portrait ? height * .055f : height * .08f;
-            var maxTitleWidth = width * .70f;
-            var titleSize = portrait ? 88f : width == height ? 70f : 96f;
-            if ((title.Length * titleSize * .56f) > maxTitleWidth) titleSize *= maxTitleWidth / (title.Length * titleSize * .56f);
-            var titleFont = ResolveHeroFont(Math.Max(44, titleSize), FontStyle.Bold);
-            var subtitleFont = ResolveHeroFont(portrait ? 42 : width == height ? 32 : 44, FontStyle.Bold);
-            ctx.DrawText(title, titleFont, Color.White, new PointF(x, titleY));
-            ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(x + 4, titleY + (portrait ? 92 : 62)));
-            var metadata = BuildHeroV6MetadataLines(intelligence);
-            var metaFont = ResolveHeroFont(portrait ? 34 : width == height ? 26 : 30, FontStyle.Bold);
-            var lineStep = portrait ? 48 : 40;
-            var panelHeight = MathF.Min(metadataZoneHeight, (metadata.Length * lineStep) + 36);
-            var panelWidth = portrait ? width - 150 : width == height ? width - 120 : 620;
-            var panelX = x;
-            var panelY = landscape ? MathF.Max(titleY + titleZoneHeight + 28, height - panelHeight - 54) : portrait ? MathF.Min(height - panelHeight - 72, titleZoneHeight + 42) : height - panelHeight - 54;
-            ctx.Fill(Color.Black.WithAlpha(0.52f), new RectangularPolygon(panelX - 18, panelY - 18, panelWidth, panelHeight));
-            for (var i = 0; i < metadata.Length; i++)
-                ctx.DrawText(metadata[i], metaFont, i == 0 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(panelX, panelY + i * lineStep));
+            var marginX = landscape ? 60f : square ? 60f : 76f;
+            var topY = landscape ? 60f : square ? 64f : 92f;
+            var rightMargin = marginX;
+            var maxTextWidth = width - marginX - rightMargin;
+            var minimumTitleSubtitleGap = 16f;
+
+            var titleSize = landscape ? 104f : square ? 78f : 88f;
+            var subtitleSize = landscape ? 46f : square ? 34f : 42f;
+            var titleFont = FitHeroFont(title, titleSize, 42f, maxTextWidth, FontStyle.Bold);
+            var subtitleFont = FitHeroFont(subtitle, subtitleSize, 26f, maxTextWidth, FontStyle.Bold);
+            var titleBounds = TextMeasurer.MeasureBounds(title, new TextOptions(titleFont));
+            var subtitleBounds = TextMeasurer.MeasureBounds(subtitle, new TextOptions(subtitleFont));
+            var subtitleY = topY + titleBounds.Height + minimumTitleSubtitleGap;
+            var bottomBarHeight = Math.Clamp(height * (landscape ? 0.15f : 0.145f), height * 0.14f, height * 0.16f);
+            var bottomBarY = height - bottomBarHeight;
+            var topBlockBottom = subtitleY + subtitleBounds.Height;
+
+            if (topBlockBottom > bottomBarY - 24f)
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: title/subtitle safe area overlaps bottom information bar.");
+            if (titleBounds.Width > maxTextWidth || subtitleBounds.Width > maxTextWidth)
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: title or subtitle is clipped.");
+            if (subtitleY - (topY + titleBounds.Height) < minimumTitleSubtitleGap)
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: title overlaps subtitle.");
+
+            ctx.DrawText(title, titleFont, Color.White, new PointF(marginX, topY));
+            ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(marginX, subtitleY));
+
+            ctx.Fill(Color.Black.WithAlpha(0.58f), new RectangleF(0, bottomBarY, width, bottomBarHeight));
+            ctx.Fill(Color.White.WithAlpha(0.10f), new RectangleF(0, bottomBarY, width, 2));
+            var (date, time) = BuildHeroV6MetadataValues(intelligence);
+            var metaFont = FitHeroFont($"{date}      {time}", landscape ? 36f : square ? 28f : 34f, 22f, maxTextWidth, FontStyle.Bold);
+            var metaBounds = TextMeasurer.MeasureBounds($"{date}      {time}", new TextOptions(metaFont));
+            var metaY = bottomBarY + (bottomBarHeight - metaBounds.Height) / 2f;
+            var timeBounds = TextMeasurer.MeasureBounds(time, new TextOptions(metaFont));
+            var dateX = marginX;
+            var timeX = portrait ? width - marginX - timeBounds.Width : MathF.Min(width - marginX - timeBounds.Width, marginX + MathF.Max(width * 0.30f, 360f));
+            if (dateX + TextMeasurer.MeasureBounds(date, new TextOptions(metaFont)).Width >= timeX - 24f)
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: date/time are not visible without overlap.");
+            ctx.DrawText(date, metaFont, Color.FromRgb(170, 233, 255), new PointF(dateX, metaY));
+            ctx.DrawText(time, metaFont, Color.White, new PointF(timeX, metaY));
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
-    private static string[] BuildHeroV6MetadataLines(ProductionEventIntelligence? intelligence)
+    private static (string Date, string Time) BuildHeroV6MetadataValues(ProductionEventIntelligence? intelligence)
     {
-        var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date: see local forecast";
-        var time = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "Time: best local window");
-        return [$"DATE  {date}", $"TIME  {time}"];
+        var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "DATE TBD";
+        var time = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "TIME TBD");
+        return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant());
+    }
+
+    private static Font FitHeroFont(string text, float preferredSize, float minimumSize, float maxWidth, FontStyle style)
+    {
+        var size = preferredSize;
+        while (size > minimumSize)
+        {
+            var font = ResolveHeroFont(size, style);
+            if (TextMeasurer.MeasureBounds(text, new TextOptions(font)).Width <= maxWidth) return font;
+            size -= 2f;
+        }
+
+        return ResolveHeroFont(minimumSize, style);
     }
 
     private static (string Title, string Subtitle) BuildHeroOverlayLines(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
@@ -1209,7 +1243,7 @@ public sealed class HeroAssetStoryGenerator(
             finalOutputPath = NormalizePath(imagePath),
             finalOutputHashBeforeOverlay,
             finalOutputHashAfterOverlay = variants.First().Hash,
-            heroOverlayDiagnostics = new { heroTextOverlapDetected = false, heroTitleMetadataOverlap = false, heroMetadataWithinSafeArea = true, heroTitleLength = heroTitle.Length, heroTitleClipped = false, heroTitleOverflowDetected = false, heroTitleSafeAreaPassed = heroTitle.Length <= 40, titleBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? 80 : variants.First().Height * .055f, width = variants.First().Width * .70f, height = variants.First().Height * .22f }, metadataBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? Math.Max(720, variants.First().Height - variants.First().Height * .24f - 54) : variants.First().Height * .22f + 42, width = variants.First().Width > variants.First().Height ? 760 : variants.First().Width - 150, height = variants.First().Height * .24f }, visualSafeBox = new { x = variants.First().Width * .36f, y = variants.First().Height * .12f, width = variants.First().Width * .58f, height = variants.First().Height * .62f } },
+            heroOverlayDiagnostics = new { heroTextOverlapDetected = false, heroTitleSubtitleOverlap = false, heroTitleMetadataOverlap = false, heroMetadataWithinSafeArea = true, heroBottomInfoBarVisible = true, heroDateVisible = true, heroTimeVisible = true, heroLocationRemoved = true, heroEventCodeRemoved = true, heroTitleLength = heroTitle.Length, heroTitleClipped = false, heroSubtitleClipped = false, heroTitleOverflowDetected = false, heroTitleSafeAreaPassed = heroTitle.Length <= 40, titleBox = new { x = variants.First().Width > variants.First().Height ? 60 : variants.First().Width == variants.First().Height ? 60 : 76, y = variants.First().Width > variants.First().Height ? 60 : variants.First().Width == variants.First().Height ? 64 : 92, width = variants.First().Width - ((variants.First().Width > variants.First().Height || variants.First().Width == variants.First().Height) ? 120 : 152), height = variants.First().Height * .22f }, metadataBox = new { x = 0, y = variants.First().Height - Math.Clamp(variants.First().Height * (variants.First().Width > variants.First().Height ? .15f : .145f), variants.First().Height * .14f, variants.First().Height * .16f), width = variants.First().Width, height = Math.Clamp(variants.First().Height * (variants.First().Width > variants.First().Height ? .15f : .145f), variants.First().Height * .14f, variants.First().Height * .16f) }, visualSafeBox = new { x = variants.First().Width * .36f, y = variants.First().Height * .12f, width = variants.First().Width * .58f, height = variants.First().Height * .62f } },
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
             totalMs,
