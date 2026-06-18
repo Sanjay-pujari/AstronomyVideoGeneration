@@ -1883,14 +1883,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, null, cancellationToken);
             throw;
         }
     }
@@ -1961,6 +1961,7 @@ public sealed partial class ProductionPipelineExecutionService(
             finalTextBeforeWrite = documentaryNarration.FinalTextBeforeWrite,
             scriptComposerDiagnostics = documentaryNarration.Diagnostics,
             source = "event-story-composer",
+            sceneLevelAdapter = documentaryNarration.AdapterDiagnostics,
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
             files = manifestItems
@@ -1988,54 +1989,103 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var family = ResolvePhase14NarrationFamily(context);
         var script = EventStoryComposer.Compose(family, context.ProductionEventIntelligence, context.ExecutionContext);
-        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["001-hook"] = $"{script.Sections.ColdOpen} It is the kind of sky event worth planning around.",
-            ["002-cause"] = $"{script.Sections.Context} The result is a live demonstration of motion in the solar system.",
-            ["003-accurate-sky-guide"] = $"{script.Sections.ViewingGuide} Keep the view simple, open, and safe.",
-            ["004-viewing-tip"] = $"{script.Sections.MainStory} Let the scene unfold without rushing it.",
-            ["005-final-reminder"] = $"{script.Sections.EmotionalClosing} Step outside with enough time to let the moment find you."
-        };
-        var longDrafts = new LongSceneNarrationDraft[]
-        {
-            new("001-hook", "hook", script.Sections.ColdOpen),
-            new("002-what-is-it", "what-is-it", script.Sections.Hook),
-            new("003-cause", "cause", family == "Eclipse" ? "A solar eclipse happens when the Moon passes directly between Earth and the Sun, casting its shadow onto our planet." : script.Sections.Context),
-            new("004-interesting-fact", "interesting-fact", family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{script.Sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light."),
-            new("005-best-time", "best-time", script.Sections.ViewingGuide),
-            new("006-accurate-sky-guide", "accurate-sky-guide", BuildNaturalSkyGuide(family)),
-            new("007-what-you-will-see", "what-you-will-see", script.Sections.MainStory),
-            new("008-viewing-tips", "viewing-tips", BuildViewingTips(family)),
-            new("009-final-reminder", "final-reminder", script.Sections.EmotionalClosing)
-        };
         var expansionContext = new LongSceneNarrationExpansionContext(
             FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.ExecutionContext?.EventType, family),
             FirstNonEmpty(context.ProductionEventIntelligence.ShortTitle, context.Request.ShortTitle, context.ProductionEventIntelligence.Title),
             FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime, context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal),
             FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint),
             FirstNonEmpty(context.ExecutionContext?.ContentStrategy, context.ProductionEventIntelligence.StrategyId, context.Request.ContentStrategy));
-        var expandedLongTexts = LongSceneNarrationExpander.Expand(family, expansionContext, longDrafts, out var expansionStrategy);
+        var shortDrafts = BuildSceneLevelNarrationDrafts(context, "short", script.Sections, family);
+        var longDrafts = BuildSceneLevelNarrationDrafts(context, "long", script.Sections, family);
+        var shortTexts = new Dictionary<string, string>(LongSceneNarrationExpander.Expand(family, expansionContext, shortDrafts, out var shortExpansionStrategy), StringComparer.OrdinalIgnoreCase);
+        var expandedLongTexts = LongSceneNarrationExpander.Expand(family, expansionContext, longDrafts, out var longExpansionStrategy);
         var longTexts = new Dictionary<string, string>(expandedLongTexts, StringComparer.OrdinalIgnoreCase);
+        var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
+        var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
+        var firstSentenceByScene = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => FirstSentence(item.Value), StringComparer.OrdinalIgnoreCase);
         var duplicatePairs = FindDuplicateFirstSentencePairs("long", longTexts);
         var diagnostics = script.Diagnostics with
         {
             LongSceneCount = longTexts.Count,
             ExtractedSectionCount = 6,
-            ExpansionApplied = longTexts.Count > 6,
-            DuplicateFirstSentenceDetected = duplicatePairs.Count > 0,
+            ExpansionApplied = shortTexts.Count > 6 || longTexts.Count > 6,
+            DuplicateFirstSentenceDetected = duplicatePairs.Count > 0 || FindDuplicateFirstSentencePairs("short", shortTexts).Count > 0,
             DuplicatePairs = duplicatePairs,
             FirstSentenceByLongScene = longTexts.ToDictionary(kv => kv.Key, kv => FirstSentence(kv.Value), StringComparer.OrdinalIgnoreCase),
-            LongSceneNarrationExpansionStrategy = expansionStrategy
+            LongSceneNarrationExpansionStrategy = longExpansionStrategy
         };
         ValidatePhase14EventStoryNarration(shortTexts, longTexts, diagnostics);
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
             .ToArray();
-        var allText = string.Join(" ", finalText.Select(item => item.text));
-        if (ContainsAuthoringInstructionText(allText))
+        var combinedText = string.Join(" ", finalText.Select(item => item.text));
+        if (ContainsAuthoringInstructionText(combinedText))
             throw new InvalidOperationException("Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
-        return new Phase14DocumentaryNarration(true, true, "EventStoryComposer", false, shortTexts, longTexts, finalText, diagnostics);
+        var adapterDiagnostics = new Phase14AdapterDiagnostics(
+            true,
+            "NarrationSceneAdapterV3.1",
+            expansionContext.EventType,
+            shortTexts.Count,
+            longTexts.Count,
+            6,
+            shortTexts.Count + longTexts.Count,
+            firstSentenceByScene,
+            diagnostics.DuplicateFirstSentenceDetected,
+            false,
+            diagnostics.ExpansionApplied,
+            diagnostics.ExpansionApplied ? "Story-level narration sections expanded to one scene-specific narration per scene asset." : "Scene count did not exceed story section count.",
+            ["ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing"],
+            scenePurposeBySceneId,
+            allTexts.Select(item => NormalizePath(Path.Combine(context.OutputRoot, "narration", item.format, $"{SanitizeFileName(item.Key)}.txt"))).ToArray(),
+            [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "long.srt"))]);
+        return new Phase14DocumentaryNarration(true, true, "EventStoryComposer+NarrationSceneAdapterV3.1", false, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics);
     }
+
+    private static IReadOnlyList<LongSceneNarrationDraft> BuildSceneLevelNarrationDrafts(ProductionPhaseContext context, string format, DocumentaryNarrationSections sections, string family)
+        => ReadPhase14SceneIds(context.OutputRoot, format).Select(sceneId => new LongSceneNarrationDraft(sceneId, ResolvePhase14ScenePurpose(sceneId), BuildSceneLevelSourceText(sceneId, sections, family))).ToArray();
+
+    private static IReadOnlyList<string> ReadPhase14SceneIds(string planRoot, string format)
+    {
+        var metadataPath = Path.Combine(planRoot, "scene-assets-v3", format, "scene-timeline-metadata.json");
+        if (File.Exists(metadataPath))
+        {
+            var ids = ReadJsonArray(metadataPath, "scenes").Select(node => GetString(node, "sceneId")).Where(id => !string.IsNullOrWhiteSpace(id)).Cast<string>().ToArray();
+            if (ids.Length > 0) return ids;
+        }
+        return string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
+            ? ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]
+            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
+    }
+
+    private static string ResolvePhase14ScenePurpose(string sceneId)
+        => sceneId switch
+        {
+            "001-hook" => "hook",
+            "002-what-is-it" => "what-is-it",
+            "002-cause" or "003-cause" => "cause",
+            "004-interesting-fact" => "interesting-fact",
+            "005-best-time" => "best-time",
+            "006-accurate-sky-guide" or "003-accurate-sky-guide" => "accurate-sky-guide",
+            "007-what-you-will-see" => "what-you-will-see",
+            "008-viewing-tips" or "004-viewing-tip" => "viewing-tips",
+            "009-final-reminder" or "005-final-reminder" => "final-reminder",
+            _ => "what-you-will-see"
+        };
+
+    private static string BuildSceneLevelSourceText(string sceneId, DocumentaryNarrationSections sections, string family)
+        => ResolvePhase14ScenePurpose(sceneId) switch
+        {
+            "hook" => sections.ColdOpen,
+            "what-is-it" => sections.Hook,
+            "cause" => family == "Eclipse" ? "A solar eclipse happens when the Moon passes directly between Earth and the Sun, casting its shadow onto our planet." : sections.Context,
+            "interesting-fact" => family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
+            "best-time" => sections.ViewingGuide,
+            "accurate-sky-guide" => BuildNaturalSkyGuide(family),
+            "what-you-will-see" => sections.MainStory,
+            "viewing-tips" => BuildViewingTips(family),
+            "final-reminder" => sections.EmotionalClosing,
+            _ => sections.MainStory
+        };
 
     private static string BuildNaturalSkyGuide(string family) => family == "Eclipse"
         ? "Stand where the Sun is unobstructed, but never look at it directly without certified eclipse eye protection."
@@ -2540,7 +2590,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -2554,6 +2604,23 @@ public sealed partial class ProductionPipelineExecutionService(
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
             matchingStrategy = "EventStoryComposerNarrationFiles",
+            sceneLevelAdapter = adapterDiagnostics,
+            adapterUsed = adapterDiagnostics?.AdapterUsed ?? false,
+            adapterName = adapterDiagnostics?.AdapterName,
+            eventType = adapterDiagnostics?.EventType,
+            shortSceneCount = adapterDiagnostics?.ShortSceneCount,
+            longSceneCount = adapterDiagnostics?.LongSceneCount,
+            storySectionCount = adapterDiagnostics?.StorySectionCount,
+            sceneNarrationGeneratedCount = adapterDiagnostics?.SceneNarrationGeneratedCount,
+            firstSentenceByScene = adapterDiagnostics?.FirstSentenceByScene,
+            duplicateFirstSentenceDetected = adapterDiagnostics?.DuplicateFirstSentenceDetected,
+            duplicateSrtBlockDetected = adapterDiagnostics?.DuplicateSrtBlockDetected,
+            expansionApplied = adapterDiagnostics?.ExpansionApplied,
+            expansionReason = adapterDiagnostics?.ExpansionReason,
+            sourceStorySectionsUsed = adapterDiagnostics?.SourceStorySectionsUsed,
+            scenePurposeBySceneId = adapterDiagnostics?.ScenePurposeBySceneId,
+            outputNarrationFiles = adapterDiagnostics?.OutputNarrationFiles,
+            srtFilesGenerated = adapterDiagnostics?.SrtFilesGenerated,
             narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
             sectionsExtracted = narrationDiagnostics.Select(n => n.Section).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase),
             narrationScenes = narrationDiagnostics,
@@ -2645,7 +2712,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record NarrationSrtTimingResult(string Srt, object Diagnostics);
     private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, bool ValidationPassed, IReadOnlyList<string> Errors);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
-    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics);
+    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics);
+    private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
 
 
