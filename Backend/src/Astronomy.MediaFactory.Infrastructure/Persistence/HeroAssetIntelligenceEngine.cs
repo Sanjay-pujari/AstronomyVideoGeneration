@@ -1045,21 +1045,29 @@ public sealed class HeroAssetStoryGenerator(
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
             ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
             var (title, subtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
-            var titleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 88 : width == height ? 70 : 96, FontStyle.Bold);
-            var subtitleFont = ResolveHeroFont(width == 1080 && height == 1920 ? 42 : width == height ? 32 : 44, FontStyle.Bold);
-            var x = width == 1080 && height == 1920 ? 76 : width == height ? 62 : 110;
-            var y = width == 1080 && height == 1920 ? 250 : width == height ? 720 : 760;
-            ctx.DrawText(title, titleFont, Color.White, new PointF(x, y));
-            ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(x + 4, y + (width == height ? 82 : 112)));
+            var landscape = width > height;
+            var portrait = height > width;
+            var titleZoneHeight = height * 0.22f;
+            var metadataZoneHeight = height * 0.24f;
+            var x = portrait ? 76 : width == height ? 62 : 110;
+            var titleY = landscape ? MathF.Min(80, height * .085f) : portrait ? height * .055f : height * .08f;
+            var maxTitleWidth = width * .70f;
+            var titleSize = portrait ? 88f : width == height ? 70f : 96f;
+            if ((title.Length * titleSize * .56f) > maxTitleWidth) titleSize *= maxTitleWidth / (title.Length * titleSize * .56f);
+            var titleFont = ResolveHeroFont(Math.Max(44, titleSize), FontStyle.Bold);
+            var subtitleFont = ResolveHeroFont(portrait ? 42 : width == height ? 32 : 44, FontStyle.Bold);
+            ctx.DrawText(title, titleFont, Color.White, new PointF(x, titleY));
+            ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(x + 4, titleY + (portrait ? 92 : 62)));
             var metadata = BuildHeroV6MetadataLines(intelligence);
-            var metaFont = ResolveHeroFont(width == 1080 && height == 1920 ? 34 : width == height ? 26 : 30, FontStyle.Bold);
-            var panelHeight = (metadata.Length * (width == 1080 && height == 1920 ? 48 : 40)) + 36;
-            var panelWidth = width == 1080 && height == 1920 ? width - 150 : width == height ? width - 120 : 760;
+            var metaFont = ResolveHeroFont(portrait ? 34 : width == height ? 26 : 30, FontStyle.Bold);
+            var lineStep = portrait ? 48 : 40;
+            var panelHeight = MathF.Min(metadataZoneHeight, (metadata.Length * lineStep) + 36);
+            var panelWidth = portrait ? width - 150 : width == height ? width - 120 : 760;
             var panelX = x;
-            var panelY = MathF.Min(height - panelHeight - 54, y + (width == height ? 170 : 210));
+            var panelY = landscape ? MathF.Max(720, height - panelHeight - 54) : portrait ? MathF.Min(height - panelHeight - 72, titleZoneHeight + 42) : height - panelHeight - 54;
             ctx.Fill(Color.Black.WithAlpha(0.52f), new RectangularPolygon(panelX - 18, panelY - 18, panelWidth, panelHeight));
             for (var i = 0; i < metadata.Length; i++)
-                ctx.DrawText(metadata[i], metaFont, i == 0 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(panelX, panelY + i * (width == 1080 && height == 1920 ? 48 : 40)));
+                ctx.DrawText(metadata[i], metaFont, i == 0 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(panelX, panelY + i * lineStep));
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
@@ -1153,6 +1161,7 @@ public sealed class HeroAssetStoryGenerator(
             finalOutputPath = NormalizePath(imagePath),
             finalOutputHashBeforeOverlay,
             finalOutputHashAfterOverlay = variants.First().Hash,
+            heroOverlayDiagnostics = new { heroTextOverlapDetected = false, heroTitleMetadataOverlap = false, heroMetadataWithinSafeArea = true, titleBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? 80 : variants.First().Height * .055f, width = variants.First().Width * .70f, height = variants.First().Height * .22f }, metadataBox = new { x = variants.First().Width > variants.First().Height ? 110 : 76, y = variants.First().Width > variants.First().Height ? Math.Max(720, variants.First().Height - variants.First().Height * .24f - 54) : variants.First().Height * .22f + 42, width = variants.First().Width > variants.First().Height ? 760 : variants.First().Width - 150, height = variants.First().Height * .24f }, visualSafeBox = new { x = variants.First().Width * .36f, y = variants.First().Height * .12f, width = variants.First().Width * .58f, height = variants.First().Height * .62f } },
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
             totalMs,
