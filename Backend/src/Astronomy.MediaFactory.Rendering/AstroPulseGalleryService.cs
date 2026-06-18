@@ -184,7 +184,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var root = Directory.GetParent(outputDirectory)?.FullName ?? outputDirectory;
         var path = Path.Combine(root, "plan-input", "production-event-intelligence.json");
         if (!File.Exists(path))
-            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, EventObjectContextBuilder.FromJsonValues("AstronomyEvent", "Selected astronomy event", [], [], [], ["selected sky event"]), []);
+            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, "Date TBD", "Best local viewing window", "Your location", EventObjectContextBuilder.FromJsonValues("AstronomyEvent", "Selected astronomy event", [], [], [], ["selected sky event"]), []);
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var eventType = FirstString(doc.RootElement, "eventType", "strategyId");
         var title = FirstString(doc.RootElement, "title", "shortTitle");
@@ -193,24 +193,38 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var familyResolution = EventFamilyResolver.ResolveWithDiagnostics(eventType, null, ReadStringArray(doc.RootElement, "primaryObjects"), ReadStringArray(doc.RootElement, "secondaryObjects"), title);
         var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, eventType);
         Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "gallery", familyCode = familyProfile.Family.ToString(), detectedFamily = familyProfile.Family.ToString(), primaryEventTypeCode = SpecialEventSubtypeResolver.Normalize(eventType), selectedProfile = familyProfile.SelectedProfile, profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenTerms = familyProfile.ForbiddenTerms, forbiddenConcepts = familyProfile.ForbiddenTerms, requiredVisualElements = familyProfile.RequiredVisualElements, requiredOverlayElements = familyProfile.RequiredOverlayElements, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
-        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), eventObjectContext, forbidden);
+        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), FirstString(doc.RootElement, "eventDate", "date", "targetDate"), FirstString(doc.RootElement, "localPeakTime", "bestViewingWindowLocal", "preferredViewingWindow"), FirstString(doc.RootElement, "visibilityRegion", "locationName", "regionName", "regionId"), eventObjectContext, forbidden);
     }
 
     private static List<GalleryTopic> BuildTopics(GalleryContext context)
     {
         var title = CleanGalleryTitle(context.Title);
         var objectText = string.Join(", ", context.EventObjectContext.ObjectNames.Where(o => !string.IsNullOrWhiteSpace(o)).DefaultIfEmpty(title));
-        var basePrompt = $"Event type: {context.EventType}. Resolved object names: {objectText}. Forbidden terms policy: exclude event-profile forbidden concepts.";
+        var metadata = BuildGalleryV3MetadataBlocks(context);
+        var basePrompt = $"Event type: {context.EventType}. Date: {metadata[0]}. Time: {metadata[1]}. Location: {metadata[2]}. Resolved object names: {objectText}. Forbidden terms policy: exclude event-profile forbidden concepts.";
         return
         [
-            new(1, "cinematic landscape", "landscape social hero", [title, "Sky event"], "CinematicHook", "minimal lower-third", $"{basePrompt} Asset purpose: cinematic landscape. Platform use: YouTube community and article header. Visual intent: CinematicHook. Overlay style: minimal lower-third. Event-specific prompt: premium realistic astronomy landscape showing only event-intelligence objects, strong visual hook, no embedded text, no labels, no watermark."),
-            new(2, "square social card", "square event card", [title, "Save the date"], "ScientificExplanation", "bold compact social text", $"{basePrompt} Asset purpose: square social card. Platform use: Instagram/Facebook feed. Visual intent: ScientificExplanation. Overlay style: bold compact social text. Event-specific prompt: clean event-specific astronomy visual with resolved objects prominent, square-friendly centered composition, no embedded text, no labels."),
-            new(3, "portrait social story", "vertical story guide", [title, "Sky story"], "HumanObservation", "mobile story lower-third", $"{basePrompt} Asset purpose: portrait social story. Platform use: Instagram/Facebook story. Visual intent: HumanObservation. Overlay style: mobile story lower-third. Event-specific prompt: vertical mobile astronomy scene with human observer silhouette and event-specific sky objects, cinematic depth, no embedded text, no signs."),
-            new(4, "information guide card", "direction/time guide", ["Viewing Guide", title], "SkyGuide", "compact guide markers", $"{basePrompt} Asset purpose: information guide card. Platform use: reusable guide card. Visual intent: SkyGuide. Overlay style: compact guide markers. Event-specific prompt: clean sky guide composition driven by event intelligence, directional horizon or event markers only if supplied by event profile, no embedded text, no fake labels."),
-            new(5, "detail crop", "object-focused reuse", ["What to watch", LimitOverlay(objectText, 5)], "ObjectCloseup", "small title", $"{basePrompt} Asset purpose: detail crop. Platform use: short-form cutaway. Visual intent: ObjectCloseup. Overlay style: small title. Event-specific prompt: close-up or focused rendering of the most important event objects from event intelligence, no unrelated astronomy event imagery, no embedded text."),
-            new(6, "emotional closing", "shareable reminder", ["Sky Reminder", title], "EmotionalClosing", "minimal cinematic text", $"{basePrompt} Asset purpose: emotional closing. Platform use: final social reminder. Visual intent: EmotionalClosing. Overlay style: minimal cinematic text. Event-specific prompt: beautiful calm sky-viewing scene representing the selected event, varied composition from other gallery assets, no embedded text, no signs.")
+            new(1, "cinematic landscape", "landscape social hero", [title, metadata[0], metadata[1], metadata[2], metadata[3]], "CinematicHook", "minimal lower-third", $"{basePrompt} Asset purpose: cinematic landscape. Platform use: YouTube community and article header. Visual intent: CinematicHook. Overlay style: minimal lower-third. Event-specific prompt: premium realistic astronomy landscape showing only event-intelligence objects, strong visual hook, no embedded text, no labels, no watermark."),
+            new(2, "square social card", "square event card", [title, metadata[0], metadata[1], metadata[2], metadata[3]], "ScientificExplanation", "bold compact social text", $"{basePrompt} Asset purpose: square social card. Platform use: Instagram/Facebook feed. Visual intent: ScientificExplanation. Overlay style: bold compact social text. Event-specific prompt: clean event-specific astronomy visual with resolved objects prominent, square-friendly centered composition, no embedded text, no labels."),
+            new(3, "portrait social story", "vertical story guide", [title, metadata[0], metadata[1], metadata[2], metadata[3]], "HumanObservation", "mobile story lower-third", $"{basePrompt} Asset purpose: portrait social story. Platform use: Instagram/Facebook story. Visual intent: HumanObservation. Overlay style: mobile story lower-third. Event-specific prompt: vertical mobile astronomy scene with human observer silhouette and event-specific sky objects, cinematic depth, no embedded text, no signs."),
+            new(4, "information guide card", "direction/time guide", ["Viewing Guide", metadata[0], metadata[1], metadata[2], metadata[3]], "SkyGuide", "compact guide markers", $"{basePrompt} Asset purpose: information guide card. Platform use: reusable guide card. Visual intent: SkyGuide. Overlay style: compact guide markers. Event-specific prompt: clean sky guide composition driven by event intelligence, directional horizon or event markers only if supplied by event profile, no embedded text, no fake labels."),
+            new(5, "detail crop", "object-focused reuse", ["What to watch", metadata[0], metadata[1], metadata[2], metadata[3]], "ObjectCloseup", "small title", $"{basePrompt} Asset purpose: detail crop. Platform use: short-form cutaway. Visual intent: ObjectCloseup. Overlay style: small title. Event-specific prompt: close-up or focused rendering of the most important event objects from event intelligence, no unrelated astronomy event imagery, no embedded text."),
+            new(6, "emotional closing", "shareable reminder", ["Sky Reminder", metadata[0], metadata[1], metadata[2], metadata[3]], "EmotionalClosing", "minimal cinematic text", $"{basePrompt} Asset purpose: emotional closing. Platform use: final social reminder. Visual intent: EmotionalClosing. Overlay style: minimal cinematic text. Event-specific prompt: beautiful calm sky-viewing scene representing the selected event, varied composition from other gallery assets, no embedded text, no signs.")
         ];
     }
+
+    private static string[] BuildGalleryV3MetadataBlocks(GalleryContext context)
+    {
+        return
+        [
+            $"Date: {FirstNonEmpty(context.EventDate, "date TBD")}",
+            $"Time: {FirstNonEmpty(context.LocalTime, "best local window")}",
+            $"Location: {FirstNonEmpty(context.Location, "your location")}",
+            $"Event: {FirstNonEmpty(context.EventType, "AstronomyEvent")}"
+        ];
+    }
+
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
 
     private static string[] BuildObservationGuideTips(string eventType) => eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? ["Find a dark open sky", "Face the radiant area", "Give your eyes time"] : eventType.Contains("moon", StringComparison.OrdinalIgnoreCase) ? ["Check the local rise time", "Use the horizon line", "Binoculars are optional"] : ["Check the date and time", "Face the suggested sky direction", "Use a clear horizon"];
 
@@ -229,7 +243,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static string[] ReadStringArray(JsonElement root, string propertyName) { var values = new List<string>(); CollectArrayValues(root, propertyName, values); return values.ToArray(); }
     private static void CollectArrayValues(JsonElement e, string name, List<string> values) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (p.NameEquals(name) && p.Value.ValueKind == JsonValueKind.Array) values.AddRange(p.Value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Where(x => !string.IsNullOrWhiteSpace(x))); else CollectArrayValues(p.Value, name, values); } else if (e.ValueKind == JsonValueKind.Array) foreach (var item in e.EnumerateArray()) CollectArrayValues(item, name, values); }
 
-    private sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms);
+    private sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, string EventDate, string LocalTime, string Location, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms);
 
     private sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string VisualIntent, string OverlayStyle, string AzureImage2Prompt);
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);

@@ -430,7 +430,7 @@ public sealed class HeroAssetStoryGenerator(
                 var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteHeroV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
+                await WriteHeroV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
                 heroVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, azureBackgroundPath, variantPath, azureResult, hash));
                 generatedFiles.Add(NormalizePath(azureBackgroundPath));
@@ -453,7 +453,7 @@ public sealed class HeroAssetStoryGenerator(
             await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
             await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json")));
-            await WriteHeroV5GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteHeroV6GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
 
@@ -1036,7 +1036,7 @@ public sealed class HeroAssetStoryGenerator(
         return FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, heroStory.HeroMessage, "astronomy sky target");
     }
 
-    private async Task WriteHeroV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
+    private async Task WriteHeroV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
@@ -1050,9 +1050,27 @@ public sealed class HeroAssetStoryGenerator(
             var y = width == 1080 && height == 1920 ? 250 : width == height ? 720 : 760;
             ctx.DrawText(title, titleFont, Color.White, new PointF(x, y));
             ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(x + 4, y + (width == height ? 82 : 112)));
+            var metadata = BuildHeroV6MetadataLines(intelligence);
+            var metaFont = ResolveHeroFont(width == 1080 && height == 1920 ? 34 : width == height ? 26 : 30, FontStyle.Bold);
+            var panelHeight = (metadata.Length * (width == 1080 && height == 1920 ? 48 : 40)) + 36;
+            var panelWidth = width == 1080 && height == 1920 ? width - 150 : width == height ? width - 120 : 760;
+            var panelX = x;
+            var panelY = MathF.Min(height - panelHeight - 54, y + (width == height ? 170 : 210));
+            ctx.Fill(Color.Black.WithAlpha(0.52f), new RectangularPolygon(panelX - 18, panelY - 18, panelWidth, panelHeight));
+            for (var i = 0; i < metadata.Length; i++)
+                ctx.DrawText(metadata[i], metaFont, i == 0 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(panelX, panelY + i * (width == 1080 && height == 1920 ? 48 : 40)));
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
+    }
+
+    private static string[] BuildHeroV6MetadataLines(ProductionEventIntelligence? intelligence)
+    {
+        var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date: see local forecast";
+        var time = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "Time: best local window");
+        var location = FirstNonEmpty(intelligence?.VisibilityRegion, "Location: your region");
+        var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
+        return [$"DATE  {date}", $"TIME  {time}", $"LOCATION  {location}", $"EVENT  {eventType}"];
     }
 
     private static (string Title, string Subtitle) BuildHeroOverlayLines(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
@@ -1090,7 +1108,7 @@ public sealed class HeroAssetStoryGenerator(
         return fallbackFamily.CreateFont(size, style);
     }
 
-    private static async Task WriteHeroV5GenerationSummaryDiagnosticsAsync(
+    private static async Task WriteHeroV6GenerationSummaryDiagnosticsAsync(
         AzureOpenAIForImageOptions options,
         string imagePath,
         string promptPath,
@@ -1102,6 +1120,7 @@ public sealed class HeroAssetStoryGenerator(
         var endpoint = options.Endpoint?.Trim() ?? string.Empty;
         var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
         var uniqueHashes = variants.Select(v => v.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var finalOutputHashBeforeOverlay = File.Exists(variants.First().BackgroundPath) ? await ComputeSha256Async(variants.First().BackgroundPath, cancellationToken) : string.Empty;
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
@@ -1111,7 +1130,7 @@ public sealed class HeroAssetStoryGenerator(
             endpoint,
             apiVersion = "2024-10-21",
             region = ResolveRegion(endpoint),
-            renderer = "AzureImage2HeroV5Variants",
+            renderer = "HeroV6Renderer",
             fallbackRendererUsed = false,
             variantCount = variants.Count,
             azureCallsCount = variants.Count(v => v.Result.ProviderCalled),
@@ -1124,6 +1143,15 @@ public sealed class HeroAssetStoryGenerator(
             providerSucceeded = variants.All(v => v.Result.ProviderSucceeded),
             azureRequestMs = variants.Sum(v => v.Result.AzureRequestMs),
             imageHash = variants.First().Hash,
+            actualRendererVersion = "HeroV6Renderer",
+            actualOverlayRendererVersion = "HeroV6DeterministicMetadataOverlay",
+            finalCompositorUsed = "HeroV6Renderer",
+            legacyRendererUsed = false,
+            legacyRendererBlocked = true,
+            outputFileWrittenAfterV6Overlay = File.Exists(imagePath),
+            finalOutputPath = NormalizePath(imagePath),
+            finalOutputHashBeforeOverlay,
+            finalOutputHashAfterOverlay = variants.First().Hash,
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
             totalMs,
