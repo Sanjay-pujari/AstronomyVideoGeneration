@@ -851,6 +851,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 directionBoundingBox = selectedOverlayDiagnostics.DirectionBoundingBox,
                 footerBoundingBox = selectedOverlayDiagnostics.FooterBoundingBox,
                 skyGuideBoundingBox = selectedOverlayDiagnostics.SkyGuideBoundingBox,
+                panelCount = selectedOverlayDiagnostics.PanelCount,
                 overlapPercent = selectedOverlayDiagnostics.OverlapPercent,
                 requiredGuideFields = new[] { "title", "subtitle", "date", "bestTime", "direction", "equipment", "moon", "skyLabels", "directionMarker", "bottomTips" },
                 heroTemplateUsed = false,
@@ -959,6 +960,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 directionBoundingBox = selectedOverlayDiagnostics.DirectionBoundingBox,
                 footerBoundingBox = selectedOverlayDiagnostics.FooterBoundingBox,
                 skyGuideBoundingBox = selectedOverlayDiagnostics.SkyGuideBoundingBox,
+                panelCount = selectedOverlayDiagnostics.PanelCount,
                 overlapPercent = selectedOverlayDiagnostics.OverlapPercent,
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
@@ -1443,7 +1445,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var square = width == height;
         var titleFont = ResolveThumbnailFont(Math.Max(34, (landscape ? 44 : square ? 50 : 58) * scale), FontStyle.Bold);
         var subFont = ResolveThumbnailFont(Math.Max(22, (landscape ? 28 : square ? 32 : 38) * scale), FontStyle.Bold);
-        var smallFont = ResolveThumbnailFont(Math.Max(18, (landscape ? 29 : square ? 31 : 34) * scale), FontStyle.Bold);
+        var smallFont = ResolveThumbnailFont(Math.Max(20, (landscape ? 32 : square ? 34 : 37) * scale), FontStyle.Bold);
         var microFont = ResolveThumbnailFont(Math.Max(15, (landscape ? 18 : square ? 19 : 22) * scale), FontStyle.Regular);
         var objects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects)).Take(4).ToArray();
         if (objects.Length == 0) objects = NormalizeObjectList(current.RequiredVisualObjects).Take(4).ToArray();
@@ -1456,43 +1458,42 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var window = FirstNonEmpty(current.BestViewingWindowLocal, "After sunset");
 
         var titleBox = landscape
-            ? new RectangleF(width * .045f, height * .075f, width * .24f, height * .18f)
+            ? new RectangleF(width * .045f, height * .075f, width * .216f, height * .60f)
             : square
                 ? new RectangleF(width * .055f, height * .055f, width * .44f, height * .16f)
-                : new RectangleF(width * .075f, height * .045f, width * .85f, height * .12f);
+                : new RectangleF(width * .075f, height * .045f, width * .85f, height * .09f);
         var card = landscape
-            ? new RectangleF(width * .045f, height * .36f, width * .24f, height * .32f)
+            ? titleBox
             : square
-                ? new RectangleF(width * .055f, height * .60f, width * .38f, height * .20f)
-                : new RectangleF(width * .075f, height * .68f, width * .85f, height * .16f);
+                ? new RectangleF(width * .055f, height * .72f, width * .38f, height * .14f)
+                : new RectangleF(width * .075f, height * .70f, width * .85f, height * .14f);
         var skyGuideBox = landscape
             ? new RectangleF(width * .34f, height * .10f, width * .56f, height * .62f)
             : square
-                ? new RectangleF(width * .36f, height * .20f, width * .56f, height * .44f)
-                : new RectangleF(width * .10f, height * .20f, width * .80f, height * .42f);
+                ? new RectangleF(width * .36f, height * .18f, width * .56f, height * .42f)
+                : new RectangleF(width * .10f, height * .16f, width * .80f, height * .50f);
         var directionBox = landscape
             ? new RectangleF(width * .66f, height * .73f, width * .26f, height * .075f)
             : square
-                ? new RectangleF(width * .58f, height * .65f, width * .34f, height * .085f)
-                : new RectangleF(width * .10f, height * .62f, width * .80f, height * .055f);
+                ? new RectangleF(width * .58f, height * .61f, width * .34f, height * .075f)
+                : new RectangleF(width * .10f, height * .65f, width * .80f, height * .05f);
         ctx.Fill(Color.FromRgba(2, 10, 24, 182), card);
         ctx.Draw(Color.FromRgba(255, 222, 91, 170), 2, card);
         var titlePoint = new PointF(titleBox.X + 18 * scale, titleBox.Y + 16 * scale);
-        ctx.Fill(Color.FromRgba(0, 0, 0, 132), titleBox);
         ctx.DrawText(textLines.ElementAtOrDefault(0) ?? string.Join(" + ", objects.Take(2)).ToUpperInvariant(), titleFont, Color.White, titlePoint);
         ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 3 * scale, titlePoint.Y + (landscape ? 50 : 62) * scale));
         if (!string.IsNullOrWhiteSpace(textLines.ElementAtOrDefault(2)))
             ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + (landscape ? 86 : 100) * scale));
         var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}", "EQUIPMENT  BINOCULARS" };
         for (var i = 0; i < rows.Count; i++)
-            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 18 * scale, card.Y + (18 + i * (landscape ? 30 : 34)) * scale));
+            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 18 * scale, card.Y + (landscape ? 140 : 18) * scale + i * (landscape ? 34 : 34) * scale));
 
         var p1 = landscape ? new PointF(width * .50f, height * .39f) : square ? new PointF(width * .46f, height * .38f) : new PointF(width * .42f, height * .38f);
         var p2 = landscape ? new PointF(width * .60f, height * .34f) : square ? new PointF(width * .62f, height * .32f) : new PointF(width * .58f, height * .34f);
         var label1 = new PointF(p1.X - 155 * scale, p1.Y + 28 * scale);
         var label2 = new PointF(p2.X + 24 * scale, p2.Y - 42 * scale);
-        ctx.Fill(Color.FromRgb(255, 244, 180), new EllipsePolygon(p1.X, p1.Y, 10 * scale));
-        ctx.Fill(Color.FromRgb(235, 248, 255), new EllipsePolygon(p2.X, p2.Y, 8 * scale));
+        ctx.Fill(Color.FromRgb(255, 244, 180), new EllipsePolygon(p1.X, p1.Y, 11 * scale));
+        ctx.Fill(Color.FromRgb(235, 248, 255), new EllipsePolygon(p2.X, p2.Y, 8.8f * scale));
         ctx.DrawText(objects.ElementAtOrDefault(0) ?? "Planet", smallFont, Color.White, label1);
         ctx.DrawText(objects.ElementAtOrDefault(1) ?? "Planet", smallFont, Color.White, label2);
         DrawLeaderLine(ctx, label1, p1, Color.White);
@@ -1502,12 +1503,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var cue = new PointF(directionBox.X + 34 * scale, directionBox.Y + directionBox.Height * .52f);
         DrawCompassCue(ctx, cue, 32 * scale, -0.05f);
         ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 44 * scale, cue.Y - 16 * scale));
-        if (!string.IsNullOrWhiteSpace(window)) ctx.DrawText($"WINDOW  {window}", microFont, Color.FromRgb(200, 230, 255), new PointF(skyGuideBox.X + skyGuideBox.Width * .52f, skyGuideBox.Y + skyGuideBox.Height * .78f));
+        if (!string.IsNullOrWhiteSpace(window) && !landscape) ctx.DrawText($"WINDOW  {CondenseViewingWindow(window)}", microFont, Color.FromRgb(200, 230, 255), new PointF(skyGuideBox.X + skyGuideBox.Width * .52f, skyGuideBox.Y + skyGuideBox.Height * .78f));
 
-        var footerHeight = Math.Max(49, 58 * scale);
+        var footerHeight = Math.Max(44, 52 * scale);
         var tips = new RectangleF(0, height - footerHeight, width, footerHeight);
         ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
-        ctx.DrawText("TIPS  •  USE BINOCULARS IF NEEDED  •  CHECK MOONLIGHT  •  START AT TWILIGHT", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 16 * scale));
+        ctx.DrawText("TIPS  •  USE BINOCULARS IF NEEDED  •  CHECK MOONLIGHT  •  START AT TWILIGHT", ResolveThumbnailFont(Math.Max(17, (landscape ? 25 : square ? 26 : 29) * scale), FontStyle.Bold), Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 14 * scale));
 
         var count = 8 + objects.Take(2).Count() + rows.Count + (!string.IsNullOrWhiteSpace(separation) ? 1 : 0);
         return ValidateAndCreatePlanetaryOverlayDiagnostics(outputPath, count, width, height, titleBox, card, directionBox, tips, skyGuideBox, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
@@ -1516,7 +1517,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static ThumbnailOverlayDiagnostics ValidateAndCreatePlanetaryOverlayDiagnostics(string outputPath, int count, int width, int height, RectangleF titleBox, RectangleF guideCardBox, RectangleF directionBox, RectangleF footerBox, RectangleF skyGuideBox, bool separationAdded, bool altitudeAdded)
     {
-        var overlapPercent = CalculateOverlapPercent([titleBox, guideCardBox, directionBox, footerBox, skyGuideBox]);
+        var landscape = width > height;
+        var panelCount = landscape ? 1 : 2;
+        if (landscape && panelCount > 1)
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: landscape panelCount must be 1.");
+        RectangleF[] overlapBoxes = landscape
+            ? [guideCardBox, directionBox, footerBox, skyGuideBox]
+            : [titleBox, guideCardBox, directionBox, footerBox, skyGuideBox];
+        var overlapPercent = CalculateOverlapPercent(overlapBoxes);
         if (overlapPercent > 0)
             throw new InvalidOperationException($"Thumbnail V6 guide validation failed: overlayPercent must be 0; actual={overlapPercent:0.###}.");
         if (IntersectionArea(guideCardBox, directionBox) > 0)
@@ -1546,8 +1554,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             DirectionBoundingBox: ToBoundsObject(directionBox),
             FooterBoundingBox: ToBoundsObject(footerBox),
             SkyGuideBoundingBox: ToBoundsObject(skyGuideBox),
-            OverlapPercent: overlapPercent);
+            OverlapPercent: overlapPercent,
+            PanelCount: panelCount);
     }
+
+    private static string CondenseViewingWindow(string window)
+        => string.IsNullOrWhiteSpace(window) ? string.Empty : window.Replace("Best viewing window", "Window", StringComparison.OrdinalIgnoreCase).Replace("Viewing Window:", "Window", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsRect(RectangleF outer, RectangleF inner)
         => inner.Left >= outer.Left && inner.Top >= outer.Top && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
@@ -3969,7 +3981,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         object? DirectionBoundingBox = null,
         object? FooterBoundingBox = null,
         object? SkyGuideBoundingBox = null,
-        double OverlapPercent = 0)
+        double OverlapPercent = 0,
+        int PanelCount = 0)
     {
         public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
     }
@@ -4000,7 +4013,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         object? DirectionBoundingBox = null,
         object? FooterBoundingBox = null,
         object? SkyGuideBoundingBox = null,
-        double OverlapPercent = 0)
+        double OverlapPercent = 0,
+        int PanelCount = 0)
     {
         public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
 
