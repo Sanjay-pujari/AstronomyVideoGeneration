@@ -150,7 +150,7 @@ public sealed class ThumbnailV7TemplatePlanner
             _ => new[] { new ThumbnailV7InfoCard("Date", obs.DateLabel), new("Best Viewing Time", obs.TimeLabel), new("Direction", obs.DirectionCue), new("Objects Visible", string.Join(" + ", obs.ObjectNames)), new("Equipment", obs.Equipment) }
         };
         var template = profile.Family switch { "MeteorShower" => "MeteorShowerV7Template", "NamedFullMoon" => "NamedFullMoonV7Template", "SolarEclipse" => "SolarEclipseV7Template", _ => "PlanetConjunctionV7Template" };
-        var footer = profile.Family switch
+        string[] footer = profile.Family switch
         {
             "MeteorShower" => ["Find dark skies", "Face the radiant", "Let eyes adapt"],
             "NamedFullMoon" => ["Find open horizon", "Watch near moonrise", "Binoculars optional"],
@@ -214,7 +214,7 @@ public sealed class ThumbnailV7VariantRenderer
     }
     private static void DrawCelestialAssetLayer(IImageProcessingContext ctx, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7AssetManifest assets)
     {
-        var positions = profile.Family == "SolarEclipse" ? [new PointF(width * .66f, height * .30f), new PointF(width * .69f, height * .30f)] : profile.Family == "NamedFullMoon" ? [new PointF(width * .68f, height * .30f)] : [new PointF(width * .66f, height * .30f), new PointF(width * .78f, height * .39f), new PointF(width * .57f, height * .43f)];
+        PointF[] positions = profile.Family == "SolarEclipse" ? [new PointF(width * .66f, height * .30f), new PointF(width * .69f, height * .30f)] : profile.Family == "NamedFullMoon" ? [new PointF(width * .68f, height * .30f)] : [new PointF(width * .66f, height * .30f), new PointF(width * .78f, height * .39f), new PointF(width * .57f, height * .43f)];
         for (var i = 0; i < assets.Loaded.Count && i < positions.Length; i++)
         {
             using var asset = Image.Load<Rgba32>(assets.Loaded[i].Path);
