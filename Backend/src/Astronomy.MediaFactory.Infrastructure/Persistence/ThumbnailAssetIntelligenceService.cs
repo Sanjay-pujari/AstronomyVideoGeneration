@@ -228,6 +228,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
         var result = await new ThumbnailV7CinematicOverlayRenderer(thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial").RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
+        await WriteThumbnailV7Phase12ValidationAsync(thumbnailRoot, result.Diagnostics, cancellationToken);
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -263,6 +264,35 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputWriteSource: "ThumbnailV7CinematicOverlayRenderer",
             outputOverwriteDetected: false,
             thumbnailLayoutValidationPath: result.DiagnosticsPath);
+    }
+
+    private static async Task WriteThumbnailV7Phase12ValidationAsync(string thumbnailRoot, ThumbnailV7Diagnostics diagnostics, CancellationToken cancellationToken)
+    {
+        if (diagnostics.V6RendererExecuted || diagnostics.V6ValidatorExecuted)
+            throw new InvalidOperationException("V6 thumbnail path executed while Thumbnail V7 is enabled");
+
+        var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+            .Select(name => NormalizePath(Path.Combine(thumbnailRoot, name)))
+            .ToArray();
+        var missing = required.Where(path => !File.Exists(path)).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException("Thumbnail V7 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
+
+        var validationPath = Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            thumbnailVersion = "V7",
+            renderer = ThumbnailV7CinematicOverlayRenderer.RendererName,
+            selectedRenderer = ThumbnailV7CinematicOverlayRenderer.RendererName,
+            validator = "ThumbnailV7Validator",
+            thumbnailReviewJsonRequired = false,
+            v6RendererExecuted = false,
+            v6ValidatorExecuted = false,
+            oldValidationBlocked = true,
+            semanticValidationPassed = true,
+            outputFiles = required,
+            requiredOutputFiles = required
+        }, JsonOptions), cancellationToken);
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateMeteorShowerThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)

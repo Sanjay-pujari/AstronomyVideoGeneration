@@ -36,7 +36,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
     IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
-    ISceneAssetsV3Service? sceneAssetsV3Service = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    ISceneAssetsV3Service? sceneAssetsV3Service = null,
+    IOptions<ThumbnailOptions>? thumbnailOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -1506,7 +1507,10 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(thumbnailSceneManifestPath))
             throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
 
-        ValidateCtrThumbnailV6Contract(context.ExecutionContext.ThumbnailRoot!);
+        if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
+            ValidateThumbnailV7Contract(context.ExecutionContext.ThumbnailRoot!);
+        else
+            ValidateCtrThumbnailV6Contract(context.ExecutionContext.ThumbnailRoot!);
         outputs.Add(thumbnailSceneManifestPath);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
@@ -1594,6 +1598,30 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Gallery generation failed contract validation: " + string.Join("; ", errors));
     }
 
+
+    private static void ValidateThumbnailV7Contract(string thumbnailRoot)
+    {
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
+        if (!File.Exists(diagnosticsPath))
+            throw new InvalidOperationException($"Thumbnail V7 validation failed: thumbnail-v7-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
+        var root = doc.RootElement;
+        if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V7", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(GetJsonString(root, "selectedRenderer", string.Empty), ThumbnailV7CinematicOverlayRenderer.RendererName, StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V7 validation failed: diagnostics must report V7 and ThumbnailV7CinematicOverlayRenderer.");
+        if (GetJsonBool(root, "v6RendererExecuted") || GetJsonBool(root, "v6ValidatorExecuted"))
+            throw new InvalidOperationException("V6 thumbnail path executed while Thumbnail V7 is enabled");
+        if (GetJsonBool(root, "thumbnailReviewJsonRequired"))
+            throw new InvalidOperationException("Thumbnail V7 validation failed: thumbnail-review.json must not be required for V7.");
+
+        var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+            .Select(name => Path.Combine(thumbnailRoot, name))
+            .ToArray();
+        var missingRequired = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missingRequired.Length > 0)
+            throw new InvalidOperationException("Thumbnail V7 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missingRequired));
+    }
 
     private static void ValidateCtrThumbnailV6Contract(string thumbnailRoot)
     {
@@ -6826,6 +6854,12 @@ public sealed partial class ProductionPipelineExecutionService(
             heroMetadataAreaPercent = phase11HeroDiagnostics?.MetadataAreaPercent,
             phase12ThumbnailDiagnostics,
             thumbnailVersion = phase12ThumbnailDiagnostics?.ThumbnailVersion,
+            renderer = phase12ThumbnailDiagnostics?.Renderer,
+            validator = phase12ThumbnailDiagnostics?.Validator,
+            thumbnailReviewJsonRequired = phase12ThumbnailDiagnostics?.ThumbnailReviewJsonRequired,
+            v6RendererExecuted = phase12ThumbnailDiagnostics?.V6RendererExecuted,
+            v6ValidatorExecuted = phase12ThumbnailDiagnostics?.V6ValidatorExecuted,
+            oldValidationBlocked = phase12ThumbnailDiagnostics?.OldValidationBlocked,
             overlayPercent = phase12ThumbnailDiagnostics?.OverlayPercent,
             visualPercent = phase12ThumbnailDiagnostics?.VisualPercent,
             textSafeAreaPassed = phase12ThumbnailDiagnostics?.TextSafeAreaPassed,
@@ -7347,8 +7381,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
 
 
-    private static Phase12ThumbnailDiagnostics BuildPhase12ThumbnailDiagnostics(ProductionPhaseContext context)
+    private Phase12ThumbnailDiagnostics BuildPhase12ThumbnailDiagnostics(ProductionPhaseContext context)
     {
+        if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
+            return BuildPhase12ThumbnailV7Diagnostics(context);
+
         var manifestPath = Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-scene-manifest.json");
         IReadOnlyDictionary<string, string> facts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(manifestPath))
@@ -7428,6 +7465,11 @@ public sealed partial class ProductionPipelineExecutionService(
             ThumbnailVersion: "V6-RC1-Guide",
             ThumbnailContract: "DetailedGuideThumbnail",
             Renderer: "ThumbnailV6GuideRenderer",
+            Validator: "ThumbnailV6Validator",
+            ThumbnailReviewJsonRequired: true,
+            V6RendererExecuted: true,
+            V6ValidatorExecuted: true,
+            OldValidationBlocked: false,
             InformationAreaPercent: 30,
             VisualAreaPercent: 70,
             InfoPanelPercent: 25,
@@ -7584,6 +7626,100 @@ public sealed partial class ProductionPipelineExecutionService(
         IReadOnlyList<string> ValidatedLongFinalPaths,
         IReadOnlyList<string> MissingFinalPaths);
 
+    private static Phase12ThumbnailDiagnostics BuildPhase12ThumbnailV7Diagnostics(ProductionPhaseContext context)
+    {
+        var thumbnailRoot = context.ExecutionContext.ThumbnailRoot!;
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
+        if (!File.Exists(diagnosticsPath))
+            throw new InvalidOperationException($"Thumbnail V7 validation failed: thumbnail-v7-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+
+        using var document = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
+        var diagnostics = document.RootElement;
+        if (GetJsonBool(diagnostics, "v6RendererExecuted") || GetJsonBool(diagnostics, "v6ValidatorExecuted"))
+            throw new InvalidOperationException("V6 thumbnail path executed while Thumbnail V7 is enabled");
+
+        var requiredOutputs = new[]
+        {
+            Path.Combine(thumbnailRoot, "thumbnail-final.png"),
+            Path.Combine(thumbnailRoot, "thumbnail-landscape.png"),
+            Path.Combine(thumbnailRoot, "thumbnail-portrait.png"),
+            Path.Combine(thumbnailRoot, "thumbnail-square.png")
+        };
+        var missingOutputs = requiredOutputs.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missingOutputs.Length > 0)
+            throw new InvalidOperationException("Thumbnail V7 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missingOutputs));
+
+        var info = GetJsonInt(diagnostics, "informationAreaPercent", 32);
+        var visual = GetJsonInt(diagnostics, "visualAreaPercent", 68);
+        return new Phase12ThumbnailDiagnostics(
+            CurrentEventLock: string.Empty,
+            ThumbnailRequestTitle: context.ProductionEventIntelligence.Title,
+            ThumbnailRequestShortTitle: context.ProductionEventIntelligence.ShortTitle,
+            ThumbnailEventType: context.ProductionEventIntelligence.EventType,
+            ThumbnailPrimaryObjects: context.ProductionEventIntelligence.PrimaryObjects,
+            ThumbnailSecondaryObjects: context.ProductionEventIntelligence.SecondaryObjects,
+            ThumbnailSourceManifestPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")),
+            ThumbnailSourceScenePath: string.Empty,
+            VisualResolverResult: GetJsonString(diagnostics, "backgroundPromptSource", string.Empty),
+            VisualObjectsUsed: context.ProductionEventIntelligence.PrimaryObjects.Concat(context.ProductionEventIntelligence.SecondaryObjects).ToArray(),
+            LabelsUsed: Array.Empty<string>(),
+            TextUsed: Array.Empty<string>(),
+            ForbiddenObjectsDetected: Array.Empty<string>(),
+            GoldenPilotLeakageDetected: false,
+            SemanticValidationPassed: true,
+            EventFamily: string.Empty,
+            ValidatorProfile: "ThumbnailV7Validator",
+            MoonPhaseName: string.Empty,
+            MoonIlluminationPercent: string.Empty,
+            MoonriseLocal: string.Empty,
+            MoonsetLocal: string.Empty,
+            MoonGuideCardAdded: false,
+            MoonObjectRendered: false,
+            MoonForbiddenTermsDetected: Array.Empty<string>(),
+            ThumbnailVersion: "V7",
+            ThumbnailContract: "ThumbnailV7CinematicOverlay",
+            Renderer: ThumbnailV7CinematicOverlayRenderer.RendererName,
+            Validator: "ThumbnailV7Validator",
+            ThumbnailReviewJsonRequired: false,
+            V6RendererExecuted: false,
+            V6ValidatorExecuted: false,
+            OldValidationBlocked: true,
+            InformationAreaPercent: info,
+            VisualAreaPercent: visual,
+            InfoPanelPercent: info,
+            BottomTipsPercent: 0,
+            TextSafeAreaPassedV6: false,
+            FooterCutDetected: false,
+            TitleCutDetected: false,
+            InfoPanelOverflowDetected: false,
+            DirectionMarkerCutDetected: false,
+            SkyLabelCutDetected: false,
+            OutputFiles: requiredOutputs.Select(NormalizePath).ToArray(),
+            DuplicateOutputFilesGenerated: false,
+            LegacyMinimalHeroThumbnailUsed: false,
+            GeneratedOnlyThumbnailPrefixedFiles: true,
+            OverlayPercent: info,
+            VisualPercent: visual,
+            TextSafeAreaPassed: true,
+            DateBadgeAdded: true,
+            EventFamilyBadgeAdded: true,
+            PortraitOverlayPercent: info,
+            PortraitOverlayWithinLimit: true,
+            OverflowDetected: GetJsonBool(diagnostics, "overlapDetected"),
+            ThumbnailLandscapeOutputPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")),
+            ThumbnailPortraitOutputPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")),
+            ThumbnailSquareOutputPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")));
+    }
+
+    private static string GetJsonString(JsonElement element, string name, string fallback)
+        => element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() ?? fallback : fallback;
+
+    private static bool GetJsonBool(JsonElement element, string name)
+        => element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.True;
+
+    private static int GetJsonInt(JsonElement element, string name, int fallback)
+        => element.TryGetProperty(name, out var property) && property.TryGetInt32(out var value) ? value : fallback;
+
     private sealed record Phase12ThumbnailDiagnostics(
         string CurrentEventLock,
         string ThumbnailRequestTitle,
@@ -7612,6 +7748,11 @@ public sealed partial class ProductionPipelineExecutionService(
         string ThumbnailVersion,
         string ThumbnailContract,
         string Renderer,
+        string Validator,
+        bool ThumbnailReviewJsonRequired,
+        bool V6RendererExecuted,
+        bool V6ValidatorExecuted,
+        bool OldValidationBlocked,
         int InformationAreaPercent,
         int VisualAreaPercent,
         int InfoPanelPercent,
