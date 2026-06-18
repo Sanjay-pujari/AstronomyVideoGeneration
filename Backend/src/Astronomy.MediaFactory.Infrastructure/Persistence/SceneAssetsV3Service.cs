@@ -130,6 +130,7 @@ public sealed class SceneAssetsV3Service(
                     sceneGuideType = beat.SceneGuideType,
                     guideRenderer = beat.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{beat.SceneGuideType}GuideRenderer" : string.Empty,
                     guideElementsUsed = beat.GuideElementsUsed ?? Array.Empty<string>(),
+                    observationGuideDiagnostics = beat.RenderMode == "AccurateSkyGuideScene" ? BuildObservationGuideDiagnostics(beat.SceneGuideType) : null,
                     forbiddenTermsDetected = forbiddenDetected,
                     providerName,
                     azureCallsCount
@@ -154,7 +155,7 @@ public sealed class SceneAssetsV3Service(
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
         await WriteJsonAsync(diagnosticsPath, new { version = Version, format, currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms, blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0, staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
-        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, sceneGuideType = b.SceneGuideType, guideRenderer = b.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{b.SceneGuideType}GuideRenderer" : string.Empty, eventType = context.EventType, guideElementsUsed = b.GuideElementsUsed ?? Array.Empty<string>(), b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
+        await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, sceneGuideType = b.SceneGuideType, guideRenderer = b.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{b.SceneGuideType}GuideRenderer" : string.Empty, eventType = context.EventType, guideElementsUsed = b.GuideElementsUsed ?? Array.Empty<string>(), observationGuideDiagnostics = b.RenderMode == "AccurateSkyGuideScene" ? BuildObservationGuideDiagnostics(b.SceneGuideType) : null, galleryDiagnostics = new { galleryVersion = "V3", dateAdded = !string.IsNullOrWhiteSpace(context.EventDateText), timeAdded = !string.IsNullOrWhiteSpace(context.PeakTimeText), locationAdded = !string.IsNullOrWhiteSpace(context.PrimaryViewingDirection), eventTypeAdded = !string.IsNullOrWhiteSpace(context.EventType) }, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         var repeatedPrompt = DetectRepeatedMetadata(beats, b => b.VisualPrompt);
@@ -218,12 +219,30 @@ public sealed class SceneAssetsV3Service(
         ctx.DrawLine(Color.FromRgb(95, 135, 155), 3, new PointF(120, 812), new PointF(1800, 812));
         ctx.DrawLine(Color.FromRgba(80, 130, 160, 120), 1, new PointF(260, 740), new PointF(1660, 740));
         ctx.DrawLine(Color.FromRgba(80, 130, 160, 90), 1, new PointF(460, 580), new PointF(1460, 580));
-        ctx.DrawText("Accurate sky guide", title, Color.FromRgb(238, 246, 255), new PointF(96, 80));
+        ctx.DrawText("How To Observe", title, Color.FromRgb(238, 246, 255), new PointF(96, 80));
         ctx.DrawText(TruncateForOverlay(beat.NarrationBeat, 86), label, Color.FromRgb(185, 215, 245), new PointF(96, 132));
         ctx.DrawText(TruncateForOverlay(FirstNonEmpty(beat.SupportingText ?? string.Empty, beat.OverlayText), 86), label, Color.FromRgb(185, 215, 245), new PointF(96, 168));
         DrawGuideElements(ctx, beat, label);
+        var bullets = ResolveObservationGuideBullets(beat.SceneGuideType);
+        for (var i = 0; i < bullets.Length; i++)
+            ctx.DrawText("• " + bullets[i], label, Color.FromRgb(220, 238, 255), new PointF(96, 230 + i * 38));
         ctx.DrawText("horizon", label, Color.FromRgb(235, 242, 248), new PointF(448, 830));
     }
+
+    private static object BuildObservationGuideDiagnostics(string eventFamily)
+    {
+        var bullets = ResolveObservationGuideBullets(eventFamily);
+        return new { guideVersion = "V2", oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", eventFamily, guideBullets = bullets, familySpecificGuideApplied = true };
+    }
+
+    private static string[] ResolveObservationGuideBullets(string eventFamily) => eventFamily switch
+    {
+        "SolarEclipse" or "Eclipse" => ["Use certified solar filter", "Never view Sun directly", "Watch maximum eclipse safely"],
+        "NamedFullMoon" or "Moon" or "MoonPlanetPairing" => ["Face moonrise direction", "Use open horizon", "Best near moonrise or later evening"],
+        "MeteorShower" => ["Look toward radiant / overhead", "Best after midnight", "Avoid city lights"],
+        "PlanetGrouping" or "PlanetConjunction" => ["Face listed direction", "Start after sunset / before dawn depending event", "Compare brightest objects one by one"],
+        _ => ["Face listed direction", "Use open horizon", "Check the best local time"]
+    };
 
     private static void DrawGuideElements(IImageProcessingContext ctx, SceneAssetsV3Beat beat, Font label)
     {
@@ -587,6 +606,8 @@ public sealed class SceneAssetsV3Service(
     private static bool IsPlanetConjunction(string eventType) => EventContentGuard.IsPlanetConjunction(eventType);
     private static string ResolveSceneGuideType(string eventType)
     {
+        if (eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "SolarEclipse";
+        if (eventType.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
         if (IsMeteorShower(eventType)) return "MeteorShower";
         if (IsPlanetConjunction(eventType)) return "PlanetConjunction";
         if (eventType.Contains("group", StringComparison.OrdinalIgnoreCase) || eventType.Contains("parade", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";

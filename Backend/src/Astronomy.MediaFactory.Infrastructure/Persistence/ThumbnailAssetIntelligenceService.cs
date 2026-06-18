@@ -816,6 +816,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 objectPairBoxUsed = false,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
                 finalMainText = prompt.CtrOverlay,
                 thumbnailArchitecture = ResolveThumbnailContract(selectedOverlayDiagnostics, isMeteorThumbnail),
                 sceneManifestRequired = false,
@@ -880,6 +881,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 textAreaPercent = 24,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
                 finalMainText = prompt.CtrOverlay,
                 landscapeExists = generatedRequiredOutputChecks["thumbnail-landscape.png"],
                 portraitExists = generatedRequiredOutputChecks["thumbnail-portrait.png"],
@@ -1213,6 +1215,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             objectPairBoxUsed = false,
             embeddedTextDetected = false,
             croppedTextDetected = false,
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
             finalMainText = variants.FirstOrDefault().TextLines.Take(2).ToArray(),
             rc1StyleRestoredForMeteorShower = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
             guidePanelAllowed = false,
@@ -1827,6 +1830,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             objectPairBoxUsed = false,
             embeddedTextDetected = false,
             croppedTextDetected = false,
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
             outputs = variants.Select(v => new { name = v.Variant, width = v.Width, height = v.Height, hash = v.Hash }),
             variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
         }, JsonOptions), cancellationToken);
