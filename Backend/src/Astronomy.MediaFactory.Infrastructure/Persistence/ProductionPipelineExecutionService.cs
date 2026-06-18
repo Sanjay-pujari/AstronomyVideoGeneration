@@ -1904,14 +1904,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, cancellationToken);
             throw;
         }
     }
@@ -1929,11 +1929,13 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var files = new List<string>();
         var manifestItems = new List<object>();
+        var narrationFileWriteTrace = new List<NarrationFileWriteTraceEntry>();
         var cleanupService = new NarrationCleanupService();
         var cleanedNarrationFiles = new List<string>();
         var longNarrationV3Items = BuildLongDocumentaryNarrationV3Items(longItems);
-        var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
-        var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, cancellationToken);
+        var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
+        var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
+        var narrationFileWriteDiagnostics = ValidateNarrationFileWriteTrace(narrationFileWriteTrace, shortItems.Count + longNarrationV3Items.Count);
 
         var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
         var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
@@ -2032,10 +2034,16 @@ public sealed partial class ProductionPipelineExecutionService(
             sceneLevelAdapter = documentaryNarration.AdapterDiagnostics,
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
+            narrationFileWriteCount = narrationFileWriteDiagnostics.NarrationFileWriteCount,
+            duplicateNarrationFileWrites = narrationFileWriteDiagnostics.DuplicateNarrationFileWrites,
+            overwrittenNarrationFiles = narrationFileWriteDiagnostics.OverwrittenNarrationFiles,
+            appendedNarrationFiles = narrationFileWriteDiagnostics.AppendedNarrationFiles,
+            fallbackNarrationTextInjected = narrationFileWriteDiagnostics.FallbackNarrationTextInjected,
+            narrationFileWriteTrace = narrationFileWriteTrace,
             files = manifestItems
         }, JsonOptions), cancellationToken);
 
-        return new NarrationOutputLayerResult(narrationRoot, manifestPath, files);
+        return new NarrationOutputLayerResult(narrationRoot, manifestPath, files, narrationFileWriteDiagnostics, narrationFileWriteTrace);
     }
 
     private static string SelectFirstNarrationOutputFile(IReadOnlyList<string> files, string format)
@@ -2259,7 +2267,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return "PlanetGrouping";
     }
 
-    private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, List<NarrationFileWriteTraceEntry> writeTrace, CancellationToken cancellationToken)
     {
         var written = new List<string>();
         foreach (var item in items)
@@ -2269,6 +2277,9 @@ public sealed partial class ProductionPipelineExecutionService(
             cleanupService.ValidateClean(cleanup.CleanedText);
             if (ContainsAuthoringInstructionText(cleanup.CleanedText))
                 throw new InvalidOperationException($"Phase 14 final narration text contains authoring instructions: {format}:{item.SceneId}");
+            var existedBeforeWrite = File.Exists(path);
+            var traceEntry = BuildNarrationFileWriteTraceEntry(path, item, format, writeTrace.Count + 1, cleanup.CleanedText, existedBeforeWrite);
+            writeTrace.Add(traceEntry);
             await File.WriteAllTextAsync(path, cleanup.CleanedText, cancellationToken);
             files.Add(path);
             cleanedNarrationFiles.Add(path);
@@ -2286,6 +2297,54 @@ public sealed partial class ProductionPipelineExecutionService(
             });
         }
         return written;
+    }
+
+
+    private static NarrationFileWriteTraceEntry BuildNarrationFileWriteTraceEntry(string path, SceneAudioSyncItem item, string format, int writeOrder, string content, bool existedBeforeWrite)
+        => new(
+            NormalizePath(path),
+            item.SceneId,
+            format,
+            "SceneLevelNarrationComposer",
+            existedBeforeWrite ? "Overwrite" : "Create",
+            writeOrder,
+            Preview(content, 180),
+            content.Contains("centers on", StringComparison.OrdinalIgnoreCase),
+            content.Contains("Moon names are cultural memory", StringComparison.OrdinalIgnoreCase),
+            "SceneLevelNarrationComposer",
+            string.IsNullOrWhiteSpace(item.SourceNarrationStrategy) ? "SceneLevelNarrationComposer" : item.SourceNarrationStrategy);
+
+    private static NarrationFileWriteDiagnostics ValidateNarrationFileWriteTrace(IReadOnlyList<NarrationFileWriteTraceEntry> writeTrace, int expectedWriteCount)
+    {
+        var duplicateWrites = writeTrace
+            .GroupBy(entry => entry.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToArray();
+        var overwrittenFiles = duplicateWrites;
+        var appendedFiles = writeTrace
+            .Where(entry => entry.WriteMode.Equals("Append", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.FilePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var fallbackInjected = writeTrace.Any(entry =>
+            !entry.WriterComponent.Equals("SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceStrategy.Contains("Fallback", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceStrategy.Contains("SceneTimelineNarrationBeat", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceStrategy.Contains("EventProductionIntelligence", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceComponent.Contains("VideoAssemblyIntelligenceService", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceComponent.Contains("DocumentaryNarrationComposer", StringComparison.OrdinalIgnoreCase));
+
+        if (writeTrace.Count != expectedWriteCount || duplicateWrites.Length > 0 || appendedFiles.Length > 0 || fallbackInjected)
+            throw new InvalidOperationException("Narration scene file overwritten after SceneLevelNarrationComposer");
+
+        return new NarrationFileWriteDiagnostics(writeTrace.Count, duplicateWrites, overwrittenFiles, appendedFiles, fallbackInjected);
+    }
+
+    private static string Preview(string text, int maxLength)
+    {
+        var normalized = Regex.Replace(text ?? string.Empty, "\\s+", " ").Trim();
+        return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
     }
 
     private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
@@ -2902,7 +2961,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -2933,6 +2992,12 @@ public sealed partial class ProductionPipelineExecutionService(
             scenePurposeBySceneId = adapterDiagnostics?.ScenePurposeBySceneId,
             outputNarrationFiles = adapterDiagnostics?.OutputNarrationFiles,
             srtFilesGenerated = adapterDiagnostics?.SrtFilesGenerated,
+            narrationFileWriteCount = writeDiagnostics?.NarrationFileWriteCount ?? 0,
+            duplicateNarrationFileWrites = writeDiagnostics?.DuplicateNarrationFileWrites ?? Array.Empty<string>(),
+            overwrittenNarrationFiles = writeDiagnostics?.OverwrittenNarrationFiles ?? Array.Empty<string>(),
+            appendedNarrationFiles = writeDiagnostics?.AppendedNarrationFiles ?? Array.Empty<string>(),
+            fallbackNarrationTextInjected = writeDiagnostics?.FallbackNarrationTextInjected ?? false,
+            narrationFileWriteTrace = writeTrace ?? Array.Empty<NarrationFileWriteTraceEntry>(),
             narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
             sectionsExtracted = narrationDiagnostics.Select(n => n.Section).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase),
             narrationScenes = narrationDiagnostics,
@@ -3033,7 +3098,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
-    private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
+    private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace);
     private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics);
     private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, IReadOnlyDictionary<string, string> SubtitleTextSource, IReadOnlyDictionary<string, string> SubtitleTextOrigin, IReadOnlyDictionary<string, string> SceneIdOrigin, IReadOnlyDictionary<string, string> GeneratorComponent, IReadOnlyList<object> SubtitleBlocks, IReadOnlyList<SubtitleCueSource> SubtitleCueSources, int NonNarrationSubtitleCueCount, IReadOnlyList<SubtitleCueSource> NonNarrationSubtitleCues, string SrtSourceMode, bool FallbackSubtitleSourcesDisabled, bool EventProductionIntelligenceUsedForSrt, bool VideoAssemblyIntelligenceUsedForSrt, bool DocumentaryNarrationComposerUsedForSrt, string GeneratedSrtPreview, object Timing);
     private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyList<string> DuplicateSubtitleSourceScenes, IReadOnlyList<string> DuplicateSubtitleSourceFiles, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors, string SrtPreservationValidationMode, int CleanNarrationNormalizedLength, int SrtNormalizedLength, bool SrtPreservesNarration, IReadOnlyList<string> SrtMissingSceneTexts, IReadOnlyList<string> SrtExtraUnexpectedTexts, string SrtComparisonFailureReason);
@@ -3043,6 +3108,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics);
     private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
+    private sealed record NarrationFileWriteTraceEntry(string FilePath, string SceneId, string Format, string WriterComponent, string WriteMode, int WriteOrder, string ContentPreview, bool ContainsCentersOn, bool ContainsMoonNamesCulturalMemory, string SourceComponent, string SourceStrategy);
+    private sealed record NarrationFileWriteDiagnostics(int NarrationFileWriteCount, IReadOnlyList<string> DuplicateNarrationFileWrites, IReadOnlyList<string> OverwrittenNarrationFiles, IReadOnlyList<string> AppendedNarrationFiles, bool FallbackNarrationTextInjected);
 
 
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsTimelineV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
