@@ -45,16 +45,30 @@ public class ThumbnailV7CinematicOverlayRenderer
         var composition = _composer.Compose(plan);
         var writes = new List<ThumbnailV7OutputWrite>();
         var backgroundPath = Path.Combine(thumbnailRoot, "v7-background.png");
+        var normalizedBackgroundPath = NormalizePath(backgroundPath);
+        var sceneKey = "ThumbnailV7Background";
         ThumbnailV7AzureImage2GenerationResult azureResult = new(false, false, 0, 0, "Azure Image2 generator was not provided to Thumbnail V7 renderer.");
-        Console.WriteLine("[ThumbnailV7] Azure Image2 prompt:");
-        Console.WriteLine(backgroundPrompt);
-        Console.WriteLine($"[ThumbnailV7] Azure Image2 output path: {NormalizePath(backgroundPath)}");
+        LogThumbnailV7BackgroundTrace(
+            renderer: RendererName,
+            backgroundPrompt: backgroundPrompt,
+            azureImage2Call: "Pending",
+            backgroundImagePath: normalizedBackgroundPath,
+            fileExists: File.Exists(backgroundPath),
+            fileSize: GetFileSize(backgroundPath),
+            sceneKey: sceneKey);
         if (_azureImage2Generator is not null)
             azureResult = await _azureImage2Generator(backgroundPrompt, backgroundPath, cancellationToken);
         var backgroundFileExists = File.Exists(backgroundPath);
+        var backgroundFileSize = GetFileSize(backgroundPath);
         var backgroundGenerated = azureResult.ProviderSucceeded && backgroundFileExists;
-        Console.WriteLine($"[ThumbnailV7] Background file exists: {backgroundFileExists.ToString().ToLowerInvariant()}");
-        Console.WriteLine($"[ThumbnailV7] Using background path: {(backgroundGenerated ? NormalizePath(backgroundPath) : "procedural-fallback")}");
+        LogThumbnailV7BackgroundTrace(
+            renderer: RendererName,
+            backgroundPrompt: backgroundPrompt,
+            azureImage2Call: azureResult.ProviderCalled ? (azureResult.ProviderSucceeded ? "Succeeded" : $"Failed: {azureResult.FailureReason}") : "NotCalled",
+            backgroundImagePath: backgroundGenerated ? normalizedBackgroundPath : "procedural-fallback",
+            fileExists: backgroundFileExists,
+            fileSize: backgroundFileSize,
+            sceneKey: sceneKey);
 
         foreach (var variant in ThumbnailV7VariantRenderer.Variants)
         {
@@ -68,7 +82,7 @@ public class ThumbnailV7CinematicOverlayRenderer
         var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation, backgroundGenerated, !backgroundGenerated, azureResult.FailureReason, backgroundGenerated ? backgroundPath : null);
         var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
         var promptPath = Path.Combine(thumbnailRoot, "thumbnail-prompt.json");
-        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2OutputPath = NormalizePath(backgroundPath), azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, renderer = RendererName, sceneKey, backgroundPrompt, azureImage2Call = azureResult.ProviderCalled ? (azureResult.ProviderSucceeded ? "Succeeded" : "Failed") : "NotCalled", azureImage2OutputPath = normalizedBackgroundPath, backgroundImagePath = backgroundGenerated ? normalizedBackgroundPath : "procedural-fallback", fileExists = backgroundFileExists, fileSize = backgroundFileSize, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         var outputFiles = writes.Select(w => NormalizePath(w.Path)).ToList();
         if (backgroundGenerated) outputFiles.Add(NormalizePath(backgroundPath));
@@ -76,6 +90,20 @@ public class ThumbnailV7CinematicOverlayRenderer
         outputFiles.Add(NormalizePath(diagnosticsPath));
         return new ThumbnailV7Result(outputFiles, diagnosticsPath, validation);
     }
+
+    private static void LogThumbnailV7BackgroundTrace(string renderer, string backgroundPrompt, string azureImage2Call, string backgroundImagePath, bool fileExists, long fileSize, string sceneKey)
+    {
+        Console.WriteLine("[ThumbnailV7BackgroundTrace]");
+        Console.WriteLine($"Renderer={renderer}");
+        Console.WriteLine($"BackgroundPrompt={backgroundPrompt}");
+        Console.WriteLine($"AzureImage2Call={azureImage2Call}");
+        Console.WriteLine($"BackgroundImagePath={backgroundImagePath}");
+        Console.WriteLine($"FileExists={fileExists.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"FileSize={fileSize}");
+        Console.WriteLine($"SceneKey={sceneKey}");
+    }
+
+    private static long GetFileSize(string path) => File.Exists(path) ? new FileInfo(path).Length : 0;
 
     private static void CleanFinalFiles(string root)
     {
