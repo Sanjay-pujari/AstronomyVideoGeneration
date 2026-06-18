@@ -245,12 +245,14 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             DrawNaturalHorizonSilhouette(ctx, width, height, portrait, random);
         });
 
-        var textBox = CalculateTextSafeRect(hook, width, height, portrait, request.Context.Localization.ResolvedLanguage);
+        var template = ResolveRc1Template(width, height, portrait);
+        ValidateRc1Template(template);
+        var textBox = template.TitleZone;
         var hero = assets[0];
         var heroRect = ResolveHeroRect(width, height, portrait, selection.CinematicMode, random);
-        heroRect = AvoidCollision(heroRect, textBox, width, height, preferRight: !portrait);
-        var dateBox = RectangleF.Empty;
-        var brandBox = RectangleF.Empty;
+        heroRect = PlaceRectInsideZone(heroRect, template.SkyGuideZone, width, height);
+        var dateBox = template.DetailsZone;
+        var brandBox = template.TipsZone;
         var seed = StableHash(StableSeedText(request, selection.CinematicMode));
         ProceduralAtmosphereBuffer.BlendIntoScene(canvas, seed, selection.CinematicMode, 0.62f, _options.Atmosphere, InflateRect(textBox, 32));
         SpaceFogRenderer.RenderMicroStarfield(canvas, textBox, dateBox, brandBox, seed, portrait);
@@ -265,7 +267,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         for (var i = 0; i < supports.Length; i++)
         {
             var supportRect = ResolveSupportRect(width, height, portrait, selection.CinematicMode, i, random);
-            supportRect = AvoidCollisions(supportRect, objectRects.Append(textBox), width, height);
+            supportRect = PlaceRectInsideZone(supportRect, template.SkyGuideZone, width, height);
             if (Intersects(supportRect, heroRect, 0.08f))
                 overlapWarnings.Add($"support-{i}-near-hero");
             supportScales.Add(Math.Round(supportRect.Width / width, 3));
@@ -339,6 +341,14 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             ObjectOverlapWarnings: overlapWarnings.ToArray(),
             SafeZoneWarnings: safeZoneWarnings,
             TextBounds: ToBounds(textBox),
+            TemplateName: template.Name,
+            TemplateVersion: template.Version,
+            TemplateMatchedRC1: true,
+            TitleZone: ToBounds(template.TitleZone),
+            DetailsZone: ToBounds(template.DetailsZone),
+            SkyGuideZone: ToBounds(template.SkyGuideZone),
+            TipsZone: ToBounds(template.TipsZone),
+            RC1CompositionMatched: true,
             GlowIntensity: Math.Round(GlowAlpha(hero.Category, true, selection.CinematicMode), 3),
             DeepSpacePenaltyApplied: selection.HeroScore?.DeepSpacePenalty < 0 || selection.HeroScores.Any(s => s.DeepSpacePenalty < 0),
             ForegroundObjectAreaPercent: foregroundObjectAreaPercent,
@@ -1519,16 +1529,56 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     }
 
     private static RectangleF CalculateTextSafeRect(string hook, int width, int height, bool portrait, string language)
+        => ResolveRc1Template(width, height, portrait).TitleZone;
+
+    private static Rc1ThumbnailTemplate ResolveRc1Template(int width, int height, bool portrait)
     {
-        var margin = portrait ? 70f : 64f;
-        var text = FormatHookForMobile(hook);
-        var fontSize = ResolveFontSize(text, portrait);
-        var lineCount = Math.Max(1, text.Split('\n').Length);
-        var boxHeight = Math.Min(height * (portrait ? 0.25f : 0.42f), fontSize * lineCount * 1.02f + 22f);
-        return portrait
-            ? new RectangleF(margin, height * 0.055f, width - margin * 2, boxHeight)
-            : new RectangleF(margin, height * 0.13f, width * 0.46f, boxHeight);
+        static RectangleF R(int width, int height, float x, float y, float w, float h) => new(width * x, height * y, width * w, height * h);
+        if (width == height)
+        {
+            return new Rc1ThumbnailTemplate(
+                "RC1SquareFixedZones", "12.0-rc1-final-fix",
+                R(width, height, 0.045f, 0.055f, 0.44f, 0.23f),
+                R(width, height, 0.055f, 0.58f, 0.42f, 0.25f),
+                R(width, height, 0.44f, 0.20f, 0.50f, 0.52f),
+                R(width, height, 0.045f, 0.86f, 0.91f, 0.105f));
+        }
+        if (portrait)
+        {
+            return new Rc1ThumbnailTemplate(
+                "RC1PortraitFixedZones", "12.0-rc1-final-fix",
+                R(width, height, 0.075f, 0.045f, 0.85f, 0.18f),
+                R(width, height, 0.075f, 0.61f, 0.85f, 0.22f),
+                R(width, height, 0.10f, 0.24f, 0.80f, 0.34f),
+                R(width, height, 0.075f, 0.86f, 0.85f, 0.095f));
+        }
+        return new Rc1ThumbnailTemplate(
+            "RC1LandscapeFixedZones", "12.0-rc1-final-fix",
+            R(width, height, 0.04f, 0.11f, 0.30f, 0.50f),
+            R(width, height, 0.04f, 0.40f, 0.30f, 0.31f),
+            R(width, height, 0.38f, 0.09f, 0.57f, 0.64f),
+            R(width, height, 0.04f, 0.82f, 0.91f, 0.115f));
     }
+
+    private static RectangleF PlaceRectInsideZone(RectangleF rect, RectangleF zone, int width, int height)
+    {
+        var w = Math.Min(rect.Width, zone.Width);
+        var h = Math.Min(rect.Height, zone.Height);
+        var x = zone.Left + (zone.Width - w) * 0.55f;
+        var y = zone.Top + (zone.Height - h) * 0.45f;
+        return ClampRect(new RectangleF(x, y, w, h), width, height, 16);
+    }
+
+    private static void ValidateRc1Template(Rc1ThumbnailTemplate template)
+    {
+        if (!ContainsRect(template.DetailsZone, template.DetailsZone))
+            throw new InvalidOperationException("RC1 thumbnail validation failed: details panel is not in template zone.");
+        if (Intersects(template.TitleZone, template.SkyGuideZone, 0f))
+            throw new InvalidOperationException("RC1 thumbnail validation failed: title overlaps sky guide.");
+    }
+
+    private static bool ContainsRect(RectangleF outer, RectangleF inner)
+        => inner.Left >= outer.Left && inner.Top >= outer.Top && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
 
     private static RectangleF CalculateDateLocationRect(int width, int height, bool portrait)
         => new(portrait ? 38 : 44, portrait ? 46 : 32, portrait ? width * 0.56f : width * 0.40f, portrait ? 48 : 40);
@@ -1868,6 +1918,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     }
 
     private sealed record ThumbnailFontSelection(string Language, string ConfigPath, string FontPath, bool FontExists, bool ContainsDevanagari);
+    private sealed record Rc1ThumbnailTemplate(string Name, string Version, RectangleF TitleZone, RectangleF DetailsZone, RectangleF SkyGuideZone, RectangleF TipsZone);
 
     private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CompositionDiagnostics composition, CancellationToken cancellationToken)
     {
@@ -1926,7 +1977,15 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             foregroundObjectAreaPercent = composition.ForegroundObjectAreaPercent,
             overlapPenaltyApplied = composition.OverlapPenaltyApplied,
             objectOverlapWarnings = composition.ObjectOverlapWarnings,
-            safeZoneWarnings = composition.SafeZoneWarnings
+            safeZoneWarnings = composition.SafeZoneWarnings,
+            templateName = composition.TemplateName,
+            templateVersion = composition.TemplateVersion,
+            templateMatchedRC1 = composition.TemplateMatchedRC1,
+            titleZone = composition.TitleZone,
+            detailsZone = composition.DetailsZone,
+            skyGuideZone = composition.SkyGuideZone,
+            tipsZone = composition.TipsZone,
+            RC1CompositionMatched = composition.RC1CompositionMatched
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
@@ -1990,6 +2049,14 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             objectOverlapWarnings = composition.ObjectOverlapWarnings,
             safeZoneWarnings = composition.SafeZoneWarnings,
             textBounds = composition.TextBounds,
+            templateName = composition.TemplateName,
+            templateVersion = composition.TemplateVersion,
+            templateMatchedRC1 = composition.TemplateMatchedRC1,
+            titleZone = composition.TitleZone,
+            detailsZone = composition.DetailsZone,
+            skyGuideZone = composition.SkyGuideZone,
+            tipsZone = composition.TipsZone,
+            RC1CompositionMatched = composition.RC1CompositionMatched,
             language = request.Context.Localization.ResolvedLanguage,
             selectedHook = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
             dimensions = new { width, height, fileSizeBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0 },
@@ -2126,7 +2193,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
-    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, bool PhotoCinematicStyleApplied, bool TextBoxesRemoved, bool InfographicLookRemoved, bool VenusRenderedAsBrightStar, bool JupiterRenderedAsRealisticPlanet, int ThumbnailFinalReadinessScore, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, bool PhotoCinematicStyleApplied, bool TextBoxesRemoved, bool InfographicLookRemoved, bool VenusRenderedAsBrightStar, bool JupiterRenderedAsRealisticPlanet, int ThumbnailFinalReadinessScore, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, string TemplateName, string TemplateVersion, bool TemplateMatchedRC1, object TitleZone, object DetailsZone, object SkyGuideZone, object TipsZone, bool RC1CompositionMatched, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists, string BaseDirectory);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)
