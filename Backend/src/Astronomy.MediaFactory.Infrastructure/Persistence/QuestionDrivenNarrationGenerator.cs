@@ -477,7 +477,8 @@ public sealed class QuestionDrivenNarrationGenerator(
         for (var i = 0; i < scenes.Count; i++)
         {
             var scene = scenes[i];
-            var sceneId = string.IsNullOrWhiteSpace(scene.SceneId) ? $"scene-{i + 1:000}" : Regex.Replace(scene.SceneId, @"[^A-Za-z0-9_.-]+", "-").Trim('-');
+            var sceneKey = scene.SceneNumber > 0 ? $"scene-{scene.SceneNumber:000}" : $"scene-{i + 1:000}";
+            var sceneId = Regex.Replace(sceneKey, @"[^A-Za-z0-9_.-]+", "-").Trim('-');
             if (string.IsNullOrWhiteSpace(sceneId)) sceneId = $"scene-{i + 1:000}";
             var path = Path.Combine(root, $"{i + 1:000}-{sceneId}.txt");
             await File.WriteAllTextAsync(path, scene.NarrationText ?? string.Empty, cancellationToken);
