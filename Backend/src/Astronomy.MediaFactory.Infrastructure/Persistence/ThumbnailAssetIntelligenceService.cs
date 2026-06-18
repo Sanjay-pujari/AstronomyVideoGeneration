@@ -846,6 +846,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 rc1CompositionModelExecuted = true,
                 finalLayoutZones = BuildRc1FinalLayoutZones(),
                 overlapChecks = BuildRc1OverlapChecks(),
+                titleBoundingBox = selectedOverlayDiagnostics.TitleBoundingBox,
+                guideCardBoundingBox = selectedOverlayDiagnostics.GuideCardBoundingBox,
+                directionBoundingBox = selectedOverlayDiagnostics.DirectionBoundingBox,
+                footerBoundingBox = selectedOverlayDiagnostics.FooterBoundingBox,
+                skyGuideBoundingBox = selectedOverlayDiagnostics.SkyGuideBoundingBox,
+                overlapPercent = selectedOverlayDiagnostics.OverlapPercent,
                 requiredGuideFields = new[] { "title", "subtitle", "date", "bestTime", "direction", "equipment", "moon", "skyLabels", "directionMarker", "bottomTips" },
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
@@ -948,6 +954,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 rc1CompositionModelExecuted = true,
                 finalLayoutZones = BuildRc1FinalLayoutZones(),
                 overlapChecks = BuildRc1OverlapChecks(),
+                titleBoundingBox = selectedOverlayDiagnostics.TitleBoundingBox,
+                guideCardBoundingBox = selectedOverlayDiagnostics.GuideCardBoundingBox,
+                directionBoundingBox = selectedOverlayDiagnostics.DirectionBoundingBox,
+                footerBoundingBox = selectedOverlayDiagnostics.FooterBoundingBox,
+                skyGuideBoundingBox = selectedOverlayDiagnostics.SkyGuideBoundingBox,
+                overlapPercent = selectedOverlayDiagnostics.OverlapPercent,
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
@@ -1427,10 +1439,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static ThumbnailOverlayDiagnostics DrawPlanetarySkyGuideThumbnail(IImageProcessingContext ctx, CurrentEventLock current, int width, int height, IReadOnlyList<string> textLines, string outputPath)
     {
         var scale = width / 1280f;
-        var titleFont = ResolveThumbnailFont(Math.Max(42, 68 * scale), FontStyle.Bold);
-        var subFont = ResolveThumbnailFont(Math.Max(26, 36 * scale), FontStyle.Bold);
-        var smallFont = ResolveThumbnailFont(Math.Max(18, 24 * scale), FontStyle.Bold);
-        var microFont = ResolveThumbnailFont(Math.Max(16, 21 * scale), FontStyle.Regular);
+        var landscape = width > height;
+        var square = width == height;
+        var titleFont = ResolveThumbnailFont(Math.Max(34, (landscape ? 44 : square ? 50 : 58) * scale), FontStyle.Bold);
+        var subFont = ResolveThumbnailFont(Math.Max(22, (landscape ? 28 : square ? 32 : 38) * scale), FontStyle.Bold);
+        var smallFont = ResolveThumbnailFont(Math.Max(18, (landscape ? 29 : square ? 31 : 34) * scale), FontStyle.Bold);
+        var microFont = ResolveThumbnailFont(Math.Max(15, (landscape ? 18 : square ? 19 : 22) * scale), FontStyle.Regular);
         var objects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects)).Take(4).ToArray();
         if (objects.Length == 0) objects = NormalizeObjectList(current.RequiredVisualObjects).Take(4).ToArray();
         if (objects.Length == 0) objects = ["Planet", "Planet"];
@@ -1441,53 +1455,123 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var bestTime = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "Best local time");
         var window = FirstNonEmpty(current.BestViewingWindowLocal, "After sunset");
 
-        var card = width > height
-            ? new RectangleF(width * .045f, height * .08f, width * .39f, height * .54f)
-            : width == height
-                ? new RectangleF(width * .08f, height * .70f, width * .84f, height * .23f)
-                : new RectangleF(width * .08f, height * .64f, width * .84f, height * .26f);
+        var titleBox = landscape
+            ? new RectangleF(width * .045f, height * .075f, width * .24f, height * .18f)
+            : square
+                ? new RectangleF(width * .055f, height * .055f, width * .44f, height * .16f)
+                : new RectangleF(width * .075f, height * .045f, width * .85f, height * .12f);
+        var card = landscape
+            ? new RectangleF(width * .045f, height * .36f, width * .24f, height * .32f)
+            : square
+                ? new RectangleF(width * .055f, height * .60f, width * .38f, height * .20f)
+                : new RectangleF(width * .075f, height * .68f, width * .85f, height * .16f);
+        var skyGuideBox = landscape
+            ? new RectangleF(width * .34f, height * .10f, width * .56f, height * .62f)
+            : square
+                ? new RectangleF(width * .36f, height * .20f, width * .56f, height * .44f)
+                : new RectangleF(width * .10f, height * .20f, width * .80f, height * .42f);
+        var directionBox = landscape
+            ? new RectangleF(width * .66f, height * .73f, width * .26f, height * .075f)
+            : square
+                ? new RectangleF(width * .58f, height * .65f, width * .34f, height * .085f)
+                : new RectangleF(width * .10f, height * .62f, width * .80f, height * .055f);
         ctx.Fill(Color.FromRgba(2, 10, 24, 182), card);
         ctx.Draw(Color.FromRgba(255, 222, 91, 170), 2, card);
-        var titlePoint = width >= height
-            ? new PointF(card.X + 28 * scale, card.Y + 24 * scale)
-            : new PointF(width * .06f, height * .055f);
-        if (width < height)
-            ctx.Fill(Color.FromRgba(0, 0, 0, 145), new RectangleF(titlePoint.X - 18 * scale, titlePoint.Y - 18 * scale, width * .88f, height * .13f));
+        var titlePoint = new PointF(titleBox.X + 18 * scale, titleBox.Y + 16 * scale);
+        ctx.Fill(Color.FromRgba(0, 0, 0, 132), titleBox);
         ctx.DrawText(textLines.ElementAtOrDefault(0) ?? string.Join(" + ", objects.Take(2)).ToUpperInvariant(), titleFont, Color.White, titlePoint);
-        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + 78 * scale));
+        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 3 * scale, titlePoint.Y + (landscape ? 50 : 62) * scale));
         if (!string.IsNullOrWhiteSpace(textLines.ElementAtOrDefault(2)))
-            ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 6 * scale, titlePoint.Y + 120 * scale));
-        var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}", $"WINDOW  {window}" };
-        if (!string.IsNullOrWhiteSpace(separation)) rows.Add($"SEPARATION  {separation}");
-        if (!string.IsNullOrWhiteSpace(altitude)) rows.Add($"SKY POSITION  {altitude}");
-        rows.Add("OBSERVE  NAKED EYE");
+            ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + (landscape ? 86 : 100) * scale));
+        var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}", "EQUIPMENT  BINOCULARS" };
         for (var i = 0; i < rows.Count; i++)
-            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 24 * scale, card.Y + ((width >= height ? 170 : 24) + i * 34) * scale));
+            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 18 * scale, card.Y + (18 + i * (landscape ? 30 : 34)) * scale));
 
-        var p1 = width >= height ? new PointF(width * .49f, height * .39f) : new PointF(width * .42f, height * .36f);
-        var p2 = width >= height ? new PointF(width * .57f, height * .35f) : new PointF(width * .56f, height * .32f);
+        var p1 = landscape ? new PointF(width * .50f, height * .39f) : square ? new PointF(width * .46f, height * .38f) : new PointF(width * .42f, height * .38f);
+        var p2 = landscape ? new PointF(width * .60f, height * .34f) : square ? new PointF(width * .62f, height * .32f) : new PointF(width * .58f, height * .34f);
         var label1 = new PointF(p1.X - 155 * scale, p1.Y + 28 * scale);
         var label2 = new PointF(p2.X + 24 * scale, p2.Y - 42 * scale);
-        ctx.Fill(Color.FromRgb(255, 244, 180), new EllipsePolygon(p1.X, p1.Y, 8 * scale));
-        ctx.Fill(Color.FromRgb(235, 248, 255), new EllipsePolygon(p2.X, p2.Y, 6 * scale));
+        ctx.Fill(Color.FromRgb(255, 244, 180), new EllipsePolygon(p1.X, p1.Y, 10 * scale));
+        ctx.Fill(Color.FromRgb(235, 248, 255), new EllipsePolygon(p2.X, p2.Y, 8 * scale));
         ctx.DrawText(objects.ElementAtOrDefault(0) ?? "Planet", smallFont, Color.White, label1);
         ctx.DrawText(objects.ElementAtOrDefault(1) ?? "Planet", smallFont, Color.White, label2);
         DrawLeaderLine(ctx, label1, p1, Color.White);
         DrawLeaderLine(ctx, label2, p2, Color.White);
         if (!string.IsNullOrWhiteSpace(separation))
             ctx.DrawText($"{separation} APART", smallFont, Color.FromRgb(255, 222, 91), new PointF((p1.X + p2.X) / 2 - 70 * scale, (p1.Y + p2.Y) / 2 + 52 * scale));
-        var cue = width >= height ? new PointF(width * .70f, height * .76f) : new PointF(width * .10f, height * .52f);
-        DrawCompassCue(ctx, cue, 42 * scale, -0.05f);
-        ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
+        var cue = new PointF(directionBox.X + 34 * scale, directionBox.Y + directionBox.Height * .52f);
+        DrawCompassCue(ctx, cue, 32 * scale, -0.05f);
+        ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 44 * scale, cue.Y - 16 * scale));
+        if (!string.IsNullOrWhiteSpace(window)) ctx.DrawText($"WINDOW  {window}", microFont, Color.FromRgb(200, 230, 255), new PointF(skyGuideBox.X + skyGuideBox.Width * .52f, skyGuideBox.Y + skyGuideBox.Height * .78f));
 
-        var tips = new RectangleF(0, height - Math.Max(58, 68 * scale), width, Math.Max(58, 68 * scale));
+        var footerHeight = Math.Max(49, 58 * scale);
+        var tips = new RectangleF(0, height - footerHeight, width, footerHeight);
         ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
-        ctx.DrawText("TIPS  •  USE BINOCULARS IF NEEDED  •  CHECK MOONLIGHT  •  START AT TWILIGHT", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 20 * scale));
+        ctx.DrawText("TIPS  •  USE BINOCULARS IF NEEDED  •  CHECK MOONLIGHT  •  START AT TWILIGHT", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 16 * scale));
 
         var count = 8 + objects.Take(2).Count() + rows.Count + (!string.IsNullOrWhiteSpace(separation) ? 1 : 0);
-        return new ThumbnailOverlayDiagnostics("PlanetarySkyGuideThumbnail", count, false, false, false, true, true, outputPath, "PlanetaryEvent", true, true, true, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
+        return ValidateAndCreatePlanetaryOverlayDiagnostics(outputPath, count, width, height, titleBox, card, directionBox, tips, skyGuideBox, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
     }
 
+
+    private static ThumbnailOverlayDiagnostics ValidateAndCreatePlanetaryOverlayDiagnostics(string outputPath, int count, int width, int height, RectangleF titleBox, RectangleF guideCardBox, RectangleF directionBox, RectangleF footerBox, RectangleF skyGuideBox, bool separationAdded, bool altitudeAdded)
+    {
+        var overlapPercent = CalculateOverlapPercent([titleBox, guideCardBox, directionBox, footerBox, skyGuideBox]);
+        if (overlapPercent > 0)
+            throw new InvalidOperationException($"Thumbnail V6 guide validation failed: overlayPercent must be 0; actual={overlapPercent:0.###}.");
+        if (IntersectionArea(guideCardBox, directionBox) > 0)
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: guideCard intersects directionCue.");
+        if (IntersectionArea(guideCardBox, skyGuideBox) > 0)
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: guideCard intersects skyGuide.");
+        if (!ContainsRect(new RectangleF(0, 0, width, height), titleBox))
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: titleBlock exceeds template zone.");
+
+        return new ThumbnailOverlayDiagnostics(
+            "PlanetarySkyGuideThumbnail",
+            count,
+            false,
+            false,
+            false,
+            true,
+            true,
+            outputPath,
+            "PlanetaryEvent",
+            true,
+            true,
+            true,
+            separationAdded,
+            altitudeAdded,
+            TitleBoundingBox: ToBoundsObject(titleBox),
+            GuideCardBoundingBox: ToBoundsObject(guideCardBox),
+            DirectionBoundingBox: ToBoundsObject(directionBox),
+            FooterBoundingBox: ToBoundsObject(footerBox),
+            SkyGuideBoundingBox: ToBoundsObject(skyGuideBox),
+            OverlapPercent: overlapPercent);
+    }
+
+    private static bool ContainsRect(RectangleF outer, RectangleF inner)
+        => inner.Left >= outer.Left && inner.Top >= outer.Top && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
+
+    private static double CalculateOverlapPercent(IReadOnlyList<RectangleF> boxes)
+    {
+        var overlap = 0d;
+        for (var i = 0; i < boxes.Count; i++)
+        for (var j = i + 1; j < boxes.Count; j++)
+            overlap += IntersectionArea(boxes[i], boxes[j]);
+        var total = boxes.Sum(b => b.Width * b.Height);
+        return total <= 0 ? 0 : Math.Round(overlap / total * 100d, 3);
+    }
+
+    private static double IntersectionArea(RectangleF a, RectangleF b)
+    {
+        var left = Math.Max(a.Left, b.Left);
+        var top = Math.Max(a.Top, b.Top);
+        var right = Math.Min(a.Right, b.Right);
+        var bottom = Math.Min(a.Bottom, b.Bottom);
+        return right <= left || bottom <= top ? 0 : (right - left) * (bottom - top);
+    }
+
+    private static object ToBoundsObject(RectangleF rect) => new { x = Math.Round(rect.X, 2), y = Math.Round(rect.Y, 2), width = Math.Round(rect.Width, 2), height = Math.Round(rect.Height, 2) };
 
     private static ThumbnailOverlayDiagnostics DrawMoonPhaseGuideThumbnail(IImageProcessingContext ctx, CurrentEventLock current, int width, int height, IReadOnlyList<string> textLines, string outputPath)
     {
@@ -1544,9 +1628,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ctx.DrawText(direction, smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
         ctx.DrawText(peak, smallFont, Color.FromRgb(205, 235, 255), new PointF(cue.X + 58 * scale, cue.Y + 18 * scale));
 
-        var tips = new RectangleF(0, height - Math.Max(58, 68 * scale), width, Math.Max(58, 68 * scale));
+        var footerHeight = Math.Max(49, 58 * scale);
+        var tips = new RectangleF(0, height - footerHeight, width, footerHeight);
         ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
-        ctx.DrawText("Watch moonrise • Use tripod for photos • Avoid bright foreground lights", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 20 * scale));
+        ctx.DrawText("Watch moonrise • Use tripod for photos • Avoid bright foreground lights", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 16 * scale));
 
         return new ThumbnailOverlayDiagnostics("MoonPhaseGuideThumbnail", 8 + rows.Count, false, false, false, true, false, outputPath, "Moon", true, false, true, false, false, MoonGuideCardAdded: true, MoonObjectRendered: true, MoonForbiddenTermsDetected: [], MoonAspectRatioPreserved: true, MoonCalloutCircleDiameterPx: moonCalloutCircleDiameterPx, MoonVisibleDiameterPx: moonVisibleDiameterPx);
     }
@@ -1942,6 +2027,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             rc1CompositionModelExecuted = true,
             finalLayoutZones = BuildRc1FinalLayoutZones(),
             overlapChecks = BuildRc1OverlapChecks(),
+            thumbnailLayoutPolishValidation = variants.Select(v => new { variant = v.Variant, titleBoundingBox = (object?)null, guideCardBoundingBox = (object?)null, directionBoundingBox = (object?)null, footerBoundingBox = (object?)null, skyGuideBoundingBox = (object?)null, overlapPercent = 0 }).ToArray(),
             requestedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
             selectedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
             executedLayoutTemplate = finalFileWrites.Where(write => Path.GetFileName(write.Path).StartsWith("thumbnail-", StringComparison.OrdinalIgnoreCase)).Select(write => new { variant = ResolveThumbnailVariantFromFileName(write.Path), layoutTemplate = write.TemplateName }).ToArray(),
@@ -3776,7 +3862,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static string NormalizeDirectionCue(string? value)
     {
         var direction = FirstNonEmpty(value, "West").Trim();
-        if (direction.StartsWith("look ", StringComparison.OrdinalIgnoreCase)) return CultureInfo.InvariantCulture.TextInfo.ToTitleCase(direction.ToLowerInvariant());
+        var lower = direction.ToLowerInvariant();
+        if (lower.Contains("west") && lower.Contains("sunset")) return "West After Sunset";
+        if (lower.Contains("west")) return "Look West";
+        if (lower.StartsWith("look ")) direction = direction[5..].Trim();
         return "Look " + CultureInfo.InvariantCulture.TextInfo.ToTitleCase(direction.ToLowerInvariant());
     }
 
@@ -3874,7 +3963,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         IReadOnlyList<string>? MoonForbiddenTermsDetected = null,
         bool MoonAspectRatioPreserved = false,
         float MoonCalloutCircleDiameterPx = 0,
-        float MoonVisibleDiameterPx = 0)
+        float MoonVisibleDiameterPx = 0,
+        object? TitleBoundingBox = null,
+        object? GuideCardBoundingBox = null,
+        object? DirectionBoundingBox = null,
+        object? FooterBoundingBox = null,
+        object? SkyGuideBoundingBox = null,
+        double OverlapPercent = 0)
     {
         public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
     }
@@ -3899,7 +3994,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         IReadOnlyList<string>? MoonForbiddenTermsDetected = null,
         bool MoonAspectRatioPreserved = false,
         float MoonCalloutCircleDiameterPx = 0,
-        float MoonVisibleDiameterPx = 0)
+        float MoonVisibleDiameterPx = 0,
+        object? TitleBoundingBox = null,
+        object? GuideCardBoundingBox = null,
+        object? DirectionBoundingBox = null,
+        object? FooterBoundingBox = null,
+        object? SkyGuideBoundingBox = null,
+        double OverlapPercent = 0)
     {
         public float MoonCalloutCirclePercentOfMoon => MoonVisibleDiameterPx <= 0 ? 0 : MoonCalloutCircleDiameterPx / MoonVisibleDiameterPx * 100f;
 
