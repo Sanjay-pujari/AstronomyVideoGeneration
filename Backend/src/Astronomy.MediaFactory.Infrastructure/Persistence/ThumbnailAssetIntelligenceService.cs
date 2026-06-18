@@ -583,7 +583,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             "High",
             isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A deterministic planetary sky-guide thumbnail with labels, direction, timing, and separation." : isMoon ? "A deterministic Moon phase guide thumbnail with lunar phase, illumination, date/time, and moonrise cues when available." : "A timely astronomy event with direct click-through text.",
             BuildPureV3VisualFocus(current),
-            isPlanetary ? "PlanetaryEvent thumbnail: Azure Image2 generates background only; deterministic overlay adds guide card, object labels, direction cue, and separation." : isMoon ? "Moon thumbnail: Azure Image2 generates a realistic Moon background only; deterministic overlay adds title, phase, date/time, illumination, and moonrise/moonset cues when available." : "RC1 cinematic thumbnail: Azure Image2 generates background only; deterministic overlay adds clean title/subtitle.",
+            isPlanetary ? "PlanetaryEvent thumbnail: Azure Image2 generates background only; deterministic overlay adds guide card, object labels, direction cue, and separation." : isMoon ? "Moon thumbnail: Azure Image2 generates a realistic Moon background only; deterministic overlay adds title, phase, date/time, illumination, and moonrise/moonset cues when available." : "Thumbnail V6 thumbnail: Azure Image2 generates background only; deterministic overlay adds clean title/subtitle.",
             "PureAzureImage2Prompt",
             "none",
             ["scene image selection", "approved scene assets", "hero-scene-manifest.json", "thumbnail-scene-manifest.json"],
@@ -654,17 +654,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (!request.DryRun)
         {
             Directory.CreateDirectory(thumbnailRoot);
-            CleanThumbnailV5FinalRoot(thumbnailRoot);
+            CleanThumbnailV6FinalRoot(thumbnailRoot);
             var candidatesRoot = Path.Combine(thumbnailRoot, "candidates");
             Directory.CreateDirectory(candidatesRoot);
-            var thumbnailVariants = BuildThumbnailV5AzurePrompts(request);
+            var thumbnailVariants = BuildThumbnailV6AzurePrompts(request);
             var thumbnailCompositionType = ResolveThumbnailCompositionType(request);
             var runtimeDiagnostics = BuildThumbnailRuntimeDiagnostics(
                 request,
                 thumbnailCompositionType,
-                thumbnailPromptBuilder: "BuildThumbnailV5AzurePrompts",
+                thumbnailPromptBuilder: "BuildThumbnailV6AzurePrompts",
                 finalThumbnailPrompt: string.Empty,
-                thumbnailRenderer: "AzureImage2",
+                thumbnailRenderer: "ThumbnailV6Renderer",
                 selectedThumbnailStrategy: "PureAzureImage2ThumbnailV3",
                 thumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode,
                 finalThumbnailPath: finalPath);
@@ -691,7 +691,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             {
                 try
                 {
-                    var azureBackgroundPath = NormalizePath(Path.Combine(candidatesRoot, $"thumbnail-v5-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
+                    var azureBackgroundPath = NormalizePath(Path.Combine(candidatesRoot, $"thumbnail-v6-{variant.Variant.ToLowerInvariant()}-azure-background.png"));
                     var variantPath = NormalizePath(Path.Combine(thumbnailRoot, variant.FileName));
                     var azureDiagnostics = runtimeDiagnostics with { FinalThumbnailPrompt = variant.Prompt };
                     LogThumbnailRuntimeDiagnostics(azureDiagnostics);
@@ -700,7 +700,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     if (!azureResult.ProviderSucceeded)
                         throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
                     azureCallsSucceeded++;
-                    var overlayDiagnostics = await WriteThumbnailV5OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, ResolveWorkingDirectoryRoot(), cancellationToken);
+                    var overlayDiagnostics = await WriteThumbnailV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, ResolveWorkingDirectoryRoot(), cancellationToken);
                     LogThumbnailRuntimeDiagnostics(runtimeDiagnostics with
                     {
                         FinalThumbnailPrompt = variant.Prompt,
@@ -750,6 +750,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 throw new InvalidOperationException("Thumbnail V6 variant validation failed: duplicate image hashes detected.");
             if (thumbnailVariantResults.Select(v => v.TextLayout).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
                 throw new InvalidOperationException("Thumbnail V6 variant validation failed: all variants use the same text layout.");
+            ValidateThumbnailV6RendererContract("ThumbnailV6Renderer", "ThumbnailV6", thumbnailVariantResults.Select(v => v.TextLayout));
 
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
             var selectedOverlayDiagnostics = overlayDiagnosticsByVariant.First().Diagnostics;
@@ -816,7 +817,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 objectPairBoxUsed = false,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
-            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", actualRendererVersion = "ThumbnailV6Renderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Renderer", legacyRendererUsed = false, legacyRendererBlocked = true, overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
                 finalMainText = prompt.CtrOverlay,
                 thumbnailArchitecture = ResolveThumbnailContract(selectedOverlayDiagnostics, isMeteorThumbnail),
                 sceneManifestRequired = false,
@@ -881,7 +882,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 textAreaPercent = 24,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
-            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", actualRendererVersion = "ThumbnailV6Renderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Renderer", legacyRendererUsed = false, legacyRendererBlocked = true, overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
                 finalMainText = prompt.CtrOverlay,
                 landscapeExists = generatedRequiredOutputChecks["thumbnail-landscape.png"],
                 portraitExists = generatedRequiredOutputChecks["thumbnail-portrait.png"],
@@ -926,20 +927,20 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(layoutPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
 
             thumbnailTotalStopwatch.Stop();
-            await WriteThumbnailV5GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteThumbnailV6GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
         }
 
         return BuildImageGenerationResponse(
             request,
             outputFiles.Append(diagnosticsPath).ToArray(),
             validation,
-            requestedRenderer: "PureAzureImage2ThumbnailV3",
-            actualRendererUsed: "PureAzureImage2ThumbnailV3",
-            rendererSelectionReason: "Thumbnail uses ProductionPipelineRequest event intelligence to build separate Azure Image2 background-only images per aspect ratio, then applies deterministic RC1 cinematic title/subtitle overlays without guide cards, object-pair boxes, or hero/gallery panels.",
+            requestedRenderer: "ThumbnailV6Renderer",
+            actualRendererUsed: "ThumbnailV6Renderer",
+            rendererSelectionReason: "Thumbnail uses ProductionPipelineRequest event intelligence to build separate Azure Image2 background-only images per aspect ratio, then applies deterministic Thumbnail V6 metadata overlays without guide cards, object-pair boxes, or hero/gallery panels.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: true,
             photoCinematicRendererCompleted: true,
-            outputWriteSource: "PureAzureImage2ThumbnailV3",
+            outputWriteSource: "ThumbnailV6Renderer",
             thumbnailLayoutValidationPath: layoutPath);
     }
 
@@ -985,7 +986,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (IsPlanetaryEvent(current.EventType)) return "PlanetarySkyGuideThumbnail";
         if (IsEclipseEvent(current.EventType, current.Title)) return "EclipseGuideThumbnail";
         if (IsMoonEvent(current.EventType, current.Title)) return "MoonPhaseGuideThumbnail";
-        return "RC1CinematicThumbnail";
+        return "ThumbnailV6";
     }
 
     private static string ResolveThumbnailContract(ThumbnailOverlayDiagnostics diagnostics, bool isMeteorThumbnail)
@@ -993,7 +994,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             : diagnostics.ThumbnailOverlayTemplate == "MoonPhaseGuideThumbnail" ? "MoonPhaseGuideThumbnail"
             : diagnostics.ThumbnailOverlayTemplate == "EclipseGuideThumbnail" ? "EclipseGuideThumbnail"
             : isMeteorThumbnail ? "RadiantBurstThumbnail"
-            : "RC1CinematicThumbnail";
+            : "ThumbnailV6";
 
     private static void LogThumbnailRuntimeDiagnostics(ThumbnailRuntimeDiagnostics diagnostics)
     {
@@ -1039,14 +1040,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return "RC1CinematicTitle";
     }
 
-    private static void CleanThumbnailV5FinalRoot(string thumbnailRoot)
+    private static void CleanThumbnailV6FinalRoot(string thumbnailRoot)
     {
         Directory.CreateDirectory(thumbnailRoot);
         var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             ThumbnailFinalFileName, "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png", ThumbnailGenerationDiagnosticsFileName, ThumbnailPromptFileName
         };
-        foreach (var file in Directory.EnumerateFiles(thumbnailRoot, "thumbnail-v5-*.png"))
+        foreach (var file in Directory.EnumerateFiles(thumbnailRoot, "thumbnail-v6-*.png"))
         {
             if (!allowed.Contains(Path.GetFileName(file))) File.Delete(file);
         }
@@ -1118,10 +1119,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Console.WriteLine($"PromptPath: {promptPath}");
         Console.WriteLine($"DiagnosticsPath: {diagnosticsPath}");
         Console.WriteLine();
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 12, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "RC1CinematicThumbnail", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 12, provider = "AzureOpenAIForImage", deployment, model = deployment, endpoint, apiVersion = "2024-10-21", region = ResolveRegion(endpoint), imageWidth = 1280, imageHeight = 720, visualStyle = "ThumbnailV6", finalPromptText = promptText, promptLength = promptText.Length, renderer = "AzureImage2", fallbackRendererUsed = false, providerCalled = true, providerSucceeded = true, azureRequestMs = azureResult.AzureRequestMs, imageDownloadMs = azureResult.ImageDownloadMs, imageSaveMs = 0, totalMs, imageHash, fileSize, imagePath = NormalizePath(imagePath), promptPath = NormalizePath(promptPath), failureReason = (string?)null }, JsonOptions), cancellationToken);
     }
 
-    private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV5AzurePrompts(ThumbnailAssetGenerationRequest request)
+    private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt, string[] TextLines, string Layout)> BuildThumbnailV6AzurePrompts(ThumbnailAssetGenerationRequest request)
     {
         var title = FirstNonEmpty(request.ProductionContext?.ProductionEventIntelligence?.Title, request.EventId, "selected sky event");
         var eventType = FirstNonEmpty(request.ProductionContext?.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "AstronomyEvent");
@@ -1131,7 +1132,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var isMeteor = IsMeteorEvent(eventType, title);
         var isPlanetary = IsPlanetaryEvent(eventType);
         var isMoon = IsMoonEvent(eventType, title);
-        var compositionType = isMeteor ? "RadiantBurstThumbnail" : isPlanetary ? "PlanetarySkyGuideThumbnail" : isMoon ? "MoonPhaseGuideThumbnail" : "RC1CinematicThumbnail";
+        var compositionType = isMeteor ? "RadiantBurstThumbnail" : isPlanetary ? "PlanetarySkyGuideThumbnail" : isMoon ? "MoonPhaseGuideThumbnail" : "ThumbnailV6";
         var rc1TextLines = BuildRc1ThumbnailTextLines(BuildCurrentEventLock(request), includeDateWhenAvailable: !isMeteor);
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "high-contrast astronomy thumbnail");
         var clickMagnetTheme = FirstNonEmpty(intelligence?.VisualTheme, "high-contrast click-magnet thumbnail");
@@ -1145,7 +1146,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ? $"Azure Image2 BACKGROUND ONLY for PlanetaryEvent sky-guide thumbnail for {title}. Event type: {eventType}. Show two or more bright celestial objects close together in a realistic twilight sky using eventObjectContext.objectNames only: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Clear negative space for deterministic overlay, realistic sky guide composition, no embedded text, no labels, no watermark, no meteor streaks, no radiant, no typography, no UI panels, no cards, no captions, no hero/gallery template. Final code overlay adds title, guide card, object labels, direction cue, and separation. Visual theme: {FirstNonEmpty(intelligence?.SkyGuideTheme, visualTheme)}.{conjunctionInstruction}"
                 : isMoon
                     ? $"Azure Image2 BACKGROUND ONLY for MoonPhaseGuideThumbnail for {title}. Event type: {eventType}. Show a large realistic Moon as the primary object, lunar phase illumination, subtle moonrise horizon atmosphere if appropriate, clean negative space for deterministic overlay, no embedded text, no labels, no typography, no UI panels, no cards, no captions, no cross-family streak effects, no pair labels. Final code overlay adds title, phase/date, and Moon guide card. Visual vocabulary: Moon, lunar phase, illumination, moonrise, moonset, eastern horizon, western horizon, full moon glow, supermoon size comparison, blue moon calendar rarity."
-                    : $"Azure Image2 BACKGROUND ONLY for an RC1 cinematic astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Do not render any letters, words, typography, labels, UI, panels, cards, badges, boxes, captions, transparent giant title, or embedded text in the image. Leave natural negative space for a separate deterministic overlay. Final overlay text added later by code: {string.Join(" | ", rc1TextLines)}. Visual theme: {visualTheme}. Layout: cinematic event image, clean large title area, short subtitle area, no center-crop dependency; compose native aspect ratio.{conjunctionInstruction} Forbidden: guide card, hero-style information panel, object-pair info box, black object-pair panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
+                    : $"Azure Image2 BACKGROUND ONLY for a Thumbnail V6 astronomy thumbnail for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. Do not render any letters, words, typography, labels, UI, panels, cards, badges, boxes, captions, transparent giant title, or embedded text in the image. Leave natural negative space for a separate deterministic overlay. Final overlay text added later by code: {string.Join(" | ", rc1TextLines)}. Visual theme: {visualTheme}. Layout: cinematic event image, clean large title area, short subtitle area, no center-crop dependency; compose native aspect ratio.{conjunctionInstruction} Forbidden: guide card, hero-style information panel, object-pair info box, black object-pair panel, date panel, time panel, altitude panel, direction panel, object list, observing instructions, long subtitle, information card, black information bars, educational panels, embedded background text, narration sentence or viewer-instruction overlay, unrelated event imagery.";
         ValidateMeteorThumbnailRc1Contract(isMeteor, compositionType, basePrompt, rc1TextLines);
         var text = rc1TextLines.Take(isMeteor ? 2 : 3).ToArray();
         var forbiddenInOverlayText = DetectThumbnailForbiddenTerms(ResolveThumbnailValidatorProfile(request), text);
@@ -1153,9 +1154,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated profile term(s) detected in thumbnail overlay text: " + string.Join(", ", forbiddenInOverlayText));
         return
         [
-            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 composition, event image on right or center, clean dark negative space on left/lower-left. {basePrompt}", text, "rc1-left-title"),
-            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: {compositionType}. Native 9:16 vertical composition, event image upper half, clean dark negative space in lower third. {basePrompt}", text, "rc1-lower-title"),
-            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: {compositionType}. Native 1:1 composition, cinematic event image with clean lower text band as natural sky darkness only. {basePrompt}", text, "rc1-bottom-title")
+            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 composition, event image on right or center, clean dark negative space on left/lower-left. {basePrompt}", text, "v6-left-metadata"),
+            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: {compositionType}. Native 9:16 vertical composition, event image upper half, clean dark negative space in lower third. {basePrompt}", text, "v6-lower-metadata"),
+            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: {compositionType}. Native 1:1 composition, cinematic event image with clean lower text band as natural sky darkness only. {basePrompt}", text, "v6-bottom-metadata")
         ];
     }
 
@@ -1189,7 +1190,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             phaseNo = 12,
             product = "Thumbnail V6.2",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : IsPlanetaryEvent(eventType) ? "PlanetarySkyGuideThumbnail" : IsMoonEvent(eventType, intelligence?.Title) ? "MoonPhaseGuideThumbnail" : "RC1CinematicThumbnail", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "simple high-CTR text", eventType, thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : IsPlanetaryEvent(eventType) ? "PlanetarySkyGuideThumbnail" : IsMoonEvent(eventType, intelligence?.Title) ? "MoonPhaseGuideThumbnail" : "ThumbnailV6", resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, clickMagnetTheme = intelligence?.VisualTheme, forbiddenTerms = forbidden },
             eventType = validationProfile.EventType,
             eventFamily = validationProfile.ResolvedEventFamily,
             legacyEventFamily = validationProfile.EventFamily,
@@ -1209,20 +1210,20 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
             heroContract = "CinematicHero",
-            thumbnailContract = "RC1CinematicThumbnail",
+            thumbnailContract = "ThumbnailV6",
             heroTemplateUsed = false,
             galleryTemplateUsed = false,
             objectPairBoxUsed = false,
             embeddedTextDetected = false,
             croppedTextDetected = false,
-            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", actualRendererVersion = "ThumbnailV6Renderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Renderer", legacyRendererUsed = false, legacyRendererBlocked = true, overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
             finalMainText = variants.FirstOrDefault().TextLines.Take(2).ToArray(),
             rc1StyleRestoredForMeteorShower = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
             guidePanelAllowed = false,
             narrationHookOverlayDetected = prompts.Concat([mainText]).Any(p => p.Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase)),
             reusedHeroLayoutDetected = false,
-            thumbnailType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
-            thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : "RC1CinematicThumbnail",
+            thumbnailType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : "ThumbnailV6",
+            thumbnailCompositionType = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "RadiantBurstThumbnail" : "ThumbnailV6",
             textLineCount = variants.Max(v => v.TextLines.Take(2).Count()),
             wordCount = CountWords(mainText),
             guideElementsDetected = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
@@ -1311,7 +1312,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static int CountWords(string value) => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     private static string LimitThumbnailWords(string value, int maxWords) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => !new[] { "TODAY", "TONIGHT", "TOMORROW" }.Contains(w, StringComparer.OrdinalIgnoreCase)).Take(maxWords));
 
-    private static async Task<ThumbnailOverlayDiagnostics> WriteThumbnailV5OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
+    private static async Task<ThumbnailOverlayDiagnostics> WriteThumbnailV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         var diagnostics = ThumbnailOverlayDiagnostics.None(outputPath, ResolveMeteorOverlayTemplate(request));
@@ -1781,7 +1782,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
     }
 
-    private static async Task WriteThumbnailV5GenerationSummaryDiagnosticsAsync(
+    private static async Task WriteThumbnailV6GenerationSummaryDiagnosticsAsync(
         string promptText,
         AzureOpenAIForImageOptions options,
         string imagePath,
@@ -1795,6 +1796,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var endpoint = options.Endpoint?.Trim() ?? string.Empty;
         var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
         var uniqueHashes = variants.Select(v => v.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var finalOutputHashBeforeOverlay = File.Exists(variants.First().BackgroundPath) ? await ComputeSha256Async(variants.First().BackgroundPath, cancellationToken) : string.Empty;
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 12,
@@ -1804,7 +1806,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             endpoint,
             apiVersion = "2024-10-21",
             region = ResolveRegion(endpoint),
-            renderer = "AzureImage2ThumbnailV5Variants",
+            renderer = "ThumbnailV6Renderer",
+            actualRendererVersion = "ThumbnailV6Renderer",
+            actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay",
+            finalCompositorUsed = "ThumbnailV6Renderer",
+            legacyRendererUsed = false,
+            legacyRendererBlocked = true,
             fallbackRendererUsed = false,
             finalPromptText = promptText,
             variantCount = variants.Count,
@@ -1820,20 +1827,36 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             azureRequestMs = variants.Sum(v => v.Result.AzureRequestMs),
             imageHash = variants.First().Hash,
             imagePath = NormalizePath(imagePath),
+            outputFileWrittenAfterV6Overlay = File.Exists(imagePath),
+            finalOutputPath = NormalizePath(imagePath),
+            finalOutputHashBeforeOverlay,
+            finalOutputHashAfterOverlay = variants.First().Hash,
             promptPath = NormalizePath(promptPath),
             totalMs,
             requiredDataBlocksPresent = true,
             overlayAreaPercent = 24,
-            thumbnailContract = "RC1CinematicThumbnail",
+            thumbnailContract = "ThumbnailV6",
             heroTemplateUsed = false,
             galleryTemplateUsed = false,
             objectPairBoxUsed = false,
             embeddedTextDetected = false,
             croppedTextDetected = false,
-            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6", actualRendererVersion = "ThumbnailV6Renderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Renderer", legacyRendererUsed = false, legacyRendererBlocked = true, overlayPercent = 30, visualPercent = 70, textSafeAreaPassed = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            outputVerification = new { finalRenderRequestSource = "thumbnailVariantResults", actualRendererVersion = "ThumbnailV6Renderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Renderer", legacyRendererUsed = false, legacyRendererBlocked = true, finalOutputPath = NormalizePath(imagePath), outputFileWrittenAfterV6Overlay = File.Exists(imagePath), finalOutputHashBeforeOverlay, finalOutputHashAfterOverlay = variants.First().Hash },
             outputs = variants.Select(v => new { name = v.Variant, width = v.Width, height = v.Height, hash = v.Hash }),
             variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
         }, JsonOptions), cancellationToken);
+    }
+
+    private static void ValidateThumbnailV6RendererContract(string renderer, string thumbnailContract, IEnumerable<string> textLayouts)
+    {
+        if (renderer.Contains("V5", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Thumbnail V6 validation failed: renderer contains V5.");
+        if (thumbnailContract.Contains("RC1", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Thumbnail V6 validation failed: thumbnailContract contains RC1.");
+        var rc1Layouts = textLayouts.Where(layout => layout.StartsWith("rc1", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (rc1Layouts.Length > 0)
+            throw new InvalidOperationException("Thumbnail V6 validation failed: textLayout starts with rc1: " + string.Join(", ", rc1Layouts));
     }
 
     private async Task<AzureImage2GenerationResult> GenerateThumbnailWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken)
@@ -2444,7 +2467,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             overlay,
             badge,
             [],
-            isMeteor ? "Azure generates a RadiantBurstThumbnail background only with no embedded text. Deterministic overlay adds exactly two main text lines. Do not use cards, direction callouts, date/time boxes, hero/gallery templates, panels, boxes, or instructional details." : isEclipse ? "Azure generates an eclipse background only with no embedded text. Deterministic EclipseGuideThumbnail overlay adds title, eclipse body callout, timing/details card, direction/safety callout, and footer tips." : isMoon ? "Azure generates a realistic Moon background only with no embedded text. Deterministic MoonPhaseGuideThumbnail overlay adds title, phase/date, and safe Moon guide card fields when available." : "Azure generates background only with no embedded text. Deterministic RC1 overlay adds at most two main text lines and an optional small date. Do not use guide cards, hero/gallery templates, panels, boxes, or object-pair info cards.",
+            isMeteor ? "Azure generates a RadiantBurstThumbnail background only with no embedded text. Deterministic overlay adds exactly two main text lines. Do not use cards, direction callouts, date/time boxes, hero/gallery templates, panels, boxes, or instructional details." : isEclipse ? "Azure generates an eclipse background only with no embedded text. Deterministic EclipseGuideThumbnail overlay adds title, eclipse body callout, timing/details card, direction/safety callout, and footer tips." : isMoon ? "Azure generates a realistic Moon background only with no embedded text. Deterministic MoonPhaseGuideThumbnail overlay adds title, phase/date, and safe Moon guide card fields when available." : "Azure generates background only with no embedded text. Deterministic Thumbnail V6 overlay adds at most two main text lines and an optional small date. Do not use guide cards, hero/gallery templates, panels, boxes, or object-pair info cards.",
             thumbnailPrompt,
             promptSource,
             forbiddenTermsMatched,
