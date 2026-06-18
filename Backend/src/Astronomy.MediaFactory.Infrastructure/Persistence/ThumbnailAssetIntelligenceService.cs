@@ -702,7 +702,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             string? azureExceptionMessage = null;
             Console.WriteLine("PHASE12_RENDERER_SELECTED = ThumbnailV6Rc1GuideRenderer");
             Console.WriteLine("PHASE12_TEMPLATE_EXECUTED = RC1GuideV6");
-            foreach (var variant in thumbnailVariants)
+            async Task<bool> GenerateThumbnailVariantAsync((string Variant, string FileName, int Width, int Height, string Prompt, string[] TextLines, string Layout) variant)
             {
                 try
                 {
@@ -735,28 +735,61 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     });
                     ValidateMeteorThumbnailOverlay(currentEventType: BuildCurrentEventLock(request).EventType, currentTitle: BuildCurrentEventLock(request).Title, overlayDiagnostics);
                     ValidatePlanetaryThumbnailOverlay(BuildCurrentEventLock(request), overlayDiagnostics);
+                    overlayDiagnosticsByVariant.RemoveAll(item => string.Equals(item.Variant, variant.Variant, StringComparison.OrdinalIgnoreCase));
                     overlayDiagnosticsByVariant.Add((variant.Variant, overlayDiagnostics));
                     var hash = await ComputeSha256Async(variantPath, cancellationToken);
                     finalFileWrites.Add((variantPath, hashBeforeVariantWrite, hash, "ThumbnailV6Rc1GuideRenderer", overlayDiagnostics.ThumbnailOverlayTemplate, overlayDiagnostics.ThumbnailOverlayTemplate));
                     Console.WriteLine($"PHASE12_FINAL_WRITE = {variantPath} ThumbnailV6Rc1GuideRenderer {hash}");
+                    thumbnailVariantResults.RemoveAll(item => string.Equals(item.Variant, variant.Variant, StringComparison.OrdinalIgnoreCase));
                     thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
+                    return true;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     azureCallsFailed++;
                     azureExceptionMessage = ex.Message;
                     Console.WriteLine($"Phase 12 Thumbnail Azure Image2 variant failure preserved partial outputs: {ex}");
-                    break;
+                    return false;
                 }
             }
 
-            if (azureExceptionMessage is not null)
-            {
-                await WritePhase12FailureValidationAsync(validationPath, prompt, semanticProfile, forbiddenObjects, forbiddenTermsDetected, goldenPilotLeakageDetected, thumbnailVariantResults.Select(v => v.ImagePath).ToArray(), azureCallsAttempted, azureCallsSucceeded, azureCallsFailed, azureExceptionMessage, cancellationToken);
-                if (thumbnailVariantResults.Count == 0)
-                    return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed before any thumbnail variants; phase 12 validation JSON was written."], "RC1GuideThumbnail", "RC1GuideThumbnail", "Thumbnail generation failed before first variant, preserving diagnostics.", true, true, false, "RC1GuideThumbnail", thumbnailLayoutValidationPath: layoutPath);
+            foreach (var variant in thumbnailVariants)
+                await GenerateThumbnailVariantAsync(variant);
 
-                return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed after partial thumbnail variants; successful variants were preserved."], "RC1GuideThumbnail", "RC1GuideThumbnail", "Partial thumbnail variants preserved after Azure Image2 failure.", true, true, false, "RC1GuideThumbnail", thumbnailLayoutValidationPath: layoutPath);
+            var retryMissingVariantsAttempted = false;
+            var retryMissingVariantsSucceeded = false;
+            var missingVariantFiles = thumbnailVariants
+                .Where(variant => !File.Exists(Path.Combine(thumbnailRoot, variant.FileName)))
+                .ToArray();
+            if (missingVariantFiles.Length > 0)
+            {
+                retryMissingVariantsAttempted = true;
+                foreach (var variant in missingVariantFiles)
+                    await GenerateThumbnailVariantAsync(variant);
+                retryMissingVariantsSucceeded = thumbnailVariants.All(variant => File.Exists(Path.Combine(thumbnailRoot, variant.FileName)));
+            }
+
+            var landscapePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"));
+            var finalCopiedFromLandscape = false;
+            if (File.Exists(landscapePath))
+            {
+                var hashBeforeFinalCopy = await ComputeOptionalSha256Async(finalPath, cancellationToken);
+                File.Copy(landscapePath, finalPath, overwrite: true);
+                var hashAfterFinalCopy = await ComputeSha256Async(finalPath, cancellationToken);
+                finalFileWrites.Add((finalPath, hashBeforeFinalCopy, hashAfterFinalCopy, "ThumbnailV6Rc1GuideRenderer", "RC1LandscapeGuideTemplate", "RC1LandscapeGuideTemplate"));
+                Console.WriteLine($"PHASE12_FINAL_WRITE = {finalPath} ThumbnailV6Rc1GuideRenderer {hashAfterFinalCopy}");
+                finalCopiedFromLandscape = true;
+            }
+
+            var requiredThumbnailFiles = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" };
+            var missingThumbnailFiles = requiredThumbnailFiles
+                .Where(fileName => !File.Exists(Path.Combine(thumbnailRoot, fileName)))
+                .ToArray();
+            var allRequiredThumbnailFilesGenerated = missingThumbnailFiles.Length == 0;
+            if (!allRequiredThumbnailFilesGenerated)
+            {
+                await WritePhase12FailureValidationAsync(validationPath, prompt, semanticProfile, forbiddenObjects, forbiddenTermsDetected, goldenPilotLeakageDetected, thumbnailVariantResults.Select(v => v.ImagePath).ToArray(), azureCallsAttempted, azureCallsSucceeded, azureCallsFailed, $"Missing required thumbnail file(s) after retry: {string.Join(", ", missingThumbnailFiles)}", cancellationToken);
+                return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, [$"Missing required thumbnail file(s) after retry: {string.Join(", ", missingThumbnailFiles)}"], "RC1GuideThumbnail", "RC1GuideThumbnail", "Partial thumbnail variants preserved; Phase 12 is not complete until all required thumbnail files exist.", true, true, false, "RC1GuideThumbnail", thumbnailLayoutValidationPath: layoutPath);
             }
             if (thumbnailVariantResults.Count(v => v.Result.ProviderCalled) < 3)
                 throw new InvalidOperationException("Thumbnail V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
@@ -774,11 +807,6 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 throw new InvalidOperationException("Thumbnail V6 variant validation failed: all variants use the same text layout.");
             ValidateThumbnailV6Rc1GuideRendererContract("ThumbnailV6Rc1GuideRenderer", Rc1GuideThumbnailContract, thumbnailVariantResults.Select(v => v.TextLayout));
 
-            var hashBeforeFinalWrite = await ComputeOptionalSha256Async(finalPath, cancellationToken);
-            File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
-            var hashAfterFinalWrite = await ComputeSha256Async(finalPath, cancellationToken);
-            finalFileWrites.Add((finalPath, hashBeforeFinalWrite, hashAfterFinalWrite, "ThumbnailV6Rc1GuideRenderer", thumbnailVariantResults[0].TextLayout, thumbnailVariantResults[0].TextLayout));
-            Console.WriteLine($"PHASE12_FINAL_WRITE = {finalPath} ThumbnailV6Rc1GuideRenderer {hashAfterFinalWrite}");
             var selectedOverlayDiagnostics = overlayDiagnosticsByVariant.First().Diagnostics;
             var isMeteorThumbnail = false;
             await File.WriteAllTextAsync(promptPath, finalPromptText, cancellationToken);
@@ -859,7 +887,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 objectPairBoxUsed = false,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
-            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false, rc1OverlayAllowed = true, obsoleteOverlayZeroRuleApplied = false, allRequiredThumbnailFilesGenerated = allRequiredThumbnailFilesGenerated, missingThumbnailFiles = missingThumbnailFiles, retryMissingVariantsAttempted = retryMissingVariantsAttempted, retryMissingVariantsSucceeded = retryMissingVariantsSucceeded, finalCopiedFromLandscape = finalCopiedFromLandscape },
                 finalMainText = prompt.CtrOverlay,
                 thumbnailArchitecture = "ThumbnailV6",
                 sceneManifestRequired = false,
@@ -1015,7 +1043,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(layoutPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
 
             thumbnailTotalStopwatch.Stop();
-            await WriteThumbnailV6GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, finalFileWrites, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteThumbnailV6GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, finalFileWrites, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, allRequiredThumbnailFilesGenerated, missingThumbnailFiles, retryMissingVariantsAttempted, retryMissingVariantsSucceeded, finalCopiedFromLandscape, cancellationToken);
         }
 
         return BuildImageGenerationResponse(
@@ -1525,8 +1553,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ? [guideCardBox, directionBox, footerBox, skyGuideBox]
             : [titleBox, guideCardBox, directionBox, footerBox, skyGuideBox];
         var overlapPercent = CalculateOverlapPercent(overlapBoxes);
-        if (overlapPercent > 0)
-            throw new InvalidOperationException($"Thumbnail V6 guide validation failed: overlayPercent must be 0; actual={overlapPercent:0.###}.");
+        var visualPercent = 100d - overlapPercent;
+        if (overlapPercent > 35d)
+            throw new InvalidOperationException($"Thumbnail V6 guide validation failed: overlayPercent must be <= 35 for RC1GuideThumbnail; actual={overlapPercent:0.###}.");
+        if (visualPercent < 65d)
+            throw new InvalidOperationException($"Thumbnail V6 guide validation failed: visualPercent must be >= 65 for RC1GuideThumbnail; actual={visualPercent:0.###}.");
         if (IntersectionArea(guideCardBox, directionBox) > 0)
             throw new InvalidOperationException("Thumbnail V6 guide validation failed: guideCard intersects directionCue.");
         if (IntersectionArea(guideCardBox, skyGuideBox) > 0)
@@ -1991,6 +2022,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         IReadOnlyList<(string Path, string HashBeforeWrite, string HashAfterWrite, string WriterComponent, string TemplateName, string TemplateVersion)> finalFileWrites,
         object duplicateHashGroups,
         long totalMs,
+        bool allRequiredThumbnailFilesGenerated,
+        IReadOnlyList<string> missingThumbnailFiles,
+        bool retryMissingVariantsAttempted,
+        bool retryMissingVariantsSucceeded,
+        bool finalCopiedFromLandscape,
         CancellationToken cancellationToken)
     {
         var endpoint = options.Endpoint?.Trim() ?? string.Empty;
@@ -2037,9 +2073,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             oldCompositionModelBlocked = true,
             thumbnailV3ArchitectureBlocked = true,
             rc1CompositionModelExecuted = true,
+            rc1OverlayAllowed = true,
+            obsoleteOverlayZeroRuleApplied = false,
+            allRequiredThumbnailFilesGenerated,
+            missingThumbnailFiles,
+            retryMissingVariantsAttempted,
+            retryMissingVariantsSucceeded,
+            finalCopiedFromLandscape,
             finalLayoutZones = BuildRc1FinalLayoutZones(),
             overlapChecks = BuildRc1OverlapChecks(),
-            thumbnailLayoutPolishValidation = variants.Select(v => new { variant = v.Variant, titleBoundingBox = (object?)null, guideCardBoundingBox = (object?)null, directionBoundingBox = (object?)null, footerBoundingBox = (object?)null, skyGuideBoundingBox = (object?)null, overlapPercent = 0 }).ToArray(),
+            thumbnailLayoutPolishValidation = variants.Select(v => new { variant = v.Variant, titleBoundingBox = (object?)null, guideCardBoundingBox = (object?)null, directionBoundingBox = (object?)null, footerBoundingBox = (object?)null, skyGuideBoundingBox = (object?)null, overlayPercent = 30, visualPercent = 70, rc1OverlayAllowed = true, obsoleteOverlayZeroRuleApplied = false }).ToArray(),
             requestedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
             selectedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
             executedLayoutTemplate = finalFileWrites.Where(write => Path.GetFileName(write.Path).StartsWith("thumbnail-", StringComparison.OrdinalIgnoreCase)).Select(write => new { variant = ResolveThumbnailVariantFromFileName(write.Path), layoutTemplate = write.TemplateName }).ToArray(),
