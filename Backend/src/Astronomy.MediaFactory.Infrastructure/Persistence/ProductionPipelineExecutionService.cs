@@ -1868,6 +1868,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 srtSource = "CleanNarrationFiles",
                 srtSourceMode = "SceneNarrationFilesOnly",
                 srtTimingSource = "SceneDurationPlanFromTtsTimeline",
+                sceneDurationPlanPath = narrationOutput.SceneDurationPlanResolution.SceneDurationPlanPath,
+                sceneDurationPlanFound = narrationOutput.SceneDurationPlanResolution.SceneDurationPlanFound,
+                shortSceneDurationPlanItemCount = narrationOutput.SceneDurationPlanResolution.ShortSceneDurationPlanItemCount,
+                longSceneDurationPlanItemCount = narrationOutput.SceneDurationPlanResolution.LongSceneDurationPlanItemCount,
+                sceneDurationPlanGeneratedFallback = narrationOutput.SceneDurationPlanResolution.SceneDurationPlanGeneratedFallback,
+                sceneDurationPlanGenerationSource = narrationOutput.SceneDurationPlanResolution.SceneDurationPlanGenerationSource,
+                missingDurationSceneIds = narrationOutput.SceneDurationPlanResolution.MissingDurationSceneIds,
                 srtGeneratedOnce = true,
                 srtGenerationCallCount = 1,
                 srtValidationCallCount = 1,
@@ -1904,14 +1911,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, cancellationToken);
             throw;
         }
     }
@@ -1941,6 +1948,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
         var srtGenerationCallCount = 1;
         var srtValidationCallCount = 1;
+        var sceneDurationPlanResolution = EnsurePhase14SceneDurationPlan(planRoot, shortNarrationFiles, longNarrationFiles, shortItems, longNarrationV3Items);
         var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, "short", shortNarrationFiles, shortItems);
         var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, "long", longNarrationFiles, longNarrationV3Items);
         ValidateSceneNarrationFileOnlyCueSources(shortSrtTiming.Diagnostics, longSrtTiming.Diagnostics);
@@ -1981,6 +1989,14 @@ public sealed partial class ProductionPipelineExecutionService(
             staleSrtDetected,
             srtWrittenUtc,
             srtReadForValidationUtc,
+            sceneDurationPlanResolution,
+            sceneDurationPlanPath = sceneDurationPlanResolution.SceneDurationPlanPath,
+            sceneDurationPlanFound = sceneDurationPlanResolution.SceneDurationPlanFound,
+            shortSceneDurationPlanItemCount = sceneDurationPlanResolution.ShortSceneDurationPlanItemCount,
+            longSceneDurationPlanItemCount = sceneDurationPlanResolution.LongSceneDurationPlanItemCount,
+            sceneDurationPlanGeneratedFallback = sceneDurationPlanResolution.SceneDurationPlanGeneratedFallback,
+            sceneDurationPlanGenerationSource = sceneDurationPlanResolution.SceneDurationPlanGenerationSource,
+            missingDurationSceneIds = sceneDurationPlanResolution.MissingDurationSceneIds,
             srtTiming = new { @short = shortSrtTiming.Diagnostics.Timing, @long = longSrtTiming.Diagnostics.Timing },
             subtitleGeneration = new { @short = shortSrtTiming.Diagnostics, @long = longSrtTiming.Diagnostics },
             subtitleCueSources = shortSrtTiming.Diagnostics.SubtitleCueSources.Concat(longSrtTiming.Diagnostics.SubtitleCueSources).ToArray(),
@@ -2044,7 +2060,7 @@ public sealed partial class ProductionPipelineExecutionService(
             files = manifestItems
         }, JsonOptions), cancellationToken);
 
-        return new NarrationOutputLayerResult(narrationRoot, manifestPath, files, narrationFileWriteDiagnostics, narrationFileWriteTrace);
+        return new NarrationOutputLayerResult(narrationRoot, manifestPath, files, narrationFileWriteDiagnostics, narrationFileWriteTrace, sceneDurationPlanResolution);
     }
 
     private static string SelectFirstNarrationOutputFile(IReadOnlyList<string> files, string format)
@@ -2444,6 +2460,152 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var normalized = Regex.Replace(text ?? string.Empty, "\\s+", " ").Trim();
         return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
+    }
+
+    private static Phase14SceneDurationPlanResolution EnsurePhase14SceneDurationPlan(
+        string planRoot,
+        IReadOnlyList<string> shortNarrationFiles,
+        IReadOnlyList<string> longNarrationFiles,
+        IReadOnlyList<SceneAudioSyncItem> shortItems,
+        IReadOnlyList<SceneAudioSyncItem> longItems)
+    {
+        var timingPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
+        var candidatePaths = new[]
+        {
+            timingPath,
+            Path.Combine(planRoot, "sync", "scene-duration-plan.json"),
+            Path.Combine(planRoot, "narration", "scene-duration-plan.json"),
+            Path.Combine(planRoot, "duration-calibration", "scene-duration-plan.json")
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(timingPath)!);
+
+        var selectedPath = candidatePaths.FirstOrDefault(File.Exists) ?? timingPath;
+        var found = File.Exists(selectedPath);
+        if (found && !string.Equals(selectedPath, timingPath, StringComparison.OrdinalIgnoreCase))
+            File.Copy(selectedPath, timingPath, true);
+
+        var shortPlanItems = ReadSceneDurationPlanItems(planRoot, "short");
+        var longPlanItems = ReadSceneDurationPlanItems(planRoot, "long");
+        var missingSceneIds = MissingDurationSceneIds(shortPlanItems, shortItems, "short")
+            .Concat(MissingDurationSceneIds(longPlanItems, longItems, "long"))
+            .ToArray();
+
+        var needsFallback = !found
+            || shortPlanItems.Count != shortItems.Count
+            || longPlanItems.Count != longItems.Count
+            || missingSceneIds.Length > 0;
+        if (!needsFallback)
+        {
+            return new Phase14SceneDurationPlanResolution(
+                NormalizePath(timingPath),
+                true,
+                shortPlanItems.Count,
+                longPlanItems.Count,
+                false,
+                string.Equals(selectedPath, timingPath, StringComparison.OrdinalIgnoreCase)
+                    ? "ExistingTimingSceneDurationPlan"
+                    : NormalizePath(selectedPath),
+                []);
+        }
+
+        shortPlanItems = BuildFallbackPhase14SceneDurationPlanItems(planRoot, "short", shortItems, shortNarrationFiles);
+        longPlanItems = BuildFallbackPhase14SceneDurationPlanItems(planRoot, "long", longItems, longNarrationFiles);
+        missingSceneIds = MissingDurationSceneIds(shortPlanItems, shortItems, "short")
+            .Concat(MissingDurationSceneIds(longPlanItems, longItems, "long"))
+            .ToArray();
+
+        File.WriteAllText(timingPath, JsonSerializer.Serialize(new
+        {
+            version = "v1",
+            sourceTtsTimelineVersion = "phase-14-fallback",
+            source = "Phase14SceneAssetsVisualTimelineNarrationWordCounts",
+            @short = new
+            {
+                sceneCount = shortPlanItems.Count,
+                totalAudioDurationSec = RoundDuration(shortPlanItems.Sum(item => item.AudioDurationSec)),
+                totalVideoDurationSec = RoundDuration(shortPlanItems.Sum(item => item.SceneDurationSec)),
+                items = shortPlanItems
+            },
+            @long = new
+            {
+                sceneCount = longPlanItems.Count,
+                totalAudioDurationSec = RoundDuration(longPlanItems.Sum(item => item.AudioDurationSec)),
+                totalVideoDurationSec = RoundDuration(longPlanItems.Sum(item => item.SceneDurationSec)),
+                items = longPlanItems
+            }
+        }, JsonOptions));
+        if (shortPlanItems.Count != shortItems.Count || longPlanItems.Count != longItems.Count || missingSceneIds.Length > 0)
+            throw new InvalidOperationException(
+                "Phase 14 scene-duration-plan fallback did not satisfy SRT timing requirements: "
+                + $"shortSceneDurationPlanItemCount={shortPlanItems.Count}; shortSceneCount={shortItems.Count}; "
+                + $"longSceneDurationPlanItemCount={longPlanItems.Count}; longSceneCount={longItems.Count}; "
+                + $"missingDurationSceneIds={string.Join(",", missingSceneIds)}");
+
+        return new Phase14SceneDurationPlanResolution(
+            NormalizePath(timingPath),
+            found,
+            shortPlanItems.Count,
+            longPlanItems.Count,
+            true,
+            "scene-assets-v3/{format}/scene-timeline-metadata.json; scene-assets-v3/{format}/visual-timeline-v3.json; narration/{format}/*.txt word counts",
+            missingSceneIds);
+    }
+
+    private static IReadOnlyList<string> MissingDurationSceneIds(IReadOnlyList<SceneDurationPlanItem> planItems, IReadOnlyList<SceneAudioSyncItem> sceneItems, string format)
+    {
+        var planSceneIds = planItems.Select(item => item.SceneId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return sceneItems
+            .Where(item => !planSceneIds.Contains(item.SceneId))
+            .Select(item => $"{format}:{item.SceneId}")
+            .ToArray();
+    }
+
+    private static IReadOnlyList<SceneDurationPlanItem> BuildFallbackPhase14SceneDurationPlanItems(string planRoot, string format, IReadOnlyList<SceneAudioSyncItem> syncItems, IReadOnlyList<string> narrationFiles)
+    {
+        var visualTimelinePath = Path.Combine(planRoot, "scene-assets-v3", format, "visual-timeline-v3.json");
+        var metadataPath = Path.Combine(planRoot, "scene-assets-v3", format, "scene-timeline-metadata.json");
+        var visualBySceneId = ReadSceneNodesById(visualTimelinePath);
+        var metadataBySceneId = ReadSceneNodesById(metadataPath);
+        var narrationBySceneId = narrationFiles.ToDictionary(path => SanitizeFileName(Path.GetFileNameWithoutExtension(path)), path => path, StringComparer.OrdinalIgnoreCase);
+        var result = new List<SceneDurationPlanItem>();
+
+        foreach (var syncItem in syncItems)
+        {
+            narrationBySceneId.TryGetValue(syncItem.SceneId, out var narrationPath);
+            var wordCount = File.Exists(narrationPath) ? CountSpokenWords(File.ReadAllText(narrationPath)) : CountSpokenWords(syncItem.NarrationText);
+            var audioDuration = RoundDuration(Math.Max(3.0, wordCount / 155.0 * 60.0));
+            visualBySceneId.TryGetValue(syncItem.SceneId, out var visualNode);
+            metadataBySceneId.TryGetValue(syncItem.SceneId, out var metadataNode);
+            var timelineDuration = GetDouble(visualNode, "durationSec", "sceneDurationSec", "targetDurationSec")
+                ?? GetDouble(metadataNode, "durationSec", "sceneDurationSec", "targetDurationSec");
+            var sceneDuration = RoundDuration(Math.Max(audioDuration, timelineDuration ?? audioDuration));
+            result.Add(new SceneDurationPlanItem(
+                format,
+                syncItem.SceneId,
+                string.Empty,
+                audioDuration,
+                sceneDuration,
+                0,
+                string.IsNullOrWhiteSpace(syncItem.RecommendedTransition) ? "cut" : syncItem.RecommendedTransition,
+                ResolveMotionProfile(syncItem.SceneId, FirstNonEmpty(syncItem.RecommendedMotion, GetString(metadataNode, "recommendedMotion"), GetString(visualNode, "recommendedMotion")))));
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyDictionary<string, JsonNode?> ReadSceneNodesById(string path)
+    {
+        if (!File.Exists(path)) return new Dictionary<string, JsonNode?>(StringComparer.OrdinalIgnoreCase);
+        var root = JsonNode.Parse(File.ReadAllText(path));
+        var nodes = (root?["scenes"] as JsonArray)
+            ?? (root?["items"] as JsonArray)
+            ?? (root?["timeline"]?["scenes"] as JsonArray)
+            ?? [];
+        return nodes
+            .Select((node, index) => new { Node = node, SceneId = GetString(node, "sceneId", "id") ?? $"{index + 1:000}" })
+            .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
+            .GroupBy(item => item.SceneId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Node, StringComparer.OrdinalIgnoreCase);
     }
 
     private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
@@ -3060,7 +3222,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -3113,6 +3275,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 : Array.Empty<string>(),
             subtitleFilesGenerated = File.Exists(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) && File.Exists(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
             srtSourceMode = "SceneNarrationFilesOnly",
+            sceneDurationPlanPath = sceneDurationPlanResolution?.SceneDurationPlanPath ?? NormalizePath(Path.Combine(planRoot, "timing", "scene-duration-plan.json")),
+            sceneDurationPlanFound = sceneDurationPlanResolution?.SceneDurationPlanFound ?? File.Exists(Path.Combine(planRoot, "timing", "scene-duration-plan.json")),
+            shortSceneDurationPlanItemCount = sceneDurationPlanResolution?.ShortSceneDurationPlanItemCount ?? ReadSceneDurationPlanItems(planRoot, "short").Count,
+            longSceneDurationPlanItemCount = sceneDurationPlanResolution?.LongSceneDurationPlanItemCount ?? ReadSceneDurationPlanItems(planRoot, "long").Count,
+            sceneDurationPlanGeneratedFallback = sceneDurationPlanResolution?.SceneDurationPlanGeneratedFallback ?? false,
+            sceneDurationPlanGenerationSource = sceneDurationPlanResolution?.SceneDurationPlanGenerationSource ?? "ExistingTimingSceneDurationPlan",
+            missingDurationSceneIds = sceneDurationPlanResolution?.MissingDurationSceneIds ?? Array.Empty<string>(),
             srtGeneratedOnce = true,
             srtGenerationCallCount = 1,
             srtValidationCallCount = 1,
@@ -3197,7 +3366,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
-    private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace);
+    private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace, Phase14SceneDurationPlanResolution SceneDurationPlanResolution);
+    private sealed record Phase14SceneDurationPlanResolution(string SceneDurationPlanPath, bool SceneDurationPlanFound, int ShortSceneDurationPlanItemCount, int LongSceneDurationPlanItemCount, bool SceneDurationPlanGeneratedFallback, string SceneDurationPlanGenerationSource, IReadOnlyList<string> MissingDurationSceneIds);
     private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics);
     private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, IReadOnlyDictionary<string, string> SubtitleTextSource, IReadOnlyDictionary<string, string> SubtitleTextOrigin, IReadOnlyDictionary<string, string> SceneIdOrigin, IReadOnlyDictionary<string, string> GeneratorComponent, IReadOnlyList<object> SubtitleBlocks, IReadOnlyList<SubtitleCueSource> SubtitleCueSources, int NonNarrationSubtitleCueCount, IReadOnlyList<SubtitleCueSource> NonNarrationSubtitleCues, string SrtSourceMode, bool FallbackSubtitleSourcesDisabled, bool EventProductionIntelligenceUsedForSrt, bool VideoAssemblyIntelligenceUsedForSrt, bool DocumentaryNarrationComposerUsedForSrt, string GeneratedSrtPreview, object Timing);
     private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyList<string> DuplicateSubtitleSourceScenes, IReadOnlyList<string> DuplicateSubtitleSourceFiles, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors, string SrtPreservationValidationMode, int CleanNarrationNormalizedLength, int SrtNormalizedLength, bool SrtPreservesNarration, IReadOnlyList<string> SrtMissingSceneTexts, IReadOnlyList<string> SrtExtraUnexpectedTexts, string SrtComparisonFailureReason);
