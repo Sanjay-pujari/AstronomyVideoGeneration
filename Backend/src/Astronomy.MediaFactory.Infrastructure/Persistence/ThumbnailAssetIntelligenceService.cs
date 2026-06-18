@@ -227,7 +227,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
-        var result = await new ThumbnailV7Engine().RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
+        var result = await new ThumbnailV7InfographicRenderer(thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial").RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -236,7 +236,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ThumbnailClickabilityScore: 96,
             ThumbnailCuriosityScore: 95,
             ThumbnailVisualSourceMode: "ThumbnailV7PremiumAstronomyInfographic",
-            SourceSceneUsed: "ThumbnailV7ProceduralSky",
+            SourceSceneUsed: "AzureImage2BackgroundOnly",
             ApprovedSceneFoundationUsed: false,
             IndependentPlanetRedrawUsed: true,
             ArtificialGlowRemoved: true,
@@ -254,13 +254,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             result.OutputFiles,
             validation,
             warnings: [],
-            requestedRenderer: "ThumbnailV7Engine",
-            actualRendererUsed: "ThumbnailV7Engine",
+            requestedRenderer: "ThumbnailV7InfographicRenderer",
+            actualRendererUsed: "ThumbnailV7InfographicRenderer",
             rendererSelectionReason: "ThumbnailGeneration:EnableThumbnailV7 is true; Phase 12 routes to the clean V7 infographic module instead of V5 fallback.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: false,
             photoCinematicRendererCompleted: false,
-            outputWriteSource: "ThumbnailV7Engine",
+            outputWriteSource: "ThumbnailV7InfographicRenderer",
             outputOverwriteDetected: false,
             thumbnailLayoutValidationPath: result.DiagnosticsPath);
     }
