@@ -26,6 +26,7 @@ public sealed class ThumbnailOptions
     public bool FallbackToStellariumFrame { get; init; } = true;
     public bool FallbackToExtractedFrame { get; init; } = true;
     public bool AllowLegacyFallbackOnFontFailure { get; init; }
+    public bool EnableThumbnailV7 { get; init; } = true;
 
     public bool EnableHookText { get; init; } = true;
     public int MaxHookWords { get; init; } = 4;
