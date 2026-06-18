@@ -41,51 +41,39 @@ public class ThumbnailV7CinematicOverlayRenderer
         var visualIntelligence = EventVisualIntelligence.From(request.ProductionContext?.ProductionEventIntelligence, observation);
         var heroComposition = HeroCompositionModel.From(request.ProductionContext?.ProductionEventIntelligence, observation);
         var galleryComposition = GalleryCompositionModel.From(request.ProductionContext?.ProductionEventIntelligence, observation);
-        var backgroundPrompt = _promptBuilder.Build(visualIntelligence, heroComposition, galleryComposition);
+        var backgroundPrompts = _promptBuilder.BuildVariants(visualIntelligence, heroComposition, galleryComposition);
         var composition = _composer.Compose(plan);
         var writes = new List<ThumbnailV7OutputWrite>();
-        var backgroundPath = Path.Combine(thumbnailRoot, "v7-background.png");
-        var normalizedBackgroundPath = NormalizePath(backgroundPath);
-        var sceneKey = "ThumbnailV7Background";
-        ThumbnailV7AzureImage2GenerationResult azureResult = new(false, false, 0, 0, "Azure Image2 generator was not provided to Thumbnail V7 renderer.");
-        LogThumbnailV7BackgroundTrace(
-            renderer: RendererName,
-            backgroundPrompt: backgroundPrompt,
-            azureImage2Call: "Pending",
-            backgroundImagePath: normalizedBackgroundPath,
-            fileExists: File.Exists(backgroundPath),
-            fileSize: GetFileSize(backgroundPath),
-            sceneKey: sceneKey);
-        if (_azureImage2Generator is not null)
-            azureResult = await _azureImage2Generator(backgroundPrompt, backgroundPath, cancellationToken);
-        var backgroundFileExists = File.Exists(backgroundPath);
-        var backgroundFileSize = GetFileSize(backgroundPath);
-        var backgroundGenerated = azureResult.ProviderSucceeded && backgroundFileExists;
-        LogThumbnailV7BackgroundTrace(
-            renderer: RendererName,
-            backgroundPrompt: backgroundPrompt,
-            azureImage2Call: azureResult.ProviderCalled ? (azureResult.ProviderSucceeded ? "Succeeded" : $"Failed: {azureResult.FailureReason}") : "NotCalled",
-            backgroundImagePath: backgroundGenerated ? normalizedBackgroundPath : "procedural-fallback",
-            fileExists: backgroundFileExists,
-            fileSize: backgroundFileSize,
-            sceneKey: sceneKey);
-
+        var sceneKey = "ThumbnailV7PerVariantBackground";
+        var backgroundResults = new Dictionary<string, ThumbnailV7VariantBackground>(StringComparer.OrdinalIgnoreCase);
         foreach (var variant in ThumbnailV7VariantRenderer.Variants)
         {
+            var variantBackgroundPath = Path.Combine(thumbnailRoot, $"v7-background-{variant.Name}.png");
+            var normalizedVariantBackgroundPath = NormalizePath(variantBackgroundPath);
+            var variantPrompt = backgroundPrompts[variant.Name];
+            ThumbnailV7AzureImage2GenerationResult azureResult = new(false, false, 0, 0, "Azure Image2 generator was not provided to Thumbnail V7 renderer.");
+            LogThumbnailV7BackgroundTrace(RendererName, variantPrompt, "Pending", normalizedVariantBackgroundPath, File.Exists(variantBackgroundPath), GetFileSize(variantBackgroundPath), sceneKey + ":" + variant.Name);
+            if (_azureImage2Generator is not null)
+                azureResult = await _azureImage2Generator(variantPrompt, variantBackgroundPath, cancellationToken);
+            var exists = File.Exists(variantBackgroundPath);
+            var generated = azureResult.ProviderSucceeded && exists;
+            LogThumbnailV7BackgroundTrace(RendererName, variantPrompt, azureResult.ProviderCalled ? (azureResult.ProviderSucceeded ? "Succeeded" : $"Failed: {azureResult.FailureReason}") : "NotCalled", generated ? normalizedVariantBackgroundPath : "procedural-fallback", exists, GetFileSize(variantBackgroundPath), sceneKey + ":" + variant.Name);
+            backgroundResults[variant.Name] = new ThumbnailV7VariantBackground(variant.Name, variantBackgroundPath, variantPrompt, azureResult, generated);
+
             var path = Path.Combine(thumbnailRoot, variant.FileName);
-            await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, backgroundGenerated ? backgroundPath : null, cancellationToken);
+            await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, generated ? variantBackgroundPath : null, cancellationToken);
             writes.Add(new ThumbnailV7OutputWrite(path, RendererName));
         }
 
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), Path.Combine(thumbnailRoot, "thumbnail-final.png"), overwrite: true);
         writes.Insert(0, new ThumbnailV7OutputWrite(Path.Combine(thumbnailRoot, "thumbnail-final.png"), RendererName));
-        var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation, backgroundGenerated, !backgroundGenerated, azureResult.FailureReason, backgroundGenerated ? backgroundPath : null);
+        var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation, backgroundResults);
         var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
         var promptPath = Path.Combine(thumbnailRoot, "thumbnail-prompt.json");
-        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, renderer = RendererName, sceneKey, backgroundPrompt, azureImage2Call = azureResult.ProviderCalled ? (azureResult.ProviderSucceeded ? "Succeeded" : "Failed") : "NotCalled", azureImage2OutputPath = normalizedBackgroundPath, backgroundImagePath = backgroundGenerated ? normalizedBackgroundPath : "procedural-fallback", fileExists = backgroundFileExists, fileSize = backgroundFileSize, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, renderer = RendererName, sceneKey, backgroundMode = "PerVariantAzureImage2", backgroundPrompts, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", cropFromLandscape = false, vectorIconsUsed = true, emojiIconsUsed = false, forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, backgrounds = backgroundResults.ToDictionary(kvp => kvp.Key, kvp => new { prompt = kvp.Value.Prompt, azureImage2Call = kvp.Value.AzureResult.ProviderCalled ? (kvp.Value.AzureResult.ProviderSucceeded ? "Succeeded" : "Failed") : "NotCalled", azureImage2OutputPath = NormalizePath(kvp.Value.Path), backgroundImagePath = kvp.Value.Generated ? NormalizePath(kvp.Value.Path) : "procedural-fallback", fileExists = File.Exists(kvp.Value.Path), fileSize = GetFileSize(kvp.Value.Path) }), layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         var outputFiles = writes.Select(w => NormalizePath(w.Path)).ToList();
-        if (backgroundGenerated) outputFiles.Add(NormalizePath(backgroundPath));
+        outputFiles.AddRange(backgroundResults.Values.Where(b => b.Generated).Select(b => NormalizePath(b.Path)));
         outputFiles.Add(NormalizePath(promptPath));
         outputFiles.Add(NormalizePath(diagnosticsPath));
         return new ThumbnailV7Result(outputFiles, diagnosticsPath, validation);
@@ -107,7 +95,7 @@ public class ThumbnailV7CinematicOverlayRenderer
 
     private static void CleanFinalFiles(string root)
     {
-        foreach (var file in new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" })
+        foreach (var file in new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png", "v7-background.png", "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" })
         {
             var path = Path.Combine(root, file);
             if (File.Exists(path)) File.Delete(path);
@@ -212,7 +200,20 @@ public sealed class ThumbnailV7TemplatePlanner
 
 public sealed class ThumbnailV7BackgroundPromptBuilder
 {
+    public IReadOnlyDictionary<string, string> BuildVariants(EventVisualIntelligence visualIntelligence, HeroCompositionModel heroComposition, GalleryCompositionModel galleryComposition)
+    {
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["landscape"] = Build(visualIntelligence, heroComposition, galleryComposition, "landscape", "1280x720", "cinematic twilight astronomy scene; main celestial objects on the right or upper-right; left side reserved for a premium dark glass information panel; bottom reserved for footer text blocks"),
+            ["portrait"] = Build(visualIntelligence, heroComposition, galleryComposition, "portrait", "1080x1920", "cinematic vertical astronomy scene; celestial objects in upper-middle or upper-right visual area; title safe at top; lower third reserved for info card; footer safe at bottom; no cropping from landscape"),
+            ["square"] = Build(visualIntelligence, heroComposition, galleryComposition, "square", "1080x1080", "cinematic square astronomy scene; object focus center-right; lower-left or left reserved for info card; footer safe at bottom")
+        };
+    }
+
     public string Build(EventVisualIntelligence visualIntelligence, HeroCompositionModel heroComposition, GalleryCompositionModel galleryComposition)
+        => Build(visualIntelligence, heroComposition, galleryComposition, "landscape", "1280x720", "cinematic twilight astronomy scene; main celestial objects on the right or upper-right; left side reserved for info panel; bottom reserved for footer");
+
+    private string Build(EventVisualIntelligence visualIntelligence, HeroCompositionModel heroComposition, GalleryCompositionModel galleryComposition, string variantName, string dimensions, string layoutInstruction)
     {
         var objects = visualIntelligence.ObjectNames.Count == 0 ? "the event objects" : string.Join(" and ", visualIntelligence.ObjectNames);
         var skyDirection = FirstNonEmpty(visualIntelligence.SkyDirectionHint, heroComposition.DirectionCue, galleryComposition.HorizonCue, "event horizon");
@@ -221,15 +222,17 @@ public sealed class ThumbnailV7BackgroundPromptBuilder
 
         return string.Join(" ", new[]
         {
-            $"Create cinematic background-only {DescribeSky(visualIntelligence.EventType, skyDirection)} for {title}.",
+            $"Create a {dimensions} {variantName} background-only image: {DescribeSky(visualIntelligence.EventType, skyDirection)} for {title}.",
+            layoutInstruction + ".",
             $"{objects} visible naturally near each other when part of the event story.",
-            "Beautiful horizon.",
+            "For planet events, render Jupiter, Venus, Moon, or named planets as beautiful bright planet-like objects, not tiny star dots, and keep them only in the open visual area away from reserved overlay zones.",
+            "Beautiful horizon and atmospheric depth.",
             mood + ".",
             "National Geographic quality.",
             "No text.",
             "No labels.",
-            "Reserve left side for observation card.",
-            "Reserve bottom strip for footer.",
+            "No UI.",
+            "Respect all reserved overlay-safe zones for this exact aspect ratio.",
             "Do not include UI, infographic panels, dashboard cards, widget panels, star-map graphics, or extra celestial objects."
         });
     }
@@ -272,7 +275,7 @@ public sealed class ThumbnailV7VariantRenderer
     private static void DrawAzureBackgroundLayer(IImageProcessingContext ctx, string backgroundImagePath, int width, int height)
     {
         using var background = Image.Load<Rgba32>(backgroundImagePath);
-        background.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }));
+        background.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Stretch }));
         ctx.DrawImage(background, 1f);
         ctx.Fill(Color.Black.WithAlpha(.18f), new RectangularPolygon(0, 0, width, height));
     }
@@ -296,13 +299,13 @@ public sealed class ThumbnailV7VariantRenderer
         ctx.DrawText(obs.Subtitle, subtitleFont, Color.FromRgb(134, 211, 255), new PointF(margin, margin * 2.05f));
         if (profile.Family == "PlanetConjunction") ctx.DrawText(obs.DirectionCue, labelFont, Color.FromRgb(255, 220, 150), new PointF(margin, margin * 2.58f));
         var cardW = width * .30f; var rowH = height * .063f; var cardH = rowH * plan.Cards.Count + margin * .9f; var y = height * .29f;
-        ctx.Fill(Color.FromRgb(3, 9, 23).WithAlpha(.68f), new RectangularPolygon(margin, y, cardW, cardH));
+        DrawGlassPanel(ctx, margin, y, cardW, cardH);
         for (var i = 0; i < plan.Cards.Count; i++)
         {
             var rowY = y + margin * .42f + i * rowH;
-            ctx.DrawText("✦", valueFont, Color.FromRgb(255, 213, 111), new PointF(margin * 1.24f, rowY));
-            ctx.DrawText(plan.Cards[i].Label.ToUpperInvariant(), labelFont, Color.FromRgb(145, 185, 218), new PointF(margin * 1.72f, rowY));
-            ctx.DrawText(Trim(plan.Cards[i].Value, 26), valueFont, Color.White, new PointF(margin * 1.72f, rowY + rowH * .36f));
+            DrawInfoIcon(ctx, i, new PointF(margin * 1.38f, rowY + rowH * .28f), Math.Max(10, width / 92));
+            ctx.DrawText(plan.Cards[i].Label.ToUpperInvariant(), labelFont, Color.FromRgb(79, 221, 255), new PointF(margin * 1.82f, rowY));
+            ctx.DrawText(Trim(plan.Cards[i].Value, 26), valueFont, Color.White, new PointF(margin * 1.82f, rowY + rowH * .36f));
         }
         ctx.DrawText(obs.DirectionMarker, subtitleFont, Color.FromRgb(255, 214, 118), new PointF(width * .76f, height * .72f));
     }
@@ -311,15 +314,67 @@ public sealed class ThumbnailV7VariantRenderer
         var margin = width * plan.SafeMarginPercent / 100f;
         var font = SystemFonts.Collection.Families.First().CreateFont(Math.Max(15, width / 76), FontStyle.Bold);
         var y = height - margin * 1.36f;
-        ctx.Fill(Color.Black.WithAlpha(.48f), new RectangularPolygon(margin, height - margin * 1.8f, width - margin * 2, margin * .92f));
-        ctx.DrawText(string.Join("   •   ", plan.FooterTips), font, Color.FromRgb(248, 229, 176), new PointF(margin * 1.28f, y));
+        var panelY = height - margin * 1.95f;
+        var panelH = margin * 1.05f;
+        DrawGlassPanel(ctx, margin, panelY, width - margin * 2, panelH);
+        var blockW = (width - margin * 2) / Math.Max(1, plan.FooterTips.Count);
+        for (var i = 0; i < plan.FooterTips.Count; i++)
+        {
+            var x = margin + i * blockW + margin * .35f;
+            DrawFooterIcon(ctx, i, new PointF(x, panelY + panelH * .52f), Math.Max(12, width / 78));
+            ctx.DrawText(plan.FooterTips[i], font, Color.FromRgb(255, 220, 100), new PointF(x + margin * .55f, y));
+        }
+    }
+
+    private static void DrawGlassPanel(IImageProcessingContext ctx, float x, float y, float w, float h)
+    {
+        var radius = Math.Min(w, h) * .12f;
+        var fill = Color.FromRgb(2, 10, 24).WithAlpha(.74f);
+        var stroke = Color.FromRgb(68, 219, 255).WithAlpha(.38f);
+        ctx.Fill(fill, new RectangularPolygon(x + radius, y, w - radius * 2, h));
+        ctx.Fill(fill, new RectangularPolygon(x, y + radius, w, h - radius * 2));
+        ctx.Fill(fill, new EllipsePolygon(new PointF(x + radius, y + radius), radius));
+        ctx.Fill(fill, new EllipsePolygon(new PointF(x + w - radius, y + radius), radius));
+        ctx.Fill(fill, new EllipsePolygon(new PointF(x + radius, y + h - radius), radius));
+        ctx.Fill(fill, new EllipsePolygon(new PointF(x + w - radius, y + h - radius), radius));
+        ctx.Draw(stroke, Math.Max(2, w / 240), new RectangularPolygon(x + radius, y, w - radius * 2, h));
+        ctx.Draw(stroke, Math.Max(2, w / 240), new RectangularPolygon(x, y + radius, w, h - radius * 2));
+        ctx.DrawLine(Color.White.WithAlpha(.20f), Math.Max(1, w / 360), new PointF(x + radius, y + 2), new PointF(x + w - radius, y + 2));
+    }
+    private static void DrawInfoIcon(IImageProcessingContext ctx, int index, PointF center, float r)
+    {
+        var cyan = Color.FromRgb(68, 219, 255);
+        var yellow = Color.FromRgb(255, 213, 93);
+        ctx.Fill(Color.FromRgb(6, 23, 44).WithAlpha(.88f), new EllipsePolygon(center, r * 1.25f));
+        ctx.Draw(cyan.WithAlpha(.82f), Math.Max(2, r / 4), new EllipsePolygon(center, r * 1.25f));
+        if (index % 3 == 0)
+            ctx.DrawLine(yellow, Math.Max(2, r / 3), new PointF(center.X, center.Y - r * .65f), new PointF(center.X, center.Y + r * .65f));
+        else if (index % 3 == 1)
+        {
+            ctx.Draw(cyan, Math.Max(2, r / 4), new EllipsePolygon(center, r * .62f));
+            ctx.DrawLine(yellow, Math.Max(2, r / 4), center, new PointF(center.X + r * .42f, center.Y - r * .34f));
+        }
+        else
+            ctx.Fill(yellow, new EllipsePolygon(center, r * .45f));
+    }
+    private static void DrawFooterIcon(IImageProcessingContext ctx, int index, PointF center, float r)
+    {
+        var cyan = Color.FromRgb(68, 219, 255);
+        var yellow = Color.FromRgb(255, 213, 93);
+        ctx.Draw(cyan, Math.Max(2, r / 5), new EllipsePolygon(center, r));
+        if (index % 3 == 0)
+            ctx.DrawLine(yellow, Math.Max(2, r / 4), new PointF(center.X - r * .65f, center.Y), new PointF(center.X + r * .65f, center.Y));
+        else if (index % 3 == 1)
+            ctx.DrawLine(yellow, Math.Max(2, r / 4), center, new PointF(center.X + r * .45f, center.Y - r * .55f));
+        else
+            ctx.Fill(yellow, new EllipsePolygon(center, r * .34f));
     }
     private static string Trim(string value, int max) => value.Length <= max ? value : value[..(max - 1)] + "…";
 }
 
 public sealed class ThumbnailV7Validator
 {
-    public ThumbnailV7Diagnostics Validate(string root, ThumbnailV7Plan plan, ThumbnailV7Composition composition, IReadOnlyList<ThumbnailV7OutputWrite> writes, ThumbnailV7Observation observation, bool backgroundGenerated, bool backgroundFallbackUsed, string? azureImage2Error, string? backgroundImagePath)
+    public ThumbnailV7Diagnostics Validate(string root, ThumbnailV7Plan plan, ThumbnailV7Composition composition, IReadOnlyList<ThumbnailV7OutputWrite> writes, ThumbnailV7Observation observation, IReadOnlyDictionary<string, ThumbnailV7VariantBackground> backgrounds)
     {
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" };
         var outputFiles = required.Select(file => Path.Combine(root, file).Replace('\\', '/')).ToArray();
@@ -327,9 +382,12 @@ public sealed class ThumbnailV7Validator
         var oldWriterDetected = writes.Any(w => !string.Equals(w.WriterComponent, ThumbnailV7CinematicOverlayRenderer.RendererName, StringComparison.Ordinal));
         var jupiterVenusEvent = observation.ObjectNames.Any(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && observation.ObjectNames.Any(o => o.Equals("Venus", StringComparison.OrdinalIgnoreCase));
         var mercuryLeak = jupiterVenusEvent && observation.ObjectNames.Any(o => o.Equals("Mercury", StringComparison.OrdinalIgnoreCase));
+        var backgroundGenerated = backgrounds.Values.Any(b => b.Generated);
+        var backgroundFallbackUsed = backgrounds.Values.Any(b => !b.Generated);
+        var azureImage2Error = string.Join("; ", backgrounds.Values.Select(b => b.AzureResult.FailureReason).Where(e => !string.IsNullOrWhiteSpace(e)));
         var valid = missing.Length == 0 && !oldWriterDetected && !mercuryLeak && !composition.OverlapDetected && composition.InformationAreaPercent <= 35 && composition.VisualAreaPercent >= 65 && !string.IsNullOrWhiteSpace(plan.SelectedTemplate) && !plan.DashboardCardsDetected && !plan.PreviewWidgetsDetected;
         if (!valid) throw new InvalidOperationException($"Thumbnail V7 validation failed: missing={string.Join(',', missing)}, oldWriterDetected={oldWriterDetected}, overlap={composition.OverlapDetected}, info={composition.InformationAreaPercent}, visual={composition.VisualAreaPercent}, template={plan.SelectedTemplate}");
-        return new ThumbnailV7Diagnostics("V7", ThumbnailV7CinematicOverlayRenderer.RendererName, "ThumbnailV7Validator", "HeroGalleryEventVisualLogic", plan.SelectedTemplate, backgroundGenerated, backgroundFallbackUsed, azureImage2Error, backgroundImagePath is null ? null : backgroundImagePath.Replace('\\', '/'), true, true, true, false, false, false, false, false, false, false, mercuryLeak, outputFiles, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected);
+        return new ThumbnailV7Diagnostics("V7", ThumbnailV7CinematicOverlayRenderer.RendererName, "ThumbnailV7Validator", "HeroGalleryEventVisualLogic", plan.SelectedTemplate, backgroundGenerated, backgroundFallbackUsed, string.IsNullOrWhiteSpace(azureImage2Error) ? null : azureImage2Error, backgrounds.GetValueOrDefault("landscape")?.Path.Replace('\\', '/'), backgrounds.GetValueOrDefault("landscape")?.Path.Replace('\\', '/'), backgrounds.GetValueOrDefault("portrait")?.Path.Replace('\\', '/'), backgrounds.GetValueOrDefault("square")?.Path.Replace('\\', '/'), "PerVariantAzureImage2", false, true, false, true, true, true, false, false, false, false, false, false, false, mercuryLeak, outputFiles, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected);
     }
 }
 
@@ -377,5 +435,6 @@ public sealed record ThumbnailV7InfoCard(string Label, string Value);
 public sealed record ThumbnailV7Composition(bool OverlapDetected, int InformationAreaPercent, int VisualAreaPercent);
 public sealed record ThumbnailV7Variant(string Name, string FileName, int Width, int Height);
 public sealed record ThumbnailV7OutputWrite(string Path, string WriterComponent);
+public sealed record ThumbnailV7VariantBackground(string VariantName, string Path, string Prompt, ThumbnailV7AzureImage2GenerationResult AzureResult, bool Generated);
 public sealed record ThumbnailV7AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
-public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string Validator, string BackgroundPromptSource, string SelectedTemplate, bool BackgroundGenerated, bool BackgroundFallbackUsed, string? AzureImage2Error, string? BackgroundImagePath, bool ObservationCardRendered, bool FooterRendered, bool OldValidationBlocked, bool ThumbnailReviewJsonRequired, bool ManualCelestialAssetPlacement, bool V6RendererExecuted, bool V6ValidatorExecuted, bool DashboardCardsAppear, bool ExtraObjectsDetected, bool V5RendererExecuted, bool MercuryAppears, IReadOnlyList<string> OutputFiles, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected);
+public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string Validator, string BackgroundPromptSource, string SelectedTemplate, bool BackgroundGenerated, bool BackgroundFallbackUsed, string? AzureImage2Error, string? BackgroundImagePath, string? LandscapeBackgroundPath, string? PortraitBackgroundPath, string? SquareBackgroundPath, string BackgroundMode, bool CropFromLandscape, bool VectorIconsUsed, bool EmojiIconsUsed, bool ObservationCardRendered, bool FooterRendered, bool OldValidationBlocked, bool ThumbnailReviewJsonRequired, bool ManualCelestialAssetPlacement, bool V6RendererExecuted, bool V6ValidatorExecuted, bool DashboardCardsAppear, bool ExtraObjectsDetected, bool V5RendererExecuted, bool MercuryAppears, IReadOnlyList<string> OutputFiles, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected);
