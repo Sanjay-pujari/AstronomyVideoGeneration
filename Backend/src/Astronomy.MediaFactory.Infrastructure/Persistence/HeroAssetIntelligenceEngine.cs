@@ -17,6 +17,7 @@ using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Path = System.IO.Path;
+using SixLabors.ImageSharp.Drawing;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
