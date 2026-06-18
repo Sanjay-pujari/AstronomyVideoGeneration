@@ -227,7 +227,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
-        var result = await new ThumbnailV7InfographicRenderer(thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial").RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
+        var result = await new ThumbnailV7CinematicOverlayRenderer(thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial").RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -235,13 +235,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ThumbnailReadabilityScore: 98,
             ThumbnailClickabilityScore: 96,
             ThumbnailCuriosityScore: 95,
-            ThumbnailVisualSourceMode: "ThumbnailV7PremiumAstronomyInfographic",
+            ThumbnailVisualSourceMode: "ThumbnailV7CinematicEventBackground",
             SourceSceneUsed: "AzureImage2BackgroundOnly",
             ApprovedSceneFoundationUsed: false,
-            IndependentPlanetRedrawUsed: true,
+            IndependentPlanetRedrawUsed: false,
             ArtificialGlowRemoved: true,
             VisualSourceQualityScore: 98,
-            CinematicCropApplied: false,
+            CinematicCropApplied: true,
             EnvironmentVisibilityScore: 98,
             AstronomyContextScore: 98,
             ThumbnailFinalReadinessScore: 98,
@@ -254,13 +254,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             result.OutputFiles,
             validation,
             warnings: [],
-            requestedRenderer: "ThumbnailV7InfographicRenderer",
-            actualRendererUsed: "ThumbnailV7InfographicRenderer",
-            rendererSelectionReason: "ThumbnailGeneration:EnableThumbnailV7 is true; Phase 12 routes to the clean V7 infographic module instead of V5 fallback.",
+            requestedRenderer: "ThumbnailV7CinematicOverlayRenderer",
+            actualRendererUsed: "ThumbnailV7CinematicOverlayRenderer",
+            rendererSelectionReason: "ThumbnailGeneration:EnableThumbnailV7 is true; Phase 12 routes to the V7 cinematic event background plus clean overlay instead of V5 fallback.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: false,
             photoCinematicRendererCompleted: false,
-            outputWriteSource: "ThumbnailV7InfographicRenderer",
+            outputWriteSource: "ThumbnailV7CinematicOverlayRenderer",
             outputOverwriteDetected: false,
             thumbnailLayoutValidationPath: result.DiagnosticsPath);
     }

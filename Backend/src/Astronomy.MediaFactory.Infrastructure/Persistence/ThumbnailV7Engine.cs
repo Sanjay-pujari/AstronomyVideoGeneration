@@ -13,22 +13,20 @@ using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public class ThumbnailV7InfographicRenderer
+public class ThumbnailV7CinematicOverlayRenderer
 {
-    public const string RendererName = "ThumbnailV7InfographicRenderer";
+    public const string RendererName = "ThumbnailV7CinematicOverlayRenderer";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private readonly string _celestialAssetsRoot;
     private readonly ThumbnailV7ProfileResolver _profileResolver = new();
     private readonly ThumbnailV7ObservationModelBuilder _observationBuilder = new();
     private readonly ThumbnailV7TemplatePlanner _templatePlanner = new();
     private readonly ThumbnailV7BackgroundPromptBuilder _promptBuilder = new();
-    private readonly ThumbnailV7InfographicComposer _composer = new();
+    private readonly ThumbnailV7CinematicOverlayComposer _composer = new();
     private readonly ThumbnailV7VariantRenderer _renderer = new();
     private readonly ThumbnailV7Validator _validator = new();
 
-    public ThumbnailV7InfographicRenderer(string celestialAssetsRoot = "assets/celestial")
+    public ThumbnailV7CinematicOverlayRenderer(string celestialAssetsRoot = "assets/celestial")
     {
-        _celestialAssetsRoot = ResolveCelestialAssetsRoot(celestialAssetsRoot);
     }
 
     public async Task<ThumbnailV7Result> RenderAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, bool overwriteExisting, CancellationToken cancellationToken)
@@ -37,7 +35,6 @@ public class ThumbnailV7InfographicRenderer
         CleanFinalFiles(thumbnailRoot);
         var profile = _profileResolver.Resolve(request);
         var observation = _observationBuilder.Build(request, profile);
-        var assets = ThumbnailV7CelestialAssetLayer.Resolve(_celestialAssetsRoot, observation.AssetObjectKeys);
         var plan = _templatePlanner.Plan(profile, observation);
         var backgroundPrompt = _promptBuilder.Build(profile, observation, plan);
         var composition = _composer.Compose(plan);
@@ -46,16 +43,16 @@ public class ThumbnailV7InfographicRenderer
         foreach (var variant in ThumbnailV7VariantRenderer.Variants)
         {
             var path = Path.Combine(thumbnailRoot, variant.FileName);
-            await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, assets, cancellationToken);
+            await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, cancellationToken);
             writes.Add(new ThumbnailV7OutputWrite(path, RendererName));
         }
 
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), Path.Combine(thumbnailRoot, "thumbnail-final.png"), overwrite: true);
         writes.Insert(0, new ThumbnailV7OutputWrite(Path.Combine(thumbnailRoot, "thumbnail-final.png"), RendererName));
-        var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, assets);
+        var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation);
         var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
         var promptPath = Path.Combine(thumbnailRoot, "thumbnail-prompt.json");
-        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2BackgroundOnly = true, forbiddenBackgroundContent = new[] { "text", "planets", "moon", "sun", "labels" }, layers = ThumbnailV7Plan.LayerNames, profile, observation, plan }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, profile, observation, plan }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         return new ThumbnailV7Result(writes.Select(w => NormalizePath(w.Path)).Append(NormalizePath(promptPath)).Append(NormalizePath(diagnosticsPath)).ToArray(), diagnosticsPath, validation);
     }
@@ -69,22 +66,15 @@ public class ThumbnailV7InfographicRenderer
         }
     }
 
-    private static string ResolveCelestialAssetsRoot(string configuredRoot)
-    {
-        var candidates = new[]
-        {
-            configuredRoot,
-            Path.Combine(AppContext.BaseDirectory, configuredRoot),
-            Path.Combine(Directory.GetCurrentDirectory(), configuredRoot),
-            Path.Combine(Directory.GetCurrentDirectory(), "Backend", "src", "Astronomy.MediaFactory.Api", configuredRoot)
-        };
-        return candidates.Select(Path.GetFullPath).FirstOrDefault(Directory.Exists) ?? Path.GetFullPath(configuredRoot);
-    }
-
     private static string NormalizePath(string path) => path.Replace('\\', '/');
 }
 
-public sealed class ThumbnailV7Engine : ThumbnailV7InfographicRenderer
+public sealed class ThumbnailV7InfographicRenderer : ThumbnailV7CinematicOverlayRenderer
+{
+    public ThumbnailV7InfographicRenderer(string celestialAssetsRoot = "assets/celestial") : base(celestialAssetsRoot) { }
+}
+
+public sealed class ThumbnailV7Engine : ThumbnailV7CinematicOverlayRenderer
 {
     public ThumbnailV7Engine(string celestialAssetsRoot = "assets/celestial") : base(celestialAssetsRoot) { }
 }
@@ -128,8 +118,19 @@ public sealed class ThumbnailV7ObservationModelBuilder
     private static IReadOnlyList<string> EnsurePlanetConjunctionObjects(ProductionEventIntelligence? intel)
     {
         var objects = (intel?.ResolvedObjectNames ?? intel?.PrimaryObjects ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
-        foreach (var required in new[] { "Jupiter", "Venus", "Mercury" }) if (!objects.Any(o => o.Equals(required, StringComparison.OrdinalIgnoreCase))) objects.Add(required);
-        return objects.Take(3).ToArray();
+        var jupiterVenusEvent = objects.Any(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Equals("Venus", StringComparison.OrdinalIgnoreCase));
+        if (jupiterVenusEvent)
+        {
+            return objects.Where(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase) || o.Equals("Venus", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(2)
+                .ToArray();
+        }
+
+        return objects
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
     }
     private static string CleanTitle(string value) => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(value.Replace('_', ' ').Trim().ToLowerInvariant());
     private static string CleanDirection(string value) => value.Trim();
@@ -147,7 +148,7 @@ public sealed class ThumbnailV7TemplatePlanner
             "MeteorShower" => new[] { new ThumbnailV7InfoCard("Date", obs.DateLabel), new("Best Time", obs.TimeLabel), new("Where To Look", obs.DirectionCue), new("Equipment", obs.Equipment), new("Moon Conditions", obs.MoonCondition) },
             "NamedFullMoon" => new[] { new ThumbnailV7InfoCard("Date", obs.DateLabel), new("Best Time", obs.TimeLabel), new("Direction", obs.DirectionCue), new("Moon Phase", "Full Moon"), new("Equipment", obs.Equipment) },
             "SolarEclipse" => new[] { new ThumbnailV7InfoCard("Date", obs.DateLabel), new("Best Time", obs.TimeLabel), new("Direction", obs.DirectionCue), new("Safety", "Certified solar filter"), new("Equipment", obs.Equipment) },
-            _ => new[] { new ThumbnailV7InfoCard("Date", obs.DateLabel), new("Best Viewing Time", obs.TimeLabel), new("Direction", obs.DirectionCue), new("Objects Visible", string.Join(" + ", obs.ObjectNames)), new("Equipment", obs.Equipment) }
+            _ => new[] { new ThumbnailV7InfoCard("Event Type", obs.Subtitle), new("Date", obs.DateLabel), new("Best Viewing Time", obs.TimeLabel), new("Direction", obs.DirectionCue), new("Objects Visible", string.Join(" + ", obs.ObjectNames)), new("Equipment", obs.Equipment) }
         };
         var template = profile.Family switch { "MeteorShower" => "MeteorShowerV7Template", "NamedFullMoon" => "NamedFullMoonV7Template", "SolarEclipse" => "SolarEclipseV7Template", _ => "PlanetConjunctionV7Template" };
         string[] footer = profile.Family switch
@@ -155,7 +156,7 @@ public sealed class ThumbnailV7TemplatePlanner
             "MeteorShower" => ["Find dark skies", "Face the radiant", "Let eyes adapt"],
             "NamedFullMoon" => ["Find open horizon", "Watch near moonrise", "Binoculars optional"],
             "SolarEclipse" => ["Use certified solar filter", "Never look unfiltered", "Check local visibility"],
-            _ => ["Find clear horizon", "Begin observing after sunset", "No telescope required"]
+            _ => ["Find clear horizon", "Observe after sunset", "No telescope required"]
         };
         return new ThumbnailV7Plan(template, 32, 68, 5, cards, footer);
     }
@@ -164,42 +165,27 @@ public sealed class ThumbnailV7TemplatePlanner
 public sealed class ThumbnailV7BackgroundPromptBuilder
 {
     public string Build(ThumbnailV7Profile profile, ThumbnailV7Observation observation, ThumbnailV7Plan plan)
-        => $"Azure Image 2 background only for a premium astronomy observation infographic: twilight sky, horizon, stars, landscape atmosphere, {profile.Family} mood. No embedded text, no labels, no planets, no moon, no sun, no preview widgets, no dashboard cards. Keep at least {plan.VisualAreaPercent}% clean visual sky area.";
+        => $"Azure Image 2 background-only image. Cinematic event-specific astronomy background for {observation.Title}: natural twilight sky and horizon atmosphere, with {BuildObjectPhrase(observation.ObjectNames)} naturally visible on the right / center-right when part of the event story. Reserve the left side for an observation card and reserve the bottom for a footer. No text, no labels, no UI, no infographic elements, no dashboard cards, no widget panels, no star-map style graphics, no extra celestial objects.";
+
+    private static string BuildObjectPhrase(IReadOnlyList<string> objects)
+        => objects.Count == 0 ? "only the astronomy event objects from the supplied story" : $"only {string.Join(" and ", objects)}";
 }
 
-public sealed class ThumbnailV7InfographicComposer
+public sealed class ThumbnailV7CinematicOverlayComposer
 {
     public ThumbnailV7Composition Compose(ThumbnailV7Plan plan) => new(false, plan.InformationAreaPercent, plan.VisualAreaPercent);
-}
-
-public sealed class ThumbnailV7CelestialAssetLayer
-{
-    public static ThumbnailV7AssetManifest Resolve(string root, IReadOnlyList<string> keys)
-    {
-        var loaded = new List<ThumbnailV7LoadedAsset>();
-        var missing = new List<string>();
-        foreach (var key in keys)
-        {
-            var path = Path.Combine(root, key, "hero-transparent.png");
-            if (File.Exists(path)) loaded.Add(new ThumbnailV7LoadedAsset(key, path.Replace('\\', '/')));
-            else missing.Add(path.Replace('\\', '/'));
-        }
-        return new ThumbnailV7AssetManifest(loaded, missing);
-    }
 }
 
 public sealed class ThumbnailV7VariantRenderer
 {
     public static readonly IReadOnlyList<ThumbnailV7Variant> Variants = [new("landscape", "thumbnail-landscape.png", 1280, 720), new("portrait", "thumbnail-portrait.png", 1080, 1920), new("square", "thumbnail-square.png", 1080, 1080)];
-    public async Task RenderAsync(string path, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7Plan plan, ThumbnailV7Composition composition, ThumbnailV7AssetManifest assets, CancellationToken cancellationToken)
+    public async Task RenderAsync(string path, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7Plan plan, ThumbnailV7Composition composition, CancellationToken cancellationToken)
     {
         using var image = new Image<Rgba32>(width, height, Color.FromRgb(5, 9, 27));
         image.Mutate(ctx =>
         {
             DrawBackgroundLayer(ctx, width, height, profile);
-            DrawCelestialAssetLayer(ctx, width, height, profile, obs, assets);
             DrawObservationCardLayer(ctx, width, height, profile, obs, plan);
-            DrawObjectCalloutLayer(ctx, width, height, profile, obs);
             DrawFooterTipsLayer(ctx, width, height, plan);
         });
         await image.SaveAsPngAsync(path, new PngEncoder(), cancellationToken);
@@ -211,17 +197,6 @@ public sealed class ThumbnailV7VariantRenderer
         ctx.Fill(Color.FromRgb(16, 25, 34).WithAlpha(.92f), new RectangularPolygon(0, height * .76f, width, height * .24f));
         ctx.Fill(Color.FromRgb(2, 9, 17).WithAlpha(.88f), new RectangularPolygon(0, height * .82f, width, height * .18f));
         if (profile.Family == "MeteorShower") for (var i = 0; i < 9; i++) ctx.DrawLine(Color.White.WithAlpha(.72f), Math.Max(2, width / 360), new PointF(width * (.45f + i * .04f), height * (.16f + i % 3 * .07f)), new PointF(width * (.38f + i * .035f), height * (.24f + i % 3 * .07f)));
-    }
-    private static void DrawCelestialAssetLayer(IImageProcessingContext ctx, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7AssetManifest assets)
-    {
-        PointF[] positions = profile.Family == "SolarEclipse" ? [new PointF(width * .66f, height * .30f), new PointF(width * .69f, height * .30f)] : profile.Family == "NamedFullMoon" ? [new PointF(width * .68f, height * .30f)] : [new PointF(width * .66f, height * .30f), new PointF(width * .78f, height * .39f), new PointF(width * .57f, height * .43f)];
-        for (var i = 0; i < assets.Loaded.Count && i < positions.Length; i++)
-        {
-            using var asset = Image.Load<Rgba32>(assets.Loaded[i].Path);
-            var size = profile.Family == "NamedFullMoon" ? width * .22f : profile.Family == "SolarEclipse" ? width * .20f : width * (.08f + i * .015f);
-            asset.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)size, (int)size), Mode = ResizeMode.Max }));
-            ctx.DrawImage(asset, new Point((int)(positions[i].X - asset.Width / 2f), (int)(positions[i].Y - asset.Height / 2f)), 1f);
-        }
     }
     private static void DrawObservationCardLayer(IImageProcessingContext ctx, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7Plan plan)
     {
@@ -245,21 +220,6 @@ public sealed class ThumbnailV7VariantRenderer
         }
         ctx.DrawText(obs.DirectionMarker, subtitleFont, Color.FromRgb(255, 214, 118), new PointF(width * .76f, height * .72f));
     }
-    private static void DrawObjectCalloutLayer(IImageProcessingContext ctx, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs)
-    {
-        var font = SystemFonts.Collection.Families.First();
-        var nameFont = font.CreateFont(Math.Max(17, width / 66), FontStyle.Bold);
-        var metaFont = font.CreateFont(Math.Max(13, width / 86), FontStyle.Regular);
-        var objects = profile.Family == "MeteorShower" ? new[] { "Radiant" } : obs.ObjectNames.Take(3).ToArray();
-        for (var i = 0; i < objects.Length; i++)
-        {
-            var x = width * (.55f + i * .11f); var y = height * (.50f + i % 2 * .10f);
-            ctx.DrawLine(Color.White.WithAlpha(.55f), 2, new PointF(x, y), new PointF(x + width * .055f, y - height * .05f));
-            ctx.Fill(Color.Black.WithAlpha(.48f), new RectangularPolygon(x + width * .058f, y - height * .078f, width * .14f, height * .064f));
-            ctx.DrawText(objects[i], nameFont, Color.White, new PointF(x + width * .068f, y - height * .072f));
-            ctx.DrawText(string.IsNullOrWhiteSpace(obs.CalloutMetric) ? (profile.Family == "SolarEclipse" && i == 2 ? "Alignment" : "Visible") : obs.CalloutMetric, metaFont, Color.FromRgb(167, 219, 255), new PointF(x + width * .068f, y - height * .038f));
-        }
-    }
     private static void DrawFooterTipsLayer(IImageProcessingContext ctx, int width, int height, ThumbnailV7Plan plan)
     {
         var margin = width * plan.SafeMarginPercent / 100f;
@@ -273,15 +233,17 @@ public sealed class ThumbnailV7VariantRenderer
 
 public sealed class ThumbnailV7Validator
 {
-    public ThumbnailV7Diagnostics Validate(string root, ThumbnailV7Plan plan, ThumbnailV7Composition composition, IReadOnlyList<ThumbnailV7OutputWrite> writes, ThumbnailV7AssetManifest assets)
+    public ThumbnailV7Diagnostics Validate(string root, ThumbnailV7Plan plan, ThumbnailV7Composition composition, IReadOnlyList<ThumbnailV7OutputWrite> writes, ThumbnailV7Observation observation)
     {
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" };
         var outputFiles = required.Select(file => Path.Combine(root, file).Replace('\\', '/')).ToArray();
         var missing = required.Where(file => !File.Exists(Path.Combine(root, file))).ToArray();
-        var oldWriterDetected = writes.Any(w => !string.Equals(w.WriterComponent, ThumbnailV7InfographicRenderer.RendererName, StringComparison.Ordinal));
-        var valid = missing.Length == 0 && !oldWriterDetected && !composition.OverlapDetected && composition.InformationAreaPercent <= 35 && composition.VisualAreaPercent >= 65 && !string.IsNullOrWhiteSpace(plan.SelectedTemplate) && !plan.DashboardCardsDetected && !plan.PreviewWidgetsDetected;
+        var oldWriterDetected = writes.Any(w => !string.Equals(w.WriterComponent, ThumbnailV7CinematicOverlayRenderer.RendererName, StringComparison.Ordinal));
+        var jupiterVenusEvent = observation.ObjectNames.Any(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && observation.ObjectNames.Any(o => o.Equals("Venus", StringComparison.OrdinalIgnoreCase));
+        var mercuryLeak = jupiterVenusEvent && observation.ObjectNames.Any(o => o.Equals("Mercury", StringComparison.OrdinalIgnoreCase));
+        var valid = missing.Length == 0 && !oldWriterDetected && !mercuryLeak && !composition.OverlapDetected && composition.InformationAreaPercent <= 35 && composition.VisualAreaPercent >= 65 && !string.IsNullOrWhiteSpace(plan.SelectedTemplate) && !plan.DashboardCardsDetected && !plan.PreviewWidgetsDetected;
         if (!valid) throw new InvalidOperationException($"Thumbnail V7 validation failed: missing={string.Join(',', missing)}, oldWriterDetected={oldWriterDetected}, overlap={composition.OverlapDetected}, info={composition.InformationAreaPercent}, visual={composition.VisualAreaPercent}, template={plan.SelectedTemplate}");
-        return new ThumbnailV7Diagnostics("V7", ThumbnailV7InfographicRenderer.RendererName, plan.SelectedTemplate, true, assets.Loaded.Select(a => a.Key).ToArray(), assets.Missing.Select(m => Path.GetFileName(Path.GetDirectoryName(m)) ?? m).ToArray(), true, true, true, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected, outputFiles, true, false, false);
+        return new ThumbnailV7Diagnostics("V7", ThumbnailV7CinematicOverlayRenderer.RendererName, "HeroGalleryEventVisualLogic", plan.SelectedTemplate, true, true, true, true, false, false, false, false, false, false, mercuryLeak, outputFiles, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected);
     }
 }
 
@@ -290,7 +252,7 @@ public sealed record ThumbnailV7Profile(string Family, string Subtitle);
 public sealed record ThumbnailV7Observation(string Title, string Subtitle, string DirectionCue, string DirectionMarker, IReadOnlyList<string> ObjectNames, IReadOnlyList<string> AssetObjectKeys, string TimeLabel, string DateLabel, string Equipment, string MoonCondition, string CalloutMetric);
 public sealed record ThumbnailV7Plan(string SelectedTemplate, int InformationAreaPercent, int VisualAreaPercent, int SafeMarginPercent, IReadOnlyList<ThumbnailV7InfoCard> Cards, IReadOnlyList<string> FooterTips)
 {
-    public static readonly IReadOnlyList<string> LayerNames = ["BackgroundLayer", "CelestialAssetLayer", "ObservationCardLayer", "ObjectCalloutLayer", "FooterTipsLayer"];
+    public static readonly IReadOnlyList<string> LayerNames = ["AzureImage2BackgroundLayer", "ObservationCardV7Layer", "FooterTipsLayer"];
     public bool DashboardCardsDetected => false;
     public bool PreviewWidgetsDetected => false;
 }
@@ -298,6 +260,4 @@ public sealed record ThumbnailV7InfoCard(string Label, string Value);
 public sealed record ThumbnailV7Composition(bool OverlapDetected, int InformationAreaPercent, int VisualAreaPercent);
 public sealed record ThumbnailV7Variant(string Name, string FileName, int Width, int Height);
 public sealed record ThumbnailV7OutputWrite(string Path, string WriterComponent);
-public sealed record ThumbnailV7LoadedAsset(string Key, string Path);
-public sealed record ThumbnailV7AssetManifest(IReadOnlyList<ThumbnailV7LoadedAsset> Loaded, IReadOnlyList<string> Missing);
-public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string SelectedTemplate, bool BackgroundGenerated, IReadOnlyList<string> CelestialAssetsLoaded, IReadOnlyList<string> MissingCelestialAssets, bool ObservationCardRendered, bool CalloutsRendered, bool FooterRendered, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected, IReadOnlyList<string> OutputFiles, bool OldRendererBlocked, bool V5RendererExecuted, bool V6RendererExecuted);
+public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string BackgroundPromptSource, string SelectedTemplate, bool BackgroundGenerated, bool ObservationCardRendered, bool FooterRendered, bool OldValidationBlocked, bool ThumbnailReviewJsonRequired, bool ManualCelestialAssetPlacement, bool V6RendererExecuted, bool DashboardCardsAppear, bool ExtraObjectsDetected, bool V5RendererExecuted, bool MercuryAppears, IReadOnlyList<string> OutputFiles, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected);
