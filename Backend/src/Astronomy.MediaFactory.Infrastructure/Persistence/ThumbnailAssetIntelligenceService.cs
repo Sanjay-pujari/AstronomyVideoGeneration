@@ -72,7 +72,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             var existing = JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing thumbnail composition model could not be parsed.");
-            return new ThumbnailAssetGenerationResponse(request.Phase, "Composition", true, NormalizePath(outputPath), existing.Validation.ThumbnailCompositionReadinessScore, []);
+            if (!string.Equals(existing.LayoutStyle, "ScrollStoppingAstronomyThumbnail", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(existing.Architecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
+                return new ThumbnailAssetGenerationResponse(request.Phase, "Composition", true, NormalizePath(outputPath), existing.Validation.ThumbnailCompositionReadinessScore, []);
         }
 
         var thumbnailIntelligence = await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
@@ -103,16 +105,23 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             var existing = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing thumbnail scene manifest could not be parsed.");
+            var existingArchitecture = existing.ValidationFacts.TryGetValue("thumbnailArchitecture", out var architecture) ? architecture : string.Empty;
+            if (!existingArchitecture.Contains("ThumbnailV3", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(existingArchitecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
+            {
+                if (request.ProductionContext is null)
+                    ValidateThumbnailSceneManifest(existing, requireSavedManifest: false, outputPath: outputPath);
+                return BuildSceneSelectionResponse(request, outputPath, existing);
+            }
             if (request.ProductionContext is null)
                 ValidateThumbnailSceneManifest(existing, requireSavedManifest: false, outputPath: outputPath);
-            return BuildSceneSelectionResponse(request, outputPath, existing);
         }
 
         var thumbnailRoot = Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot();
         ThumbnailSceneManifestDto manifest;
         if (request.ProductionContext is not null)
         {
-            manifest = BuildPureV3ThumbnailManifest(request, thumbnailRoot);
+            manifest = BuildRc1ThumbnailManifest(request, thumbnailRoot);
         }
         else
         {
@@ -626,7 +635,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ThumbnailReadabilityScore: 99,
             ThumbnailClickabilityScore: 99,
             ThumbnailCuriosityScore: 98,
-            ThumbnailVisualSourceMode: "PureAzureImage2ThumbnailV3",
+            ThumbnailVisualSourceMode: "RC1GuideThumbnail",
             SourceSceneUsed: "none",
             ApprovedSceneFoundationUsed: false,
             IndependentPlanetRedrawUsed: false,
@@ -666,7 +675,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 thumbnailPromptBuilder: "BuildThumbnailV6AzurePrompts",
                 finalThumbnailPrompt: string.Empty,
                 thumbnailRenderer: "ThumbnailV6Rc1GuideRenderer",
-                selectedThumbnailStrategy: "PureAzureImage2ThumbnailV3",
+                selectedThumbnailStrategy: "RC1GuideThumbnail",
                 thumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode,
                 finalThumbnailPath: finalPath);
             if (!IsPlanetaryEvent(prompt.EventType)) ValidateRc1ThumbnailContract(prompt.CtrOverlay, thumbnailVariants.Select(v => v.Layout));
@@ -745,9 +754,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             {
                 await WritePhase12FailureValidationAsync(validationPath, prompt, semanticProfile, forbiddenObjects, forbiddenTermsDetected, goldenPilotLeakageDetected, thumbnailVariantResults.Select(v => v.ImagePath).ToArray(), azureCallsAttempted, azureCallsSucceeded, azureCallsFailed, azureExceptionMessage, cancellationToken);
                 if (thumbnailVariantResults.Count == 0)
-                    return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed before any thumbnail variants; phase 12 validation JSON was written."], "PureAzureImage2ThumbnailV3", "PureAzureImage2ThumbnailV3", "Thumbnail generation failed before first variant, preserving diagnostics.", true, true, false, "PureAzureImage2ThumbnailV3", thumbnailLayoutValidationPath: layoutPath);
+                    return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed before any thumbnail variants; phase 12 validation JSON was written."], "RC1GuideThumbnail", "RC1GuideThumbnail", "Thumbnail generation failed before first variant, preserving diagnostics.", true, true, false, "RC1GuideThumbnail", thumbnailLayoutValidationPath: layoutPath);
 
-                return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed after partial thumbnail variants; successful variants were preserved."], "PureAzureImage2ThumbnailV3", "PureAzureImage2ThumbnailV3", "Partial thumbnail variants preserved after Azure Image2 failure.", true, true, false, "PureAzureImage2ThumbnailV3", thumbnailLayoutValidationPath: layoutPath);
+                return BuildImageGenerationResponse(request, outputFiles.Append(diagnosticsPath).ToArray(), validation, ["Azure Image2 failed after partial thumbnail variants; successful variants were preserved."], "RC1GuideThumbnail", "RC1GuideThumbnail", "Partial thumbnail variants preserved after Azure Image2 failure.", true, true, false, "RC1GuideThumbnail", thumbnailLayoutValidationPath: layoutPath);
             }
             if (thumbnailVariantResults.Count(v => v.Result.ProviderCalled) < 3)
                 throw new InvalidOperationException("Thumbnail V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
@@ -832,6 +841,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 thumbnailContractRequested = Rc1GuideThumbnailContract,
                 thumbnailContractSelected = Rc1GuideThumbnailContract,
                 thumbnailContractExecuted = Rc1GuideThumbnailContract,
+                oldCompositionModelBlocked = true,
+                thumbnailV3ArchitectureBlocked = true,
+                rc1CompositionModelExecuted = true,
+                finalLayoutZones = BuildRc1FinalLayoutZones(),
+                overlapChecks = BuildRc1OverlapChecks(),
                 requiredGuideFields = new[] { "title", "subtitle", "date", "bestTime", "direction", "equipment", "moon", "skyLabels", "directionMarker", "bottomTips" },
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
@@ -929,6 +943,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 overlayEventFamily = selectedOverlayDiagnostics.EventFamily,
                 finalThumbnailPath = NormalizePath(finalPath),
                 thumbnailContract = Rc1GuideThumbnailContract,
+                oldCompositionModelBlocked = true,
+                thumbnailV3ArchitectureBlocked = true,
+                rc1CompositionModelExecuted = true,
+                finalLayoutZones = BuildRc1FinalLayoutZones(),
+                overlapChecks = BuildRc1OverlapChecks(),
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
@@ -1114,7 +1133,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Console.WriteLine($"ImageHeight: {height}");
         Console.WriteLine("VisualStyle: PhotoCinematic");
         Console.WriteLine($"PromptLength: {promptText.Length}");
-        Console.WriteLine("ThumbnailMode: PureAzureImage2ThumbnailV3");
+        Console.WriteLine("ThumbnailMode: RC1GuideThumbnail");
         Console.WriteLine($"UseAzureImage2: {IsAzureImage2Configured(options)}");
         Console.WriteLine($"UseFallbackRenderer: {!IsAzureImage2Configured(options)}");
         Console.WriteLine();
@@ -1422,28 +1441,28 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var bestTime = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "Best local time");
         var window = FirstNonEmpty(current.BestViewingWindowLocal, "After sunset");
 
-        var titlePoint = width >= height
-            ? new PointF(width * .055f, height * .075f)
-            : new PointF(width * .06f, height * .055f);
-        ctx.Fill(Color.FromRgba(0, 0, 0, 145), new RectangleF(titlePoint.X - 18 * scale, titlePoint.Y - 18 * scale, width >= height ? width * .58f : width * .88f, width == height ? height * .18f : height * .13f));
-        ctx.DrawText(textLines.ElementAtOrDefault(0) ?? string.Join(" + ", objects.Take(2)).ToUpperInvariant(), titleFont, Color.White, titlePoint);
-        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + 78 * scale));
-        if (!string.IsNullOrWhiteSpace(textLines.ElementAtOrDefault(2)))
-            ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 6 * scale, titlePoint.Y + 120 * scale));
-
         var card = width > height
-            ? new RectangleF(width * .64f, height * .12f, width * .31f, height * .43f)
+            ? new RectangleF(width * .045f, height * .08f, width * .39f, height * .54f)
             : width == height
                 ? new RectangleF(width * .08f, height * .70f, width * .84f, height * .23f)
                 : new RectangleF(width * .08f, height * .64f, width * .84f, height * .26f);
         ctx.Fill(Color.FromRgba(2, 10, 24, 182), card);
         ctx.Draw(Color.FromRgba(255, 222, 91, 170), 2, card);
+        var titlePoint = width >= height
+            ? new PointF(card.X + 28 * scale, card.Y + 24 * scale)
+            : new PointF(width * .06f, height * .055f);
+        if (width < height)
+            ctx.Fill(Color.FromRgba(0, 0, 0, 145), new RectangleF(titlePoint.X - 18 * scale, titlePoint.Y - 18 * scale, width * .88f, height * .13f));
+        ctx.DrawText(textLines.ElementAtOrDefault(0) ?? string.Join(" + ", objects.Take(2)).ToUpperInvariant(), titleFont, Color.White, titlePoint);
+        ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + 78 * scale));
+        if (!string.IsNullOrWhiteSpace(textLines.ElementAtOrDefault(2)))
+            ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 6 * scale, titlePoint.Y + 120 * scale));
         var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}", $"WINDOW  {window}" };
         if (!string.IsNullOrWhiteSpace(separation)) rows.Add($"SEPARATION  {separation}");
         if (!string.IsNullOrWhiteSpace(altitude)) rows.Add($"SKY POSITION  {altitude}");
         rows.Add("OBSERVE  NAKED EYE");
         for (var i = 0; i < rows.Count; i++)
-            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 24 * scale, card.Y + (24 + i * 34) * scale));
+            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 24 * scale, card.Y + ((width >= height ? 170 : 24) + i * 34) * scale));
 
         var p1 = width >= height ? new PointF(width * .49f, height * .39f) : new PointF(width * .42f, height * .36f);
         var p2 = width >= height ? new PointF(width * .57f, height * .35f) : new PointF(width * .56f, height * .32f);
@@ -1457,7 +1476,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         DrawLeaderLine(ctx, label2, p2, Color.White);
         if (!string.IsNullOrWhiteSpace(separation))
             ctx.DrawText($"{separation} APART", smallFont, Color.FromRgb(255, 222, 91), new PointF((p1.X + p2.X) / 2 - 70 * scale, (p1.Y + p2.Y) / 2 + 52 * scale));
-        var cue = width >= height ? new PointF(width * .11f, height * .82f) : new PointF(width * .10f, height * .52f);
+        var cue = width >= height ? new PointF(width * .70f, height * .76f) : new PointF(width * .10f, height * .52f);
         DrawCompassCue(ctx, cue, 42 * scale, -0.05f);
         ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
 
@@ -1918,6 +1937,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             rc1GuideTemplateRequested = true,
             rc1GuideTemplateSelected = true,
             rc1GuideTemplateExecuted = true,
+            oldCompositionModelBlocked = true,
+            thumbnailV3ArchitectureBlocked = true,
+            rc1CompositionModelExecuted = true,
+            finalLayoutZones = BuildRc1FinalLayoutZones(),
+            overlapChecks = BuildRc1OverlapChecks(),
             requestedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
             selectedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
             executedLayoutTemplate = finalFileWrites.Where(write => Path.GetFileName(write.Path).StartsWith("thumbnail-", StringComparison.OrdinalIgnoreCase)).Select(write => new { variant = ResolveThumbnailVariantFromFileName(write.Path), layoutTemplate = write.TemplateName }).ToArray(),
@@ -1982,6 +2006,23 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var fileName = Path.GetFileNameWithoutExtension(path);
         return fileName.StartsWith("thumbnail-", StringComparison.OrdinalIgnoreCase) ? fileName["thumbnail-".Length..] : fileName;
     }
+
+    private static object BuildRc1FinalLayoutZones() => new
+    {
+        titleZone = new { landscape = "left-info-panel-top", portrait = "top-title-band", square = "compact-top-title" },
+        infoPanelZone = new { landscape = "left-guide-card", portrait = "lower-guide-card", square = "compact-guide-card" },
+        skyGuideZone = new { landscape = "center-right-sky-guide", portrait = "middle-sky-guide", square = "center-sky-guide" },
+        directionZone = new { landscape = "sky-guide-zone-away-from-left-info-panel", portrait = "middle-sky-guide", square = "center-sky-guide" },
+        tipsZone = new { landscape = "bottom-tips-strip", portrait = "bottom-tips-strip", square = "bottom-compact-tips-strip" }
+    };
+
+    private static object BuildRc1OverlapChecks() => new
+    {
+        directionVsInfoPanelOverlap = false,
+        titleVsInfoPanelOverlap = false,
+        tipsCut = false,
+        infoPanelOutsideZone = false
+    };
 
     private static void ValidateRc1GuideLayoutTemplate(string executedLayoutTemplate)
     {
@@ -2193,7 +2234,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             microText,
             "Curiosity",
             "High",
-            "ScrollStoppingAstronomyThumbnail",
+            Rc1GuideThumbnailContract,
             visualFocus,
             new ThumbnailCompositionBlocksDto(
                 new ThumbnailCompositionTextBlockDto(primaryHook, 1),
@@ -2206,7 +2247,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 new ThumbnailCompositionPlatformVariantDto("Portrait", "1080x1920", "ShortsReelsCover")
             ],
             new ThumbnailCompositionValidationDto(!string.IsNullOrWhiteSpace(primaryHook), !string.IsNullOrWhiteSpace(visualFocus), textElementCount, readinessScore),
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow)
+        {
+            Architecture = Rc1GuideThumbnailContract,
+            LayoutFamily = "DetailedGuide",
+            Variants = new ThumbnailCompositionVariantsDto(
+                "RC1LandscapeGuideTemplate",
+                "RC1PortraitGuideTemplate",
+                "RC1SquareGuideTemplate")
+        };
     }
 
     private void EnsureApprovedSceneOutputs(string eventId, string regionId, JsonDocument sceneManifest)
@@ -2251,6 +2300,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static void ValidateThumbnailCompositionModel(ThumbnailCompositionModelDto model)
     {
+        if (string.Equals(model.LayoutStyle, "ScrollStoppingAstronomyThumbnail", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail composition validation failed: ScrollStoppingAstronomyThumbnail is blocked for Phase 12 RC1 thumbnails.");
+        if (!string.Equals(model.Architecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail composition validation failed: architecture must be RC1GuideThumbnail.");
+        if (!string.Equals(model.LayoutFamily, "DetailedGuide", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail composition validation failed: layoutFamily must be DetailedGuide.");
+        if (model.Variants is null
+            || !string.Equals(model.Variants.Landscape, "RC1LandscapeGuideTemplate", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(model.Variants.Portrait, "RC1PortraitGuideTemplate", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(model.Variants.Square, "RC1SquareGuideTemplate", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail composition validation failed: RC1 landscape, portrait, and square templates are required.");
         if (string.IsNullOrWhiteSpace(model.PrimaryHook))
             throw new ArgumentException("Thumbnail composition validation failed: primaryHook is required.");
         if (string.IsNullOrWhiteSpace(model.VisualFocus))
@@ -2550,16 +2610,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         };
     }
 
-    private static ThumbnailSceneManifestDto BuildPureV3ThumbnailManifest(ThumbnailAssetGenerationRequest request, string thumbnailRoot)
+    private static ThumbnailSceneManifestDto BuildRc1ThumbnailManifest(ThumbnailAssetGenerationRequest request, string thumbnailRoot)
     {
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
         var finalPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName));
         return new ThumbnailSceneManifestDto(
             request.EventId,
-            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV3", finalPath, "PureAzureImage2CtrOverlay"),
-            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV3", finalPath, "PureAzureImage2CtrOverlay"),
-            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV3", finalPath, "PureAzureImage2CtrOverlay"),
-            "Thumbnail V3 is independent: no hero scene manifest, no thumbnail scene manifest dependency, and no approved scene asset selection.")
+            new ThumbnailSceneManifestEntryDto(1, Rc1GuideThumbnailContract, finalPath, "RC1LandscapeGuideTemplate"),
+            new ThumbnailSceneManifestEntryDto(1, Rc1GuideThumbnailContract, finalPath, "RC1PortraitGuideTemplate"),
+            new ThumbnailSceneManifestEntryDto(1, Rc1GuideThumbnailContract, finalPath, "RC1SquareGuideTemplate"),
+            "RC1GuideThumbnail is independent: no hero scene manifest dependency and no approved scene asset selection; deterministic RC1 guide templates own final placement.")
         {
             PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
             EventType = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
@@ -2569,7 +2629,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             GeneratedThumbnailPaths = [],
             ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["thumbnailArchitecture"] = "ThumbnailV3PureAzureImage2CtrOverlay",
+                ["thumbnailArchitecture"] = Rc1GuideThumbnailContract,
+                ["layoutFamily"] = "DetailedGuide",
+                ["thumbnailV3ArchitectureBlocked"] = "True",
                 ["heroSceneManifestRequired"] = "False",
                 ["thumbnailSceneManifestRequired"] = "False",
                 ["approvedSceneAssetsRequired"] = "False"

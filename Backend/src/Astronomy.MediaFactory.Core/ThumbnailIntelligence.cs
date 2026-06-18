@@ -137,7 +137,17 @@ public sealed record ThumbnailCompositionModelDto(
     ThumbnailCompositionBlocksDto CompositionBlocks,
     IReadOnlyList<ThumbnailCompositionPlatformVariantDto> PlatformVariants,
     ThumbnailCompositionValidationDto Validation,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc)
+{
+    public string Architecture { get; init; } = string.Empty;
+    public string LayoutFamily { get; init; } = string.Empty;
+    public ThumbnailCompositionVariantsDto? Variants { get; init; }
+}
+
+public sealed record ThumbnailCompositionVariantsDto(
+    string Landscape,
+    string Portrait,
+    string Square);
 
 public sealed record ThumbnailCompositionBlocksDto(
     ThumbnailCompositionTextBlockDto HookBlock,
