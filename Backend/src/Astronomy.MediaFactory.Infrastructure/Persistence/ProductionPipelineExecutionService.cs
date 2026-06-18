@@ -1953,6 +1953,16 @@ public sealed partial class ProductionPipelineExecutionService(
             srtTiming = new { @short = shortSrtTiming.Diagnostics.Timing, @long = longSrtTiming.Diagnostics.Timing },
             subtitleGeneration = new { @short = shortSrtTiming.Diagnostics, @long = longSrtTiming.Diagnostics },
             srtValidation = new { @short = shortSrtValidation, @long = longSrtValidation },
+            srtPreservationValidationMode = "NormalizedOrderedSceneText",
+            shortCleanNarrationNormalizedLength = shortSrtValidation.CleanNarrationNormalizedLength,
+            shortSrtNormalizedLength = shortSrtValidation.SrtNormalizedLength,
+            shortSrtPreservesNarration = shortSrtValidation.SrtPreservesNarration,
+            longCleanNarrationNormalizedLength = longSrtValidation.CleanNarrationNormalizedLength,
+            longSrtNormalizedLength = longSrtValidation.SrtNormalizedLength,
+            longSrtPreservesNarration = longSrtValidation.SrtPreservesNarration,
+            srtMissingSceneTexts = shortSrtValidation.SrtMissingSceneTexts.Concat(longSrtValidation.SrtMissingSceneTexts).ToArray(),
+            srtExtraUnexpectedTexts = shortSrtValidation.SrtExtraUnexpectedTexts.Concat(longSrtValidation.SrtExtraUnexpectedTexts).ToArray(),
+            srtComparisonFailureReason = FirstNonEmpty(shortSrtValidation.SrtComparisonFailureReason, longSrtValidation.SrtComparisonFailureReason),
             generatedSubtitleBlockCount = shortSrtValidation.GeneratedSubtitleBlockCount + longSrtValidation.GeneratedSubtitleBlockCount,
             duplicateSubtitleBlockCount = shortSrtValidation.DuplicateSubtitleBlockCount + longSrtValidation.DuplicateSubtitleBlockCount,
             duplicateSubtitleBlockIds = shortSrtValidation.DuplicateSubtitleBlockIds.Concat(longSrtValidation.DuplicateSubtitleBlockIds).ToArray(),
@@ -2459,10 +2469,25 @@ public sealed partial class ProductionPipelineExecutionService(
         var sourceTexts = narrationFiles.Select(path => File.ReadAllText(path).Trim()).ToArray();
         var srtTexts = ExtractSrtTexts(srtPath);
         var errors = new List<string>();
-        var sourceCombined = NormalizeNarrationForDuplicateCheck(string.Join(" ", sourceTexts));
-        var srtCombined = NormalizeNarrationForDuplicateCheck(string.Join(" ", srtTexts));
+        var sourceCombined = NormalizeNarrationForSrtComparison(string.Join(" ", sourceTexts));
+        var srtCombined = NormalizeNarrationForSrtComparison(File.ReadAllText(srtPath));
+        var missingSceneTexts = new List<string>();
+        var extraUnexpectedTexts = new List<string>();
+        var comparisonFailureReason = string.Empty;
         var matches = string.Equals(srtCombined, sourceCombined, StringComparison.Ordinal);
-        if (!matches) errors.Add($"{Path.GetFileName(srtPath)} text does not preserve clean narration files after cue splitting");
+        var preservesNarration = matches || ContainsNormalizedSceneTextsInOrder(srtCombined, sourceTexts, missingSceneTexts, extraUnexpectedTexts);
+        if (!preservesNarration)
+        {
+            comparisonFailureReason = missingSceneTexts.Count > 0
+                ? "SRT is missing normalized scene narration text or scene order is broken."
+                : "SRT normalized text does not match normalized clean narration text.";
+            errors.Add($"{Path.GetFileName(srtPath)} text does not preserve clean narration files after cue splitting");
+        }
+        else if (extraUnexpectedTexts.Count > 0)
+        {
+            comparisonFailureReason = "SRT contains stale unrelated text outside ordered clean narration scenes.";
+            errors.Add($"{Path.GetFileName(srtPath)} contains stale unrelated text outside clean narration files");
+        }
         if (srtTexts.Any(text => text.Length > 84)) errors.Add($"{Path.GetFileName(srtPath)} contains a cue longer than 84 characters");
         if (srtTexts.Any(ContainsAuthoringInstructionText)) errors.Add($"{Path.GetFileName(srtPath)} contains forbidden authoring phrases");
         var srtBlocks = ExtractSrtBlocks(srtPath);
@@ -2474,7 +2499,49 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicateSubtitleBlockIds = duplicateBlockGroups.SelectMany(g => g.Select(block => block.Id)).ToArray();
         var duplicateSources = sourceTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         if (duplicateGroups.Length > 0 && !duplicateSources) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle text while narration files are unique");
-        return new SrtValidationResult(matches, duplicateGroups.Length > 0, duplicateGroups, srtBlocks.Count, duplicateSubtitleBlockIds.Length, duplicateSubtitleBlockIds, duplicateGroups, BuildSrtPreview(File.ReadAllText(srtPath)), errors.Count == 0, errors);
+        return new SrtValidationResult(matches || preservesNarration, duplicateGroups.Length > 0, duplicateGroups, srtBlocks.Count, duplicateSubtitleBlockIds.Length, duplicateSubtitleBlockIds, duplicateGroups, BuildSrtPreview(File.ReadAllText(srtPath)), errors.Count == 0, errors, "NormalizedOrderedSceneText", sourceCombined.Length, srtCombined.Length, preservesNarration && extraUnexpectedTexts.Count == 0, missingSceneTexts, extraUnexpectedTexts, comparisonFailureReason);
+    }
+
+    private static bool ContainsNormalizedSceneTextsInOrder(string normalizedSrtText, IReadOnlyList<string> sourceTexts, List<string> missingSceneTexts, List<string> extraUnexpectedTexts)
+    {
+        var cursor = 0;
+        var unexpected = new StringBuilder();
+        foreach (var sourceText in sourceTexts)
+        {
+            var normalizedSceneText = NormalizeNarrationForSrtComparison(sourceText);
+            if (string.IsNullOrWhiteSpace(normalizedSceneText)) continue;
+            var index = normalizedSrtText.IndexOf(normalizedSceneText, cursor, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                missingSceneTexts.Add(normalizedSceneText.Length <= 160 ? normalizedSceneText : normalizedSceneText[..160]);
+                return false;
+            }
+            if (index > cursor) unexpected.Append(' ').Append(normalizedSrtText[cursor..index]);
+            cursor = index + normalizedSceneText.Length;
+        }
+        if (cursor < normalizedSrtText.Length) unexpected.Append(' ').Append(normalizedSrtText[cursor..]);
+        var normalizedUnexpected = NormalizeNarrationForSrtComparison(unexpected.ToString());
+        if (!string.IsNullOrWhiteSpace(normalizedUnexpected))
+            extraUnexpectedTexts.Add(normalizedUnexpected.Length <= 240 ? normalizedUnexpected : normalizedUnexpected[..240]);
+        return missingSceneTexts.Count == 0;
+    }
+
+    private static string NormalizeNarrationForSrtComparison(string text)
+    {
+        var normalized = (text ?? string.Empty)
+            .Replace('“', '"').Replace('”', '"').Replace('„', '"').Replace('‟', '"')
+            .Replace('‘', '\'').Replace('’', '\'').Replace('‚', '\'').Replace('‛', '\'')
+            .Replace('—', '-').Replace('–', '-').Replace('…', '.');
+        var lines = Regex.Split(normalized, @"\r?\n")
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !Regex.IsMatch(line, @"^\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}"));
+        normalized = string.Join(" ", lines);
+        normalized = Regex.Replace(normalized, @"\s+", " ");
+        normalized = Regex.Replace(normalized, @"\s+([,.;:!?])", "$1");
+        normalized = Regex.Replace(normalized, @"([,.;:!?])(?=[^\s,.;:!?])", "$1 ");
+        normalized = Regex.Replace(normalized, @"\s*([\-])\s*", " $1 ");
+        normalized = Regex.Replace(normalized, @"\s+", " ");
+        return normalized.Trim().ToLowerInvariant();
     }
 
     private static IReadOnlyList<(string Id, string Text)> ExtractSrtBlocks(string srtPath)
@@ -2848,7 +2915,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
     private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics);
     private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, string GeneratedSrtPreview, object Timing);
-    private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors);
+    private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors, string SrtPreservationValidationMode, int CleanNarrationNormalizedLength, int SrtNormalizedLength, bool SrtPreservesNarration, IReadOnlyList<string> SrtMissingSceneTexts, IReadOnlyList<string> SrtExtraUnexpectedTexts, string SrtComparisonFailureReason);
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics);
