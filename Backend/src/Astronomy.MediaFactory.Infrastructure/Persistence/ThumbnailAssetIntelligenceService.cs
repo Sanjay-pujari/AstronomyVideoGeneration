@@ -127,7 +127,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ThumbnailSceneManifestDto manifest;
         if (request.ProductionContext is not null)
         {
-            manifest = BuildRc1ThumbnailManifest(request, thumbnailRoot);
+            manifest = thumbnailOptions?.Value.EnableThumbnailV7 != false
+                ? BuildThumbnailV7Manifest(request, thumbnailRoot)
+                : BuildRc1ThumbnailManifest(request, thumbnailRoot);
         }
         else
         {
@@ -231,8 +233,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
-        var result = await new ThumbnailV7CinematicOverlayRenderer(thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial").RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
+        var result = await new ThumbnailV7CinematicOverlayRenderer(
+                thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial",
+                async (prompt, outputPath, ct) =>
+                {
+                    var generation = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, prompt, outputPath, ct);
+                    return new ThumbnailV7AzureImage2GenerationResult(generation.ProviderCalled, generation.ProviderSucceeded, generation.AzureRequestMs, generation.ImageDownloadMs, generation.FailureReason);
+                })
+            .RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
         await WriteThumbnailV7Phase12ValidationAsync(thumbnailRoot, result.Diagnostics, cancellationToken);
+        await WriteThumbnailV7ManifestAsync(request, thumbnailRoot, cancellationToken);
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
             VisualFocusVisible: true,
@@ -297,6 +307,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputFiles = required,
             requiredOutputFiles = required
         }, JsonOptions), cancellationToken);
+    }
+
+    private static async Task WriteThumbnailV7ManifestAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(thumbnailRoot, ThumbnailSceneManifestFileName);
+        var manifest = BuildThumbnailV7Manifest(request, thumbnailRoot);
+        Directory.CreateDirectory(thumbnailRoot);
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateMeteorShowerThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
@@ -2928,6 +2946,40 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ["thumbnailV3ArchitectureBlocked"] = "True",
                 ["heroSceneManifestRequired"] = "False",
                 ["thumbnailSceneManifestRequired"] = "False",
+                ["approvedSceneAssetsRequired"] = "False"
+            }
+        };
+    }
+
+    private static ThumbnailSceneManifestDto BuildThumbnailV7Manifest(ThumbnailAssetGenerationRequest request, string thumbnailRoot)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var finalPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName));
+        var landscapePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"));
+        var portraitPath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png"));
+        var squarePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png"));
+        var backgroundPath = NormalizePath(Path.Combine(thumbnailRoot, "v7-background.png"));
+        return new ThumbnailSceneManifestDto(
+            request.EventId,
+            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV7Landscape", landscapePath, "landscape"),
+            new ThumbnailSceneManifestEntryDto(2, "ThumbnailV7Portrait", portraitPath, "portrait"),
+            new ThumbnailSceneManifestEntryDto(3, "ThumbnailV7Square", squarePath, "square"),
+            "ThumbnailV7CinematicOverlayRenderer uses an Azure Image2-generated event background with deterministic V7 observation overlay placement.")
+        {
+            PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
+            EventType = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
+            Title = intelligence?.Title ?? request.EventId,
+            SourceHeroAssets = [],
+            SourceSceneAssets = [],
+            GeneratedThumbnailPaths = [finalPath, landscapePath, portraitPath, squarePath],
+            BackgroundImagePath = backgroundPath,
+            ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["thumbnailArchitecture"] = ThumbnailV7Architecture,
+                ["backgroundImagePath"] = backgroundPath,
+                ["layoutFamily"] = ThumbnailV7LayoutStyle,
+                ["heroSceneManifestRequired"] = "False",
+                ["thumbnailSceneManifestRequired"] = "True",
                 ["approvedSceneAssetsRequired"] = "False"
             }
         };

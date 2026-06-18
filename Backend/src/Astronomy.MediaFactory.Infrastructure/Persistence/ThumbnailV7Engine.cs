@@ -24,9 +24,11 @@ public class ThumbnailV7CinematicOverlayRenderer
     private readonly ThumbnailV7CinematicOverlayComposer _composer = new();
     private readonly ThumbnailV7VariantRenderer _renderer = new();
     private readonly ThumbnailV7Validator _validator = new();
+    private readonly Func<string, string, CancellationToken, Task<ThumbnailV7AzureImage2GenerationResult>>? _azureImage2Generator;
 
-    public ThumbnailV7CinematicOverlayRenderer(string celestialAssetsRoot = "assets/celestial")
+    public ThumbnailV7CinematicOverlayRenderer(string celestialAssetsRoot = "assets/celestial", Func<string, string, CancellationToken, Task<ThumbnailV7AzureImage2GenerationResult>>? azureImage2Generator = null)
     {
+        _azureImage2Generator = azureImage2Generator;
     }
 
     public async Task<ThumbnailV7Result> RenderAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, bool overwriteExisting, CancellationToken cancellationToken)
@@ -42,22 +44,37 @@ public class ThumbnailV7CinematicOverlayRenderer
         var backgroundPrompt = _promptBuilder.Build(visualIntelligence, heroComposition, galleryComposition);
         var composition = _composer.Compose(plan);
         var writes = new List<ThumbnailV7OutputWrite>();
+        var backgroundPath = Path.Combine(thumbnailRoot, "v7-background.png");
+        ThumbnailV7AzureImage2GenerationResult azureResult = new(false, false, 0, 0, "Azure Image2 generator was not provided to Thumbnail V7 renderer.");
+        Console.WriteLine("[ThumbnailV7] Azure Image2 prompt:");
+        Console.WriteLine(backgroundPrompt);
+        Console.WriteLine($"[ThumbnailV7] Azure Image2 output path: {NormalizePath(backgroundPath)}");
+        if (_azureImage2Generator is not null)
+            azureResult = await _azureImage2Generator(backgroundPrompt, backgroundPath, cancellationToken);
+        var backgroundFileExists = File.Exists(backgroundPath);
+        var backgroundGenerated = azureResult.ProviderSucceeded && backgroundFileExists;
+        Console.WriteLine($"[ThumbnailV7] Background file exists: {backgroundFileExists.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"[ThumbnailV7] Using background path: {(backgroundGenerated ? NormalizePath(backgroundPath) : "procedural-fallback")}");
 
         foreach (var variant in ThumbnailV7VariantRenderer.Variants)
         {
             var path = Path.Combine(thumbnailRoot, variant.FileName);
-            await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, cancellationToken);
+            await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, backgroundGenerated ? backgroundPath : null, cancellationToken);
             writes.Add(new ThumbnailV7OutputWrite(path, RendererName));
         }
 
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), Path.Combine(thumbnailRoot, "thumbnail-final.png"), overwrite: true);
         writes.Insert(0, new ThumbnailV7OutputWrite(Path.Combine(thumbnailRoot, "thumbnail-final.png"), RendererName));
-        var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation);
+        var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation, backgroundGenerated, !backgroundGenerated, azureResult.FailureReason, backgroundGenerated ? backgroundPath : null);
         var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
         var promptPath = Path.Combine(thumbnailRoot, "thumbnail-prompt.json");
-        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2OutputPath = NormalizePath(backgroundPath), azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-        return new ThumbnailV7Result(writes.Select(w => NormalizePath(w.Path)).Append(NormalizePath(promptPath)).Append(NormalizePath(diagnosticsPath)).ToArray(), diagnosticsPath, validation);
+        var outputFiles = writes.Select(w => NormalizePath(w.Path)).ToList();
+        if (backgroundGenerated) outputFiles.Add(NormalizePath(backgroundPath));
+        outputFiles.Add(NormalizePath(promptPath));
+        outputFiles.Add(NormalizePath(diagnosticsPath));
+        return new ThumbnailV7Result(outputFiles, diagnosticsPath, validation);
     }
 
     private static void CleanFinalFiles(string root)
@@ -210,16 +227,26 @@ public sealed class ThumbnailV7CinematicOverlayComposer
 public sealed class ThumbnailV7VariantRenderer
 {
     public static readonly IReadOnlyList<ThumbnailV7Variant> Variants = [new("landscape", "thumbnail-landscape.png", 1280, 720), new("portrait", "thumbnail-portrait.png", 1080, 1920), new("square", "thumbnail-square.png", 1080, 1080)];
-    public async Task RenderAsync(string path, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7Plan plan, ThumbnailV7Composition composition, CancellationToken cancellationToken)
+    public async Task RenderAsync(string path, int width, int height, ThumbnailV7Profile profile, ThumbnailV7Observation obs, ThumbnailV7Plan plan, ThumbnailV7Composition composition, string? backgroundImagePath, CancellationToken cancellationToken)
     {
         using var image = new Image<Rgba32>(width, height, Color.FromRgb(5, 9, 27));
         image.Mutate(ctx =>
         {
-            DrawBackgroundLayer(ctx, width, height, profile);
+            if (!string.IsNullOrWhiteSpace(backgroundImagePath) && File.Exists(backgroundImagePath))
+                DrawAzureBackgroundLayer(ctx, backgroundImagePath, width, height);
+            else
+                DrawBackgroundLayer(ctx, width, height, profile);
             DrawObservationCardLayer(ctx, width, height, profile, obs, plan);
             DrawFooterTipsLayer(ctx, width, height, plan);
         });
         await image.SaveAsPngAsync(path, new PngEncoder(), cancellationToken);
+    }
+    private static void DrawAzureBackgroundLayer(IImageProcessingContext ctx, string backgroundImagePath, int width, int height)
+    {
+        using var background = Image.Load<Rgba32>(backgroundImagePath);
+        background.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }));
+        ctx.DrawImage(background, 1f);
+        ctx.Fill(Color.Black.WithAlpha(.18f), new RectangularPolygon(0, 0, width, height));
     }
     private static void DrawBackgroundLayer(IImageProcessingContext ctx, int width, int height, ThumbnailV7Profile profile)
     {
@@ -264,7 +291,7 @@ public sealed class ThumbnailV7VariantRenderer
 
 public sealed class ThumbnailV7Validator
 {
-    public ThumbnailV7Diagnostics Validate(string root, ThumbnailV7Plan plan, ThumbnailV7Composition composition, IReadOnlyList<ThumbnailV7OutputWrite> writes, ThumbnailV7Observation observation)
+    public ThumbnailV7Diagnostics Validate(string root, ThumbnailV7Plan plan, ThumbnailV7Composition composition, IReadOnlyList<ThumbnailV7OutputWrite> writes, ThumbnailV7Observation observation, bool backgroundGenerated, bool backgroundFallbackUsed, string? azureImage2Error, string? backgroundImagePath)
     {
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" };
         var outputFiles = required.Select(file => Path.Combine(root, file).Replace('\\', '/')).ToArray();
@@ -274,7 +301,7 @@ public sealed class ThumbnailV7Validator
         var mercuryLeak = jupiterVenusEvent && observation.ObjectNames.Any(o => o.Equals("Mercury", StringComparison.OrdinalIgnoreCase));
         var valid = missing.Length == 0 && !oldWriterDetected && !mercuryLeak && !composition.OverlapDetected && composition.InformationAreaPercent <= 35 && composition.VisualAreaPercent >= 65 && !string.IsNullOrWhiteSpace(plan.SelectedTemplate) && !plan.DashboardCardsDetected && !plan.PreviewWidgetsDetected;
         if (!valid) throw new InvalidOperationException($"Thumbnail V7 validation failed: missing={string.Join(',', missing)}, oldWriterDetected={oldWriterDetected}, overlap={composition.OverlapDetected}, info={composition.InformationAreaPercent}, visual={composition.VisualAreaPercent}, template={plan.SelectedTemplate}");
-        return new ThumbnailV7Diagnostics("V7", ThumbnailV7CinematicOverlayRenderer.RendererName, "ThumbnailV7Validator", "HeroGalleryEventVisualLogic", plan.SelectedTemplate, true, true, true, true, false, false, false, false, false, false, false, mercuryLeak, outputFiles, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected);
+        return new ThumbnailV7Diagnostics("V7", ThumbnailV7CinematicOverlayRenderer.RendererName, "ThumbnailV7Validator", "HeroGalleryEventVisualLogic", plan.SelectedTemplate, backgroundGenerated, backgroundFallbackUsed, azureImage2Error, backgroundImagePath is null ? null : backgroundImagePath.Replace('\\', '/'), true, true, true, false, false, false, false, false, false, false, mercuryLeak, outputFiles, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected);
     }
 }
 
@@ -322,4 +349,5 @@ public sealed record ThumbnailV7InfoCard(string Label, string Value);
 public sealed record ThumbnailV7Composition(bool OverlapDetected, int InformationAreaPercent, int VisualAreaPercent);
 public sealed record ThumbnailV7Variant(string Name, string FileName, int Width, int Height);
 public sealed record ThumbnailV7OutputWrite(string Path, string WriterComponent);
-public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string Validator, string BackgroundPromptSource, string SelectedTemplate, bool BackgroundGenerated, bool ObservationCardRendered, bool FooterRendered, bool OldValidationBlocked, bool ThumbnailReviewJsonRequired, bool ManualCelestialAssetPlacement, bool V6RendererExecuted, bool V6ValidatorExecuted, bool DashboardCardsAppear, bool ExtraObjectsDetected, bool V5RendererExecuted, bool MercuryAppears, IReadOnlyList<string> OutputFiles, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected);
+public sealed record ThumbnailV7AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
+public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string Validator, string BackgroundPromptSource, string SelectedTemplate, bool BackgroundGenerated, bool BackgroundFallbackUsed, string? AzureImage2Error, string? BackgroundImagePath, bool ObservationCardRendered, bool FooterRendered, bool OldValidationBlocked, bool ThumbnailReviewJsonRequired, bool ManualCelestialAssetPlacement, bool V6RendererExecuted, bool V6ValidatorExecuted, bool DashboardCardsAppear, bool ExtraObjectsDetected, bool V5RendererExecuted, bool MercuryAppears, IReadOnlyList<string> OutputFiles, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected);

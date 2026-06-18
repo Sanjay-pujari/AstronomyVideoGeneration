@@ -110,6 +110,8 @@ public sealed record ThumbnailSceneManifestDto(
 
     public IReadOnlyList<string> GeneratedThumbnailPaths { get; init; } = [];
 
+    public string? BackgroundImagePath { get; init; }
+
     public IReadOnlyDictionary<string, string> ValidationFacts { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
 
