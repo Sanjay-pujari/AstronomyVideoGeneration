@@ -707,7 +707,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                         throw new InvalidOperationException($"Phase 12 Thumbnail Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
                     azureCallsSucceeded++;
                     var hashBeforeVariantWrite = await ComputeOptionalSha256Async(variantPath, cancellationToken);
-                    var overlayDiagnostics = await WriteThumbnailV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, request, ResolveWorkingDirectoryRoot(), cancellationToken);
+                    ValidateRc1GuideLayoutTemplate(variant.Layout);
+                    Console.WriteLine($"PHASE12_REQUESTED_LAYOUT_TEMPLATE = {variant.Layout}");
+                    Console.WriteLine($"PHASE12_SELECTED_LAYOUT_TEMPLATE = {variant.Layout}");
+                    var overlayDiagnostics = await WriteThumbnailV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, variant.Layout, request, ResolveWorkingDirectoryRoot(), cancellationToken);
+                    Console.WriteLine($"PHASE12_EXECUTED_LAYOUT_TEMPLATE = {overlayDiagnostics.ThumbnailOverlayTemplate}");
                     LogThumbnailRuntimeDiagnostics(runtimeDiagnostics with
                     {
                         FinalThumbnailPrompt = variant.Prompt,
@@ -724,7 +728,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     ValidatePlanetaryThumbnailOverlay(BuildCurrentEventLock(request), overlayDiagnostics);
                     overlayDiagnosticsByVariant.Add((variant.Variant, overlayDiagnostics));
                     var hash = await ComputeSha256Async(variantPath, cancellationToken);
-                    finalFileWrites.Add((variantPath, hashBeforeVariantWrite, hash, "ThumbnailV6Rc1GuideRenderer", "RC1GuideV6", "RC1GuideV6"));
+                    finalFileWrites.Add((variantPath, hashBeforeVariantWrite, hash, "ThumbnailV6Rc1GuideRenderer", overlayDiagnostics.ThumbnailOverlayTemplate, overlayDiagnostics.ThumbnailOverlayTemplate));
                     Console.WriteLine($"PHASE12_FINAL_WRITE = {variantPath} ThumbnailV6Rc1GuideRenderer {hash}");
                     thumbnailVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, variant.Layout, azureBackgroundPath, variantPath, azureResult, hash));
                 }
@@ -764,7 +768,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var hashBeforeFinalWrite = await ComputeOptionalSha256Async(finalPath, cancellationToken);
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
             var hashAfterFinalWrite = await ComputeSha256Async(finalPath, cancellationToken);
-            finalFileWrites.Add((finalPath, hashBeforeFinalWrite, hashAfterFinalWrite, "ThumbnailV6Rc1GuideRenderer", "RC1GuideV6", "RC1GuideV6"));
+            finalFileWrites.Add((finalPath, hashBeforeFinalWrite, hashAfterFinalWrite, "ThumbnailV6Rc1GuideRenderer", thumbnailVariantResults[0].TextLayout, thumbnailVariantResults[0].TextLayout));
             Console.WriteLine($"PHASE12_FINAL_WRITE = {finalPath} ThumbnailV6Rc1GuideRenderer {hashAfterFinalWrite}");
             var selectedOverlayDiagnostics = overlayDiagnosticsByVariant.First().Diagnostics;
             var isMeteorThumbnail = false;
@@ -1187,9 +1191,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated profile term(s) detected in thumbnail overlay text: " + string.Join(", ", forbiddenInOverlayText));
         return
         [
-            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 composition, event image on right or center, clean dark negative space on left/lower-left. {basePrompt}", text, "v6-left-metadata"),
-            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: {compositionType}. Native 9:16 vertical composition, event image upper half, clean dark negative space in lower third. {basePrompt}", text, "v6-lower-metadata"),
-            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: {compositionType}. Native 1:1 composition, cinematic event image with clean lower text band as natural sky darkness only. {basePrompt}", text, "v6-bottom-metadata")
+            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 RC1 layout with fixed zones: left information card, right sky guide, bottom tips strip. {basePrompt}", text, "RC1LandscapeGuideTemplate"),
+            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: {compositionType}. Native 9:16 RC1 layout with fixed zones: top title, middle sky guide, lower guide card, bottom tips strip. {basePrompt}", text, "RC1PortraitGuideTemplate"),
+            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: {compositionType}. Native 1:1 RC1 layout with fixed zones: top-left title, center/right sky guide, lower-left guide card, bottom tips strip. {basePrompt}", text, "RC1SquareGuideTemplate")
         ];
     }
 
@@ -1345,10 +1349,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static int CountWords(string value) => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     private static string LimitThumbnailWords(string value, int maxWords) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => !new[] { "TODAY", "TONIGHT", "TOMORROW" }.Contains(w, StringComparer.OrdinalIgnoreCase)).Take(maxWords));
 
-    private static async Task<ThumbnailOverlayDiagnostics> WriteThumbnailV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
+    private static async Task<ThumbnailOverlayDiagnostics> WriteThumbnailV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, string layoutTemplate, ThumbnailAssetGenerationRequest request, string workingDirectoryRoot, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
-        var diagnostics = ThumbnailOverlayDiagnostics.None(outputPath, ResolveMeteorOverlayTemplate(request));
+        ValidateRc1GuideLayoutTemplate(layoutTemplate);
+        var diagnostics = ThumbnailOverlayDiagnostics.None(outputPath, layoutTemplate);
         image.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Stretch });
@@ -1397,7 +1402,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? workingDirectoryRoot);
         await image.SaveAsPngAsync(outputPath, cancellationToken);
-        return diagnostics;
+        return diagnostics with { ThumbnailOverlayTemplate = layoutTemplate };
     }
 
     private static ThumbnailOverlayDiagnostics DrawPlanetarySkyGuideThumbnail(IImageProcessingContext ctx, CurrentEventLock current, int width, int height, IReadOnlyList<string> textLines, string outputPath)
@@ -1753,8 +1758,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static void ValidatePlanetaryThumbnailOverlay(CurrentEventLock current, ThumbnailOverlayDiagnostics diagnostics)
     {
         if (!IsPlanetaryEvent(current.EventType)) return;
-        if (!string.Equals(diagnostics.ThumbnailOverlayTemplate, "PlanetarySkyGuideThumbnail", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: thumbnailOverlayTemplate must be PlanetarySkyGuideThumbnail.");
+        ValidateRc1GuideLayoutTemplate(diagnostics.ThumbnailOverlayTemplate);
         if (!diagnostics.ObjectLabelsAdded || !diagnostics.GuideCardAdded || !diagnostics.DirectionCueAdded)
             throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: guide card, labels, and direction cue are required.");
         if (current.AngularSeparationDegrees.HasValue && !diagnostics.SeparationAdded)
@@ -1914,6 +1918,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             rc1GuideTemplateRequested = true,
             rc1GuideTemplateSelected = true,
             rc1GuideTemplateExecuted = true,
+            requestedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
+            selectedLayoutTemplate = variants.Select(v => new { variant = v.Variant, layoutTemplate = v.TextLayout }).ToArray(),
+            executedLayoutTemplate = finalFileWrites.Where(write => Path.GetFileName(write.Path).StartsWith("thumbnail-", StringComparison.OrdinalIgnoreCase)).Select(write => new { variant = ResolveThumbnailVariantFromFileName(write.Path), layoutTemplate = write.TemplateName }).ToArray(),
             legacyRendererExecuted = false,
             legacyRendererName = string.Empty,
             legacyRendererBlocked = true,
@@ -1966,8 +1973,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(imagePath), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-landscape.png")), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-portrait.png")), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
             outputVerification = new { finalRenderRequestSource = "thumbnailVariantResults", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", legacyRendererUsed = false, legacyRendererBlocked = true, finalOutputPath = NormalizePath(imagePath), outputFileWrittenAfterV6Overlay = File.Exists(imagePath), finalOutputHashBeforeOverlay, finalOutputHashAfterOverlay = variants.First().Hash },
             outputs = variants.Select(v => new { name = v.Variant, width = v.Width, height = v.Height, hash = v.Hash }),
-            variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
+            variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, requestedLayoutTemplate = v.TextLayout, selectedLayoutTemplate = v.TextLayout, executedLayoutTemplate = v.TextLayout, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
         }, JsonOptions), cancellationToken);
+    }
+
+    private static string ResolveThumbnailVariantFromFileName(string path)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(path);
+        return fileName.StartsWith("thumbnail-", StringComparison.OrdinalIgnoreCase) ? fileName["thumbnail-".Length..] : fileName;
+    }
+
+    private static void ValidateRc1GuideLayoutTemplate(string executedLayoutTemplate)
+    {
+        if (string.IsNullOrWhiteSpace(executedLayoutTemplate))
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: executedLayoutTemplate is required.");
+        var blockedPrefixes = new[] { "v6-left-metadata", "v6-lower-metadata", "v6-bottom-metadata" };
+        if (blockedPrefixes.Any(prefix => executedLayoutTemplate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Thumbnail V6 guide validation failed: blocked legacy layout template executed: {executedLayoutTemplate}.");
+        var approved = new[] { "RC1LandscapeGuideTemplate", "RC1PortraitGuideTemplate", "RC1SquareGuideTemplate" };
+        if (!approved.Contains(executedLayoutTemplate, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Thumbnail V6 guide validation failed: executedLayoutTemplate must be an approved RC1 guide template, not {executedLayoutTemplate}.");
     }
 
     private static void ValidateThumbnailV6Rc1GuideRendererContract(string renderer, string thumbnailContract, IEnumerable<string> textLayouts)
@@ -1978,8 +2003,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("Thumbnail V6 guide validation failed: thumbnailContract must be RC1GuideThumbnail.");
         if (renderer.Contains("V5", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V6 validation failed: renderer contains V5.");
-        if (textLayouts.Any(string.IsNullOrWhiteSpace))
+        var layouts = textLayouts.ToArray();
+        if (layouts.Any(string.IsNullOrWhiteSpace))
             throw new InvalidOperationException("Thumbnail V6 guide validation failed: every variant must declare a layout.");
+        foreach (var layout in layouts) ValidateRc1GuideLayoutTemplate(layout);
+        var required = new[] { "RC1LandscapeGuideTemplate", "RC1PortraitGuideTemplate", "RC1SquareGuideTemplate" };
+        if (!required.All(requiredLayout => layouts.Contains(requiredLayout, StringComparer.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: landscape, portrait, and square variants must execute their approved RC1 layout templates.");
     }
 
     private async Task<AzureImage2GenerationResult> GenerateThumbnailWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken)
