@@ -1950,7 +1950,15 @@ public sealed partial class ProductionPipelineExecutionService(
             longSrtPath = NormalizePath(longSrtPath),
             srtSource = "CleanNarrationFiles",
             srtTimingSource = "SceneDurationPlanFromTtsTimeline",
-            srtTiming = new { @short = shortSrtTiming.Diagnostics, @long = longSrtTiming.Diagnostics },
+            srtTiming = new { @short = shortSrtTiming.Diagnostics.Timing, @long = longSrtTiming.Diagnostics.Timing },
+            subtitleGeneration = new { @short = shortSrtTiming.Diagnostics, @long = longSrtTiming.Diagnostics },
+            srtValidation = new { @short = shortSrtValidation, @long = longSrtValidation },
+            generatedSubtitleBlockCount = shortSrtValidation.GeneratedSubtitleBlockCount + longSrtValidation.GeneratedSubtitleBlockCount,
+            duplicateSubtitleBlockCount = shortSrtValidation.DuplicateSubtitleBlockCount + longSrtValidation.DuplicateSubtitleBlockCount,
+            duplicateSubtitleBlockIds = shortSrtValidation.DuplicateSubtitleBlockIds.Concat(longSrtValidation.DuplicateSubtitleBlockIds).ToArray(),
+            duplicateSubtitleTexts = shortSrtValidation.DuplicateSubtitleTexts.Concat(longSrtValidation.DuplicateSubtitleTexts).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            generatedShortSrtPreview = shortSrtValidation.GeneratedSrtPreview,
+            generatedLongSrtPreview = longSrtValidation.GeneratedSrtPreview,
             srtMatchesNarrationFiles = shortSrtValidation.MatchesNarrationFiles && longSrtValidation.MatchesNarrationFiles,
             duplicateSrtTextDetected = shortSrtValidation.DuplicateSrtTextDetected || longSrtValidation.DuplicateSrtTextDetected,
             duplicateSrtGroups = shortSrtValidation.DuplicateSrtGroups.Concat(longSrtValidation.DuplicateSrtGroups).ToArray(),
@@ -2279,10 +2287,18 @@ public sealed partial class ProductionPipelineExecutionService(
             });
             sceneStart = sceneEnd;
         }
-        var duplicateBlocks = blocks.Select(block => NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)))
-            .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
-            .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
-        if (duplicateBlocks) throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
+        var duplicateBlockGroups = blocks
+            .Select(block => new { block.Number, block.SceneId, Text = string.Join(" ", block.Lines), NormalizedText = NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)) })
+            .Where(block => !string.IsNullOrWhiteSpace(block.NormalizedText))
+            .GroupBy(block => block.NormalizedText, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .ToArray();
+        var duplicateSubtitleBlockIds = duplicateBlockGroups
+            .SelectMany(group => group.Select(block => $"{format}:{block.SceneId}:cue-{block.Number}"))
+            .ToArray();
+        var duplicateSubtitleTexts = duplicateBlockGroups
+            .Select(group => group.First().Text)
+            .ToArray();
         var srt = new StringBuilder();
         foreach (var block in blocks)
         {
@@ -2298,7 +2314,7 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"{format}.srt ends more than 0.5 sec before audio; srt={srtTotal}, audio={audioTotal}");
         if (Math.Abs(srtTotal - videoTotal) > 0.5)
             throw new InvalidOperationException($"{format}.srt duration differs from video duration by >0.5 sec; srt={srtTotal}, video={videoTotal}");
-        var diagnostics = new
+        var timingDiagnostics = new
         {
             srtTimingSource = "SceneDurationPlanFromTtsTimeline",
             ttsDurationsMeasuredFromMp3 = true,
@@ -2309,6 +2325,14 @@ public sealed partial class ProductionPipelineExecutionService(
             srtMatchesVideoDuration = Math.Abs(srtTotal - videoTotal) <= 0.1,
             perSceneTiming = perScene
         };
+        var diagnostics = new SubtitleGenerationDiagnostics(
+            format,
+            blocks.Count,
+            duplicateSubtitleBlockIds.Length,
+            duplicateSubtitleBlockIds,
+            duplicateSubtitleTexts,
+            BuildSrtPreview(srt.ToString()),
+            timingDiagnostics);
         return new NarrationSrtTimingResult(srt.ToString(), diagnostics);
     }
 
@@ -2385,20 +2409,56 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!matches) errors.Add($"{Path.GetFileName(srtPath)} text does not preserve clean narration files after cue splitting");
         if (srtTexts.Any(text => text.Length > 84)) errors.Add($"{Path.GetFileName(srtPath)} contains a cue longer than 84 characters");
         if (srtTexts.Any(ContainsAuthoringInstructionText)) errors.Add($"{Path.GetFileName(srtPath)} contains forbidden authoring phrases");
-        var duplicateGroups = srtTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.First())
+        var srtBlocks = ExtractSrtBlocks(srtPath);
+        var duplicateBlockGroups = srtBlocks
+            .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
             .ToArray();
+        var duplicateGroups = duplicateBlockGroups.Select(g => g.First().Text).ToArray();
+        var duplicateSubtitleBlockIds = duplicateBlockGroups.SelectMany(g => g.Select(block => block.Id)).ToArray();
         var duplicateSources = sourceTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
         if (duplicateGroups.Length > 0 && !duplicateSources) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle text while narration files are unique");
-        return new SrtValidationResult(matches, duplicateGroups.Length > 0, duplicateGroups, errors.Count == 0, errors);
+        return new SrtValidationResult(matches, duplicateGroups.Length > 0, duplicateGroups, srtBlocks.Count, duplicateSubtitleBlockIds.Length, duplicateSubtitleBlockIds, duplicateGroups, BuildSrtPreview(File.ReadAllText(srtPath)), errors.Count == 0, errors);
     }
 
-    private static IReadOnlyList<string> ExtractSrtTexts(string srtPath)
+    private static IReadOnlyList<(string Id, string Text)> ExtractSrtBlocks(string srtPath)
         => Regex.Split(File.ReadAllText(srtPath), @"\r?\n\r?\n")
-            .Select(block => string.Join(" ", block.Split('\n').Select(line => line.Trim()).Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))).Trim())
-            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select((block, index) => (Id: $"{Path.GetFileName(srtPath)}:block-{index + 1}", Text: string.Join(" ", block.Split('\n').Select(line => line.Trim()).Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))).Trim()))
+            .Where(block => !string.IsNullOrWhiteSpace(block.Text))
             .ToArray();
+
+    private static string BuildSrtPreview(string srt)
+        => srt.Length <= 1200 ? srt : srt[..1200] + "\n... [truncated]";
+
+    private static IReadOnlyList<string> ExtractSrtTexts(string srtPath)
+        => ExtractSrtBlocks(srtPath).Select(block => block.Text).ToArray();
+
+    private static int CountExistingSrtBlocks(string srtPath)
+        => File.Exists(srtPath) ? ExtractSrtBlocks(srtPath).Count : 0;
+
+    private static int CountExistingDuplicateSrtBlocks(string srtPath)
+        => ExistingDuplicateSrtBlockIds(srtPath).Count;
+
+    private static IReadOnlyList<string> ExistingDuplicateSrtBlockIds(string srtPath)
+        => File.Exists(srtPath)
+            ? ExtractSrtBlocks(srtPath)
+                .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
+                .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+                .SelectMany(g => g.Select(block => block.Id))
+                .ToArray()
+            : [];
+
+    private static IReadOnlyList<string> ExistingDuplicateSrtTexts(string srtPath)
+        => File.Exists(srtPath)
+            ? ExtractSrtBlocks(srtPath)
+                .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
+                .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+                .Select(g => g.First().Text)
+                .ToArray()
+            : [];
+
+    private static string ExistingSrtPreview(string srtPath)
+        => File.Exists(srtPath) ? BuildSrtPreview(File.ReadAllText(srtPath)) : string.Empty;
 
     private static double ReadSrtFinalEndSeconds(string srtPath)
     {
@@ -2646,7 +2706,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 : Array.Empty<string>(),
             subtitleFilesGenerated = File.Exists(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) && File.Exists(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
             shortSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "short.srt")),
-            longSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))
+            longSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
+            generatedSubtitleBlockCount = CountExistingSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) + CountExistingSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
+            duplicateSubtitleBlockCount = CountExistingDuplicateSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) + CountExistingDuplicateSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
+            duplicateSubtitleBlockIds = ExistingDuplicateSrtBlockIds(Path.Combine(planRoot, "narration", "subtitles", "short.srt")).Concat(ExistingDuplicateSrtBlockIds(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))).ToArray(),
+            duplicateSubtitleTexts = ExistingDuplicateSrtTexts(Path.Combine(planRoot, "narration", "subtitles", "short.srt")).Concat(ExistingDuplicateSrtTexts(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            generatedShortSrtPreview = ExistingSrtPreview(Path.Combine(planRoot, "narration", "subtitles", "short.srt")),
+            generatedLongSrtPreview = ExistingSrtPreview(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))
         }, JsonOptions), ct);
         return path;
     }
@@ -2718,8 +2784,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
-    private sealed record NarrationSrtTimingResult(string Srt, object Diagnostics);
-    private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, bool ValidationPassed, IReadOnlyList<string> Errors);
+    private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics);
+    private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, string GeneratedSrtPreview, object Timing);
+    private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics);
     private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated);
