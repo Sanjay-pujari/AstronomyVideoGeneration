@@ -4327,12 +4327,6 @@ public sealed partial class ProductionPipelineExecutionService(
             : TrimToSpokenWords(trimmed, ShortNarrationMaximumWords);
     }
 
-    private static IReadOnlyList<string> SplitNarrationSentences(string text)
-        => Regex.Matches(text.Trim(), @"[^.!?]+[.!?]?")
-            .Select(match => match.Value.Trim())
-            .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
-            .ToArray();
-
     private static int GetShortNarrationSentencePriority(string sentence, ProductionPhaseContext context, int index, int sentenceCount)
     {
         var priority = 0;
