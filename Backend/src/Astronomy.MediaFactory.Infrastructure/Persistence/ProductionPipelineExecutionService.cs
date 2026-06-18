@@ -1776,6 +1776,8 @@ public sealed partial class ProductionPipelineExecutionService(
             Path.Combine(planRoot, "question-engine", "question-driven-narration-v2.json")
         };
 
+        Phase14DocumentaryNarration? documentaryNarration = null;
+
         try
         {
             var shortNarration = SelectExisting(shortNarrationCandidates, checkedPaths, "short narration V2 source", missingFiles);
@@ -1783,7 +1785,14 @@ public sealed partial class ProductionPipelineExecutionService(
             var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, shortNarration, 5, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
             var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, longNarration, 9, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
 
-            var documentaryNarration = BuildPhase14DocumentaryNarration(context);
+            try
+            {
+                documentaryNarration = BuildPhase14DocumentaryNarration(context);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
+            {
+                throw new InvalidOperationException("SceneLevelNarrationComposer failed", ex);
+            }
             shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
             longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
             var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, shortItems, longItems, documentaryNarration, cancellationToken);
@@ -1812,10 +1821,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 version = "v1",
                 sourceSceneAssetsVersion = "V3.1",
                 sourceNarrationVersion = EventStoryComposer.Version,
-                matchingStrategy = "EventStoryComposerNarrationFiles",
+                matchingStrategy = "SceneLevelNarrationComposer",
                 diagnostics = new
                 {
-                    matchingStrategy = "EventStoryComposerNarrationFiles",
+                    matchingStrategy = "SceneLevelNarrationComposer",
                     narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                     sectionsExtracted = extractedSections,
                     matchedPairs,
@@ -1871,7 +1880,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 missingNarrationBeats,
                 oldPathUsed = false,
                 validationPassed = errors.Count == 0,
-                matchingStrategy = "EventStoryComposerNarrationFiles",
+                matchingStrategy = "SceneLevelNarrationComposer",
                 narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                 sectionsExtracted = extractedSections,
                 matchedPairs,
@@ -1890,7 +1899,7 @@ public sealed partial class ProductionPipelineExecutionService(
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, null, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, cancellationToken);
             throw;
         }
     }
@@ -2023,7 +2032,7 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
         var adapterDiagnostics = new Phase14AdapterDiagnostics(
             true,
-            "NarrationSceneAdapterV3.1",
+            "SceneLevelNarrationComposer",
             expansionContext.EventType,
             shortTexts.Count,
             longTexts.Count,
@@ -2038,7 +2047,7 @@ public sealed partial class ProductionPipelineExecutionService(
             scenePurposeBySceneId,
             allTexts.Select(item => NormalizePath(Path.Combine(context.OutputRoot, "narration", item.format, $"{SanitizeFileName(item.Key)}.txt"))).ToArray(),
             [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "long.srt"))]);
-        return new Phase14DocumentaryNarration(true, true, "EventStoryComposer+NarrationSceneAdapterV3.1", false, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics);
+        return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics);
     }
 
     private static IReadOnlyList<LongSceneNarrationDraft> BuildSceneLevelNarrationDrafts(ProductionPhaseContext context, string format, DocumentaryNarrationSections sections, string family)
@@ -2169,7 +2178,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => items.Select(item =>
         {
             var text = documentaryTextBySceneId.TryGetValue(item.SceneId, out var documentaryText) ? documentaryText : item.NarrationText;
-            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "EventStoryComposer" };
+            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "SceneLevelNarrationComposer" };
         }).ToArray();
 
     private static string ResolvePhase14NarrationFamily(ProductionPhaseContext context)
@@ -2603,7 +2612,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedLongNarrationSource = NormalizePath(longNarration),
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
-            matchingStrategy = "EventStoryComposerNarrationFiles",
+            matchingStrategy = "SceneLevelNarrationComposer",
             sceneLevelAdapter = adapterDiagnostics,
             adapterUsed = adapterDiagnostics?.AdapterUsed ?? false,
             adapterName = adapterDiagnostics?.AdapterName,
