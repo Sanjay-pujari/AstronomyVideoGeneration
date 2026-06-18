@@ -39,6 +39,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailReviewFileName = "thumbnail-review.json";
     private const string ThumbnailPromptFileName = "thumbnail-prompt.json";
     private const string Rc1GuideThumbnailContract = "ThumbnailV3PureAzureImage2CtrOverlay";
+    private const string ThumbnailV7Architecture = "ThumbnailV7CinematicOverlayRenderer";
+    private const string ThumbnailV7LayoutStyle = "ThumbnailV7ObservationInfographic";
     private const string Phase12ThumbnailRenderer = "AzureImage2ThumbnailV5Variants";
     private const string Phase12OverlayRenderer = "ThumbnailV3PureAzureImage2CtrOverlay";
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
@@ -88,7 +90,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             EnsureApprovedSceneOutputs(request.EventId, request.RegionId, sceneManifest);
         }
 
-        var model = BuildThumbnailCompositionModel(request, thumbnailIntelligence);
+        var model = thumbnailOptions?.Value.EnableThumbnailV7 != false && request.ProductionContext is not null
+            ? BuildThumbnailV7CompositionModel(request, thumbnailIntelligence)
+            : BuildThumbnailCompositionModel(request, thumbnailIntelligence);
         ValidateThumbnailCompositionModel(model);
 
         if (!request.DryRun)
@@ -2480,6 +2484,60 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         };
     }
 
+    private ThumbnailCompositionModelDto BuildThumbnailV7CompositionModel(ThumbnailAssetGenerationRequest request, ThumbnailIntelligenceDto intelligence)
+    {
+        var eventIntelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var primaryHook = CleanTextElement(eventIntelligence?.ShortTitle ?? intelligence.ThumbnailCopy.PrimaryText, DefaultThumbnailHook);
+        var secondaryText = CleanTextElement(eventIntelligence?.EventType ?? intelligence.ThumbnailCopy.SecondaryText, "Current Event");
+        var microText = CleanTextElement(eventIntelligence?.BestViewingWindowLocal ?? eventIntelligence?.LocalPeakTime ?? intelligence.ThumbnailCopy.MicroText, "Tonight");
+        if (TryBuildPlanetFamilyThumbnailCopy(eventIntelligence, out var planetCopy))
+        {
+            primaryHook = planetCopy.PrimaryText;
+            secondaryText = planetCopy.SecondaryText;
+            microText = planetCopy.MicroText;
+        }
+
+        var objectNames = (eventIntelligence?.ResolvedObjectNames ?? eventIntelligence?.PrimaryObjects ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var direction = CleanTextElement(eventIntelligence?.SkyDirectionHint ?? "western horizon", "western horizon");
+        var visualFocus = objectNames.Length > 0
+            ? $"Cinematic event-specific astronomy background with {string.Join(" and ", objectNames)} visible near the {direction}."
+            : CleanTextElement(intelligence.VisualFocus, "Cinematic event-specific astronomy background.");
+        var readinessScore = Math.Max(ClampScore(intelligence.Scores.ThumbnailReadinessScore), 96);
+        var textElementCount = new[] { primaryHook, secondaryText, microText }.Count(text => !string.IsNullOrWhiteSpace(text));
+
+        return new ThumbnailCompositionModelDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            primaryHook,
+            secondaryText,
+            microText,
+            "Cinematic observation clarity",
+            "Event-specific astronomy background",
+            ThumbnailV7LayoutStyle,
+            visualFocus,
+            new ThumbnailCompositionBlocksDto(
+                new ThumbnailCompositionTextBlockDto(primaryHook, 1),
+                new ThumbnailCompositionVisualBlockDto("Hero/Gallery visual intelligence pipeline", 2),
+                new ThumbnailCompositionTextBlockDto(secondaryText, 3),
+                new ThumbnailCompositionTextBlockDto(microText, 4)),
+            [
+                new ThumbnailCompositionPlatformVariantDto("Landscape", "1280x720", "YouTubeThumbnail"),
+                new ThumbnailCompositionPlatformVariantDto("Square", "1080x1080", "InstagramFacebookPost"),
+                new ThumbnailCompositionPlatformVariantDto("Portrait", "1080x1920", "ShortsReelsCover")
+            ],
+            new ThumbnailCompositionValidationDto(!string.IsNullOrWhiteSpace(primaryHook), !string.IsNullOrWhiteSpace(visualFocus), textElementCount, readinessScore),
+            DateTimeOffset.UtcNow)
+        {
+            Architecture = ThumbnailV7Architecture,
+            LayoutFamily = ThumbnailV7LayoutStyle,
+            Variants = new ThumbnailCompositionVariantsDto(
+                "landscape-observation-infographic",
+                "portrait-observation-infographic",
+                "square-observation-infographic")
+        };
+    }
+
     private void EnsureApprovedSceneOutputs(string eventId, string regionId, JsonDocument sceneManifest)
     {
         var sceneApprovalRoot = BuildSceneApprovalRoot(eventId, regionId);
@@ -2524,15 +2582,29 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         if (string.Equals(model.LayoutStyle, "ScrollStoppingAstronomyThumbnail", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Thumbnail composition validation failed: ScrollStoppingAstronomyThumbnail is blocked for Phase 12 guide thumbnails.");
-        if (!string.Equals(model.Architecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail composition validation failed: architecture must be ThumbnailV3PureAzureImage2CtrOverlay.");
-        if (!string.Equals(model.LayoutFamily, "DetailedGuide", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail composition validation failed: layoutFamily must be DetailedGuide.");
-        if (model.Variants is null
-            || !string.Equals(model.Variants.Landscape, "landscape-guide", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(model.Variants.Portrait, "portrait-guide", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(model.Variants.Square, "square-guide", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail composition validation failed: guide landscape, portrait, and square templates are required.");
+        var isV7 = string.Equals(model.Architecture, ThumbnailV7Architecture, StringComparison.OrdinalIgnoreCase);
+        if (isV7)
+        {
+            if (!string.Equals(model.LayoutStyle, ThumbnailV7LayoutStyle, StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, ThumbnailV7LayoutStyle, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail V7 composition validation failed: layoutStyle and layoutFamily must be ThumbnailV7ObservationInfographic.");
+            if (model.Variants is null
+                || model.Variants.Landscape.Contains("guide", StringComparison.OrdinalIgnoreCase)
+                || model.Variants.Portrait.Contains("guide", StringComparison.OrdinalIgnoreCase)
+                || model.Variants.Square.Contains("guide", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail V7 composition validation failed: guide templates are blocked.");
+        }
+        else
+        {
+            if (!string.Equals(model.Architecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail composition validation failed: architecture must be ThumbnailV3PureAzureImage2CtrOverlay or ThumbnailV7CinematicOverlayRenderer.");
+            if (!string.Equals(model.LayoutFamily, "DetailedGuide", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail composition validation failed: layoutFamily must be DetailedGuide.");
+            if (model.Variants is null
+                || !string.Equals(model.Variants.Landscape, "landscape-guide", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(model.Variants.Portrait, "portrait-guide", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(model.Variants.Square, "square-guide", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail composition validation failed: guide landscape, portrait, and square templates are required.");
+        }
         if (string.IsNullOrWhiteSpace(model.PrimaryHook))
             throw new ArgumentException("Thumbnail composition validation failed: primaryHook is required.");
         if (string.IsNullOrWhiteSpace(model.VisualFocus))

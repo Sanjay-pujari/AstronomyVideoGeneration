@@ -175,7 +175,13 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         var outputPath = Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-composition-model.json");
         var saved = JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
         Assert.NotNull(saved);
-        Assert.Equal("JUPITER + VENUS", saved!.PrimaryHook);
+        Assert.Equal("ThumbnailV7CinematicOverlayRenderer", saved!.Architecture);
+        Assert.Equal("ThumbnailV7ObservationInfographic", saved.LayoutStyle);
+        Assert.Equal("ThumbnailV7ObservationInfographic", saved.LayoutFamily);
+        Assert.DoesNotContain("ThumbnailV3PureAzureImage2CtrOverlay", await File.ReadAllTextAsync(outputPath), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("CTROverlay", await File.ReadAllTextAsync(outputPath), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DetailedGuide", await File.ReadAllTextAsync(outputPath), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("JUPITER + VENUS", saved.PrimaryHook);
         Assert.Equal("CLOSEST APPROACH", saved.SecondaryText);
         Assert.Equal(string.Empty, saved.MicroText);
         Assert.Equal(2, saved.Validation.TextElementCount);

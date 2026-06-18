@@ -36,7 +36,10 @@ public class ThumbnailV7CinematicOverlayRenderer
         var profile = _profileResolver.Resolve(request);
         var observation = _observationBuilder.Build(request, profile);
         var plan = _templatePlanner.Plan(profile, observation);
-        var backgroundPrompt = _promptBuilder.Build(profile, observation, plan);
+        var visualIntelligence = EventVisualIntelligence.From(request.ProductionContext?.ProductionEventIntelligence, observation);
+        var heroComposition = HeroCompositionModel.From(request.ProductionContext?.ProductionEventIntelligence, observation);
+        var galleryComposition = GalleryCompositionModel.From(request.ProductionContext?.ProductionEventIntelligence, observation);
+        var backgroundPrompt = _promptBuilder.Build(visualIntelligence, heroComposition, galleryComposition);
         var composition = _composer.Compose(plan);
         var writes = new List<ThumbnailV7OutputWrite>();
 
@@ -52,7 +55,7 @@ public class ThumbnailV7CinematicOverlayRenderer
         var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation);
         var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
         var promptPath = Path.Combine(thumbnailRoot, "thumbnail-prompt.json");
-        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, profile, observation, plan }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { thumbnailVersion = "V7", selectedRenderer = RendererName, backgroundPrompt, azureImage2BackgroundOnly = true, backgroundPromptSource = "HeroGalleryEventVisualLogic", forbiddenBackgroundContent = new[] { "text", "labels", "ui", "infographic elements", "dashboard cards", "widget panels", "extra celestial objects" }, layers = ThumbnailV7Plan.LayerNames, visualIntelligence, heroComposition, galleryComposition, profile, observation, plan }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         return new ThumbnailV7Result(writes.Select(w => NormalizePath(w.Path)).Append(NormalizePath(promptPath)).Append(NormalizePath(diagnosticsPath)).ToArray(), diagnosticsPath, validation);
     }
@@ -164,11 +167,39 @@ public sealed class ThumbnailV7TemplatePlanner
 
 public sealed class ThumbnailV7BackgroundPromptBuilder
 {
-    public string Build(ThumbnailV7Profile profile, ThumbnailV7Observation observation, ThumbnailV7Plan plan)
-        => $"Azure Image 2 background-only image. Cinematic event-specific astronomy background for {observation.Title}: natural twilight sky and horizon atmosphere, with {BuildObjectPhrase(observation.ObjectNames)} naturally visible on the right / center-right when part of the event story. Reserve the left side for an observation card and reserve the bottom for a footer. No text, no labels, no UI, no infographic elements, no dashboard cards, no widget panels, no star-map style graphics, no extra celestial objects.";
+    public string Build(EventVisualIntelligence visualIntelligence, HeroCompositionModel heroComposition, GalleryCompositionModel galleryComposition)
+    {
+        var objects = visualIntelligence.ObjectNames.Count == 0 ? "the event objects" : string.Join(" and ", visualIntelligence.ObjectNames);
+        var skyDirection = FirstNonEmpty(visualIntelligence.SkyDirectionHint, heroComposition.DirectionCue, galleryComposition.HorizonCue, "event horizon");
+        var mood = FirstNonEmpty(heroComposition.VisualMood, galleryComposition.VisualMood, visualIntelligence.VisualTheme, "premium astronomy photography");
+        var title = FirstNonEmpty(visualIntelligence.ShortTitle, visualIntelligence.Title, "astronomy event");
 
-    private static string BuildObjectPhrase(IReadOnlyList<string> objects)
-        => objects.Count == 0 ? "only the astronomy event objects from the supplied story" : $"only {string.Join(" and ", objects)}";
+        return string.Join(" ", new[]
+        {
+            $"Create cinematic background-only {DescribeSky(visualIntelligence.EventType, skyDirection)} for {title}.",
+            $"{objects} visible naturally near each other when part of the event story.",
+            "Beautiful horizon.",
+            mood + ".",
+            "National Geographic quality.",
+            "No text.",
+            "No labels.",
+            "Reserve left side for observation card.",
+            "Reserve bottom strip for footer.",
+            "Do not include UI, infographic panels, dashboard cards, widget panels, star-map graphics, or extra celestial objects."
+        });
+    }
+
+    private static string DescribeSky(string eventType, string skyDirection)
+    {
+        if (eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || eventType.Contains("planet", StringComparison.OrdinalIgnoreCase))
+            return skyDirection.Contains("west", StringComparison.OrdinalIgnoreCase) ? "twilight western sky" : $"twilight sky toward the {skyDirection}";
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "dark-sky meteor shower radiant";
+        if (eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "eclipse-safe dramatic sky";
+        if (eventType.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "moonrise horizon sky";
+        return $"event-specific astronomy sky toward the {skyDirection}";
+    }
+
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
 }
 
 public sealed class ThumbnailV7CinematicOverlayComposer
@@ -245,6 +276,37 @@ public sealed class ThumbnailV7Validator
         if (!valid) throw new InvalidOperationException($"Thumbnail V7 validation failed: missing={string.Join(',', missing)}, oldWriterDetected={oldWriterDetected}, overlap={composition.OverlapDetected}, info={composition.InformationAreaPercent}, visual={composition.VisualAreaPercent}, template={plan.SelectedTemplate}");
         return new ThumbnailV7Diagnostics("V7", ThumbnailV7CinematicOverlayRenderer.RendererName, "ThumbnailV7Validator", "HeroGalleryEventVisualLogic", plan.SelectedTemplate, true, true, true, true, false, false, false, false, false, false, false, mercuryLeak, outputFiles, composition.InformationAreaPercent, composition.VisualAreaPercent, composition.OverlapDetected);
     }
+}
+
+
+public sealed record EventVisualIntelligence(string EventType, string Title, string ShortTitle, string SkyDirectionHint, IReadOnlyList<string> ObjectNames, string VisualTheme)
+{
+    public static EventVisualIntelligence From(ProductionEventIntelligence? intelligence, ThumbnailV7Observation observation)
+        => new(
+            intelligence?.EventType ?? observation.Subtitle,
+            intelligence?.Title ?? observation.Title,
+            intelligence?.ShortTitle ?? observation.Title,
+            intelligence?.SkyDirectionHint ?? observation.DirectionCue,
+            observation.ObjectNames.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            intelligence?.VisualTheme ?? intelligence?.StoryTheme ?? "Premium astronomy photography");
+}
+
+public sealed record HeroCompositionModel(string BackgroundPrompt, string DirectionCue, string VisualMood)
+{
+    public static HeroCompositionModel From(ProductionEventIntelligence? intelligence, ThumbnailV7Observation observation)
+        => new(
+            $"Cinematic astronomy hero visual for {intelligence?.Title ?? observation.Title}",
+            intelligence?.SkyDirectionHint ?? observation.DirectionCue,
+            intelligence?.VisualTheme ?? "Premium astronomy photography");
+}
+
+public sealed record GalleryCompositionModel(string HorizonCue, string VisualMood, IReadOnlyList<string> VisualMotifs)
+{
+    public static GalleryCompositionModel From(ProductionEventIntelligence? intelligence, ThumbnailV7Observation observation)
+        => new(
+            intelligence?.SkyDirectionHint ?? observation.DirectionCue,
+            intelligence?.SkyGuideTheme ?? intelligence?.VisualTheme ?? "National Geographic quality",
+            intelligence?.VisualMotifs ?? []);
 }
 
 public sealed record ThumbnailV7Result(IReadOnlyList<string> OutputFiles, string DiagnosticsPath, ThumbnailV7Diagnostics Diagnostics);
