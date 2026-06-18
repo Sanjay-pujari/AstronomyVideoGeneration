@@ -2032,6 +2032,7 @@ public sealed partial class ProductionPipelineExecutionService(
             scriptComposerDiagnostics = documentaryNarration.Diagnostics,
             source = "event-story-composer",
             sceneLevelAdapter = documentaryNarration.AdapterDiagnostics,
+            sceneNarrationComposerTrace = documentaryNarration.AdapterDiagnostics.SceneNarrationComposerTrace,
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
             narrationFileWriteCount = narrationFileWriteDiagnostics.NarrationFileWriteCount,
@@ -2076,6 +2077,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortTexts = new Dictionary<string, string>(LongSceneNarrationExpander.Expand(family, expansionContext, shortDrafts, out var shortExpansionStrategy), StringComparer.OrdinalIgnoreCase);
         var expandedLongTexts = LongSceneNarrationExpander.Expand(family, expansionContext, longDrafts, out var longExpansionStrategy);
         var longTexts = new Dictionary<string, string>(expandedLongTexts, StringComparer.OrdinalIgnoreCase);
+        var composerTrace = new List<SceneNarrationComposerTraceEntry>();
+        SanitizeSceneNarrationComposerOutputs(context, family, shortTexts, composerTrace, "short");
+        SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
         var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
         var firstSentenceByScene = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => FirstSentence(item.Value), StringComparer.OrdinalIgnoreCase);
@@ -2113,9 +2117,104 @@ public sealed partial class ProductionPipelineExecutionService(
             ["ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing"],
             scenePurposeBySceneId,
             allTexts.Select(item => NormalizePath(Path.Combine(context.OutputRoot, "narration", item.format, $"{SanitizeFileName(item.Key)}.txt"))).ToArray(),
-            [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "long.srt"))]);
+            [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "long.srt"))],
+            composerTrace);
         return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics);
     }
+
+    private static void SanitizeSceneNarrationComposerOutputs(ProductionPhaseContext context, string family, IDictionary<string, string> texts, List<SceneNarrationComposerTraceEntry> trace, string format)
+    {
+        foreach (var (sceneId, raw) in texts.ToArray())
+        {
+            var scenePurpose = ResolvePhase14ScenePurpose(sceneId);
+            var inputEventSummary = BuildEventSummaryFallbackText(context);
+            var sanitizedResult = SanitizeSceneNarrationText(raw, context, family, scenePurpose);
+            texts[sceneId] = sanitizedResult.Text;
+            trace.Add(new SceneNarrationComposerTraceEntry(
+                format,
+                sceneId,
+                scenePurpose,
+                raw,
+                inputEventSummary,
+                raw,
+                sanitizedResult.Text,
+                sanitizedResult.RemovedFallbackSentences,
+                raw.Contains("centers on", StringComparison.OrdinalIgnoreCase),
+                sanitizedResult.Text.Contains("centers on", StringComparison.OrdinalIgnoreCase),
+                "SceneLevelNarrationComposer"));
+        }
+    }
+
+    private static SceneNarrationSanitizeResult SanitizeSceneNarrationText(string rawText, ProductionPhaseContext context, string family, string scenePurpose)
+    {
+        var removed = new List<string>();
+        var sentences = SplitNarrationSentences(rawText);
+        var kept = new List<string>();
+        foreach (var sentence in sentences)
+        {
+            if (IsBannedFallbackNarrationSentence(sentence, context))
+            {
+                removed.Add(sentence.Trim());
+                continue;
+            }
+            kept.Add(sentence.Trim());
+        }
+
+        if (string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
+            kept = MergeCauseNarration(kept, family);
+
+        var sanitized = string.Join(" ", kept.Where(sentence => !string.IsNullOrWhiteSpace(sentence))).Trim();
+        if (string.IsNullOrWhiteSpace(sanitized) && string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
+            sanitized = BuildEventFamilyCauseNarration(family);
+        if (sanitized.Contains("centers on", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("SceneLevelNarrationComposer sanitizer failed to remove fallback narration text.");
+        return new SceneNarrationSanitizeResult(sanitized, removed);
+    }
+
+    private static List<string> MergeCauseNarration(IReadOnlyList<string> kept, string family)
+    {
+        var cause = BuildEventFamilyCauseNarration(family);
+        var first = kept.FirstOrDefault(sentence => !string.IsNullOrWhiteSpace(sentence));
+        if (string.IsNullOrWhiteSpace(first)) return [cause];
+        if (cause.Contains(first, StringComparison.OrdinalIgnoreCase) || first.Contains(cause, StringComparison.OrdinalIgnoreCase)) return [cause];
+        return [first, cause];
+    }
+
+    private static string BuildEventFamilyCauseNarration(string family)
+        => family switch
+        {
+            "Moon" => "A full moon happens when the Moon is opposite the Sun from our point of view on Earth.",
+            "Meteor" => "Meteor showers happen when Earth passes through a trail of comet debris, and tiny particles burn brightly in our atmosphere.",
+            "PlanetGrouping" => "Planet groupings happen because planets move along the same broad path across our sky, so they can appear close together from Earth.",
+            "Eclipse" => "A solar eclipse happens when the Moon passes between Earth and the Sun, briefly blocking part or all of the Sun’s disk.",
+            _ => "This event happens because objects in space keep moving through predictable positions from our point of view on Earth."
+        };
+
+    private static string BuildEventSummaryFallbackText(ProductionPhaseContext context)
+    {
+        var title = FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.ProductionEventIntelligence.ShortTitle, context.Request.ShortTitle);
+        var primaryObjects = context.ProductionEventIntelligence.PrimaryObjects is { Count: > 0 }
+            ? string.Join(", ", context.ProductionEventIntelligence.PrimaryObjects)
+            : string.Empty;
+        return string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(primaryObjects) ? string.Empty : $"{title} centers on {primaryObjects}.";
+    }
+
+    private static bool IsBannedFallbackNarrationSentence(string sentence, ProductionPhaseContext context)
+    {
+        var normalized = Regex.Replace(sentence ?? string.Empty, "\\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(normalized)) return false;
+        if (Regex.IsMatch(normalized, @"\bcenters\s+on\b", RegexOptions.IgnoreCase)) return true;
+        var title = FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.ProductionEventIntelligence.ShortTitle, context.Request.ShortTitle);
+        var primaryObjects = context.ProductionEventIntelligence.PrimaryObjects is { Count: > 0 }
+            ? string.Join("|", context.ProductionEventIntelligence.PrimaryObjects.Where(value => !string.IsNullOrWhiteSpace(value)).Select(Regex.Escape))
+            : string.Empty;
+        if (!string.IsNullOrWhiteSpace(title) && Regex.IsMatch(normalized, $"^{Regex.Escape(title)}\\s+is\\s+about\\s+", RegexOptions.IgnoreCase)) return true;
+        if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(primaryObjects) && Regex.IsMatch(normalized, $"{Regex.Escape(title)}.*\\b({primaryObjects})\\b", RegexOptions.IgnoreCase) && Regex.IsMatch(normalized, @"\b(centers on|is about|built around)\b", RegexOptions.IgnoreCase)) return true;
+        return Regex.IsMatch(normalized, @"\b(event|guide)\s+(this guide is built around|at the center of this guide)\b", RegexOptions.IgnoreCase);
+    }
+
+    private static IReadOnlyList<string> SplitNarrationSentences(string text)
+        => Regex.Matches(text ?? string.Empty, @"[^.!?]+[.!?]?").Select(m => m.Value.Trim()).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
 
     private static IReadOnlyList<LongSceneNarrationDraft> BuildSceneLevelNarrationDrafts(ProductionPhaseContext context, string format, DocumentaryNarrationSections sections, string family)
         => ReadPhase14SceneIds(context.OutputRoot, format).Select(sceneId => new LongSceneNarrationDraft(sceneId, ResolvePhase14ScenePurpose(sceneId), BuildSceneLevelSourceText(sceneId, sections, family))).ToArray();
@@ -2153,7 +2252,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             "hook" => sections.ColdOpen,
             "what-is-it" => sections.Hook,
-            "cause" => family == "Eclipse" ? "A solar eclipse happens when the Moon passes directly between Earth and the Sun, casting its shadow onto our planet." : sections.Context,
+            "cause" => BuildEventFamilyCauseNarration(family),
             "interesting-fact" => family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
             "best-time" => sections.ViewingGuide,
             "accurate-sky-guide" => BuildNaturalSkyGuide(family),
@@ -3106,7 +3205,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics);
-    private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated);
+    private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated, IReadOnlyList<SceneNarrationComposerTraceEntry> SceneNarrationComposerTrace);
+    private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
+    private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
     private sealed record NarrationFileWriteTraceEntry(string FilePath, string SceneId, string Format, string WriterComponent, string WriteMode, int WriteOrder, string ContentPreview, bool ContainsCentersOn, bool ContainsMoonNamesCulturalMemory, string SourceComponent, string SourceStrategy);
     private sealed record NarrationFileWriteDiagnostics(int NarrationFileWriteCount, IReadOnlyList<string> DuplicateNarrationFileWrites, IReadOnlyList<string> OverwrittenNarrationFiles, IReadOnlyList<string> AppendedNarrationFiles, bool FallbackNarrationTextInjected);
