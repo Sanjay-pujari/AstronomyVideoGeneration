@@ -38,6 +38,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailFinalFileName = "thumbnail-final.png";
     private const string ThumbnailReviewFileName = "thumbnail-review.json";
     private const string ThumbnailPromptFileName = "thumbnail-prompt.json";
+    private const string Rc1GuideThumbnailContract = "RC1GuideThumbnail";
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -673,6 +674,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             {
                 prompt,
                 variants = thumbnailVariants,
+                thumbnailContractRequested = Rc1GuideThumbnailContract,
+                thumbnailContractSelected = Rc1GuideThumbnailContract,
                 eventFamily = semanticProfile.ResolvedEventFamily,
                 eventFamilyResolverInput = semanticProfile.EventFamilyResolverInput,
                 eventFamilyResolverReason = semanticProfile.EventFamilyResolverReason,
@@ -756,7 +759,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 throw new InvalidOperationException("Thumbnail V6 variant validation failed: duplicate image hashes detected.");
             if (thumbnailVariantResults.Select(v => v.TextLayout).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
                 throw new InvalidOperationException("Thumbnail V6 variant validation failed: all variants use the same text layout.");
-            ValidateThumbnailV6Rc1GuideRendererContract("ThumbnailV6Rc1GuideRenderer", "DetailedGuideThumbnail", thumbnailVariantResults.Select(v => v.TextLayout));
+            ValidateThumbnailV6Rc1GuideRendererContract("ThumbnailV6Rc1GuideRenderer", Rc1GuideThumbnailContract, thumbnailVariantResults.Select(v => v.TextLayout));
 
             var hashBeforeFinalWrite = await ComputeOptionalSha256Async(finalPath, cancellationToken);
             File.Copy(thumbnailVariantResults[0].ImagePath, finalPath, overwrite: true);
@@ -821,13 +824,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 separationAdded = selectedOverlayDiagnostics.SeparationAdded,
                 altitudeAdded = selectedOverlayDiagnostics.AltitudeAdded,
                 finalThumbnailPath = NormalizePath(finalPath),
-                thumbnailContract = "DetailedGuideThumbnail",
+                thumbnailContract = Rc1GuideThumbnailContract,
+                thumbnailContractRequested = Rc1GuideThumbnailContract,
+                thumbnailContractSelected = Rc1GuideThumbnailContract,
+                thumbnailContractExecuted = Rc1GuideThumbnailContract,
+                requiredGuideFields = new[] { "title", "subtitle", "date", "bestTime", "direction", "equipment", "moon", "skyLabels", "directionMarker", "bottomTips" },
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
-            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = "DetailedGuideThumbnail", textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = "DetailedGuideThumbnail", renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
                 finalMainText = prompt.CtrOverlay,
                 thumbnailArchitecture = "ThumbnailV6",
                 sceneManifestRequired = false,
@@ -836,6 +843,33 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var generatedRequiredOutputs = new[] { finalPath, NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) };
             var generatedRequiredOutputChecks = generatedRequiredOutputs.ToDictionary(path => Path.GetFileName(path), File.Exists, StringComparer.OrdinalIgnoreCase);
             var actualOutputsExist = generatedRequiredOutputChecks.Values.All(exists => exists);
+            var titleExists = prompt.CtrOverlay.Any(line => !string.IsNullOrWhiteSpace(line));
+            var subtitleExists = prompt.CtrOverlay.Skip(1).Any(line => !string.IsNullOrWhiteSpace(line));
+            var dateExists = !string.IsNullOrWhiteSpace(prompt.Badge) || BuildCurrentEventLock(request).EventDate.HasValue;
+            var bestTimeExists = selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded;
+            var directionExists = selectedOverlayDiagnostics.LookDirectionCueAdded || selectedOverlayDiagnostics.DirectionCueAdded;
+            var equipmentExists = selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded;
+            var moonExists = selectedOverlayDiagnostics.MoonObjectRendered || !string.IsNullOrWhiteSpace(prompt.MoonInterference) || !string.IsNullOrWhiteSpace(ResolveMoonPhaseName(BuildCurrentEventLock(request)));
+            var skyLabelsExist = selectedOverlayDiagnostics.ObjectLabelsAdded || selectedOverlayDiagnostics.MeteorStreakLabelAdded || selectedOverlayDiagnostics.MoonObjectRendered;
+            var directionMarkerExists = selectedOverlayDiagnostics.LookDirectionCueAdded || selectedOverlayDiagnostics.DirectionCueAdded;
+            var bottomTipsExist = selectedOverlayDiagnostics.BottomTipsBarAdded;
+            var requiredGuideFields = new[] { "title", "subtitle", "date", "bestTime", "direction", "equipment", "moon", "skyLabels", "directionMarker", "bottomTips" };
+            var missingGuideFields = requiredGuideFields.Where(field => field switch
+            {
+                "title" => !titleExists,
+                "subtitle" => !subtitleExists,
+                "date" => !dateExists,
+                "bestTime" => !bestTimeExists,
+                "direction" => !directionExists,
+                "equipment" => !equipmentExists,
+                "moon" => !moonExists,
+                "skyLabels" => !skyLabelsExist,
+                "directionMarker" => !directionMarkerExists,
+                "bottomTips" => !bottomTipsExist,
+                _ => true
+            }).ToArray();
+            if (missingGuideFields.Length > 0)
+                throw new InvalidOperationException("Thumbnail V6 RC1 guide contract validation failed: missing required guide fields: " + string.Join(", ", missingGuideFields));
             await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
             {
                 status = actualOutputsExist ? "Succeeded" : "Failed",
@@ -843,10 +877,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 semanticValidationPassed = actualOutputsExist,
                 detectedEventFamily = selectedOverlayDiagnostics.EventFamily,
                 cleanHeadline = prompt.ShortTitle,
-                guideCardFieldsPresent = false,
-                guideCardDetected = false,
+                thumbnailContractRequested = Rc1GuideThumbnailContract,
+                thumbnailContractSelected = Rc1GuideThumbnailContract,
+                thumbnailContractExecuted = Rc1GuideThumbnailContract,
+                requiredGuideFields,
+                missingGuideFields,
+                guideCardFieldsPresent = missingGuideFields.Length == 0,
+                guideCardDetected = selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded,
                 locationDetected = false,
-                metadataPanelDetected = false,
+                metadataPanelDetected = selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded,
                 thumbnailProfileReady = actualOutputsExist,
                 forbiddenObjectsDetected = forbiddenObjects,
                 forbiddenTermsDetected,
@@ -864,14 +903,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 forbiddenTermsApplied = semanticProfile.ForbiddenTermsApplied,
                 forbiddenTermsSkippedBecauseExpected = semanticProfile.ForbiddenTermsSkippedBecauseExpected,
                 validatorProfile = semanticProfile.ValidatorProfile,
-                titleExists = true,
-                dateExists = !string.IsNullOrWhiteSpace(prompt.Badge),
-                bestTimeExists = false,
-                directionExists = false,
-                equipmentExists = false,
-                moonExists = selectedOverlayDiagnostics.MoonObjectRendered,
+                titleExists,
+                subtitleExists,
+                dateExists,
+                bestTimeExists,
+                directionExists,
+                equipmentExists,
+                moonExists,
+                skyLabelsExist,
+                directionMarkerExists,
                 radiantAnnotationExists = selectedOverlayDiagnostics.RadiantMarkerAdded,
-                bottomTipsExist = selectedOverlayDiagnostics.BottomTipsBarAdded,
+                bottomTipsExist,
                 thumbnailCompositionType,
                 thumbnailOverlayTemplate = selectedOverlayDiagnostics.ThumbnailOverlayTemplate,
                 selectedOverlayDiagnostics.OverlayElementsCount,
@@ -882,7 +924,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 selectedOverlayDiagnostics.BottomTipsBarAdded,
                 overlayEventFamily = selectedOverlayDiagnostics.EventFamily,
                 finalThumbnailPath = NormalizePath(finalPath),
-                thumbnailContract = "DetailedGuideThumbnail",
+                thumbnailContract = Rc1GuideThumbnailContract,
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
@@ -891,7 +933,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 textAreaPercent = 24,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
-            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = "DetailedGuideThumbnail", textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = "DetailedGuideThumbnail", renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
                 finalMainText = prompt.CtrOverlay,
                 landscapeExists = generatedRequiredOutputChecks["thumbnail-landscape.png"],
                 portraitExists = generatedRequiredOutputChecks["thumbnail-portrait.png"],
@@ -1201,13 +1243,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             objectNameValidationPassed = eventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
             heroContract = "CinematicHero",
-            thumbnailContract = "DetailedGuideThumbnail",
+            thumbnailContract = Rc1GuideThumbnailContract,
             heroTemplateUsed = false,
             galleryTemplateUsed = false,
             objectPairBoxUsed = false,
             embeddedTextDetected = false,
             croppedTextDetected = false,
-            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = "DetailedGuideThumbnail", textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = "DetailedGuideThumbnail", renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName)), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName)), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
             finalMainText = variants.FirstOrDefault().TextLines.Take(2).ToArray(),
             rc1StyleRestoredForMeteorShower = eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase),
             guidePanelAllowed = false,
@@ -1414,8 +1456,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         DrawCompassCue(ctx, cue, 42 * scale, -0.05f);
         ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 58 * scale, cue.Y - 18 * scale));
 
-        var count = 7 + objects.Take(2).Count() + rows.Count + (!string.IsNullOrWhiteSpace(separation) ? 1 : 0);
-        return new ThumbnailOverlayDiagnostics("PlanetarySkyGuideThumbnail", count, false, false, false, false, false, outputPath, "PlanetaryEvent", true, true, true, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
+        var tips = new RectangleF(0, height - Math.Max(58, 68 * scale), width, Math.Max(58, 68 * scale));
+        ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
+        ctx.DrawText("TIPS  •  USE BINOCULARS IF NEEDED  •  CHECK MOONLIGHT  •  START AT TWILIGHT", smallFont, Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 20 * scale));
+
+        var count = 8 + objects.Take(2).Count() + rows.Count + (!string.IsNullOrWhiteSpace(separation) ? 1 : 0);
+        return new ThumbnailOverlayDiagnostics("PlanetarySkyGuideThumbnail", count, false, false, false, true, true, outputPath, "PlanetaryEvent", true, true, true, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
     }
 
 
@@ -1713,7 +1759,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: guide card, labels, and direction cue are required.");
         if (current.AngularSeparationDegrees.HasValue && !diagnostics.SeparationAdded)
             throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: separation overlay is required when angularSeparationDegrees exists.");
-        if (diagnostics.RadiantMarkerAdded || diagnostics.MeteorStreakLabelAdded || diagnostics.BottomTipsBarAdded)
+        if (diagnostics.RadiantMarkerAdded || diagnostics.MeteorStreakLabelAdded)
             throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: meteor overlay elements are not allowed.");
         if (diagnostics.OverlayElementsCount <= 4)
             throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: overlayElementsCount must be greater than 4.");
@@ -1911,13 +1957,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             totalMs,
             requiredDataBlocksPresent = true,
             overlayAreaPercent = 24,
-            thumbnailContract = "DetailedGuideThumbnail",
+            thumbnailContract = Rc1GuideThumbnailContract,
             heroTemplateUsed = false,
             galleryTemplateUsed = false,
             objectPairBoxUsed = false,
             embeddedTextDetected = false,
             croppedTextDetected = false,
-            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = "DetailedGuideThumbnail", textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = "DetailedGuideThumbnail", renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(imagePath), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-landscape.png")), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-portrait.png")), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
+            thumbnailV6Diagnostics = new { actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v6", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V6-RC1-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "ThumbnailV6Rc1GuideRenderer", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", textLayout = "v6-guide", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(imagePath), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-landscape.png")), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-portrait.png")), NormalizePath(Path.Combine(Path.GetDirectoryName(imagePath) ?? string.Empty, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false },
             outputVerification = new { finalRenderRequestSource = "thumbnailVariantResults", actualRendererVersion = "ThumbnailV6Rc1GuideRenderer", actualOverlayRendererVersion = "ThumbnailV6DeterministicOverlay", finalCompositorUsed = "ThumbnailV6Rc1GuideRenderer", legacyRendererUsed = false, legacyRendererBlocked = true, finalOutputPath = NormalizePath(imagePath), outputFileWrittenAfterV6Overlay = File.Exists(imagePath), finalOutputHashBeforeOverlay, finalOutputHashAfterOverlay = variants.First().Hash },
             outputs = variants.Select(v => new { name = v.Variant, width = v.Width, height = v.Height, hash = v.Hash }),
             variants = variants.Select(v => new { v.Variant, v.Prompt, v.Width, v.Height, v.TextLayout, backgroundPath = NormalizePath(v.BackgroundPath), imagePath = NormalizePath(v.ImagePath), imageHash = v.Hash, azureRequestMs = v.Result.AzureRequestMs, imageDownloadMs = v.Result.ImageDownloadMs })
@@ -1928,8 +1974,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         if (!renderer.Equals("ThumbnailV6Rc1GuideRenderer", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V6 guide validation failed: renderer must be ThumbnailV6Rc1GuideRenderer.");
-        if (!thumbnailContract.Equals("DetailedGuideThumbnail", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Thumbnail V6 guide validation failed: thumbnailContract must be DetailedGuideThumbnail.");
+        if (!thumbnailContract.Equals(Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: thumbnailContract must be RC1GuideThumbnail.");
         if (renderer.Contains("V5", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V6 validation failed: renderer contains V5.");
         if (textLayouts.Any(string.IsNullOrWhiteSpace))
@@ -2516,7 +2562,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             : isMoon ? ["Moon", "lunar phase", "illumination"]
             : current.PrimaryObjects.Concat(current.SecondaryObjects).DefaultIfEmpty(current.ShortTitle));
         var meteorPromptTitle = CleanThumbnailText(FirstNonEmpty(current.ShortTitle, current.Title), "Meteor shower", 18);
-        var background = $"thumbnailCompositionType = ThumbnailV6. Premium cinematic astronomy background for {current.Title}, focused on {string.Join(", ", visualObjects)}, no text, labels, guide cards, metadata panels, location, direction, safety text, or typography.";
+        var background = $"thumbnailCompositionType = ThumbnailV6. Premium cinematic astronomy background for {current.Title}, focused on {string.Join(", ", visualObjects)}, background only with no embedded text or typography; deterministic RC1 guide overlay will add guide cards, metadata panels, direction marker, sky labels, moon context, equipment, and bottom tips.";
         var promptSource = "currentEventLock.eventType";
         var vocabularyProfile = isMeteor ? "MeteorShower" : isEclipse ? "Eclipse" : isMoon ? "Moon" : AllowsConjunctionVocabulary(current.EventType, current.Category) ? "PlanetConjunction" : "CurrentEvent";
         var eventTypeVocabularyUsed = isMeteor ? new[] { "meteor shower", "meteor streaks", "radiant burst", "dark sky" } : isEclipse ? new[] { "eclipse", "solar eclipse", "lunar eclipse", "safe viewing", "timing" } : isMoon ? new[] { "Moon", "lunar phase", "illumination", "moonrise", "moonset" } : AllowsConjunctionVocabulary(current.EventType, current.Category) ? new[] { "conjunction", "planet pairing" } : new[] { current.EventType };
@@ -2541,7 +2587,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             overlay,
             badge,
             [],
-            "Azure generates a background only with no embedded text. Deterministic Thumbnail V6 overlay adds only family badge, event title, and date badge. Do not use time, location, direction, safety text, guide cards, metadata panels, hero/gallery templates, boxes, or object-pair info cards.",
+            "Azure generates a background only with no embedded text. Deterministic Thumbnail V6 RC1 guide overlay adds title, subtitle, date, best time, direction, equipment, moon context, sky labels, direction marker, guide card, and bottom viewing tips. Do not embed typography in the background or use hero/gallery templates.",
             thumbnailPrompt,
             promptSource,
             forbiddenTermsMatched,

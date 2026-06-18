@@ -638,6 +638,16 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Equal("MeteorEvent", phase12Validation.RootElement.GetProperty("detectedEventFamily").GetString());
         Assert.Equal("MeteorEvent", phase12Validation.RootElement.GetProperty("overlayEventFamily").GetString());
         Assert.Equal("MeteorEvent", phase12Validation.RootElement.GetProperty("thumbnailEventFamily").GetString());
+        Assert.Equal("RC1GuideThumbnail", phase12Validation.RootElement.GetProperty("thumbnailContract").GetString());
+        Assert.Equal("RC1GuideThumbnail", phase12Validation.RootElement.GetProperty("thumbnailContractRequested").GetString());
+        Assert.Equal("RC1GuideThumbnail", phase12Validation.RootElement.GetProperty("thumbnailContractSelected").GetString());
+        Assert.Equal("RC1GuideThumbnail", phase12Validation.RootElement.GetProperty("thumbnailContractExecuted").GetString());
+        Assert.True(phase12Validation.RootElement.GetProperty("bestTimeExists").GetBoolean());
+        Assert.True(phase12Validation.RootElement.GetProperty("directionExists").GetBoolean());
+        Assert.True(phase12Validation.RootElement.GetProperty("equipmentExists").GetBoolean());
+        Assert.True(phase12Validation.RootElement.GetProperty("bottomTipsExist").GetBoolean());
+        Assert.True(phase12Validation.RootElement.GetProperty("guideCardFieldsPresent").GetBoolean());
+        Assert.Empty(phase12Validation.RootElement.GetProperty("missingGuideFields").EnumerateArray());
 
         var promptText = await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-prompt.json"));
         Assert.Contains("GEMINIDS", promptText);
@@ -646,7 +656,7 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Contains("thumbnailCompositionType = RadiantBurstThumbnail", promptText);
         Assert.Contains("visible radiant burst point", promptText);
         Assert.DoesNotContain("radiant hint", promptText);
-        Assert.DoesNotContain("guide card", promptText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("guide card", promptText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Look East", promptText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("thumbnailPromptSource", promptText);
         Assert.Contains("forbiddenTermsMatched", promptText);
