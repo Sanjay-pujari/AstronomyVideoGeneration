@@ -47,6 +47,7 @@ internal static class PhotoCinematicThumbnailRenderer
 
                 DrawEventObjectsAndLabels(ctx, spec, visualObjects, labels);
                 DrawTypography(ctx, spec, request);
+                DrawV6Badges(ctx, spec, request);
                 DrawCinematicFinish(ctx, spec);
             });
 
@@ -375,8 +376,8 @@ internal static class PhotoCinematicThumbnailRenderer
 
     private static void DrawTypography(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, PhotoCinematicThumbnailRenderRequest request)
     {
-        var hookFont = ResolveFont(spec.HookFontSize, FontStyle.BoldItalic);
-        var hook = BuildHookText(request);
+        var hookFont = ResolveFont(spec.HookFontSize, FontStyle.Bold);
+        var hook = BuildShortTitleText(request);
         DrawTextWithShadow(ctx, hook, hookFont, spec.HookOrigin, Color.White, 0.86f);
 
         if (IsPlanetFamilyEventType(request.EventType)) return;
@@ -396,7 +397,43 @@ internal static class PhotoCinematicThumbnailRenderer
         // All CTR copy is constrained to the hook text only.
     }
 
-    private static string BuildHookText(PhotoCinematicThumbnailRenderRequest request)
+    private static void DrawV6Badges(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec, PhotoCinematicThumbnailRenderRequest request)
+    {
+        var badgeFont = ResolveFont(spec.BadgeFontSize, FontStyle.Bold);
+        var dateFont = ResolveFont(spec.DateBadgeFontSize, FontStyle.Bold);
+        DrawBadge(ctx, ResolveFamilyBadge(request.EventType), badgeFont, spec.FamilyBadgeOrigin, Color.ParseHex("#FFD45E"));
+        DrawBadge(ctx, ResolveDateBadge(request), dateFont, spec.DateBadgeOrigin, Color.ParseHex("#D8EBFF"));
+    }
+
+    private static void DrawBadge(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color)
+    {
+        var padX = font.Size * 0.38f;
+        var padY = font.Size * 0.28f;
+        var width = Math.Max(font.Size * 6.2f, text.Length * font.Size * 0.58f);
+        var height = font.Size + padY * 2f;
+        var rect = new RectangleF(origin.X - padX, origin.Y - padY, width + padX * 2f, height);
+        ctx.Fill(Color.Black.WithAlpha(0.58f), rect);
+        ctx.Draw(color.WithAlpha(0.82f), 1.6f, rect);
+        DrawTextWithShadow(ctx, text, font, origin, color, 0.9f);
+    }
+
+    private static string ResolveFamilyBadge(string? eventType)
+    {
+        var value = eventType ?? string.Empty;
+        if (value.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "RARE ECLIPSE";
+        if (value.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "FULL MOON";
+        if (value.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "METEOR SHOWER";
+        if (IsPlanetFamilyEventType(value)) return "PLANET ALIGNMENT";
+        return "SKY EVENT";
+    }
+
+    private static string ResolveDateBadge(PhotoCinematicThumbnailRenderRequest request)
+    {
+        var source = CleanText(request.MicroText, request.SecondaryText, "DATE TBA", 18).ToUpperInvariant();
+        return source.Contains(":", StringComparison.Ordinal) ? "DATE TBA" : source;
+    }
+
+    private static string BuildShortTitleText(PhotoCinematicThumbnailRenderRequest request)
     {
         if (IsPlanetFamilyEventType(request.EventType))
         {
@@ -409,7 +446,7 @@ internal static class PhotoCinematicThumbnailRenderer
         var text = CleanText(request.ShortTitle, request.Title, DefaultHookText, 24).ToUpperInvariant();
         if (text.Contains('\n')) return LimitHookWords(text, 6);
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return LimitHookWords(words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2)), 6);
+        return LimitHookWords(words.Length <= 2 ? text : string.Join(' ', words.Take((words.Length + 1) / 2)) + "\n" + string.Join(' ', words.Skip((words.Length + 1) / 2)), 5);
     }
 
     private static string LimitHookWords(string value, int maxWords)
@@ -540,12 +577,16 @@ internal static class PhotoCinematicThumbnailRenderer
         public bool IsPortrait => Height > Width;
         public bool IsSquare => Width == Height;
         public float HorizonY => IsPortrait ? Height * 0.66f : IsSquare ? Height * 0.70f : Height * 0.72f;
-        public float PlanetScale => IsPortrait ? 1.85f : IsSquare ? 1.35f : 1.05f;
-        public float HookFontSize => IsPortrait ? 116f : IsSquare ? 88f : 82f;
+        public float PlanetScale => IsPortrait ? 2.18f : IsSquare ? 1.58f : 1.32f;
+        public float HookFontSize => IsPortrait ? 84f : IsSquare ? 66f : 58f;
         public float SecondaryFontSize => IsPortrait ? 58f : IsSquare ? 44f : 40f;
         public float MicroFontSize => IsPortrait ? 42f : IsSquare ? 34f : 28f;
         public float LabelFontSize => IsPortrait ? 28f : IsSquare ? 24f : 21f;
-        public PointF HookOrigin => IsPortrait ? new PointF(70, 100) : IsSquare ? new PointF(62, 70) : new PointF(58, 56);
+        public PointF HookOrigin => IsPortrait ? new PointF(74, 205) : IsSquare ? new PointF(62, 150) : new PointF(58, 128);
+        public float BadgeFontSize => IsPortrait ? 36f : IsSquare ? 30f : 26f;
+        public float DateBadgeFontSize => IsPortrait ? 34f : IsSquare ? 28f : 24f;
+        public PointF FamilyBadgeOrigin => IsPortrait ? new PointF(74, 96) : IsSquare ? new PointF(62, 68) : new PointF(58, 58);
+        public PointF DateBadgeOrigin => IsPortrait ? new PointF(74, 410) : IsSquare ? new PointF(62, 312) : new PointF(58, 256);
         public PointF SecondaryOrigin => IsPortrait ? new PointF(76, 360) : IsSquare ? new PointF(72, 250) : new PointF(72, 250);
         public PointF MicroOrigin => IsPortrait ? new PointF(80, 430) : IsSquare ? new PointF(76, 306) : new PointF(76, 302);
         public PointF PrimaryObjectCenter => IsPortrait ? new PointF(Width * 0.57f, Height * 0.48f) : IsSquare ? new PointF(Width * 0.70f, Height * 0.48f) : new PointF(Width * 0.78f, Height * 0.45f);
