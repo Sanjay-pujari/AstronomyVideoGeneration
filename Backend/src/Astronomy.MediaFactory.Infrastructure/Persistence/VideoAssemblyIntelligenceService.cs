@@ -1644,7 +1644,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var root = Path.Combine(BuildVideoAssemblyRoot(timings.EventId, timings.RegionId), "subtitles", folder);
         Directory.CreateDirectory(root);
         var outputs = new List<string>();
-        var blocks = BuildSubtitleBlocks(timings.SceneTimings);
+        var blocks = BuildSubtitleBlocks(timings.SceneTimings, BuildVideoAssemblyRoot(timings.EventId, timings.RegionId), nameof(BuildSubtitleBlocks));
         if (subtitleOptions.GenerateSrt)
         {
             var path = Path.Combine(root, fileStem + ".srt");
@@ -1659,17 +1659,19 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
         var diagnosticsPath = Path.Combine(root, "subtitle-validation.json");
         var srtPath = Path.Combine(root, fileStem + ".srt");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "V1", srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "V1", srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count, subtitleBlocks = blocks.Select(block => new { blockId = $"cue-{block.Number}", sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).ToArray() }, JsonOptions), cancellationToken);
         outputs.Add(NormalizePath(diagnosticsPath));
         return outputs;
     }
 
-    private static IReadOnlyList<SubtitleBlock> BuildSubtitleBlocks(IReadOnlyList<VideoTtsSceneTimingDto> scenes)
+    private static IReadOnlyList<SubtitleBlock> BuildSubtitleBlocks(IReadOnlyList<VideoTtsSceneTimingDto> scenes, string planRoot, string generatorComponent)
     {
         var blocks = new List<SubtitleBlock>();
         var number = 1;
         foreach (var scene in scenes)
         {
+            var sourceFile = ResolveSubtitleNarrationSourceFile(planRoot, scene.SceneKey);
+            ValidateSubtitleCueNarrationSource(planRoot, sourceFile, generatorComponent);
             var sentences = Regex.Split(scene.Narration ?? string.Empty, @"(?<=[.!?])\s+").Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
             if (sentences.Length == 0) sentences = [scene.Narration ?? string.Empty];
             var duration = Math.Max(0.1, scene.EndSeconds - scene.StartSeconds);
@@ -1677,7 +1679,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             {
                 var start = scene.StartSeconds + duration * i / sentences.Length;
                 var end = i == sentences.Length - 1 ? scene.EndSeconds : scene.StartSeconds + duration * (i + 1) / sentences.Length;
-                blocks.Add(new SubtitleBlock(number++, Math.Round(start, 3), Math.Round(end, 3), WrapSubtitle(sentences[i])));
+                blocks.Add(new SubtitleBlock(number++, Math.Round(start, 3), Math.Round(end, 3), WrapSubtitle(sentences[i]), scene.SceneKey, NormalizePath(sourceFile), sentences[i], generatorComponent));
             }
         }
         return blocks;
@@ -1722,7 +1724,27 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private static string FormatSrtTime(double seconds) => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"hh\:mm\:ss\,fff", CultureInfo.InvariantCulture);
     private static string FormatAssTime(double seconds) => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff", CultureInfo.InvariantCulture);
-    private sealed record SubtitleBlock(int Number, double StartSeconds, double EndSeconds, IReadOnlyList<string> Lines);
+    private static string ResolveSubtitleNarrationSourceFile(string planRoot, string sceneKey)
+    {
+        var safeSceneKey = Regex.Replace(sceneKey ?? string.Empty, @"[^A-Za-z0-9_.-]+", "-").Trim('-');
+        var shortPath = Path.Combine(planRoot, "narration", "short", safeSceneKey + ".txt");
+        var longPath = Path.Combine(planRoot, "narration", "long", safeSceneKey + ".txt");
+        if (File.Exists(shortPath)) return shortPath;
+        if (File.Exists(longPath)) return longPath;
+        throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. sceneKey={sceneKey}; generatorComponent={nameof(BuildSubtitleBlocks)}");
+    }
+
+    private static void ValidateSubtitleCueNarrationSource(string planRoot, string narrationFile, string generatorComponent)
+    {
+        var root = Path.GetFullPath(Path.Combine(planRoot, "narration"));
+        var sourcePath = Path.GetFullPath(narrationFile);
+        var shortPrefix = Path.Combine(root, "short").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var longPrefix = Path.Combine(root, "long").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!string.Equals(Path.GetExtension(sourcePath), ".txt", StringComparison.OrdinalIgnoreCase) || (!sourcePath.StartsWith(shortPrefix, StringComparison.OrdinalIgnoreCase) && !sourcePath.StartsWith(longPrefix, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. sourceFile={NormalizePath(narrationFile)}; generatorComponent={generatorComponent}");
+    }
+
+    private sealed record SubtitleBlock(int Number, double StartSeconds, double EndSeconds, IReadOnlyList<string> Lines, string SourceSceneId, string SourceFile, string SourceText, string GeneratorComponent);
 
     private VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds, string ttsProvider, string voiceUsed, VideoTtsAudioValidationDto audioValidation)
     {

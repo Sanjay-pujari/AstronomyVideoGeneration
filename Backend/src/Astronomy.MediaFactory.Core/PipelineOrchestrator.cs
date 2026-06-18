@@ -2282,7 +2282,7 @@ public sealed class PipelineOrchestrator
     {
         var subtitlesDirectory = Path.Combine(outputDirectory, "subtitles");
         Directory.CreateDirectory(subtitlesDirectory);
-        var blocks = BuildSplitSubtitleBlocks(entries);
+        var blocks = BuildSplitSubtitleBlocks(entries, outputDirectory);
         var duplicateSrtTextDetected = blocks.Select(block => NormalizeSubtitleText(string.Join(" ", block.Lines)))
             .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
             .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
@@ -2306,30 +2306,49 @@ public sealed class PipelineOrchestrator
             subtitleCueSplitApplied = blocks.Count > entries.Count,
             subtitleCueCountBeforeSplit = entries.Count,
             subtitleCueCountAfterSplit = blocks.Count,
-            duplicateSrtTextDetected
+            duplicateSrtTextDetected,
+            subtitleBlocks = blocks.Select(block => new
+            {
+                blockId = $"cue-{block.Number}",
+                sourceSceneId = block.SourceSceneId,
+                sourceFile = block.SourceFile,
+                sourceText = block.SourceText,
+                generatorComponent = block.GeneratorComponent
+            }).ToArray()
         }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
 
-    private sealed record SubtitleBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines);
+    private sealed record SubtitleBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SourceSceneId, string SourceFile, string SourceText, string GeneratorComponent);
 
-    private static IReadOnlyList<SubtitleBlock> BuildSplitSubtitleBlocks(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries)
+    private static IReadOnlyList<SubtitleBlock> BuildSplitSubtitleBlocks(IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> entries, string outputDirectory)
     {
         var blocks = new List<SubtitleBlock>();
         var start = TimeSpan.Zero;
         var number = 1;
         foreach (var entry in entries)
         {
+            ValidateSubtitleCueNarrationSource(outputDirectory, entry.TextPath, nameof(BuildSplitSubtitleBlocks));
             var chunks = SplitSubtitleChunks(entry.Text);
             foreach (var chunk in chunks)
             {
                 var seconds = Math.Clamp(chunk.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length / 2.6, 2.0, 4.5);
                 var end = start + TimeSpan.FromSeconds(seconds);
-                blocks.Add(new SubtitleBlock(number++, start, end, WrapSubtitleChunk(chunk)));
+                blocks.Add(new SubtitleBlock(number++, start, end, WrapSubtitleChunk(chunk), entry.Index.ToString("000", System.Globalization.CultureInfo.InvariantCulture), NormalizePath(entry.TextPath), chunk, nameof(BuildSplitSubtitleBlocks)));
                 start = end;
             }
         }
         return blocks;
+    }
+
+    private static void ValidateSubtitleCueNarrationSource(string outputDirectory, string narrationFile, string generatorComponent)
+    {
+        var root = Path.GetFullPath(Path.Combine(outputDirectory, "narration"));
+        var sourcePath = Path.GetFullPath(narrationFile);
+        var shortPrefix = Path.Combine(root, "short").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var longPrefix = Path.Combine(root, "long").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!string.Equals(Path.GetExtension(sourcePath), ".txt", StringComparison.OrdinalIgnoreCase) || (!sourcePath.StartsWith(shortPrefix, StringComparison.OrdinalIgnoreCase) && !sourcePath.StartsWith(longPrefix, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. sourceFile={NormalizePath(narrationFile)}; generatorComponent={generatorComponent}");
     }
 
     private static IReadOnlyList<string> SplitSubtitleChunks(string text)
@@ -2369,6 +2388,8 @@ public sealed class PipelineOrchestrator
         if (cut < 20) cut = Math.Min(42, text.Length);
         return [text[..cut].Trim(), text[cut..].Trim()];
     }
+
+    private static string NormalizePath(string path) => path.Replace('\\', '/');
 
     private static string NormalizeSubtitleText(string text)
         => System.Text.RegularExpressions.Regex.Replace(text.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();

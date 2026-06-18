@@ -148,7 +148,8 @@ public sealed class QuestionDrivenVisualComposer(
             ValidateRequiredVisualObjectContract(spec, request.ProductionContext);
             ValidateVisualSourceResolutionContract(spec, sourceResolution);
             ValidatePreRenderStrategyLeakage(spec, prompt, request.ProductionContext);
-            var srt = BuildSrt(spec);
+            var narrationTextPath = Path.Combine(outputRoot, "narration", "long", $"{numberPrefix}.txt");
+            var srt = BuildSrt(spec, narrationTextPath);
             var overlayPlan = BuildOverlayPlan(spec);
             var review = BuildReview(spec, srt, seenSrtTexts, seenLayoutKeys, !usesLocalPlanetAssets || venusAsset is not null, !usesLocalPlanetAssets || jupiterAsset is not null);
 
@@ -166,7 +167,6 @@ public sealed class QuestionDrivenVisualComposer(
                 shortFormFinalImages[numberPrefix] = NormalizePath(shortFinalPath);
             }
             var srtPath = Path.Combine(outputRoot, $"{numberPrefix}.srt");
-            var narrationTextPath = Path.Combine(outputRoot, $"{numberPrefix}-narration.txt");
             var specPath = Path.Combine(outputRoot, $"{numberPrefix}-infographic-spec.json");
             var reviewPath = Path.Combine(outputRoot, $"{numberPrefix}-review.json");
             var presentationVariants = includeSceneApprovalVariants
@@ -206,8 +206,9 @@ public sealed class QuestionDrivenVisualComposer(
             {
                 await infographicRenderer.RenderAsync(finalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.LongForm);
             }
+            Directory.CreateDirectory(Path.GetDirectoryName(narrationTextPath)!);
+            await File.WriteAllTextAsync(narrationTextPath, spec.CaptionText + Environment.NewLine, cancellationToken);
             await File.WriteAllTextAsync(srtPath, srt, cancellationToken);
-            await File.WriteAllTextAsync(narrationTextPath, spec.NarrationText + Environment.NewLine, cancellationToken);
             await File.WriteAllTextAsync(specPath, serializedSpec, cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
             if (includeSceneApprovalVariants)
@@ -1628,7 +1629,25 @@ public sealed class QuestionDrivenVisualComposer(
         };
     }
 
-    private static string BuildSrt(QuestionDrivenVisualSpec spec) { var end = TimeSpan.FromSeconds(Math.Max(4, spec.EstimatedDurationSeconds)); return string.Join(Environment.NewLine, new[] { "1", $"00:00:00,000 --> {FormatSrtTime(end)}", spec.CaptionText, string.Empty }); }
+    private static string BuildSrt(QuestionDrivenVisualSpec spec, string sourceNarrationFile)
+    {
+        ValidateSubtitleCueNarrationSource(sourceNarrationFile, nameof(BuildSrt));
+        var end = TimeSpan.FromSeconds(Math.Max(4, spec.EstimatedDurationSeconds));
+        return string.Join(Environment.NewLine, new[] { "1", $"00:00:00,000 --> {FormatSrtTime(end)}", spec.CaptionText, string.Empty });
+    }
+
+    private static void ValidateSubtitleCueNarrationSource(string sourceNarrationFile, string generatorComponent)
+    {
+        var sourcePath = Path.GetFullPath(sourceNarrationFile);
+        var parent = Directory.GetParent(sourcePath);
+        var grandParent = parent?.Parent;
+        if (!string.Equals(Path.GetExtension(sourcePath), ".txt", StringComparison.OrdinalIgnoreCase)
+            || parent is null
+            || grandParent is null
+            || !(string.Equals(parent.Name, "short", StringComparison.OrdinalIgnoreCase) || string.Equals(parent.Name, "long", StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(grandParent.Name, "narration", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. sourceFile={NormalizePath(sourceNarrationFile)}; generatorComponent={generatorComponent}");
+    }
     private static ShortFormValidation ValidateShortFormOutputs(IReadOnlyDictionary<string, string> shortFormImages, bool dryRun)
     {
         var compositionDecision = AstronomyInfographicRenderer.NativeShortFormCompositionDecision;
