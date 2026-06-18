@@ -2276,6 +2276,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var spokenEnd = Math.Min(sceneEnd, sceneStart + audioDuration);
             var subtitleTimelineEnd = sceneEnd;
             var narrationFile = narrationFiles[i];
+            ValidateSubtitleCueNarrationSource(planRoot, format, narrationFile, nameof(BuildNarrationSrtFromCleanFiles));
             var text = File.ReadAllText(narrationFile).Trim();
             var sceneIdOrigin = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             if (!string.Equals(sceneIdOrigin, SanitizeFileName(planItem.SceneId), StringComparison.OrdinalIgnoreCase))
@@ -2350,6 +2351,14 @@ public sealed partial class ProductionPipelineExecutionService(
             srtMatchesVideoDuration = Math.Abs(srtTotal - videoTotal) <= 0.1,
             perSceneTiming = perScene
         };
+        var subtitleBlocks = blocks.Select(block => new
+        {
+            blockId = $"{format}:{block.SceneId}:cue-{block.Number}",
+            sourceSceneId = block.SceneId,
+            sourceFile = block.SubtitleTextOrigin,
+            sourceText = block.SourceText,
+            generatorComponent = block.GeneratorComponent
+        }).ToArray();
         var diagnostics = new SubtitleGenerationDiagnostics(
             format,
             blocks.Count,
@@ -2363,9 +2372,19 @@ public sealed partial class ProductionPipelineExecutionService(
             blocks.ToDictionary(block => $"{format}:{block.SceneId}:cue-{block.Number}", block => block.SubtitleTextOrigin, StringComparer.OrdinalIgnoreCase),
             blocks.ToDictionary(block => $"{format}:{block.SceneId}:cue-{block.Number}", block => block.SceneIdOrigin, StringComparer.OrdinalIgnoreCase),
             blocks.ToDictionary(block => $"{format}:{block.SceneId}:cue-{block.Number}", block => block.GeneratorComponent, StringComparer.OrdinalIgnoreCase),
+            subtitleBlocks,
             BuildSrtPreview(srt.ToString()),
             timingDiagnostics);
         return new NarrationSrtTimingResult(srt.ToString(), diagnostics);
+    }
+
+    private static void ValidateSubtitleCueNarrationSource(string planRoot, string format, string narrationFile, string generatorComponent)
+    {
+        var expectedRoot = Path.GetFullPath(Path.Combine(planRoot, "narration", format));
+        var sourcePath = Path.GetFullPath(narrationFile);
+        var expectedPrefix = expectedRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!string.Equals(Path.GetExtension(sourcePath), ".txt", StringComparison.OrdinalIgnoreCase) || !sourcePath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. format={format}; sourceFile={NormalizePath(narrationFile)}; generatorComponent={generatorComponent}");
     }
 
     private static IReadOnlyList<string> SplitDuplicateSubtitleChunks(IReadOnlyList<string> chunks, HashSet<string> seenSubtitleChunks)
@@ -2926,7 +2945,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files);
     private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics);
-    private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, IReadOnlyDictionary<string, string> SubtitleTextSource, IReadOnlyDictionary<string, string> SubtitleTextOrigin, IReadOnlyDictionary<string, string> SceneIdOrigin, IReadOnlyDictionary<string, string> GeneratorComponent, string GeneratedSrtPreview, object Timing);
+    private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, IReadOnlyDictionary<string, string> SubtitleTextSource, IReadOnlyDictionary<string, string> SubtitleTextOrigin, IReadOnlyDictionary<string, string> SceneIdOrigin, IReadOnlyDictionary<string, string> GeneratorComponent, IReadOnlyList<object> SubtitleBlocks, string GeneratedSrtPreview, object Timing);
     private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors, string SrtPreservationValidationMode, int CleanNarrationNormalizedLength, int SrtNormalizedLength, bool SrtPreservesNarration, IReadOnlyList<string> SrtMissingSceneTexts, IReadOnlyList<string> SrtExtraUnexpectedTexts, string SrtComparisonFailureReason);
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);

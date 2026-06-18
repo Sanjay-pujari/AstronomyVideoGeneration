@@ -455,33 +455,78 @@ public sealed class QuestionDrivenNarrationGenerator(
         Directory.CreateDirectory(root);
         var shortPath = Path.Combine(root, "short.srt");
         var longPath = Path.Combine(root, "long.srt");
-        var scenes = narration.Scenes.Select(scene => scene.NarrationText).ToArray();
-        await File.WriteAllTextAsync(shortPath, BuildNarrationSrt(scenes.Take(6).ToArray()), cancellationToken);
-        await File.WriteAllTextAsync(longPath, BuildNarrationSrt(scenes), cancellationToken);
+        var narrationRoot = Path.Combine(Path.GetDirectoryName(narrationPath)!, "narration");
+        var shortNarrationRoot = Path.Combine(narrationRoot, "short");
+        var longNarrationRoot = Path.Combine(narrationRoot, "long");
+        Directory.CreateDirectory(shortNarrationRoot);
+        Directory.CreateDirectory(longNarrationRoot);
+        var sourceScenes = narration.Scenes.ToArray();
+        var shortFiles = await WriteSubtitleNarrationSourceFilesAsync(shortNarrationRoot, sourceScenes.Take(6).ToArray(), cancellationToken);
+        var longFiles = await WriteSubtitleNarrationSourceFilesAsync(longNarrationRoot, sourceScenes, cancellationToken);
+        var shortSrt = BuildNarrationSrt("short", shortFiles);
+        var longSrt = BuildNarrationSrt("long", longFiles);
+        await File.WriteAllTextAsync(shortPath, shortSrt.Srt, cancellationToken);
+        await File.WriteAllTextAsync(longPath, longSrt.Srt, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "subtitle-diagnostics.json"), JsonSerializer.Serialize(new { shortBlocks = shortSrt.SubtitleBlocks, longBlocks = longSrt.SubtitleBlocks }, JsonOptions), cancellationToken);
         return (shortPath.Replace('\\', '/'), longPath.Replace('\\', '/'));
     }
 
-    private static string BuildNarrationSrt(IReadOnlyList<string> lines)
+    private static async Task<IReadOnlyList<string>> WriteSubtitleNarrationSourceFilesAsync(string root, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, CancellationToken cancellationToken)
     {
-        var blocks = new List<(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> CueLines)>();
+        var files = new List<string>();
+        for (var i = 0; i < scenes.Count; i++)
+        {
+            var scene = scenes[i];
+            var sceneId = string.IsNullOrWhiteSpace(scene.SceneId) ? $"scene-{i + 1:000}" : Regex.Replace(scene.SceneId, @"[^A-Za-z0-9_.-]+", "-").Trim('-');
+            if (string.IsNullOrWhiteSpace(sceneId)) sceneId = $"scene-{i + 1:000}";
+            var path = Path.Combine(root, $"{i + 1:000}-{sceneId}.txt");
+            await File.WriteAllTextAsync(path, scene.NarrationText ?? string.Empty, cancellationToken);
+            files.Add(path);
+        }
+        return files;
+    }
+
+    private static (string Srt, IReadOnlyList<object> SubtitleBlocks) BuildNarrationSrt(string format, IReadOnlyList<string> narrationFiles)
+    {
+        var blocks = new List<SubtitleBlock>();
         var start = TimeSpan.Zero;
         var number = 1;
-        foreach (var line in lines)
+        foreach (var narrationFile in narrationFiles)
         {
+            ValidateSubtitleCueNarrationSource(format, narrationFile, nameof(BuildNarrationSrt));
+            var line = File.ReadAllText(narrationFile);
+            var sourceSceneId = Path.GetFileNameWithoutExtension(narrationFile);
             foreach (var chunk in SplitSubtitleChunks(line))
             {
                 var seconds = Math.Clamp(CountWords(chunk) / 2.3, 2.0, 4.5);
                 var end = start.Add(TimeSpan.FromSeconds(seconds));
-                blocks.Add((number++, start, end, WrapSubtitle(chunk)));
+                blocks.Add(new SubtitleBlock(number++, start, end, WrapSubtitle(chunk), sourceSceneId, NormalizePath(narrationFile), chunk, nameof(BuildNarrationSrt)));
                 start = end;
             }
         }
-        var duplicates = blocks.Select(block => NormalizeSubtitleText(string.Join(" ", block.CueLines)))
+        var duplicates = blocks.Select(block => NormalizeSubtitleText(string.Join(" ", block.Lines)))
             .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
             .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
         if (duplicates) throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
-        return string.Join("\n\n", blocks.Select(block => $"{block.Number}\n{FormatSrtTime(block.Start)} --> {FormatSrtTime(block.End)}\n{string.Join("\n", block.CueLines)}")) + "\n";
+        var srt = string.Join("\n\n", blocks.Select(block => $"{block.Number}\n{FormatSrtTime(block.Start)} --> {FormatSrtTime(block.End)}\n{string.Join("\n", block.Lines)}")) + "\n";
+        var subtitleBlocks = blocks.Select(block => new { blockId = $"{format}:cue-{block.Number}", sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).Cast<object>().ToArray();
+        return (srt, subtitleBlocks);
     }
+
+    private static void ValidateSubtitleCueNarrationSource(string format, string narrationFile, string generatorComponent)
+    {
+        var sourcePath = Path.GetFullPath(narrationFile);
+        var expectedRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(sourcePath)!)!, format));
+        var expectedPrefix = expectedRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var parentFolder = new DirectoryInfo(Path.GetDirectoryName(expectedRoot)!).Name;
+        if (!string.Equals(parentFolder, "narration", StringComparison.OrdinalIgnoreCase) || !string.Equals(Path.GetExtension(sourcePath), ".txt", StringComparison.OrdinalIgnoreCase) || !sourcePath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt or narration/long/*.txt. format={format}; sourceFile={NormalizePath(narrationFile)}; generatorComponent={generatorComponent}");
+    }
+
+    private sealed record SubtitleBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SourceSceneId, string SourceFile, string SourceText, string GeneratorComponent);
+
+    private static string NormalizePath(string path) => path.Replace('\\', '/');
+
 
     private static IReadOnlyList<string> SplitSubtitleChunks(string text)
     {
