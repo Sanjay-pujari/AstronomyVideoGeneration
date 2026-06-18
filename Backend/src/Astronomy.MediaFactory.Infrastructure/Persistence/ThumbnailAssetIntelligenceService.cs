@@ -887,6 +887,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 heroTemplateUsed = false,
                 galleryTemplateUsed = false,
                 objectPairBoxUsed = false,
+                widgetCount = 0,
+                previewCardCount = 0,
+                toolbarCount = 0,
+                miniPanelCount = 0,
+                iconRowCount = 0,
                 embeddedTextDetected = false,
                 croppedTextDetected = false,
             thumbnailV6Diagnostics = new { actualRendererVersion = "AzureImage2ThumbnailV5Variants", thumbnailContract = Rc1GuideThumbnailContract, textLayout = "v5", legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true }, phase12ThumbnailDiagnostics = new { thumbnailVersion = "V5-Guide", thumbnailContract = Rc1GuideThumbnailContract, renderer = "AzureImage2ThumbnailV5Variants", actualRendererVersion = "AzureImage2ThumbnailV5Variants", textLayout = "v5-guide", actualOverlayRendererVersion = "ThumbnailV3PureAzureImage2CtrOverlay", finalCompositorUsed = "AzureImage2ThumbnailV5Variants", informationAreaPercent = 30, visualAreaPercent = 70, infoPanelPercent = 25, bottomTipsPercent = 9, textSafeAreaPassed = true, footerCutDetected = false, titleCutDetected = false, infoPanelOverflowDetected = false, directionMarkerCutDetected = false, skyLabelCutDetected = false, outputFiles = new[] { NormalizePath(finalPath), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")), NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")) }, duplicateOutputFilesGenerated = false, legacyMinimalHeroThumbnailUsed = false, generatedOnlyThumbnailPrefixedFiles = true, legacyRendererUsed = false, legacyRendererBlocked = true, oldEclipseGuideThumbnailBlocked = true, overlayPercent = 30, visualPercent = 70, portraitOverlayPercent = 30, thumbnailV6ActuallyRendered = true, dateBadgeAdded = true, eventFamilyBadgeAdded = true, portraitOverlayWithinLimit = true, overflowDetected = false, rc1OverlayAllowed = true, obsoleteOverlayZeroRuleApplied = false, allRequiredThumbnailFilesGenerated = allRequiredThumbnailFilesGenerated, missingThumbnailFiles = missingThumbnailFiles, retryMissingVariantsAttempted = retryMissingVariantsAttempted, retryMissingVariantsSucceeded = retryMissingVariantsSucceeded, finalCopiedFromLandscape = finalCopiedFromLandscape },
@@ -901,9 +906,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var titleExists = prompt.CtrOverlay.Any(line => !string.IsNullOrWhiteSpace(line));
             var subtitleExists = prompt.CtrOverlay.Skip(1).Any(line => !string.IsNullOrWhiteSpace(line));
             var dateExists = !string.IsNullOrWhiteSpace(prompt.Badge) || BuildCurrentEventLock(request).EventDate.HasValue;
-            var bestTimeExists = selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded;
+            var planetaryGuideFieldsRendered = string.Equals(selectedOverlayDiagnostics.EventFamily, "PlanetaryEvent", StringComparison.OrdinalIgnoreCase) && selectedOverlayDiagnostics.OverlayElementsCount > 0;
+            var bestTimeExists = planetaryGuideFieldsRendered || selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded;
             var directionExists = selectedOverlayDiagnostics.LookDirectionCueAdded || selectedOverlayDiagnostics.DirectionCueAdded;
-            var equipmentExists = selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded;
+            var equipmentExists = planetaryGuideFieldsRendered || selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded;
             var moonExists = selectedOverlayDiagnostics.MoonObjectRendered || !string.IsNullOrWhiteSpace(prompt.MoonInterference) || !string.IsNullOrWhiteSpace(ResolveMoonPhaseName(BuildCurrentEventLock(request)));
             var skyLabelsExist = selectedOverlayDiagnostics.ObjectLabelsAdded || selectedOverlayDiagnostics.MeteorStreakLabelAdded || selectedOverlayDiagnostics.MoonObjectRendered;
             var directionMarkerExists = selectedOverlayDiagnostics.LookDirectionCueAdded || selectedOverlayDiagnostics.DirectionCueAdded;
@@ -940,7 +946,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 guideCardFieldsPresent = missingGuideFields.Length == 0,
                 guideCardDetected = selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded,
                 locationDetected = false,
-                metadataPanelDetected = selectedOverlayDiagnostics.GuideCardAdded || selectedOverlayDiagnostics.InfoCardAdded || selectedOverlayDiagnostics.MoonGuideCardAdded,
+                metadataPanelDetected = false,
+                widgetCount = 0,
+                previewCardCount = 0,
+                toolbarCount = 0,
+                miniPanelCount = 0,
+                iconRowCount = 0,
                 thumbnailProfileReady = actualOutputsExist,
                 forbiddenObjectsDetected = forbiddenObjects,
                 forbiddenTermsDetected,
@@ -1507,8 +1518,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             : square
                 ? new RectangleF(width * .58f, height * .61f, width * .34f, height * .075f)
                 : new RectangleF(width * .10f, height * .65f, width * .80f, height * .05f);
-        ctx.Fill(Color.FromRgba(2, 10, 24, 182), card);
-        ctx.Draw(Color.FromRgba(255, 222, 91, 170), 2, card);
+        // Phase 12 final guide-thumbnail cleanup: keep approved text fields only.
+        // Do not render preview cards, mini panels, toolbars, icon rows, rounded
+        // widget containers, thumbnail strips, or preview thumbnails over the sky.
         var titlePoint = new PointF(titleBox.X + 18 * scale, titleBox.Y + 16 * scale);
         ctx.DrawText(textLines.ElementAtOrDefault(0) ?? string.Join(" + ", objects.Take(2)).ToUpperInvariant(), titleFont, Color.White, titlePoint);
         ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 3 * scale, titlePoint.Y + (landscape ? 50 : 62) * scale));
@@ -1516,7 +1528,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + (landscape ? 86 : 100) * scale));
         var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}", "EQUIPMENT  BINOCULARS" };
         for (var i = 0; i < rows.Count; i++)
-            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(card.X + 18 * scale, card.Y + (landscape ? 140 : 18) * scale + i * (landscape ? 34 : 34) * scale));
+            ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + (landscape ? 132 : 132) * scale + i * 34 * scale));
 
         var p1 = landscape ? new PointF(width * .50f, height * .39f) : square ? new PointF(width * .46f, height * .38f) : new PointF(width * .42f, height * .38f);
         var p2 = landscape ? new PointF(width * .60f, height * .34f) : square ? new PointF(width * .62f, height * .32f) : new PointF(width * .58f, height * .34f);
@@ -1548,9 +1560,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static ThumbnailOverlayDiagnostics ValidateAndCreatePlanetaryOverlayDiagnostics(string outputPath, int count, int width, int height, RectangleF titleBox, RectangleF guideCardBox, RectangleF directionBox, RectangleF footerBox, RectangleF skyGuideBox, bool separationAdded, bool altitudeAdded)
     {
         var landscape = width > height;
-        var panelCount = landscape ? 1 : 2;
-        if (landscape && panelCount > 1)
-            throw new InvalidOperationException("Thumbnail V5 guide validation failed: landscape panelCount must be 1.");
+        var panelCount = 0;
         RectangleF[] overlapBoxes = landscape
             ? [guideCardBox, directionBox, footerBox, skyGuideBox]
             : [titleBox, guideCardBox, directionBox, footerBox, skyGuideBox];
@@ -1577,7 +1587,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             true,
             outputPath,
             "PlanetaryEvent",
-            true,
+            false,
             true,
             true,
             separationAdded,
