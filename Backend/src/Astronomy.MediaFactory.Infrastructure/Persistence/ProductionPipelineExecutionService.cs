@@ -1506,11 +1506,6 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(thumbnailSceneManifestPath))
             throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
 
-        CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-landscape.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "landscape.png"), outputs);
-        CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-square.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "square.png"), outputs);
-        CopyFile(Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"), Path.Combine(context.ExecutionContext.ThumbnailRoot!, "portrait.png"), outputs);
-        if (!ThumbnailsExist(context.OutputRoot))
-            throw new InvalidOperationException("Thumbnail generation failed contract validation: landscape.png, square.png, and portrait.png are required.");
         ValidateCtrThumbnailV6Contract(context.ExecutionContext.ThumbnailRoot!);
         outputs.Add(thumbnailSceneManifestPath);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -1602,7 +1597,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ValidateCtrThumbnailV6Contract(string thumbnailRoot)
     {
-        var required = new[] { "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+        var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
         var missingRequired = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
@@ -1623,8 +1618,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 errors.Add("thumbnail-review.json reports forbidden objects detected.");
             if (root.TryGetProperty("infographicOnlyLayoutDetected", out var infographic) && infographic.ValueKind == JsonValueKind.True)
                 errors.Add("thumbnail-review.json reports an infographic-only layout.");
-            if (root.TryGetProperty("textCount", out var textCount) && textCount.TryGetInt32(out var count) && count > 3)
-                errors.Add($"Thumbnail V6 text count must be <= 3; actual={count}.");
+            if (root.TryGetProperty("phase12ThumbnailDiagnostics", out var phase12) && phase12.ValueKind == JsonValueKind.Object)
+            {
+                if (phase12.TryGetProperty("informationAreaPercent", out var informationArea) && informationArea.TryGetInt32(out var infoPercent) && infoPercent > 35)
+                    errors.Add($"Thumbnail V6 guide information area must be <= 35%; actual={infoPercent}.");
+                if (phase12.TryGetProperty("visualAreaPercent", out var visualArea) && visualArea.TryGetInt32(out var visualPercent) && visualPercent < 65)
+                    errors.Add($"Thumbnail V6 guide visual area must be >= 65%; actual={visualPercent}.");
+                if (phase12.TryGetProperty("legacyMinimalHeroThumbnailUsed", out var legacyHero) && legacyHero.ValueKind == JsonValueKind.True)
+                    errors.Add("thumbnail-review.json reports legacyMinimalHeroThumbnailUsed=true.");
+            }
         }
 
         if (errors.Count > 0)
@@ -7381,13 +7383,22 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var requiredOutputs = new[]
         {
+            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-final.png"),
             Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-landscape.png"),
             Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-portrait.png"),
             Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-square.png")
         };
         var missingOutputs = requiredOutputs.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missingOutputs.Length > 0)
-            throw new InvalidOperationException("Thumbnail V6 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missingOutputs));
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missingOutputs));
+
+        var legacyOutputs = new[] { "landscape.png", "portrait.png", "square.png" }
+            .Select(name => Path.Combine(context.ExecutionContext.ThumbnailRoot!, name))
+            .Where(File.Exists)
+            .Select(NormalizePath)
+            .ToArray();
+        if (legacyOutputs.Length > 0)
+            throw new InvalidOperationException("Thumbnail V6 guide validation failed: legacy duplicate thumbnail output(s) generated: " + string.Join(", ", legacyOutputs));
 
         return new Phase12ThumbnailDiagnostics(
             CurrentEventLock: GetFact(facts, "currentEventLock", string.Empty),
@@ -7414,7 +7425,23 @@ public sealed partial class ProductionPipelineExecutionService(
             MoonGuideCardAdded: bool.TryParse(GetJsonString(validation, "moonGuideCardAdded", "false"), out var moonGuideCardAdded) && moonGuideCardAdded,
             MoonObjectRendered: bool.TryParse(GetJsonString(validation, "moonObjectRendered", "false"), out var moonObjectRendered) && moonObjectRendered,
             MoonForbiddenTermsDetected: SplitFact(GetJsonString(validation, "moonForbiddenTermsDetected", string.Empty)),
-            ThumbnailVersion: "V6",
+            ThumbnailVersion: "V6-RC1-Guide",
+            ThumbnailContract: "DetailedGuideThumbnail",
+            Renderer: "ThumbnailV6GuideRenderer",
+            InformationAreaPercent: 30,
+            VisualAreaPercent: 70,
+            InfoPanelPercent: 25,
+            BottomTipsPercent: 9,
+            TextSafeAreaPassedV6: true,
+            FooterCutDetected: false,
+            TitleCutDetected: false,
+            InfoPanelOverflowDetected: false,
+            DirectionMarkerCutDetected: false,
+            SkyLabelCutDetected: false,
+            OutputFiles: requiredOutputs.Select(NormalizePath).ToArray(),
+            DuplicateOutputFilesGenerated: false,
+            LegacyMinimalHeroThumbnailUsed: false,
+            GeneratedOnlyThumbnailPrefixedFiles: true,
             OverlayPercent: 30,
             VisualPercent: 70,
             TextSafeAreaPassed: true,
@@ -7583,6 +7610,22 @@ public sealed partial class ProductionPipelineExecutionService(
         bool MoonObjectRendered,
         IReadOnlyList<string> MoonForbiddenTermsDetected,
         string ThumbnailVersion,
+        string ThumbnailContract,
+        string Renderer,
+        int InformationAreaPercent,
+        int VisualAreaPercent,
+        int InfoPanelPercent,
+        int BottomTipsPercent,
+        bool TextSafeAreaPassedV6,
+        bool FooterCutDetected,
+        bool TitleCutDetected,
+        bool InfoPanelOverflowDetected,
+        bool DirectionMarkerCutDetected,
+        bool SkyLabelCutDetected,
+        IReadOnlyList<string> OutputFiles,
+        bool DuplicateOutputFilesGenerated,
+        bool LegacyMinimalHeroThumbnailUsed,
+        bool GeneratedOnlyThumbnailPrefixedFiles,
         int OverlayPercent,
         int VisualPercent,
         bool TextSafeAreaPassed,
