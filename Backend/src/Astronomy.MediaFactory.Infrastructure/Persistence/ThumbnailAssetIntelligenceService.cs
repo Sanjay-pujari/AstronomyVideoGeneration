@@ -2958,7 +2958,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var landscapePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"));
         var portraitPath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png"));
         var squarePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png"));
-        var backgroundPath = NormalizePath(Path.Combine(thumbnailRoot, "v7-background.png"));
+        var landscapeBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, "v7-background-landscape.png"));
+        var portraitBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, "v7-background-portrait.png"));
+        var squareBackgroundPath = NormalizePath(Path.Combine(thumbnailRoot, "v7-background-square.png"));
         return new ThumbnailSceneManifestDto(
             request.EventId,
             new ThumbnailSceneManifestEntryDto(1, "ThumbnailV7Landscape", landscapePath, "landscape"),
@@ -2972,11 +2974,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             SourceHeroAssets = [],
             SourceSceneAssets = [],
             GeneratedThumbnailPaths = [finalPath, landscapePath, portraitPath, squarePath],
-            BackgroundImagePath = backgroundPath,
+            BackgroundImagePath = landscapeBackgroundPath,
             ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["thumbnailArchitecture"] = ThumbnailV7Architecture,
-                ["backgroundImagePath"] = backgroundPath,
+                ["backgroundImagePath"] = landscapeBackgroundPath,
+                ["backgroundMode"] = "PerVariantAzureImage2",
+                ["landscapeBackgroundPath"] = landscapeBackgroundPath,
+                ["portraitBackgroundPath"] = portraitBackgroundPath,
+                ["squareBackgroundPath"] = squareBackgroundPath,
+                ["cropFromLandscape"] = "False",
                 ["layoutFamily"] = ThumbnailV7LayoutStyle,
                 ["heroSceneManifestRequired"] = "False",
                 ["thumbnailSceneManifestRequired"] = "True",

@@ -63,9 +63,18 @@ public sealed class ThumbnailV7CinematicOverlayRendererTests
         Assert.False(diagnostics.GetProperty("mercuryAppears").GetBoolean());
         Assert.True(diagnostics.GetProperty("oldValidationBlocked").GetBoolean());
         Assert.False(diagnostics.GetProperty("thumbnailReviewJsonRequired").GetBoolean());
+        Assert.Equal("PerVariantAzureImage2", diagnostics.GetProperty("backgroundMode").GetString());
+        Assert.False(diagnostics.GetProperty("cropFromLandscape").GetBoolean());
+        Assert.True(diagnostics.GetProperty("vectorIconsUsed").GetBoolean());
+        Assert.False(diagnostics.GetProperty("emojiIconsUsed").GetBoolean());
+        Assert.EndsWith("v7-background-landscape.png", diagnostics.GetProperty("landscapeBackgroundPath").GetString());
+        Assert.EndsWith("v7-background-portrait.png", diagnostics.GetProperty("portraitBackgroundPath").GetString());
+        Assert.EndsWith("v7-background-square.png", diagnostics.GetProperty("squareBackgroundPath").GetString());
 
         var promptJson = await File.ReadAllTextAsync(Path.Combine(root, "thumbnail-prompt.json"));
         Assert.Contains("background-only image", promptJson);
+        Assert.Contains("1080x1920", promptJson);
+        Assert.Contains("no cropping from landscape", promptJson);
         Assert.Contains("HeroGalleryEventVisualLogic", promptJson);
         Assert.False(promptJson.Contains("Mercury", StringComparison.OrdinalIgnoreCase));
         Assert.False(promptJson.Contains("thumbnail-review.json", StringComparison.OrdinalIgnoreCase));
