@@ -2779,25 +2779,6 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return SanitizeThumbnailV8PromptText(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, eventId));
         }
 
-        private static string ResolveEclipseEventName(CurrentEventLock current, ProductionEventIntelligence? intelligence)
-        {
-            var source = HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, intelligence?.EventType, current.EventType));
-            if (source.Contains("Annular", StringComparison.OrdinalIgnoreCase) && source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Annular Solar Eclipse";
-            if (source.Contains("Total", StringComparison.OrdinalIgnoreCase) && source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Total Solar Eclipse";
-            if (source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Solar Eclipse";
-            if (source.Contains("Total", StringComparison.OrdinalIgnoreCase) && source.Contains("Lunar", StringComparison.OrdinalIgnoreCase)) return "Total Lunar Eclipse";
-            if (source.Contains("Lunar", StringComparison.OrdinalIgnoreCase)) return "Lunar Eclipse";
-            return IsSolarEclipse(current) ? "Solar Eclipse" : "Lunar Eclipse";
-        }
-
-        private static string ResolveMeteorShowerTitle(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects)
-        {
-            var source = FirstNonEmpty(objects.FirstOrDefault(), intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, "Meteor Shower");
-            var name = CleanMeteorDisplayName(source).Replace("Meteor Shower Peak", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("Meteor Shower", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("Meteors", string.Empty, StringComparison.OrdinalIgnoreCase).Trim(' ', '+', '-', ':');
-            if (string.IsNullOrWhiteSpace(name) || name.Equals("Meteor", StringComparison.OrdinalIgnoreCase)) name = "Meteor";
-            return source.Contains("peak", StringComparison.OrdinalIgnoreCase) ? $"{name} Meteor Shower Peak" : $"{name} Meteor Shower";
-        }
-
         private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
             if (IsPlanetaryEvent(current.EventType) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary)
@@ -2913,6 +2894,25 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
 
     private sealed record ThumbnailV8AspectSpec(string Name, int Width, int Height, string AspectRatio, string LayoutInstruction);
     private sealed record ThumbnailV8PromptContext(CurrentEventLock Current, ProductionEventIntelligence? Intelligence, string Title, string EventType, string DateText, string BestTime, string Direction, string Equipment, IReadOnlyList<string> Tips, IReadOnlyList<string> Objects);
+
+    private static string ResolveEclipseEventName(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+    {
+        var source = HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, intelligence?.EventType, current.EventType));
+        if (source.Contains("Annular", StringComparison.OrdinalIgnoreCase) && source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Annular Solar Eclipse";
+        if (source.Contains("Total", StringComparison.OrdinalIgnoreCase) && source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Total Solar Eclipse";
+        if (source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Solar Eclipse";
+        if (source.Contains("Total", StringComparison.OrdinalIgnoreCase) && source.Contains("Lunar", StringComparison.OrdinalIgnoreCase)) return "Total Lunar Eclipse";
+        if (source.Contains("Lunar", StringComparison.OrdinalIgnoreCase)) return "Lunar Eclipse";
+        return IsSolarEclipse(current) ? "Solar Eclipse" : "Lunar Eclipse";
+    }
+
+    private static string ResolveMeteorShowerTitle(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects)
+    {
+        var source = FirstNonEmpty(objects.FirstOrDefault(), intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, "Meteor Shower");
+        var name = CleanMeteorDisplayName(source).Replace("Meteor Shower Peak", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("Meteor Shower", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("Meteors", string.Empty, StringComparison.OrdinalIgnoreCase).Trim(' ', '+', '-', ':');
+        if (string.IsNullOrWhiteSpace(name) || name.Equals("Meteor", StringComparison.OrdinalIgnoreCase)) name = "Meteor";
+        return source.Contains("peak", StringComparison.OrdinalIgnoreCase) ? $"{name} Meteor Shower Peak" : $"{name} Meteor Shower";
+    }
 
     private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
 Generate final finished thumbnail image: {{posterType}}.
