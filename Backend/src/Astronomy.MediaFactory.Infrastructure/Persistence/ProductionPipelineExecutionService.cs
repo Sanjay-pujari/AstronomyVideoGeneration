@@ -4211,13 +4211,14 @@ public sealed partial class ProductionPipelineExecutionService(
         => IsExperimentalMotionV2Strength(motionV2Strength) ? "Experimental" : "Default";
 
     private static string ResolvePhase18MotionV2Strength(string? requestMotionV2Strength, string? planMotionV2Strength)
+        => ResolveMotionV2Strength(planMotionV2Strength ?? requestMotionV2Strength);
+
+    private static bool HasMotionV2StrengthMismatch(string? requestMotionV2Strength, string? motionV2StrengthUsed)
         => IsExperimentalMotionV2Strength(requestMotionV2Strength)
-            ? "Experimental"
-            : ResolveMotionV2Strength(planMotionV2Strength);
+            && !IsExperimentalMotionV2Strength(motionV2StrengthUsed);
 
     private static bool ShouldWarnMotionV2StrengthRequestOverride(string? requestMotionV2Strength, string? planMotionV2Strength)
-        => IsExperimentalMotionV2Strength(requestMotionV2Strength)
-            && string.Equals(planMotionV2Strength, "Default", StringComparison.OrdinalIgnoreCase);
+        => HasMotionV2StrengthMismatch(requestMotionV2Strength, ResolvePhase18MotionV2Strength(requestMotionV2Strength, planMotionV2Strength));
 
     private static bool IsExperimentalMotionV2Strength(string? motionV2Strength)
         => string.Equals(motionV2Strength, "Experimental", StringComparison.OrdinalIgnoreCase);
@@ -5444,10 +5445,11 @@ public sealed partial class ProductionPipelineExecutionService(
             ? JsonNode.Parse(await File.ReadAllTextAsync(motionPlanPath, cancellationToken)) ?? new JsonObject()
             : BuildDefaultPhase18MotionPlan(sceneAssetsRoot, syncPath, ttsPath);
         var motionV2StrengthWarning = ShouldWarnMotionV2StrengthRequestOverride(context.PipelineRequest.MotionV2Strength, GetString(motionRoot, "motionV2Strength"))
-            ? "Motion plan strength differs from request; request override applied."
+            ? "Motion plan strength differs from request; phase 18 will fail with MotionV2StrengthMismatch."
             : null;
         var warnings = string.IsNullOrWhiteSpace(motionV2StrengthWarning) ? Array.Empty<string>() : new[] { motionV2StrengthWarning };
         var motionV2StrengthUsed = ResolvePhase18MotionV2Strength(context.PipelineRequest.MotionV2Strength, GetString(motionRoot, "motionV2Strength"));
+        var motionV2StrengthMismatch = HasMotionV2StrengthMismatch(context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed);
         {
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
             var shortItems = ReadVideoAssemblyItems(planRoot, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
@@ -5549,6 +5551,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (scenesWithTransitions < Math.Max(0, totalScenes - 1)) errors.Add("Not every scene boundary has a transition");
         if (!motionPlanFound) errors.Add($"motion-plan.json missing: {NormalizePath(motionPlanPath)}");
         if (!motionDebugFound) errors.Add($"motion-debug.json missing: {NormalizePath(motionDebugPath)}");
+        if (motionV2StrengthMismatch) errors.Add($"MotionV2StrengthMismatch: request=Experimental, diagnostics={motionV2StrengthUsed}");
         if (!previewOnly && backgroundMusicConfigForDiagnostics.Enabled && !backgroundAudioFound) errors.Add($"Configured background music file missing: {NormalizePath(backgroundAudioPathForDiagnostics)}");
         if (!previewOnly && !shortDurationValidationPassed) errors.Add($"short video duration differs from narration + cinematic outro by >1.0 sec; actual={RoundDuration(shortDurationDeltaAgainstExpected)}");
         if (!previewOnly && !longDurationValidationPassed) errors.Add($"long video duration differs from narration + cinematic outro by >1.0 sec; actual={RoundDuration(longDurationDeltaAgainstExpected)}");
@@ -5579,7 +5582,9 @@ public sealed partial class ProductionPipelineExecutionService(
             rendererVersion = "V2",
             motionTypeApplied = true,
             motionPlanPath = NormalizePath(motionPlanPath),
+            requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength,
             motionV2StrengthUsed,
+            motionV2StrengthMismatch,
             warnings,
             motionPlanFound,
             defaultMotionGenerated,
@@ -5673,7 +5678,7 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = "V2", motionTypeApplied = true, motionV2StrengthUsed, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = "V2", motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -5685,7 +5690,9 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedTtsPath = NormalizePath(ttsPath),
             selectedDurationPlanPath = NormalizePath(durationPlanPath),
             selectedMotionPlanPath = NormalizePath(motionPlanPath),
+            requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength,
             motionV2StrengthUsed,
+            motionV2StrengthMismatch,
             warnings,
             motionDebugFound,
             motionDebugPath = NormalizePath(motionDebugPath),

@@ -49,9 +49,17 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
-    public void Phase18MotionV2Strength_RequestExperimentalOverridesDefaultPlan()
+    public void Phase18MotionV2Strength_RequestExperimentalDoesNotOverrideDefaultPlan()
     {
-        Assert.Equal("Experimental", InvokePhase18MotionV2StrengthResolver("Experimental", "Default"));
+        Assert.Equal("Default", InvokePhase18MotionV2StrengthResolver("Experimental", "Default"));
+    }
+
+    [Fact]
+    public void Phase18MotionV2Strength_DetectsRequestExperimentalDefaultDiagnosticsMismatch()
+    {
+        Assert.True(InvokePhase18MotionV2StrengthMismatch("Experimental", "Default"));
+        Assert.False(InvokePhase18MotionV2StrengthMismatch("Experimental", "Experimental"));
+        Assert.False(InvokePhase18MotionV2StrengthMismatch(null, "Default"));
     }
 
     [Fact]
@@ -601,6 +609,13 @@ public sealed class ProductionPipelineExecutionServiceTests
         var method = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase18MotionV2Strength", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
         return (string)method!.Invoke(null, [requestMotionV2Strength, planMotionV2Strength])!;
+    }
+
+    private static bool InvokePhase18MotionV2StrengthMismatch(string? requestMotionV2Strength, string? motionV2StrengthUsed)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("HasMotionV2StrengthMismatch", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method!.Invoke(null, [requestMotionV2Strength, motionV2StrengthUsed])!;
     }
 
     private static bool InvokePhase18MotionV2StrengthOverrideWarning(string? requestMotionV2Strength, string? planMotionV2Strength)
