@@ -7717,22 +7717,33 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ValidateThumbnailV8Contract(string thumbnailRoot)
     {
-        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-generation-diagnostics.json");
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v8-diagnostics.json");
         if (!File.Exists(diagnosticsPath))
-            throw new InvalidOperationException($"Thumbnail V8 validation failed: thumbnail-generation-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+            throw new InvalidOperationException($"Thumbnail V8 validation failed: thumbnail-v8-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
         using var document = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
         var root = document.RootElement;
-        if (!string.Equals(GetJsonString(root, "thumbnailEngineVersion", string.Empty), "V8_AI_NATIVE", StringComparison.Ordinal))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report V8_AI_NATIVE.");
-        if (GetJsonBool(root, "fallbackUsed") || GetJsonBool(root, "promptOnly"))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: fallbackUsed and promptOnly must be false.");
+        if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V8", StringComparison.Ordinal)
+            || !string.Equals(GetJsonString(root, "selectedRenderer", string.Empty), "ThumbnailV8AiNativeGenerator", StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report V8 and ThumbnailV8AiNativeGenerator.");
+        if (!GetJsonBool(root, "aiNativeFullImage") || GetJsonBool(root, "manualOverlayUsed") || GetJsonBool(root, "backgroundOnlyMode") || GetJsonBool(root, "cropFromLandscape") || !GetJsonBool(root, "azureImage2Generated"))
+            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report full AI-native generation without manual overlay, background-only mode, or landscape crop.");
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0)
             throw new InvalidOperationException("Thumbnail V8 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
-        var legacy = new[] { "landscape.png", "portrait.png", "square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
+        var phase12ValidationPath = Path.Combine(thumbnailRoot, "phase-12-validation.json");
+        if (!File.Exists(phase12ValidationPath))
+            throw new InvalidOperationException($"Thumbnail V8 validation failed: phase-12-validation.json is required at '{NormalizePath(phase12ValidationPath)}'.");
+        using (var phase12 = JsonDocument.Parse(File.ReadAllText(phase12ValidationPath)))
+        {
+            var phase12Root = phase12.RootElement;
+            if (!string.Equals(GetJsonString(phase12Root, "thumbnailVersion", string.Empty), "V8", StringComparison.Ordinal)
+                || !string.Equals(GetJsonString(phase12Root, "selectedRenderer", string.Empty), "ThumbnailV8AiNativeGenerator", StringComparison.Ordinal))
+                throw new InvalidOperationException("Thumbnail V8 validation failed: phase-12-validation.json must report V8 and ThumbnailV8AiNativeGenerator.");
+        }
+        var legacy = new[] { "landscape.png", "portrait.png", "square.png", "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
         if (legacy.Length > 0)
             throw new InvalidOperationException("Thumbnail V8 validation failed: duplicate non-thumbnail-prefixed output(s) generated: " + string.Join(", ", legacy));
     }
@@ -7773,9 +7784,9 @@ public sealed partial class ProductionPipelineExecutionService(
             MoonGuideCardAdded: false,
             MoonObjectRendered: false,
             MoonForbiddenTermsDetected: Array.Empty<string>(),
-            ThumbnailVersion: "V8_AI_NATIVE",
+            ThumbnailVersion: "V8",
             ThumbnailContract: "ThumbnailV8AiNative",
-            Renderer: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            Renderer: "ThumbnailV8AiNativeGenerator",
             Validator: "ThumbnailV8AiNativeValidator",
             ThumbnailReviewJsonRequired: false,
             V6RendererExecuted: false,

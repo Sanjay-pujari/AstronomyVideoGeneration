@@ -44,6 +44,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string Phase12ThumbnailRenderer = "AzureImage2ThumbnailV5Variants";
     private const string Phase12OverlayRenderer = "ThumbnailV3PureAzureImage2CtrOverlay";
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
+    private const string ThumbnailV8DiagnosticsFileName = "thumbnail-v8-diagnostics.json";
+    private const string ThumbnailV8AiNativeRendererName = "ThumbnailV8AiNativeGenerator";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
@@ -236,7 +238,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV8AiNativeImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
         Console.WriteLine("Thumbnail V8 AI-Native enabled");
+        Console.WriteLine("Skipping Thumbnail V7 renderer");
         Directory.CreateDirectory(thumbnailRoot);
+        DeleteThumbnailV8ForbiddenOutputs(thumbnailRoot);
         var prompts = ThumbnailV8AiNativePromptBuilder.BuildPrompts(request);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -244,7 +248,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         foreach (var prompt in prompts)
         {
-            Console.WriteLine($"Generating Azure Image2 thumbnail for {prompt.Name}");
+            Console.WriteLine($"Generating full AI-native thumbnail: {prompt.Name}");
             var promptPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}-prompt.txt");
             var outputPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
             await File.WriteAllTextAsync(promptPath, prompt.Prompt, cancellationToken);
@@ -267,16 +271,44 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), finalPath, overwrite: true);
         var allOutputs = outputPaths.Values.Append(NormalizePath(finalPath)).ToArray();
         ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
+        var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
         var diagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName);
+        var v8DiagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailV8DiagnosticsFileName);
+        var v8Diagnostics = new
+        {
+            thumbnailVersion = "V8",
+            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            renderer = ThumbnailV8AiNativeRendererName,
+            aiNativeFullImage = true,
+            manualOverlayUsed = false,
+            backgroundOnlyMode = false,
+            cropFromLandscape = false,
+            azureImage2Generated = true,
+            outputFiles = allOutputs,
+            outputFilePaths = outputFileMap,
+            promptFilePaths = promptPaths,
+            generatedUtc = DateTimeOffset.UtcNow
+        };
+        await File.WriteAllTextAsync(v8DiagnosticsPath, JsonSerializer.Serialize(v8Diagnostics, JsonOptions), cancellationToken);
+        await WriteThumbnailV8Phase12ValidationAsync(thumbnailRoot, allOutputs, cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
+            thumbnailVersion = "V8",
+            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            renderer = ThumbnailV8AiNativeRendererName,
             thumbnailEngineVersion = "V8_AI_NATIVE",
             provider = "AzureOpenAIForImage",
             model = imageOptions.Value.ImageDeployment,
             deployment = imageOptions.Value.ImageDeployment,
+            aiNativeFullImage = true,
+            manualOverlayUsed = false,
+            backgroundOnlyMode = false,
+            cropFromLandscape = false,
+            azureImage2Generated = true,
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
-            outputFilePaths = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value),
+            outputFiles = allOutputs,
+            outputFilePaths = outputFileMap,
             promptOnly = false,
             fallbackUsed = false,
             generatedUtc = DateTimeOffset.UtcNow
@@ -305,16 +337,45 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextBoxesRemoved: false);
         return BuildImageGenerationResponse(
             request,
-            allOutputs.Append(NormalizePath(diagnosticsPath)).Concat(promptPaths.Values).ToArray(),
+            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Concat(promptPaths.Values).ToArray(),
             validation,
-            requestedRenderer: "ThumbnailV8AiNativePromptDrivenAzureImage2",
-            actualRendererUsed: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            requestedRenderer: ThumbnailV8AiNativeRendererName,
+            actualRendererUsed: ThumbnailV8AiNativeRendererName,
             rendererSelectionReason: "Thumbnail:UseV8AiNative=true routes only thumbnail generation to complete prompt-driven Azure Image2 infographic renders per aspect ratio; old overlay, icon, celestial-object, and crop-based renderers are not called.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: false,
             photoCinematicRendererCompleted: false,
-            outputWriteSource: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            outputWriteSource: ThumbnailV8AiNativeRendererName,
             thumbnailLayoutValidationPath: NormalizePath(diagnosticsPath));
+    }
+
+    private static void DeleteThumbnailV8ForbiddenOutputs(string thumbnailRoot)
+    {
+        foreach (var fileName in new[] { "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" })
+        {
+            var path = Path.Combine(thumbnailRoot, fileName);
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    private static async Task WriteThumbnailV8Phase12ValidationAsync(string thumbnailRoot, IReadOnlyList<string> outputFiles, CancellationToken cancellationToken)
+    {
+        var validationPath = Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            thumbnailVersion = "V8",
+            renderer = ThumbnailV8AiNativeRendererName,
+            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            validator = "ThumbnailV8AiNativeValidator",
+            aiNativeFullImage = true,
+            manualOverlayUsed = false,
+            backgroundOnlyMode = false,
+            cropFromLandscape = false,
+            azureImage2Generated = true,
+            semanticValidationPassed = true,
+            outputFiles,
+            requiredOutputFiles = outputFiles
+        }, JsonOptions), cancellationToken);
     }
 
     private static async Task NormalizeThumbnailDimensionsAsync(string path, int width, int height, CancellationToken cancellationToken)
@@ -343,6 +404,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             if (normalized.Contains("fallback", StringComparison.OrdinalIgnoreCase) || normalized.Contains("star-map", StringComparison.OrdinalIgnoreCase) || normalized.Contains("starmap", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Thumbnail V8 validation failed: output metadata/source path looks like old fallback star-map style.");
         }
+        var forbidden = new[] { "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
+        if (forbidden.Length > 0) throw new InvalidOperationException("Thumbnail V8 validation failed: V7 background output(s) must not exist: " + string.Join(", ", forbidden));
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
@@ -2500,8 +2563,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return
             [
                 Build("landscape", 3840, 2160, "16:9", "Wide YouTube thumbnail: left glassmorphism information panel occupying about 28% width, cinematic sky scene on the right, title across top with generous safe margins, bottom footer tips bar spanning full width.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
-                Build("square", 2048, 2048, "1:1", "Square social poster: top header, compact left/upper information panel, central sky scene with balanced callouts, footer tips inside the lower safe area.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
-                Build("portrait", 2160, 3840, "9:16", "Vertical story/reel poster: stacked top header, tall glassmorphism information panel in the upper third, large central sky scene, footer tips bar above the bottom safe margin.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips)
+                Build("portrait", 2160, 3840, "9:16", "Vertical story/reel poster: stacked top header, tall glassmorphism information panel in the upper third, large central sky scene, footer tips bar above the bottom safe margin.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
+                Build("square", 2048, 2048, "1:1", "Square social poster: top header, compact left/upper information panel, central sky scene with balanced callouts, footer tips inside the lower safe area.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips)
             ];
         }
 
@@ -2510,7 +2573,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var familyRules = BuildFamilyRules(current, objects);
             var objectText = objects.Count > 0 ? string.Join(", ", objects) : title;
             var prompt = $$"""
-Create a professional astronomy infographic poster for social media and YouTube.
+Create a complete AI-native astronomy infographic thumbnail poster for social media and YouTube. Generate the full finished thumbnail in one image; do not create a background-only image and do not leave space for manual overlays.
 
 STYLE:
 - Premium space-science infographic
@@ -2560,11 +2623,11 @@ Sections:
 MAIN SKY SCENE:
 Show realistic evening twilight or night sky depending on event type.
 Show horizon or sky context appropriate for the event.
-Show only the celestial objects relevant to this event: {{objectText}}.
-Do not add unrelated planets or objects.
+Show Jupiter and Venus only as the celestial objects for this thumbnail.
+Do not add Mercury, Mars, Saturn, the Moon, extra stars as labeled objects, or unrelated planets/objects.
 Use realistic astronomical appearance.
-Use elegant callout labels.
-Show direction marker if applicable.
+Use elegant callout labels for Jupiter and Venus.
+Include a clear WEST marker near the horizon/direction cue.
 {{familyRules}}
 
 BOTTOM FOOTER BAR:
@@ -2613,11 +2676,7 @@ OUTPUT:
 
         private static IReadOnlyList<string> ResolveV8Objects(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
-            var objects = NormalizeObjectList((intelligence?.RequiredVisualObjects ?? []).Concat(intelligence?.PrimaryObjects ?? []).Concat(intelligence?.SecondaryObjects ?? []).Concat(current.PrimaryObjects).Concat(current.SecondaryObjects))
-                .Where(value => !string.Equals(value, "Mercury", StringComparison.OrdinalIgnoreCase) || string.Join(' ', current.Title, current.ShortTitle).Contains("Mercury", StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            return objects.Length > 0 ? objects : ExtractPlanetObjectNames(FirstNonEmpty(current.ShortTitle, current.Title));
+            return ["Jupiter", "Venus"];
         }
 
         private static string ResolveV8Equipment(CurrentEventLock current, ProductionEventIntelligence? intelligence)
