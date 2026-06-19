@@ -286,6 +286,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), finalPath, overwrite: true);
         var allOutputs = outputPaths.Values.Append(NormalizePath(finalPath)).ToArray();
         ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
+        await WriteThumbnailV8ManifestAsync(request, thumbnailRoot, cancellationToken);
+        var promptJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptFileName);
+        await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
+        {
+            thumbnailVersion = "V8",
+            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            selectedTemplate = "AiNativePromptBasedThumbnail",
+            validator = "ThumbnailV8Validator",
+            prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.Prompt }).ToArray()
+        }, JsonOptions), cancellationToken);
         var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
         var diagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName);
         var v8DiagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailV8DiagnosticsFileName);
@@ -304,6 +314,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             layoutFamily = "AiGeneratedObservationGuide",
             backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
+            validator = "ThumbnailV8Validator",
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
             promptFilePaths = promptPaths,
@@ -330,6 +341,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             layoutFamily = "AiGeneratedObservationGuide",
             backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
+            validator = "ThumbnailV8Validator",
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
             outputFiles = allOutputs,
@@ -363,7 +375,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextBoxesRemoved: false);
         return BuildImageGenerationResponse(
             request,
-            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Concat(promptPaths.Values).ToArray(),
+            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Concat(promptPaths.Values).ToArray(),
             validation,
             requestedRenderer: ThumbnailV8AiNativeRendererName,
             actualRendererUsed: ThumbnailV8AiNativeRendererName,
@@ -377,7 +389,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static void DeleteThumbnailV8ForbiddenOutputs(string thumbnailRoot)
     {
-        foreach (var fileName in new[] { "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" })
+        foreach (var fileName in new[] { "thumbnail-v7-diagnostics.json", "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" })
         {
             var path = Path.Combine(thumbnailRoot, fileName);
             if (File.Exists(path)) File.Delete(path);
@@ -392,7 +404,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             thumbnailVersion = "V8",
             renderer = ThumbnailV8AiNativeRendererName,
             selectedRenderer = ThumbnailV8AiNativeRendererName,
-            validator = "ThumbnailV8AiNativeValidator",
+            validator = "ThumbnailV8Validator",
             aiNativeFullImage = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
@@ -446,7 +458,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var forbiddenTerms = new[]
         {
             "ThumbnailV7",
-            "V7Template",
+            "V7",
+            "PlanetConjunctionV7Template",
             "ThumbnailV7CinematicOverlayRenderer",
             "ThumbnailV7Validator"
         };
@@ -535,6 +548,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputFiles = required,
             requiredOutputFiles = required
         }, JsonOptions), cancellationToken);
+    }
+
+    private static async Task WriteThumbnailV8ManifestAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(thumbnailRoot, ThumbnailSceneManifestFileName);
+        var manifest = BuildThumbnailV8Manifest(request, thumbnailRoot);
+        Directory.CreateDirectory(thumbnailRoot);
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
     }
 
     private static async Task WriteThumbnailV7ManifestAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)

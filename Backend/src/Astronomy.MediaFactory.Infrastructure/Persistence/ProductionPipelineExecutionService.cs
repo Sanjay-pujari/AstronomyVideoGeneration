@@ -1496,10 +1496,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private bool IsThumbnailV8Enabled()
     {
+        const bool phase12ThumbnailV8DefaultEnabled = true;
         var options = thumbnailOptions?.Value;
         return options?.UseThumbnailV8 == true
             || options?.UseV8AiNative == true
-            || string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase)
+            || phase12ThumbnailV8DefaultEnabled;
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateThumbnailsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -7781,7 +7783,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var forbiddenTerms = new[]
         {
             "ThumbnailV7",
-            "V7Template",
+            "V7",
+            "PlanetConjunctionV7Template",
             "ThumbnailV7CinematicOverlayRenderer",
             "ThumbnailV7Validator"
         };
@@ -7822,7 +7825,7 @@ public sealed partial class ProductionPipelineExecutionService(
             GoldenPilotLeakageDetected: false,
             SemanticValidationPassed: true,
             EventFamily: context.ProductionEventIntelligence.EventType,
-            ValidatorProfile: "ThumbnailV8AiNativeValidator",
+            ValidatorProfile: "ThumbnailV8Validator",
             MoonPhaseName: string.Empty,
             MoonIlluminationPercent: string.Empty,
             MoonriseLocal: string.Empty,
@@ -7833,7 +7836,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ThumbnailVersion: "V8",
             ThumbnailContract: "ThumbnailV8AiNative",
             Renderer: "ThumbnailV8AiNativeRenderer",
-            Validator: "ThumbnailV8AiNativeValidator",
+            Validator: "ThumbnailV8Validator",
             ThumbnailReviewJsonRequired: false,
             V6RendererExecuted: false,
             V6ValidatorExecuted: false,
