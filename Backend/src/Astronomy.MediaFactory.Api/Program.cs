@@ -5725,8 +5725,7 @@ app.MapPost("/api/visual-lab/generate", async Task<IResult> (VisualLabGenerateRe
     var outputDirectory = Path.Combine(@"D:\AstronomyWorkspace\Astronomy\media-output\visual-lab", eventType, timestamp);
     Directory.CreateDirectory(outputDirectory);
 
-    var width = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
-    var height = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
+    var (width, height) = ResolveVisualLabCanvasSize(request.Format);
     var variants = Math.Clamp(request.VariantCount.GetValueOrDefault(3), 1, 6);
     var reports = new List<VisualLabQualityReportItem>();
 
@@ -5783,8 +5782,7 @@ app.MapPost("/api/visual-lab/generate-background", async Task<IResult> (VisualLa
     var outputDirectory = Path.Combine(@"D:\AstronomyWorkspace\Astronomy\media-output\visual-lab\backgrounds", eventType, timestamp);
     Directory.CreateDirectory(outputDirectory);
 
-    var width = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
-    var height = string.Equals(request.Format, "Short", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
+    var (width, height) = ResolveVisualLabCanvasSize(request.Format);
     var diagnosticsEnabled = request.EnableDiagnostics == true;
     var promptOnly = request.PromptOnly == true;
     var diagnosticsDirectory = Path.Combine(outputDirectory, "debug");
@@ -7491,23 +7489,46 @@ static IReadOnlyList<string> ValidateVisualLabRequest(VisualLabGenerateRequest r
     return errors;
 }
 
+static (int Width, int Height) ResolveVisualLabCanvasSize(string format)
+{
+    if (string.Equals(format, "Short", StringComparison.OrdinalIgnoreCase) || string.Equals(format, "Portrait", StringComparison.OrdinalIgnoreCase)) return (1080, 1920);
+    if (string.Equals(format, "Square", StringComparison.OrdinalIgnoreCase) || string.Equals(format, "Instagram", StringComparison.OrdinalIgnoreCase) || string.Equals(format, "Facebook", StringComparison.OrdinalIgnoreCase)) return (1080, 1080);
+    return (1920, 1080);
+}
+
+static string GetVisualLabFact(IReadOnlyDictionary<string, string> facts, string key, string fallback)
+{
+    if (!facts.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)) return fallback;
+    return ToHumanReadableText(value);
+}
+
+static string ToHumanReadableText(string value)
+{
+    var normalized = Regex.Replace(value.Replace('_', ' '), @"(?<=[a-z])(?=[A-Z])", " ").Trim();
+    return CultureInfo.InvariantCulture.TextInfo.ToTitleCase(Regex.Replace(normalized, @"\s+", " ").ToLowerInvariant());
+}
+
 static VisualLabPrompt BuildVisualLabPrompt(VisualLabGenerateRequest request, int width, int height, int variant)
 {
     var facts = request.Facts ?? new Dictionary<string, string>();
-    var factLines = facts.Where(x => !string.IsNullOrWhiteSpace(x.Value)).Select(x => $"{ToTitleLabel(x.Key)}: {x.Value.Trim()}").ToArray();
-    var composition = request.EventType switch
+    var primary = GetVisualLabFact(facts, "primaryObject", "Jupiter");
+    var secondary = GetVisualLabFact(facts, "secondaryObject", "Venus");
+    var dateShort = GetVisualLabFact(facts, "dateShort", "Tonight");
+    var direction = GetVisualLabFact(facts, "direction", "West");
+    var equipment = GetVisualLabFact(facts, "equipment", "Naked Eye");
+    var title = $"{primary} + {secondary}";
+    var factLines = new[]
     {
-        "MeteorShower" => "Radiant star field with multiple bright meteor streaks over a subtle horizon and clean data panels.",
-        "PlanetConjunction" => "Two luminous planets close together above twilight, with angular separation callouts and viewing direction.",
-        "BlueMoon" => "Detailed full Moon disk with blue-toned accent lighting and a calendar-style explanatory panel.",
-        "PlanetParade" => "Wide ecliptic arc with labeled planets arranged in order across a dark sky map.",
-        "LunarEclipse" => "Copper-red Moon progression with shadow geometry and a compact eclipse timeline.",
-        "SolarEclipse" => "Solar corona silhouette with safe-viewing emphasis and a precise path/timing information panel.",
-        _ => "Polished astronomy scene with documentary-style educational overlays."
+        $"Date: {dateShort}",
+        $"Direction: {direction}",
+        $"Equipment: {equipment}",
+        "Look West",
+        "After Sunset",
+        "Naked Eye"
     };
 
     return new VisualLabPrompt(
-        request.Title.Trim(),
+        title,
         request.EventType.Trim(),
         request.Format.Trim(),
         request.Layout.Trim(),
@@ -7516,40 +7537,107 @@ static VisualLabPrompt BuildVisualLabPrompt(VisualLabGenerateRequest request, in
         variant,
         width,
         height,
-        "Professional astronomy infographic blending NASA educational poster clarity, National Geographic feature polish, and Discovery documentary contrast.",
-        composition,
+        "Premium astronomy infographic thumbnail with NASA and National Geographic quality, cinematic twilight sky, dark blue and gold palette, realistic celestial objects, glassmorphism UI, high contrast, mobile-readable typography, 4K social-media polish, no watermark, and no branding.",
+        $"Visual hierarchy: celestial objects first, title second, observation card third, footer last. Main title reads {title}; subtitle reads Planet Conjunction. Objects occupy 25-35 percent of the canvas with the primary object dominant but capped at 25 percent and the secondary object at 10-15 percent. Use a realistic twilight sky, warm horizon glow, compact callouts, left observation card, WEST horizon marker, and three large footer tips.",
         factLines,
-        "Final public astronomy copy: real labels, dates, directions, and observing tips.");
+        "All visible text must be human-readable title case. Never use underscores, snake case, database field names, or technical identifiers. Use only short public-facing labels: Date, Direction, Equipment, West, Look West, After Sunset, Naked Eye.");
 }
 
 static async Task RenderVisualLabBenchmarkAsync(VisualLabGenerateRequest request, VisualLabPrompt prompt, string imagePath, int width, int height, int variant, CancellationToken ct)
 {
     using var image = new Image<Rgba32>(width, height, Color.ParseHex("#050816"));
-    var titleFont = SystemFonts.CreateFont("Arial", width >= height ? 72 : 58, FontStyle.Bold);
-    var subtitleFont = SystemFonts.CreateFont("Arial", width >= height ? 34 : 30, FontStyle.Regular);
-    var labelFont = SystemFonts.CreateFont("Arial", width >= height ? 30 : 26, FontStyle.Bold);
-    var bodyFont = SystemFonts.CreateFont("Arial", width >= height ? 26 : 24, FontStyle.Regular);
+    var isLandscape = width > height;
+    var isSquare = width == height;
+    var titleFont = SystemFonts.CreateFont("Arial", isLandscape ? 78 : isSquare ? 58 : 54, FontStyle.Bold);
+    var subtitleFont = SystemFonts.CreateFont("Arial", isLandscape ? 34 : 30, FontStyle.Bold);
+    var labelFont = SystemFonts.CreateFont("Arial", isLandscape ? 24 : 20, FontStyle.Bold);
+    var bodyFont = SystemFonts.CreateFont("Arial", isLandscape ? 34 : 28, FontStyle.Bold);
+    var tipFont = SystemFonts.CreateFont("Arial", isLandscape ? 30 : 24, FontStyle.Bold);
 
     image.Mutate(ctx =>
     {
-        DrawVisualLabBackground(ctx, width, height, request.EventType, variant);
-        DrawVisualLabEventMotif(ctx, width, height, request.EventType, variant);
-        var panel = width >= height ? new RectangleF(width * 0.57f, height * 0.12f, width * 0.34f, height * 0.74f) : new RectangleF(width * 0.08f, height * 0.56f, width * 0.84f, height * 0.36f);
-        ctx.Fill(Color.ParseHex("#081A33").WithAlpha(0.86f), panel);
-        ctx.Draw(Color.ParseHex("#60D7FF").WithAlpha(0.85f), 3, panel);
-        DrawText(ctx, prompt.Title, titleFont, Color.White, new PointF(width * 0.07f, height * 0.08f));
-        DrawText(ctx, $"{SplitCamel(request.EventType)} • {request.QualityMode ?? "Benchmark"} visual study", subtitleFont, Color.ParseHex("#AEEBFF"), new PointF(width * 0.075f, height * 0.18f));
-        DrawText(ctx, "VIEWING GUIDE", labelFont, Color.ParseHex("#FFE08A"), new PointF(panel.X + 34, panel.Y + 30));
-        var y = panel.Y + 86;
-        foreach (var line in prompt.FactLines.Take(7))
+        DrawVisualLabInfographicTwilight(ctx, width, height, variant);
+
+        var safe = Math.Max(44, (int)Math.Round(Math.Min(width, height) * 0.045));
+        var titleX = safe;
+        var titleY = isLandscape ? safe : safe + 12;
+        DrawTextWithStroke(ctx, prompt.Title, titleFont, Color.White, Color.Black, 4, new PointF(titleX, titleY));
+        DrawText(ctx, "Planet Conjunction", subtitleFont, Color.ParseHex("#FFD36A"), new PointF(titleX + 4, titleY + titleFont.Size + 10));
+
+        var clusterX = isLandscape ? width * 0.68f : isSquare ? width * 0.66f : width * 0.52f;
+        var clusterY = isLandscape ? height * 0.43f : isSquare ? height * 0.38f : height * 0.36f;
+        var primaryRadius = Math.Min(width, height) * (isLandscape ? 0.145f : isSquare ? 0.135f : 0.155f);
+        var secondaryRadius = Math.Min(width, height) * (isLandscape ? 0.095f : isSquare ? 0.10f : 0.105f);
+        DrawVisualLabInfographicPlanet(ctx, new PointF(clusterX, clusterY), primaryRadius, "Jupiter");
+        DrawVisualLabInfographicPlanet(ctx, new PointF(clusterX + primaryRadius * 1.55f, clusterY - primaryRadius * 0.65f), secondaryRadius, "Venus");
+
+        DrawVisualLabCompactCallout(ctx, "JUPITER", "The Giant", new PointF(clusterX - primaryRadius * 1.2f, clusterY + primaryRadius * 1.15f), labelFont);
+        DrawVisualLabCompactCallout(ctx, "VENUS", "The Brightest Planet", new PointF(clusterX + primaryRadius * 1.15f, clusterY - primaryRadius * 1.75f), labelFont);
+
+        var cardWidth = isLandscape ? width * 0.23f : isSquare ? width * 0.42f : width * 0.72f;
+        var cardHeight = isLandscape ? height * 0.34f : isSquare ? height * 0.20f : height * 0.18f;
+        var cardX = safe;
+        var cardY = isLandscape ? height * 0.34f : isSquare ? height * 0.58f : height * 0.68f;
+        var card = new RectangleF(cardX, cardY, cardWidth, cardHeight);
+        ctx.Fill(Color.ParseHex("#071A35").WithAlpha(0.66f), card);
+        ctx.Draw(Color.White.WithAlpha(0.28f), 2, card);
+        var rowY = card.Y + 22;
+        foreach (var line in prompt.FactLines.Take(3))
         {
-            DrawText(ctx, line, bodyFont, Color.White, new PointF(panel.X + 34, y));
-            y += bodyFont.Size + 18;
+            var parts = line.Split(':', 2, StringSplitOptions.TrimEntries);
+            DrawText(ctx, parts[0].ToUpperInvariant(), labelFont, Color.ParseHex("#FFD36A"), new PointF(card.X + 24, rowY));
+            DrawText(ctx, parts.Length > 1 ? parts[1] : string.Empty, bodyFont, Color.White, new PointF(card.X + 24, rowY + labelFont.Size + 2));
+            rowY += isLandscape ? 78 : isSquare ? 58 : 64;
         }
-        DrawText(ctx, request.Facts?.GetValueOrDefault("shortDescription") ?? "A notable sky event with timing, direction, and observing context.", bodyFont, Color.ParseHex("#C8D7EF"), new PointF(panel.X + 34, panel.Bottom - 92));
+
+        DrawText(ctx, "WEST", labelFont, Color.ParseHex("#FFE08A"), new PointF(width * 0.48f, height * 0.78f));
+        var footer = new RectangleF(safe, height - safe - (isLandscape ? 82 : 94), width - safe * 2, isLandscape ? 82 : 94);
+        ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.58f), footer);
+        ctx.Draw(Color.White.WithAlpha(0.22f), 2, footer);
+        var tips = new[] { "LOOK WEST", "AFTER SUNSET", "NAKED EYE" };
+        for (var i = 0; i < tips.Length; i++)
+        {
+            var centerX = footer.X + footer.Width * (i + 0.5f) / 3f;
+            DrawCenteredText(ctx, tips[i], tipFont, Color.White, new PointF(centerX, footer.Y + (footer.Height - tipFont.Size) / 2f - 2));
+        }
     });
 
     await image.SaveAsPngAsync(imagePath, new PngEncoder(), ct);
+}
+
+static void DrawVisualLabInfographicTwilight(IImageProcessingContext ctx, int width, int height, int seed)
+{
+    for (var y = 0; y < height; y += 3)
+    {
+        var t = y / (float)height;
+        var r = (byte)(4 + 28 * t);
+        var g = (byte)(15 + 58 * t);
+        var b = (byte)(38 + 36 * (1 - t));
+        ctx.Fill(Color.FromRgb(r, g, b), new RectangleF(0, y, width, 3));
+    }
+    ctx.Fill(Color.ParseHex("#F2A33A").WithAlpha(0.24f), new EllipsePolygon(width * 0.50f, height * 0.78f, width * 0.55f, height * 0.18f));
+    ctx.Fill(Color.ParseHex("#020611").WithAlpha(0.62f), new RectangleF(0, height * 0.82f, width, height * 0.18f));
+}
+
+static void DrawVisualLabInfographicPlanet(IImageProcessingContext ctx, PointF center, float radius, string name)
+{
+    var color = name == "Jupiter" ? Color.ParseHex("#D8A66A") : Color.ParseHex("#FFF0A8");
+    ctx.Fill(color.WithAlpha(0.16f), new EllipsePolygon(center.X, center.Y, radius * 1.45f));
+    ctx.Fill(color, new EllipsePolygon(center.X, center.Y, radius));
+    if (name == "Jupiter")
+    {
+        ctx.DrawLine(Color.ParseHex("#8A5434").WithAlpha(0.75f), Math.Max(3f, radius * 0.035f), new PointF(center.X - radius * 0.92f, center.Y - radius * 0.20f), new PointF(center.X + radius * 0.92f, center.Y - radius * 0.16f));
+        ctx.DrawLine(Color.ParseHex("#F7D9A3").WithAlpha(0.9f), Math.Max(2f, radius * 0.025f), new PointF(center.X - radius * 0.82f, center.Y + radius * 0.16f), new PointF(center.X + radius * 0.82f, center.Y + radius * 0.13f));
+    }
+}
+
+static void DrawVisualLabCompactCallout(IImageProcessingContext ctx, string title, string subtitle, PointF point, Font font)
+{
+    var box = new RectangleF(point.X, point.Y, font.Size * 8.8f, font.Size * 2.75f);
+    ctx.Fill(Color.ParseHex("#071A35").WithAlpha(0.62f), box);
+    ctx.Draw(Color.ParseHex("#FFD36A").WithAlpha(0.60f), 2, box);
+    DrawText(ctx, title, font, Color.ParseHex("#FFD36A"), new PointF(box.X + 14, box.Y + 10));
+    DrawText(ctx, subtitle, SystemFonts.CreateFont("Arial", Math.Max(15, font.Size - 5), FontStyle.Regular), Color.White, new PointF(box.X + 14, box.Y + font.Size + 16));
 }
 
 static void DrawVisualLabBackground(IImageProcessingContext ctx, int width, int height, string eventType, int seed)
