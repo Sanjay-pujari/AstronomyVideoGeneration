@@ -45,7 +45,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string Phase12OverlayRenderer = "ThumbnailV3PureAzureImage2CtrOverlay";
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
     private const string ThumbnailV8DiagnosticsFileName = "thumbnail-v8-diagnostics.json";
-    private const string ThumbnailV8AiNativeRendererName = "ThumbnailV8AiNativeGenerator";
+    private const string ThumbnailV8AiNativeRendererName = "ThumbnailV8AiNativeRenderer";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
@@ -71,6 +71,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return await GenerateThumbnailIntelligenceAsync(request, cancellationToken);
     }
 
+
+    private bool IsThumbnailV8Enabled()
+    {
+        var options = thumbnailOptions?.Value;
+        return options?.UseThumbnailV8 == true
+            || options?.UseV8AiNative == true
+            || string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailCompositionModelAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var outputPath = BuildThumbnailCompositionOutputPath(request.EventId, request.RegionId);
@@ -92,9 +101,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             EnsureApprovedSceneOutputs(request.EventId, request.RegionId, sceneManifest);
         }
 
-        var model = thumbnailOptions?.Value.EnableThumbnailV7 != false && request.ProductionContext is not null
-            ? BuildThumbnailV7CompositionModel(request, thumbnailIntelligence)
-            : BuildThumbnailCompositionModel(request, thumbnailIntelligence);
+        var model = IsThumbnailV8Enabled()
+            ? BuildThumbnailV8CompositionModel(request, thumbnailIntelligence)
+            : thumbnailOptions?.Value.EnableThumbnailV7 != false && request.ProductionContext is not null
+                ? BuildThumbnailV7CompositionModel(request, thumbnailIntelligence)
+                : BuildThumbnailCompositionModel(request, thumbnailIntelligence);
         ValidateThumbnailCompositionModel(model);
 
         if (!request.DryRun)
@@ -129,9 +140,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ThumbnailSceneManifestDto manifest;
         if (request.ProductionContext is not null)
         {
-            manifest = thumbnailOptions?.Value.EnableThumbnailV7 != false
-                ? BuildThumbnailV7Manifest(request, thumbnailRoot)
-                : BuildRc1ThumbnailManifest(request, thumbnailRoot);
+            manifest = IsThumbnailV8Enabled()
+                ? BuildThumbnailV8Manifest(request, thumbnailRoot)
+                : thumbnailOptions?.Value.EnableThumbnailV7 != false
+                    ? BuildThumbnailV7Manifest(request, thumbnailRoot)
+                    : BuildRc1ThumbnailManifest(request, thumbnailRoot);
         }
         else
         {
@@ -159,8 +172,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
-        if (thumbnailOptions?.Value.UseV8AiNative == true)
+        if (IsThumbnailV8Enabled())
+        {
+            Console.WriteLine("PHASE 12 THUMBNAIL ROUTER: V8 selected");
             return await GenerateThumbnailV8AiNativeImagesAsync(request, thumbnailRoot, cancellationToken);
+        }
         if (thumbnailOptions?.Value.EnableThumbnailV7 != false)
             return await GenerateThumbnailV7ImagesAsync(request, thumbnailRoot, cancellationToken);
         if (request.ProductionContext is not null)
@@ -237,8 +253,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV8AiNativeImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
-        Console.WriteLine("Thumbnail V8 AI-Native enabled");
-        Console.WriteLine("Skipping Thumbnail V7 renderer");
+        Console.WriteLine("ThumbnailV8AiNativeRenderer executing");
         Directory.CreateDirectory(thumbnailRoot);
         DeleteThumbnailV8ForbiddenOutputs(thumbnailRoot);
         var prompts = ThumbnailV8AiNativePromptBuilder.BuildPrompts(request);
@@ -248,6 +263,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         foreach (var prompt in prompts)
         {
+            Console.WriteLine("Azure Image2 thumbnail background generation started");
             Console.WriteLine($"Generating full AI-native thumbnail: {prompt.Name}");
             var promptPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}-prompt.txt");
             var outputPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
@@ -260,7 +276,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             else
             {
                 await NormalizeThumbnailDimensionsAsync(outputPath, prompt.Width, prompt.Height, cancellationToken);
-                Console.WriteLine($"Saved thumbnail-{prompt.Name}.png");
+                Console.WriteLine($"Thumbnail V8 output written: {NormalizePath(outputPath)}");
             }
         }
 
@@ -283,6 +299,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
+            selectedTemplate = "AiNativePromptBased",
+            backgroundSource = "AzureImage2",
+            cropMode = "PerAspectGenerated",
             azureImage2Generated = true,
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
@@ -304,6 +323,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
+            selectedTemplate = "AiNativePromptBased",
+            backgroundSource = "AzureImage2",
+            cropMode = "PerAspectGenerated",
             azureImage2Generated = true,
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
@@ -371,6 +393,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
+            selectedTemplate = "AiNativePromptBased",
+            backgroundSource = "AzureImage2",
+            cropMode = "PerAspectGenerated",
             azureImage2Generated = true,
             semanticValidationPassed = true,
             outputFiles,
@@ -2827,6 +2852,17 @@ OUTPUT:
         };
     }
 
+    private ThumbnailCompositionModelDto BuildThumbnailV8CompositionModel(ThumbnailAssetGenerationRequest request, ThumbnailIntelligenceDto intelligence)
+    {
+        var model = BuildThumbnailCompositionModel(request, intelligence);
+        return model with
+        {
+            Architecture = ThumbnailV8AiNativeRendererName,
+            LayoutStyle = "AiNativePromptBased",
+            LayoutFamily = "AiNativePromptBased"
+        };
+    }
+
     private ThumbnailCompositionModelDto BuildThumbnailV7CompositionModel(ThumbnailAssetGenerationRequest request, ThumbnailIntelligenceDto intelligence)
     {
         var eventIntelligence = request.ProductionContext?.ProductionEventIntelligence;
@@ -2925,8 +2961,14 @@ OUTPUT:
     {
         if (string.Equals(model.LayoutStyle, "ScrollStoppingAstronomyThumbnail", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Thumbnail composition validation failed: ScrollStoppingAstronomyThumbnail is blocked for Phase 12 guide thumbnails.");
+        var isV8 = string.Equals(model.Architecture, ThumbnailV8AiNativeRendererName, StringComparison.OrdinalIgnoreCase);
         var isV7 = string.Equals(model.Architecture, ThumbnailV7Architecture, StringComparison.OrdinalIgnoreCase);
-        if (isV7)
+        if (isV8)
+        {
+            if (!string.Equals(model.LayoutStyle, "AiNativePromptBased", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiNativePromptBased", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail V8 composition validation failed: layoutStyle and layoutFamily must be AiNativePromptBased.");
+        }
+        else if (isV7)
         {
             if (!string.Equals(model.LayoutStyle, ThumbnailV7LayoutStyle, StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, ThumbnailV7LayoutStyle, StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Thumbnail V7 composition validation failed: layoutStyle and layoutFamily must be ThumbnailV7ObservationInfographic.");
@@ -2939,7 +2981,7 @@ OUTPUT:
         else
         {
             if (!string.Equals(model.Architecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Thumbnail composition validation failed: architecture must be ThumbnailV3PureAzureImage2CtrOverlay or ThumbnailV7CinematicOverlayRenderer.");
+                throw new ArgumentException("Thumbnail composition validation failed: architecture must be ThumbnailV3PureAzureImage2CtrOverlay, ThumbnailV7CinematicOverlayRenderer, or ThumbnailV8AiNativeRenderer.");
             if (!string.Equals(model.LayoutFamily, "DetailedGuide", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Thumbnail composition validation failed: layoutFamily must be DetailedGuide.");
             if (model.Variants is null
@@ -3271,6 +3313,44 @@ OUTPUT:
                 ["thumbnailV3ArchitectureBlocked"] = "True",
                 ["heroSceneManifestRequired"] = "False",
                 ["thumbnailSceneManifestRequired"] = "False",
+                ["approvedSceneAssetsRequired"] = "False"
+            }
+        };
+    }
+
+    private static ThumbnailSceneManifestDto BuildThumbnailV8Manifest(ThumbnailAssetGenerationRequest request, string thumbnailRoot)
+    {
+        var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+        var finalPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailFinalFileName));
+        var landscapePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"));
+        var portraitPath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png"));
+        var squarePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png"));
+        return new ThumbnailSceneManifestDto(
+            request.EventId,
+            new ThumbnailSceneManifestEntryDto(1, "ThumbnailV8Landscape", landscapePath, "landscape"),
+            new ThumbnailSceneManifestEntryDto(2, "ThumbnailV8Portrait", portraitPath, "portrait"),
+            new ThumbnailSceneManifestEntryDto(3, "ThumbnailV8Square", squarePath, "square"),
+            "ThumbnailV8AiNativeRenderer generates complete Azure Image2 thumbnail images independently for each aspect ratio.")
+        {
+            PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
+            EventType = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
+            Title = intelligence?.Title ?? request.EventId,
+            SourceHeroAssets = [],
+            SourceSceneAssets = [],
+            GeneratedThumbnailPaths = [finalPath, landscapePath, portraitPath, squarePath],
+            BackgroundImagePath = landscapePath,
+            ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["thumbnailVersion"] = "V8",
+                ["thumbnailArchitecture"] = ThumbnailV8AiNativeRendererName,
+                ["selectedRenderer"] = ThumbnailV8AiNativeRendererName,
+                ["selectedTemplate"] = "AiNativePromptBased",
+                ["backgroundSource"] = "AzureImage2",
+                ["cropMode"] = "PerAspectGenerated",
+                ["cropFromLandscape"] = "False",
+                ["layoutFamily"] = "AiNativePromptBased",
+                ["heroSceneManifestRequired"] = "False",
+                ["thumbnailSceneManifestRequired"] = "True",
                 ["approvedSceneAssetsRequired"] = "False"
             }
         };
