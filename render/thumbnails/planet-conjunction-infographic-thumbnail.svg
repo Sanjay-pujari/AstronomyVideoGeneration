@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160" role="img" aria-labelledby="title desc">
+  <title id="title">Jupiter + Venus Planet Conjunction Thumbnail</title>
+  <desc id="desc">Premium dark blue and gold astronomy infographic thumbnail with a twilight horizon, dominant realistic Jupiter and Venus on the right, glassmorphism observation card on the left, west marker, and compact footer tips.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#06142f"/>
+      <stop offset="0.46" stop-color="#0b234a"/>
+      <stop offset="0.72" stop-color="#5d3b2b"/>
+      <stop offset="1" stop-color="#e7a84c"/>
+    </linearGradient>
+    <radialGradient id="sunset" cx="58%" cy="84%" r="58%">
+      <stop offset="0" stop-color="#ffd17a" stop-opacity="0.78"/>
+      <stop offset="0.35" stop-color="#d98a3f" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#091936" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="jupiter" cx="38%" cy="34%" r="62%">
+      <stop offset="0" stop-color="#fff5d6"/>
+      <stop offset="0.3" stop-color="#d9b36f"/>
+      <stop offset="0.6" stop-color="#9a673e"/>
+      <stop offset="1" stop-color="#4d2d24"/>
+    </radialGradient>
+    <radialGradient id="venus" cx="35%" cy="30%" r="68%">
+      <stop offset="0" stop-color="#fff7c8"/>
+      <stop offset="0.45" stop-color="#f2d16d"/>
+      <stop offset="1" stop-color="#8e5b24"/>
+    </radialGradient>
+    <filter id="glow" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="35" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="28" flood-color="#000814" flood-opacity="0.45"/>
+    </filter>
+    <clipPath id="cardClip"><rect x="190" y="565" width="900" height="710" rx="58"/></clipPath>
+  </defs>
+  <rect width="3840" height="2160" fill="url(#sky)"/>
+  <rect width="3840" height="2160" fill="url(#sunset)"/>
+  <g opacity="0.32" fill="#ffffff">
+    <circle cx="410" cy="250" r="3"/><circle cx="590" cy="360" r="2"/><circle cx="760" cy="220" r="2"/><circle cx="1210" cy="310" r="3"/><circle cx="1650" cy="180" r="2"/><circle cx="2220" cy="285" r="3"/><circle cx="3140" cy="190" r="2"/>
+  </g>
+  <g opacity="0.28" fill="#f9d28a">
+    <ellipse cx="620" cy="1430" rx="590" ry="92"/><ellipse cx="1680" cy="1370" rx="720" ry="120"/><ellipse cx="2860" cy="1320" rx="640" ry="100"/>
+  </g>
+  <path d="M0 1535 C420 1485 625 1550 980 1510 C1400 1460 1700 1530 2055 1490 C2450 1440 2745 1495 3100 1458 C3380 1428 3600 1450 3840 1418 L3840 2160 L0 2160 Z" fill="#06101d" opacity="0.88"/>
+  <path d="M0 1645 C390 1608 760 1648 1090 1605 C1500 1552 1950 1622 2340 1574 C2860 1512 3270 1578 3840 1525 L3840 2160 L0 2160 Z" fill="#020814"/>
+
+  <text x="190" y="205" fill="#fff4d8" font-family="Montserrat, Arial, sans-serif" font-size="116" font-weight="800" letter-spacing="-3">Jupiter + Venus</text>
+  <text x="195" y="300" fill="#f0b95a" font-family="Montserrat, Arial, sans-serif" font-size="56" font-weight="700" letter-spacing="4">Planet Conjunction</text>
+
+  <g filter="url(#softShadow)">
+    <rect x="190" y="565" width="900" height="710" rx="58" fill="#092248" fill-opacity="0.48" stroke="#f4c56a" stroke-opacity="0.48" stroke-width="3"/>
+    <rect x="225" y="600" width="830" height="640" rx="42" fill="#ffffff" fill-opacity="0.055" clip-path="url(#cardClip)"/>
+    <text x="285" y="730" fill="#f6c767" font-family="Montserrat, Arial, sans-serif" font-size="38" font-weight="800" letter-spacing="6">DATE</text>
+    <text x="285" y="812" fill="#ffffff" font-family="Montserrat, Arial, sans-serif" font-size="74" font-weight="800">Aug 12</text>
+    <text x="285" y="955" fill="#f6c767" font-family="Montserrat, Arial, sans-serif" font-size="38" font-weight="800" letter-spacing="6">DIRECTION</text>
+    <text x="285" y="1037" fill="#ffffff" font-family="Montserrat, Arial, sans-serif" font-size="74" font-weight="800">West</text>
+    <text x="285" y="1180" fill="#f6c767" font-family="Montserrat, Arial, sans-serif" font-size="38" font-weight="800" letter-spacing="6">EQUIPMENT</text>
+    <text x="285" y="1262" fill="#ffffff" font-family="Montserrat, Arial, sans-serif" font-size="74" font-weight="800">Naked Eye</text>
+  </g>
+
+  <g filter="url(#glow)">
+    <circle cx="2780" cy="710" r="330" fill="#f7c56f" opacity="0.18"/>
+    <circle cx="2780" cy="710" r="255" fill="url(#jupiter)"/>
+    <path d="M2540 640 C2655 690 2850 700 3018 650" stroke="#f4d18a" stroke-width="28" opacity="0.35" fill="none"/>
+    <path d="M2532 735 C2680 780 2890 782 3038 730" stroke="#6b3b2c" stroke-width="34" opacity="0.34" fill="none"/>
+    <ellipse cx="2908" cy="755" rx="58" ry="35" fill="#a24d35" opacity="0.72"/>
+    <circle cx="3350" cy="1025" r="205" fill="#ffd76b" opacity="0.18"/>
+    <circle cx="3350" cy="1025" r="145" fill="url(#venus)"/>
+  </g>
+
+  <g font-family="Montserrat, Arial, sans-serif" filter="url(#softShadow)">
+    <path d="M2395 438 L2525 535" stroke="#f5c66c" stroke-width="4" opacity="0.9"/>
+    <rect x="2065" y="300" width="360" height="140" rx="28" fill="#081d3d" fill-opacity="0.68" stroke="#f5c66c" stroke-opacity="0.55"/>
+    <text x="2112" y="363" fill="#f6c767" font-size="38" font-weight="900" letter-spacing="4">JUPITER</text>
+    <text x="2112" y="415" fill="#ffffff" font-size="36" font-weight="700">The Giant</text>
+    <path d="M3252 800 L3150 908" stroke="#f5c66c" stroke-width="4" opacity="0.9"/>
+    <rect x="2870" y="665" width="350" height="136" rx="28" fill="#081d3d" fill-opacity="0.68" stroke="#f5c66c" stroke-opacity="0.55"/>
+    <text x="2918" y="726" fill="#f6c767" font-size="38" font-weight="900" letter-spacing="4">VENUS</text>
+    <text x="2918" y="778" fill="#ffffff" font-size="34" font-weight="700">The Brightest</text>
+  </g>
+
+  <g font-family="Montserrat, Arial, sans-serif">
+    <path d="M1630 1455 L1725 1455 L1677 1388 Z" fill="#f4c56a"/>
+    <text x="1575" y="1535" fill="#f8d17b" font-size="54" font-weight="900" letter-spacing="8">WEST</text>
+  </g>
+
+  <g transform="translate(0 1835)" filter="url(#softShadow)">
+    <rect x="160" y="0" width="3520" height="210" rx="64" fill="#071a36" fill-opacity="0.72" stroke="#f4c56a" stroke-opacity="0.34"/>
+    <g font-family="Montserrat, Arial, sans-serif" font-weight="900" fill="#ffffff">
+      <circle cx="610" cy="105" r="48" fill="#f4c56a"/><path d="M587 105 h46 m-23 -23 v46" stroke="#071a36" stroke-width="12" stroke-linecap="round"/>
+      <text x="705" y="124" font-size="54">LOOK WEST</text>
+      <circle cx="1745" cy="105" r="48" fill="#f4c56a"/><path d="M1712 113 c34 -54 72 -54 100 0" stroke="#071a36" stroke-width="12" fill="none" stroke-linecap="round"/>
+      <text x="1840" y="124" font-size="54">AFTER SUNSET</text>
+      <circle cx="2960" cy="105" r="48" fill="#f4c56a"/><circle cx="2942" cy="101" r="9" fill="#071a36"/><circle cx="2978" cy="101" r="9" fill="#071a36"/><path d="M2935 128 c20 14 48 14 70 0" stroke="#071a36" stroke-width="10" fill="none" stroke-linecap="round"/>
+      <text x="3055" y="124" font-size="54">NAKED EYE</text>
+    </g>
+  </g>
+</svg>

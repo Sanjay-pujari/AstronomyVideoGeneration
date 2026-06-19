@@ -2693,9 +2693,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
         [
-            new("landscape", 3840, 2160, "16:9", "Wide YouTube thumbnail. Title top-left. Large left observation card, max 32% width. Realistic celestial objects on right. Elegant callout cards. Direction marker near horizon. Footer tips run full width along the bottom safe area."),
-            new("square", 2048, 2048, "1:1", "NATIVE INSTAGRAM / FACEBOOK POST. Top left: title only. Center / upper right: large celestial objects dominate and occupy at least 25% of canvas. Lower left: small observation badge only, less than 20% of canvas, with Date, Direction, Equipment. Bottom: three compact footer tips. Avoid oversized cards and crowded composition."),
-            new("portrait", 2160, 3840, "9:16", "NATIVE SHORTS / REELS COVER. Top 12%: large title only; no subtitle block, no information card. Center 60%: celestial objects are primary hero, visually dominant, occupying 30-40% of image area; large recognizable Jupiter/Venus when present; professional callouts only if space allows. Lower 18%: compact observation card only, with Date, Direction, Equipment. Bottom 10%: three compact footer tips. No landscape-style left panel, no large information card, no scientific poster, no squeezed layout.")
+            new("landscape", 3840, 2160, "16:9", "LANDSCAPE 16:9. Title top-left. Observation card on the left. Celestial objects on the right and occupying 25-40% of the visible composition. Footer spans full width along the bottom safe area. Elegant WEST marker near the natural horizon."),
+            new("square", 2048, 2048, "1:1", "SQUARE 1:1. Title top-left. Objects center-right, large and recognizable. Small observation card lower-left, less than 20% of canvas. Compact footer at bottom. Observation card must not compete with celestial objects."),
+            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16. Title occupies top 8-12%. Objects occupy center 50-60% and visually dominate. Observation card occupies lower 15-20%. Footer occupies bottom 10%. No landscape-style side panel and no oversized information cards.")
         ];
 
         public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
@@ -2703,17 +2703,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var current = BuildCurrentEventLock(request);
             var intelligence = request.ProductionContext?.ProductionEventIntelligence;
             var builder = SelectBuilder(current);
+            var objects = ResolveV8Objects(current, intelligence);
             var context = new ThumbnailV8PromptContext(
                 Current: current,
                 Intelligence: intelligence,
-                Title: SanitizeThumbnailV8PromptText(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, request.EventId)),
-                EventType: SanitizeThumbnailV8PromptText(FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, current.EventType, "Astronomy viewing guide")),
-                DateText: current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date",
+                Title: ResolveV8Title(current, intelligence, objects, request.EventId),
+                EventType: ResolveV8Subtitle(current, intelligence),
+                DateText: current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture) ?? "Event date",
                 BestTime: ResolveShortBestTime(current, intelligence),
                 Direction: ResolveShortDirection(current, intelligence),
                 Equipment: ResolveV8Equipment(current, intelligence),
                 Tips: [],
-                Objects: ResolveV8Objects(current, intelligence));
+                Objects: objects);
 
             return AspectSpecs.Select(aspect => builder.Build(aspect, context)).ToArray();
         }
@@ -2753,6 +2754,22 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var titleText = FirstNonEmpty(current.ShortTitle, current.Title);
             var jupiterVenusEvent = titleText.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && titleText.Contains("Venus", StringComparison.OrdinalIgnoreCase) && !titleText.Contains("Mercury", StringComparison.OrdinalIgnoreCase);
             return jupiterVenusEvent ? distinct.Where(value => !value.Equals("Mercury", StringComparison.OrdinalIgnoreCase)).ToArray() : distinct;
+        }
+
+        private static string ResolveV8Title(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects, string eventId)
+        {
+            if (objects.Count >= 2)
+                return SanitizeThumbnailV8PromptText($"{objects[0]} + {objects[1]}");
+            if (objects.Count == 1)
+                return SanitizeThumbnailV8PromptText(objects[0]);
+            return SanitizeThumbnailV8PromptText(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, eventId));
+        }
+
+        private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            if (IsPlanetaryEvent(current.EventType) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary)
+                return "Planet Conjunction";
+            return SanitizeThumbnailV8PromptText(HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.EventType, current.EventType, "Astronomy Viewing Guide")));
         }
 
         private static string ResolveShortBestTime(CurrentEventLock current, ProductionEventIntelligence? intelligence)
@@ -2797,16 +2814,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             var objectText = c.Objects.Count > 0 ? string.Join(" + ", c.Objects) : "event planets only";
             var prompt = CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
-FAMILY-SPECIFIC TEMPLATE: Premium planetary observation guide poster using the Jupiter/Venus/Mercury reference as the design contract, adapted to the exact event objects only.
-VISUAL SCENE: realistic twilight sky, dark blue to amber horizon gradient, planet objects on the right side only. Show only these event objects: {{objectText}}. For Jupiter + Venus, show only Jupiter and Venus; do not add Mercury. No extra celestial objects, no Moon unless listed as an event object, no random planets.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields visible in mobile variants: Date, Direction, Equipment only. Do not render Best Time, Objects, time-span block, long date range, region, location, or scientific description as visible fields. Professional callouts connected to planets only if space allows and never competing with planets. West marker near horizon. Footer tips exactly: WEST, AFTER SUNSET, NAKED EYE.
+FAMILY-SPECIFIC TEMPLATE: Premium astronomy infographic thumbnail for a planet conjunction. NASA + National Geographic quality, cinematic twilight sky, ultra realistic celestial objects, modern glassmorphism UI, professional typography, high contrast, mobile readable, social-media optimized.
+VISUAL SCENE: realistic twilight sky with beautiful sunset glow, natural horizon, atmospheric scattering, cinematic clouds, professional landscape silhouette, dark blue and gold palette. Planet objects on the right side only. Show only these event objects: {{objectText}}. For Jupiter + Venus, show only Jupiter and Venus; do not add Mercury. No extra celestial objects, no Moon unless listed as an event object, no random planets.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields visible in mobile variants: DATE, DIRECTION, EQUIPMENT only. Do not render Best Time, Objects, coordinates, city, country, visibility windows, time-span block, long date range, region, location, technical astronomy data, or scientific description as visible fields. Professional callouts connected to planets only if space allows and never competing with planets. West marker near horizon. Footer tips exactly: LOOK WEST, AFTER SUNSET, NAKED EYE.
+CALLOUT STYLE: elegant astronomy callout cards near the planets, for example "JUPITER / The Giant" and "VENUS / The Brightest Planet", with compact glass panels and thin gold leader lines.
 PLANETARY CTR RULE: This is a click-through-rate optimized thumbnail.
 Celestial objects are more important than the information panel.
 Objects must dominate visual hierarchy.
 Information supports the image and must never compete with the celestial objects.
-Large recognizable celestial bodies.
+Objects must occupy 25-40% of visible composition where the aspect ratio allows.
+Large recognizable realistic celestial bodies.
 Do not render planets as tiny points of light.
-PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact panels, elegant glow.
+PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact panels, elegant glow, clean spacing, no overlapping elements, no cropped celestial objects.
 """ + CommonData(c, objectText);
             return Final(aspect, c, prompt, nameof(PlanetaryObservationGuidePromptBuilder), "Planetary", $"Planetary guide with aspect-native observation card, {objectText} only, planet callouts, West marker, short footer tips.");
         }
@@ -2861,12 +2880,13 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
 
     private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
 Generate final finished thumbnail image: {{posterType}}.
-Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. No cropping. Do not reuse another aspect-ratio prompt. No extra celestial objects. No location text.
+Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. 4K quality. No cropping. Do not reuse another aspect-ratio prompt. No extra celestial objects. No location text. No watermark. No branding.
 OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 TITLE TEXT: "{{c.Title}}"
 SUBTITLE TEXT: "{{c.EventType}}"
 MOBILE INFORMATION LIMIT: maximum visible information is Date, Direction, Equipment. Do not display time-span blocks, long date ranges, region names, location names, or scientific descriptions.
+TEXT STYLE RULE: Render natural title case words only. Do not render underscores, snake case, database field names, technical identifiers, or all-caps event codes.
 """;
 
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
@@ -2878,7 +2898,7 @@ DATA TO RENDER IN THE IMAGE:
 - Footer tips: use the three short tips specified in the family template above.
 QUALITY RULES: sharp readable typography, no watermark, no branding, no location text, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette. Information area must be 20% of canvas or less.
 CTR INSTRUCTIONS: This is a professional YouTube thumbnail and social cover. Optimize for maximum click-through rate, mobile readability, large celestial objects, large typography, strong visual hierarchy, and clean premium astronomy-magazine design.
-AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter.
+AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers.
 NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping.
 """;
 
@@ -2890,9 +2910,18 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
         var sanitized = value ?? string.Empty;
         foreach (var forbidden in new[] { "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "regionId", "lat/lon", "around Jun" })
             sanitized = sanitized.Replace(forbidden, string.Empty, StringComparison.OrdinalIgnoreCase);
+        sanitized = sanitized.Replace('_', ' ');
         sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+over\s*(?=[;,.\n])", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s{2,}", " ", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         return sanitized.Trim();
+    }
+
+    private static string HumanizeThumbnailV8Text(string value)
+    {
+        var text = (value ?? string.Empty).Replace('_', ' ').Trim();
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"(?<=[a-z])(?=[A-Z])", " ", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s{2,}", " ", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return string.IsNullOrWhiteSpace(text) ? string.Empty : CultureInfo.InvariantCulture.TextInfo.ToTitleCase(text.ToLowerInvariant());
     }
 
     private sealed class DefaultHttpClientFactory : IHttpClientFactory
