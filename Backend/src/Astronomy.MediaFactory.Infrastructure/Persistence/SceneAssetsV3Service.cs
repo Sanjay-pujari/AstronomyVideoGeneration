@@ -47,15 +47,16 @@ public sealed class SceneAssetsV3Service(
         string? longValidation = null;
 
         var context = await LoadTimelineContextAsync(root, cancellationToken);
+        var enableAccurateSkyGuideV2 = request.EnableAccurateSkyGuideV2 ?? renderingOptions.Value.EnableAccurateSkyGuideV2;
         if (request.GenerateShort)
-            shortValidation = await GenerateFormatAsync(root, "short", BuildBeats(context, "short", 5), 5, request.OverwriteExisting, files, warnings, context, cancellationToken);
+            shortValidation = await GenerateFormatAsync(root, "short", BuildBeats(context, "short", 5), 5, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, cancellationToken);
         if (request.GenerateLong)
-            longValidation = await GenerateFormatAsync(root, "long", BuildBeats(context, "long", 9), 9, request.OverwriteExisting, files, warnings, context, cancellationToken);
+            longValidation = await GenerateFormatAsync(root, "long", BuildBeats(context, "long", 9), 9, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, cancellationToken);
 
         return new SceneAssetsV3Response(root, files, warnings, shortValidation, longValidation);
     }
 
-    private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, CancellationToken ct)
+    private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, bool enableAccurateSkyGuideV2, CancellationToken ct)
     {
         var dir = Path.Combine(root, format);
         if (overwrite && Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
@@ -82,7 +83,7 @@ public sealed class SceneAssetsV3Service(
             foreach (var beat in beats)
             {
                 var imagePath = Path.Combine(dir, beat.SceneId + ".png");
-                var guideV2Enabled = renderingOptions.Value.EnableAccurateSkyGuideV2 && beat.RenderMode == "AccurateSkyGuideScene";
+                var guideV2Enabled = enableAccurateSkyGuideV2 && beat.RenderMode == "AccurateSkyGuideScene";
                 var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene" || guideV2Enabled;
                 var providerSucceeded = false;
                 var fallbackUsed = false;
@@ -114,7 +115,7 @@ public sealed class SceneAssetsV3Service(
 
                 if (beat.RenderMode == "AccurateSkyGuideScene")
                 {
-                    accurateSkyGuideV2Diagnostics.Add(new { enabled = renderingOptions.Value.EnableAccurateSkyGuideV2, format, beat.SceneId, family = ResolveAccurateSkyGuideV2Family(context.EventType), providerCalled, promptPath = accurateSkyGuidePromptPath ?? string.Empty, outputPath = imagePath, fallbackUsed, imageExists = File.Exists(imagePath) });
+                    accurateSkyGuideV2Diagnostics.Add(new { enabled = enableAccurateSkyGuideV2, format, beat.SceneId, family = ResolveAccurateSkyGuideV2Family(context.EventType), providerCalled, promptPath = accurateSkyGuidePromptPath ?? string.Empty, outputPath = imagePath, fallbackUsed, imageExists = File.Exists(imagePath) });
                 }
 
                 var forbiddenDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beat.NarrationBeat, beat.VisualIntent, beat.VisualPrompt, beat.OverlayText, beat.SupportingText ?? string.Empty), context.ForbiddenTerms);

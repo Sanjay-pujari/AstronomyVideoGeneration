@@ -103,6 +103,7 @@ public sealed class ContentPlanProductionExecutionService(
                 RequestedStartPhaseNo: requestedStartPhaseNo,
                 RequestedEndPhaseNo: requestedEndPhaseNo,
                 EnableSceneAssetsV3: request.EnableSceneAssetsV3,
+                EnableAccurateSkyGuideV2: request.EnableAccurateSkyGuideV2,
                 EnableSubtitles: request.EnableSubtitles,
                 PublishApproved: request.PublishApproved,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
