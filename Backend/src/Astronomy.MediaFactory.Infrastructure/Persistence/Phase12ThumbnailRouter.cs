@@ -7,11 +7,14 @@ public sealed class ThumbnailV8AiNativeRenderer;
 
 public static class Phase12ThumbnailRouter
 {
+    private const bool Phase12ThumbnailV8DefaultEnabled = true;
+
     public static bool IsThumbnailV8Enabled(ThumbnailOptions? options, ThumbnailAssetGenerationRequest? request)
-        => string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase)
+        => request?.EnableThumbnailV8 == true
             || options?.UseThumbnailV8 == true
             || options?.UseV8AiNative == true
-            || request?.EnableThumbnailV8 == true;
+            || string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase)
+            || Phase12ThumbnailV8DefaultEnabled;
 
     public static async Task<ThumbnailAssetGenerationResponse?> RouteAsync(
         ThumbnailOptions? options,
@@ -30,10 +33,7 @@ public static class Phase12ThumbnailRouter
             return response;
         }
 
-        if (options?.EnableThumbnailV7 != false)
-            return await renderV7Async();
-
-        return null;
+        throw new InvalidOperationException("Phase 12 thumbnail routing failed: Thumbnail V8 is the default renderer and V7 fallback is not allowed.");
     }
 
     private static void EnsureNoV7Selection(ThumbnailAssetGenerationResponse response)
@@ -44,7 +44,8 @@ public static class Phase12ThumbnailRouter
             response.ActualRendererUsed,
             response.OutputWriteSource,
             response.RendererSelectionReason,
-            response.ThumbnailVisualSourceMode
+            response.ThumbnailVisualSourceMode,
+            response.ThumbnailLayoutValidationPath
         };
 
         if (selected.Any(value => value?.Contains("V7", StringComparison.OrdinalIgnoreCase) == true))
