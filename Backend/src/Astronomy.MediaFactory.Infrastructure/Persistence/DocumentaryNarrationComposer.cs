@@ -40,7 +40,7 @@ internal static partial class EventStoryComposer
         var openingValid = IsOpeningAllowed(sections.ColdOpen) && ContainsNameAndDate(sections.ColdOpen, eventName, eventDateText);
         var documentaryScore = Math.Min(100, 55 + (openingValid ? 20 : 0) + (ContainsHistoricalOrObservationalContext(allText) ? 15 : 0) + (!ContainsAuthorInstruction(allText) ? 10 : 0));
         var storytellingScore = Math.Min(100, 50 + (sections.Context.Length > 80 ? 15 : 0) + (sections.MainStory.Length > 80 ? 15 : 0) + (sections.EmotionalClosing.Contains("memory", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (!ContainsRawTimestamp(allText) ? 10 : 0));
-        var diagnostics = new EventStoryComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore);
+        var diagnostics = new EventStoryComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore, ScoreWonderLanguage(allText), ScoreScientificAccuracy(family, allText));
         return new EventStoryComposerResult(sections, diagnostics);
     }
 
@@ -57,10 +57,10 @@ internal static partial class EventStoryComposer
     }
 
     private static string OpeningVerb(string family) => family switch { "Meteor" => "reaches its peak", "Moon" => "will rise above the evening horizon", "Eclipse" => "will be visible across parts of the world", _ => "will appear in the sky" };
-    private static string BuildImportance(string family, string eventName, string contextFact) => family switch { "Meteor" => "Under dark skies, observers may see repeated meteors crossing the night, each one a tiny fragment of cosmic history burning into light.", "Moon" => "As a full moon tied to winter traditions, it connects a familiar sight with centuries of skywatching memory.", "Eclipse" => "For a brief time, the Moon will move across the face of the Sun, creating one of the most dramatic daytime sky events in astronomy.", _ => "For a short time, perspective will bring distant worlds into the same human field of view, revealing the solar system in motion." };
+    private static string BuildImportance(string family, string eventName, string contextFact) => family switch { "Meteor" => "Under dark skies, observers may see repeated meteors crossing the night, each one a tiny fragment of cosmic history burning into light.", "Moon" => "As a full moon tied to winter traditions, it connects a familiar sight with centuries of skywatching memory.", "Eclipse" => "For a brief time, the Moon will move across the face of the Sun, creating one of the most dramatic daytime sky events in astronomy.", "PlanetConjunction" => "For a short time, perspective brings distant worlds into the same human field of view, revealing the solar system in motion without suggesting they are physically close.", _ => "For a short time, perspective will bring distant worlds into the same human field of view, revealing the solar system in motion." };
     private static string BuildHook(string family, string eventName) => family switch { "Meteor" => "The story begins quietly, then suddenly: a streak, a pause, and another flash where empty darkness seemed to be.", "Moon" => "Its light is familiar, but the first full moon of the year still changes the landscape, softening edges and pulling attention back to the horizon.", "Eclipse" => "Eclipses turn celestial mechanics into something physical, letting daylight itself become part of the drama.", _ => "To the eye, the planets may seem almost close enough to belong together, even though space keeps them separated by enormous distances." };
-    private static string BuildContext(string family, string eventName, string fact) => family switch { "Meteor" => $"Meteor showers are old trails crossing a new night. {fact}", "Moon" => $"Moon names are cultural memory written onto a predictable orbit. {fact}", "Eclipse" => $"An eclipse is a shadow story, possible only when the Sun, Moon, and Earth line up with rare precision. {fact}", _ => $"Planetary conjunctions are stories of perspective, not proximity. {fact}" };
-    private static string BuildMainStory(string family, string eventName) => family switch { "Meteor" => "Each meteor is small enough to fit in your hand, but fast enough to announce itself across the atmosphere in a line of fire.", "Moon" => "As the Moon climbs, its color and brightness change with the air near the horizon, making a familiar world feel newly discovered.", "Eclipse" => "The change arrives in stages: a bite from the Sun, a dimming of the ground, and then the unmistakable sense that the sky is moving on a grand scale.", _ => "One object may blaze brighter, the other may seem steadier, but together they make orbital motion visible without a telescope." };
+    private static string BuildContext(string family, string eventName, string fact) => family switch { "Meteor" => $"Meteor showers are old trails crossing a new night. {fact}", "Moon" => $"Moon names are cultural memory written onto a predictable orbit. {fact}", "Eclipse" => $"An eclipse is a shadow story, possible only when the Sun, Moon, and Earth line up with rare precision. {fact}", "PlanetConjunction" => $"A planetary conjunction is a story of perspective, not proximity. {fact}", _ => $"Planetary conjunctions are stories of perspective, not proximity. {fact}" };
+    private static string BuildMainStory(string family, string eventName) => family switch { "Meteor" => "Each meteor is small enough to fit in your hand, but fast enough to announce itself across the atmosphere in a line of fire.", "Moon" => "As the Moon climbs, its color and brightness change with the air near the horizon, making a familiar world feel newly discovered.", "Eclipse" => "The change arrives in stages: a bite from the Sun, a dimming of the ground, and then the unmistakable sense that the sky is moving on a grand scale.", "PlanetConjunction" => "One planet may blaze brighter while the other looks steadier, but their apparent closeness is a line-of-sight effect across deep space.", _ => "One object may blaze brighter, the other may seem steadier, but together they make orbital motion visible without a telescope." };
     private static string BuildViewingGuide(string family, string direction, string window) => family == "Eclipse"
         ? $"The event reaches its strongest visibility during {window}; look toward the Sun only with certified solar eclipse glasses."
         : $"The best view comes from a clear, open location facing {direction}. The event reaches its strongest visibility during {window}, so arrive early enough for your eyes to settle into the scene.";
@@ -75,7 +75,12 @@ internal static partial class EventStoryComposer
     private static IEnumerable<string> SignificantWords(string value) => Regex.Matches(value ?? string.Empty, @"[\p{L}\p{N}]{4,}").Select(m => m.Value).Where(w => !string.Equals(w, "event", StringComparison.OrdinalIgnoreCase));
     private static bool ContainsHistoricalOrObservationalContext(string text) => ContainsAny(text, ["centuries", "traditions", "observers", "horizon", "atmosphere", "telescope", "shadow", "perspective"]);
     private static bool ContainsAny(string text, IEnumerable<string> terms) => terms.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
-    private static string BuildDefaultContext(string family, string eventName) => family switch { "Meteor" => "The shower comes from debris left along a comet or asteroid path.", "Moon" => "The full moon has long been used to mark seasons and passing months.", "Eclipse" => "Its path depends on the exact geometry of the Moon's shadow across Earth.", _ => "The alignment is created by changing orbital positions as seen from Earth." };
+    private static string BuildDefaultContext(string family, string eventName) => family switch { "Meteor" => "The shower comes from debris left along a comet or asteroid path.", "Moon" => "The full moon has long been used to mark seasons and passing months.", "Eclipse" => "Its path depends on the exact geometry of the Moon's shadow across Earth.", "PlanetConjunction" => "Although the planets appear close together, they remain separated by vast distances in space.", _ => "The alignment is created by changing orbital positions as seen from Earth." };
+    private static int ScoreWonderLanguage(string text) => Math.Min(100, 75 + (ContainsAny(text, ["wonder", "memory", "light", "horizon", "distant", "worlds", "motion"]) ? 15 : 0) + (ContainsPerspectiveStatement(text) ? 10 : 0));
+    private static int ScoreScientificAccuracy(string family, string text) => Math.Min(100, 85 + (family == "PlanetConjunction" && ContainsPerspectiveStatement(text) ? 15 : 5));
+    private static bool ContainsPerspectiveStatement(string text)
+        => Regex.IsMatch(text ?? string.Empty, @"\b(appear|apparent|seem)\s+(?:near|close|together|closeness)\b", RegexOptions.IgnoreCase)
+            && Regex.IsMatch(text ?? string.Empty, @"\b(separated|distances?|space|line.of.sight|perspective|proximity)\b", RegexOptions.IgnoreCase);
     private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
     private static string Clean(string? value) => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
     private static IReadOnlyList<string> SplitSentences(string value) => SentenceSplitRegex().Split(value ?? string.Empty).Select(p => p.Trim()).Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
@@ -105,6 +110,8 @@ internal sealed record EventStoryComposerDiagnostics(
     bool EventNameMentioned,
     int DocumentaryScore,
     int StorytellingScore,
+    int WonderScore = 0,
+    int ScientificAccuracyScore = 0,
     int LongSceneCount = 0,
     int ExtractedSectionCount = 0,
     bool ExpansionApplied = false,
@@ -132,7 +139,7 @@ internal static class LongSceneNarrationExpander
         IReadOnlyList<LongSceneNarrationDraft> scenes,
         out string strategy)
     {
-        if (scenes.Count <= ExtractedNarrationSectionCount)
+        if (scenes.Count <= ExtractedNarrationSectionCount && !string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
         {
             strategy = "NotApplied";
             return scenes.ToDictionary(scene => scene.SceneId, scene => scene.BodyText, StringComparer.OrdinalIgnoreCase);
@@ -201,6 +208,15 @@ internal static class LongSceneNarrationExpander
             ("MeteorShower", "hook") => $"{title} can turn a quiet dark sky into sudden streaks of light.",
             ("MeteorShower", "best-time") => $"Meteor watching is strongest during {time}, especially under darker skies.",
             ("MeteorShower", "viewing-tips") => "Lie back, avoid bright screens, and scan a wide area of the night sky.",
+            ("PlanetConjunction", "hook") => $"{title} opens with two distant worlds sharing one quiet patch of sky.",
+            ("PlanetConjunction", "what-is-it") => $"{title} is a planetary conjunction: a close apparent pairing as seen from Earth.",
+            ("PlanetConjunction", "cause") => "A planetary conjunction happens when two planets line up near the same direction in our sky.",
+            ("PlanetConjunction", "interesting-fact") => "Although the planets appear close together, they remain separated by vast distances in space.",
+            ("PlanetConjunction", "best-time") => $"The best time to watch the conjunction is during {time}.",
+            ("PlanetConjunction", "accurate-sky-guide") => $"Start with {direction}, then look for the two bright planetary points near each other.",
+            ("PlanetConjunction", "what-you-will-see") => "You will see an apparent pairing, not two worlds physically approaching each other.",
+            ("PlanetConjunction", "viewing-tips") => "Give the sky a few minutes, keep the horizon clear, and use binoculars only after finding the pair with your eyes.",
+            ("PlanetConjunction", "final-reminder") => $"{title} is a reminder that distance and perspective can meet in a single human view.",
             ("PlanetGrouping", "accurate-sky-guide") => $"Start with {direction}, then compare the bright points one by one.",
             ("PlanetGrouping", "what-you-will-see") => "You will see separate worlds appearing close together from our point of view.",
             ("PlanetGrouping", "viewing-tips") => "Use the horizon and nearby bright objects as guideposts before reaching for binoculars.",
@@ -223,7 +239,8 @@ internal static class LongSceneNarrationExpander
         if (text.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return "SolarEclipse";
         if (text.Contains("Meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
         if (text.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
-        if (text.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) || text.Contains("Planet", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+        if (text.Contains("Conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (text.Contains("Planet", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
         return "Generic";
     }
 
