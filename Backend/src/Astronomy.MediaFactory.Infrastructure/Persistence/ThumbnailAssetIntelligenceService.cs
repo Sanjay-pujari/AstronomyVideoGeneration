@@ -314,14 +314,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             mobileOptimizedCopy = true,
             maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
             visibleInformationFields = new[] { "Date", "Direction", "Equipment" },
-            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "region names", "location names", "scientific descriptions" },
+            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
             informationAreaPercentMax = 20,
-            portraitObjectsAreaPercentMin = 30,
+            titleAreaPercentMax = 12,
+            portraitObjectsAreaPercentMin = 35,
             squareObjectsAreaPercentMin = 25,
-            portraitComposition = "Native Shorts/Reels cover: top 12% title, center 60% dominant objects, lower 18% compact observation card, bottom 10% footer tips.",
+            portraitComposition = "Native mobile-first Shorts/Reels cover, not cropped landscape: title max 12%, information max 20%, celestial objects min 35%, portrait-specific vertical balance.",
             squareComposition = "Native Instagram/Facebook post: top-left title, center/upper-right dominant objects, lower-left small observation badge, bottom footer tips.",
+            thumbnailV8Status = "LOCKED",
             phase12ThumbnailV8Status = "COMPLETE",
             architectureStatus = "LOCKED",
+            familyStatuses = new { Planetary = "COMPLETE", Moon = "COMPLETE", Meteor = "COMPLETE", Eclipse = "COMPLETE" },
             aspectPromptsGenerated = true,
             dedicatedLandscapePrompt = true,
             dedicatedPortraitPrompt = true,
@@ -366,14 +369,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             mobileOptimizedCopy = true,
             maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
             visibleInformationFields = new[] { "Date", "Direction", "Equipment" },
-            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "region names", "location names", "scientific descriptions" },
+            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
             informationAreaPercentMax = 20,
-            portraitObjectsAreaPercentMin = 30,
+            titleAreaPercentMax = 12,
+            portraitObjectsAreaPercentMin = 35,
             squareObjectsAreaPercentMin = 25,
-            portraitComposition = "Native Shorts/Reels cover: top 12% title, center 60% dominant objects, lower 18% compact observation card, bottom 10% footer tips.",
+            portraitComposition = "Native mobile-first Shorts/Reels cover, not cropped landscape: title max 12%, information max 20%, celestial objects min 35%, portrait-specific vertical balance.",
             squareComposition = "Native Instagram/Facebook post: top-left title, center/upper-right dominant objects, lower-left small observation badge, bottom footer tips.",
+            thumbnailV8Status = "LOCKED",
             phase12ThumbnailV8Status = "COMPLETE",
             architectureStatus = "LOCKED",
+            familyStatuses = new { Planetary = "COMPLETE", Moon = "COMPLETE", Meteor = "COMPLETE", Eclipse = "COMPLETE" },
             aspectPromptsGenerated = true,
             dedicatedLandscapePrompt = true,
             dedicatedPortraitPrompt = true,
@@ -477,13 +483,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             semanticValidationPassed = true,
             maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
             informationAreaPercentMax = 20,
-            portraitObjectsAreaPercentMin = 30,
+            titleAreaPercentMax = 12,
+            portraitObjectsAreaPercentMin = 35,
             squareObjectsAreaPercentMin = 25,
             portraitNoLandscapePanel = true,
             noOverlappingTextRequired = true,
             noSqueezedLayoutRequired = true,
+            thumbnailV8Status = "LOCKED",
             phase12ThumbnailV8Status = "COMPLETE",
             architectureStatus = "LOCKED",
+            familyStatuses = new { Planetary = "COMPLETE", Moon = "COMPLETE", Meteor = "COMPLETE", Eclipse = "COMPLETE" },
             outputFiles,
             requiredOutputFiles = outputFiles
         }, JsonOptions), cancellationToken);
@@ -2694,20 +2703,21 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
         [
             new("landscape", 3840, 2160, "16:9", "LANDSCAPE 16:9. Title top-left. Observation card on the left. Celestial objects on the right and occupying 25-40% of the visible composition. Footer spans full width along the bottom safe area. Elegant WEST marker near the natural horizon."),
-            new("square", 2048, 2048, "1:1", "SQUARE 1:1. Title top-left. Objects center-right, large and recognizable. Small observation card lower-left, less than 20% of canvas. Compact footer at bottom. Observation card must not compete with celestial objects."),
-            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16. Title occupies top 8-12%. Objects occupy center 50-60% and visually dominate. Observation card occupies lower 15-20%. Footer occupies bottom 10%. No landscape-style side panel and no oversized information cards.")
+            new("square", 2160, 2160, "1:1", "SQUARE 1:1. Generate a native square composition, never cropped from landscape. Title top-left. Objects center-right, large and recognizable. Small observation card lower-left, less than 20% of canvas. Compact footer at bottom. Observation card must not compete with celestial objects."),
+            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16. Generate a native mobile-first composition for YouTube Shorts, Instagram Reels, and Facebook Reels; this is not a squeezed or cropped landscape layout. Title area maximum 12% of canvas. Information area maximum 20% of canvas. Celestial object area minimum 35% of canvas and primary visual focus. Create portrait-specific vertical balance, not landscape side-panel composition.")
         ];
 
         public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
         {
             var current = BuildCurrentEventLock(request);
             var intelligence = request.ProductionContext?.ProductionEventIntelligence;
-            var builder = SelectBuilder(current);
+            var family = ThumbnailFamilyResolver.Resolve(current);
+            var builder = SelectBuilder(family);
             var objects = ResolveV8Objects(current, intelligence);
             var context = new ThumbnailV8PromptContext(
                 Current: current,
                 Intelligence: intelligence,
-                Title: ResolveV8Title(current, intelligence, objects, request.EventId),
+                Title: ResolveV8Title(current, intelligence, objects, request.EventId, family),
                 EventType: ResolveV8Subtitle(current, intelligence),
                 DateText: current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture) ?? "Event date",
                 BestTime: ResolveShortBestTime(current, intelligence),
@@ -2719,8 +2729,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return AspectSpecs.Select(aspect => builder.Build(aspect, context)).ToArray();
         }
 
-        private static IThumbnailV8FamilyPromptBuilder SelectBuilder(CurrentEventLock current)
-            => ThumbnailFamilyResolver.Resolve(current) switch
+        private static IThumbnailV8FamilyPromptBuilder SelectBuilder(ThumbnailV8Family family)
+            => family switch
             {
                 ThumbnailV8Family.Meteor => new MeteorObservationGuidePromptBuilder(),
                 ThumbnailV8Family.Moon => new MoonObservationGuidePromptBuilder(),
@@ -2756,13 +2766,36 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return jupiterVenusEvent ? distinct.Where(value => !value.Equals("Mercury", StringComparison.OrdinalIgnoreCase)).ToArray() : distinct;
         }
 
-        private static string ResolveV8Title(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects, string eventId)
+        private static string ResolveV8Title(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects, string eventId, ThumbnailV8Family family)
         {
+            if (family == ThumbnailV8Family.Eclipse)
+                return SanitizeThumbnailV8PromptText(ResolveEclipseEventName(current, intelligence));
+            if (family == ThumbnailV8Family.Meteor)
+                return SanitizeThumbnailV8PromptText(ResolveMeteorShowerTitle(current, intelligence, objects));
             if (objects.Count >= 2)
                 return SanitizeThumbnailV8PromptText($"{objects[0]} + {objects[1]}");
             if (objects.Count == 1)
                 return SanitizeThumbnailV8PromptText(objects[0]);
             return SanitizeThumbnailV8PromptText(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, eventId));
+        }
+
+        private static string ResolveEclipseEventName(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var source = HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, intelligence?.EventType, current.EventType));
+            if (source.Contains("Annular", StringComparison.OrdinalIgnoreCase) && source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Annular Solar Eclipse";
+            if (source.Contains("Total", StringComparison.OrdinalIgnoreCase) && source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Total Solar Eclipse";
+            if (source.Contains("Solar", StringComparison.OrdinalIgnoreCase)) return "Solar Eclipse";
+            if (source.Contains("Total", StringComparison.OrdinalIgnoreCase) && source.Contains("Lunar", StringComparison.OrdinalIgnoreCase)) return "Total Lunar Eclipse";
+            if (source.Contains("Lunar", StringComparison.OrdinalIgnoreCase)) return "Lunar Eclipse";
+            return IsSolarEclipse(current) ? "Solar Eclipse" : "Lunar Eclipse";
+        }
+
+        private static string ResolveMeteorShowerTitle(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects)
+        {
+            var source = FirstNonEmpty(objects.FirstOrDefault(), intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, "Meteor Shower");
+            var name = CleanMeteorDisplayName(source).Replace("Meteor Shower Peak", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("Meteor Shower", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("Meteors", string.Empty, StringComparison.OrdinalIgnoreCase).Trim(' ', '+', '-', ':');
+            if (string.IsNullOrWhiteSpace(name) || name.Equals("Meteor", StringComparison.OrdinalIgnoreCase)) name = "Meteor";
+            return source.Contains("peak", StringComparison.OrdinalIgnoreCase) ? $"{name} Meteor Shower Peak" : $"{name} Meteor Shower";
         }
 
         private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
@@ -2823,6 +2856,7 @@ Celestial objects are more important than the information panel.
 Objects must dominate visual hierarchy.
 Information supports the image and must never compete with the celestial objects.
 Objects must occupy 25-40% of visible composition where the aspect ratio allows.
+PLANETARY FAMILY BALANCE: primary planet maximum 22% of total image area; secondary planet minimum 12% and maximum 16% of total image area. Keep realistic visual balance: large Jupiter with medium Venus is good; huge Jupiter with tiny Venus is bad. Do not allow any single planet to dominate more than 70% of the total celestial object area.
 Large recognizable realistic celestial bodies.
 Do not render planets as tiny points of light.
 PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact panels, elegant glow, clean spacing, no overlapping elements, no cropped celestial objects.
@@ -2835,12 +2869,12 @@ PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact 
     {
         public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
         {
-            var name = FirstNonEmpty(c.Title, c.Current.Title, "Meteor Shower");
+            var name = ResolveMeteorShowerTitle(c.Current, c.Intelligence, c.Objects);
             var prompt = CommonOpening(aspect, c, "Meteor shower observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Meteor shower observation guide poster using the Geminids reference as the design contract.
 VISUAL SCENE: dark realistic night sky with a clear radiant marker, multiple natural meteor streaks emanating from the radiant, atmospheric horizon, no random planets and no unrelated conjunction imagery.
 UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon, Equipment. Include a strong direction cue and bottom footer tips: Dark Sky, Look Up, 20 Min Eyes.
-EVENT NAME: {{name}}. Make the radiant and meteor streaks the visual focus.
+EVENT NAME AND TITLE RULE: use exactly a natural shower event name such as "Perseids Meteor Shower", "Geminids Meteor Shower", or "Quadrantids Meteor Shower"; optional peak form is "{ShowerName} Meteor Shower Peak". Never render split titles like "Geminids + Meteors". Make the radiant and meteor streaks the visual focus.
 """ + CommonData(c, name);
             return Final(aspect, c, prompt, nameof(MeteorObservationGuidePromptBuilder), "Meteor", "Meteor shower guide with radiant marker, meteor streaks, aspect-native observation card, direction cue, short footer tips, no planets.");
         }
@@ -2865,12 +2899,14 @@ UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation car
         public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
         {
             var solar = IsSolarEclipse(c.Current);
+            var eventName = ResolveEclipseEventName(c.Current, c.Intelligence);
             var prompt = CommonOpening(aspect, c, "Professional eclipse observation guide") + $$"""
 FAMILY-SPECIFIC TEMPLATE: professional eclipse observation guide.
 VISUAL SCENE: realistic eclipse scene with accurate Sun/Moon alignment, dramatic sky and visibility context. Show the eclipse bodies only; no random planets or unrelated celestial objects.
 UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Peak Time, Visibility, Equipment, Safety. Include alignment callouts and bottom footer tips; solar eclipse footer must include safe viewing, lunar eclipse footer can include naked-eye viewing.
+TITLE RULE: primary title must be the actual eclipse event name "{{eventName}}". Never generate or render "Sun + Moon" as the title.
 SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOLAR FILTER REQUIRED. Never look at the Sun directly without approved protection." : "Lunar eclipse safety: safe to view with eyes or binoculars; note visibility and timing clearly.")}}
-""" + CommonData(c, solar ? "Sun + Moon alignment" : "Moon + Earth shadow alignment");
+""" + CommonData(c, eventName);
             return Final(aspect, c, prompt, nameof(EclipseObservationGuidePromptBuilder), "Eclipse", "Eclipse guide with realistic alignment, aspect-native timing/safety/visibility card, solar safety when applicable, short footer tips.");
         }
     }
@@ -2880,12 +2916,13 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
 
     private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
 Generate final finished thumbnail image: {{posterType}}.
-Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. 4K quality. No cropping. Do not reuse another aspect-ratio prompt. No extra celestial objects. No location text. No watermark. No branding.
+Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. 4K quality. Generate independently for this exact format; do not crop landscape and do not reuse another aspect-ratio prompt. No extra celestial objects. No location text. No city, region, country, or coordinates. No watermark. No branding.
 OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 TITLE TEXT: "{{c.Title}}"
 SUBTITLE TEXT: "{{c.EventType}}"
-MOBILE INFORMATION LIMIT: maximum visible information is Date, Direction, Equipment. Do not display time-span blocks, long date ranges, region names, location names, or scientific descriptions.
+MOBILE INFORMATION LIMIT: maximum visible information is Date, Direction, Equipment. Do not display time-span blocks, long date ranges, city names, region names, country names, coordinates, location names, or scientific descriptions.
+PORTRAIT LOCK: when aspect is 9:16, title area maximum 12%, information area maximum 20%, celestial object area minimum 35%, and objects remain the primary visual focus in a unique Shorts/Reels composition.
 TEXT STYLE RULE: Render natural title case words only. Do not render underscores, snake case, database field names, technical identifiers, or all-caps event codes.
 """;
 
