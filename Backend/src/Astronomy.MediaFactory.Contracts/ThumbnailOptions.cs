@@ -27,7 +27,9 @@ public sealed class ThumbnailOptions
     public bool FallbackToExtractedFrame { get; init; } = true;
     public bool AllowLegacyFallbackOnFontFailure { get; init; }
     public bool EnableThumbnailV7 { get; init; } = true;
+    public bool UseThumbnailV8 { get; init; }
     public bool UseV8AiNative { get; init; }
+    public string ThumbnailVersion { get; init; } = string.Empty;
 
     public bool EnableHookText { get; init; } = true;
     public int MaxHookWords { get; init; } = 4;
