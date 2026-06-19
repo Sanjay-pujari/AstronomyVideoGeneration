@@ -7,11 +7,10 @@ public sealed class SmoothMotionRenderer
     public string BuildZoomPanFilter(double durationSeconds, int fps, int outputWidth, int outputHeight, MotionProfile profile)
     {
         var totalFrames = Math.Max(1, (int)Math.Round(Math.Max(0d, durationSeconds) * fps, MidpointRounding.AwayFromZero));
-        var denominator = Math.Max(totalFrames, 1);
+        var denominator = Math.Max(totalFrames - 1, 1);
         var progress = $"on/{denominator.ToString(CultureInfo.InvariantCulture)}.0";
         var eased = profile.Easing switch
         {
-            MotionEasingKind.EaseOutCubic => $"1-pow(1-({progress}),3)",
             MotionEasingKind.EaseInOutSine => $"(1-cos(PI*({progress})))/2",
             _ => progress
         };

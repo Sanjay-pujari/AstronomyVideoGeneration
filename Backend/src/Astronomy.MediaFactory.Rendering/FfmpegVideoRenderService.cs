@@ -117,6 +117,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var effectsReports = new List<VideoEffectsReportEntry>();
         var performanceReports = new List<SegmentRenderPerformanceReportEntry>();
         var motionDebugEntries = new List<MotionDebugEntry>();
+        var motionLayerV2Diagnostics = new List<MotionLayerV2DiagnosticEntry>();
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
@@ -184,6 +185,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             syncReports.Add(CreateSegmentSyncReportEntry(scene, i, audioDurationSeconds, visualDurationSeconds));
             effectsReports.Add(CreateVideoEffectsReportEntry(scene, i, isShort, effects, audioDurationSeconds, visualDurationSeconds));
             motionDebugEntries.Add(CreateMotionDebugEntry(scene, i, motionProfile, audioDurationSeconds, fps, outroDurationSeconds: 0d, fadeToBlackSeconds: 0d));
+            motionLayerV2Diagnostics.Add(CreateMotionLayerV2DiagnosticEntry(scene, i, motionProfile, audioDurationSeconds));
             LogMotionSelection(i, scene, motionProfile, 0d);
             segmentClipPaths.Add(segmentOutputPath);
         }
@@ -200,6 +202,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await WriteVideoEffectsReportAsync(outputDirectory, effectsReports, cancellationToken);
         await WriteRenderPerformanceReportAsync(outputDirectory, performanceReports, cancellationToken);
         await WriteMotionDebugAsync(outputDirectory, motionDebugEntries, cancellationToken);
+        await WriteMotionLayerV2DiagnosticsAsync(outputDirectory, motionLayerV2Diagnostics, cancellationToken);
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
@@ -252,6 +255,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentDiagnostics = new List<string>();
         var motionDiagnostics = new List<string>();
         var motionDebugEntries = new List<MotionDebugEntry>();
+        var motionLayerV2Diagnostics = new List<MotionLayerV2DiagnosticEntry>();
         var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
         var syncReports = new List<SegmentSyncReportEntry>();
         var effectsReports = new List<VideoEffectsReportEntry>();
@@ -347,6 +351,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 "}"
             }));
             motionDebugEntries.Add(CreateMotionDebugEntry(scene, i, motionProfile, duration, fps, outroDurationSeconds: 0d, fadeToBlackSeconds: 0d));
+            motionLayerV2Diagnostics.Add(CreateMotionLayerV2DiagnosticEntry(scene, i, motionProfile, duration));
             LogMotionSelection(i, scene, motionProfile, 0d);
             await _fileSystem.WriteAllTextAsync(segmentCommandPath, segmentDiagnosticsEntry, cancellationToken);
             _logger.LogInformation(
@@ -406,6 +411,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             effectsReports.Add(CreateVideoEffectsReportEntry(outroScene, segmentPaths.Count - 1, IsShortManifest(manifest), outroEffects, outroDuration, outroFrameCount / (double)outroFps));
             motionDiagnostics.Add("{\"sceneId\":\"cinematic-ending\",\"motionProfile\":\"Closing\",\"musicOnlyOutroSeconds\":4,\"fadeToBlackSeconds\":1,\"fadeToBlack\":true}");
             motionDebugEntries.Add(CreateMotionDebugEntry(outroScene, segmentPaths.Count - 1, outroProfile, outroDuration, outroFps, outroDurationSeconds: outroDuration, fadeToBlackSeconds: 1d));
+            motionLayerV2Diagnostics.Add(CreateMotionLayerV2DiagnosticEntry(outroScene, segmentPaths.Count - 1, outroProfile, outroDuration));
             LogMotionSelection(segmentPaths.Count - 1, outroScene, outroProfile, outroDuration);
         }
 
@@ -448,6 +454,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await WriteVideoEffectsReportAsync(outputDirectory, effectsReports, cancellationToken);
         await WriteRenderPerformanceReportAsync(outputDirectory, performanceReports, cancellationToken);
         await WriteMotionDebugAsync(outputDirectory, motionDebugEntries, cancellationToken);
+        await WriteMotionLayerV2DiagnosticsAsync(outputDirectory, motionLayerV2Diagnostics, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
@@ -689,6 +696,21 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "motion-debug.json"), json, cancellationToken);
     }
 
+    private Task WriteMotionLayerV2DiagnosticsAsync(string outputDirectory, IReadOnlyCollection<MotionLayerV2DiagnosticEntry> entries, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(entries, DiagnosticJsonOptions);
+        return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "motion-layer-v2-diagnostics.json"), json, cancellationToken);
+    }
+
+    private static MotionLayerV2DiagnosticEntry CreateMotionLayerV2DiagnosticEntry(RenderPlanScene scene, int sceneIndex, MotionProfile profile, double durationSeconds)
+        => new(
+            SceneId: string.IsNullOrWhiteSpace(scene.SceneId) ? $"scene-{sceneIndex + 1:000}" : scene.SceneId!,
+            MotionType: profile.MotionType.ToString(),
+            Duration: durationSeconds,
+            StartScale: profile.StartScale,
+            EndScale: profile.EndScale,
+            ValidationPassed: profile.ValidationPassed);
+
     private static MotionDebugEntry CreateMotionDebugEntry(RenderPlanScene scene, int sceneIndex, MotionProfile profile, double durationSeconds, int frameRate, double outroDurationSeconds, double fadeToBlackSeconds)
     {
         var totalFrames = Math.Max(1, (int)Math.Round(Math.Max(0d, durationSeconds) * frameRate, MidpointRounding.AwayFromZero));
@@ -725,7 +747,6 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var progress = frame / (double)totalFrames;
             var eased = easing switch
             {
-                MotionEasingKind.EaseOutCubic => 1d - Math.Pow(1d - progress, 3d),
                 MotionEasingKind.EaseInOutSine => -(Math.Cos(Math.PI * progress) - 1d) / 2d,
                 _ => progress
             };
@@ -860,6 +881,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         double TempoFactor,
         double FinalSegmentDurationSeconds,
         IReadOnlyList<string> Warnings);
+
+    private sealed record MotionLayerV2DiagnosticEntry(
+        string SceneId,
+        string MotionType,
+        double Duration,
+        double StartScale,
+        double EndScale,
+        bool ValidationPassed);
 
     private sealed record MotionDebugEntry(
         int SceneIndex,
