@@ -293,8 +293,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             thumbnailVersion = "V8",
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             selectedTemplate = "AiNativePromptBasedThumbnail",
+            selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
+            selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             validator = "ThumbnailV8Validator",
-            prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.Prompt }).ToArray()
+            prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, prompt.Prompt }).ToArray()
         }, JsonOptions), cancellationToken);
         var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
         var diagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName);
@@ -314,6 +316,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             layoutFamily = "AiGeneratedObservationGuide",
             backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
+            selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
+            selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
+            landscapePromptPath = promptPaths.GetValueOrDefault("landscape"),
+            portraitPromptPath = promptPaths.GetValueOrDefault("portrait"),
+            squarePromptPath = promptPaths.GetValueOrDefault("square"),
+            landscapePromptSummary = prompts.First(p => string.Equals(p.Name, "landscape", StringComparison.OrdinalIgnoreCase)).PromptSummary,
+            portraitPromptSummary = prompts.First(p => string.Equals(p.Name, "portrait", StringComparison.OrdinalIgnoreCase)).PromptSummary,
+            squarePromptSummary = prompts.First(p => string.Equals(p.Name, "square", StringComparison.OrdinalIgnoreCase)).PromptSummary,
             validator = "ThumbnailV8Validator",
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
@@ -341,6 +351,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             layoutFamily = "AiGeneratedObservationGuide",
             backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
+            selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
+            selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
+            landscapePromptPath = promptPaths.GetValueOrDefault("landscape"),
+            portraitPromptPath = promptPaths.GetValueOrDefault("portrait"),
+            squarePromptPath = promptPaths.GetValueOrDefault("square"),
+            landscapePromptSummary = prompts.First(p => string.Equals(p.Name, "landscape", StringComparison.OrdinalIgnoreCase)).PromptSummary,
+            portraitPromptSummary = prompts.First(p => string.Equals(p.Name, "portrait", StringComparison.OrdinalIgnoreCase)).PromptSummary,
+            squarePromptSummary = prompts.First(p => string.Equals(p.Name, "square", StringComparison.OrdinalIgnoreCase)).PromptSummary,
             validator = "ThumbnailV8Validator",
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
@@ -2616,143 +2634,62 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
 
-    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt);
+    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary);
 
     private static class ThumbnailV8AiNativePromptBuilder
     {
+        private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
+        [
+            new("landscape", 3840, 2160, "16:9", "Landscape 3840x2160: wide premium poster, left glassmorphism information card occupying 28-32% width, main astronomical scene on the right, callouts in the right visual field, bottom footer tips inside the image."),
+            new("portrait", 2160, 3840, "9:16", "Portrait 2160x3840: vertical premium poster, title/header at top, tall left/upper glassmorphism information card, main astronomical scene filling middle and lower visual area, footer tips above bottom safe margin."),
+            new("square", 2048, 2048, "1:1", "Square 2048x2048: balanced premium poster, compact left information card, main astronomical scene on right/center, callouts with generous spacing, footer tips inside lower safe area.")
+        ];
+
         public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
         {
-            var intelligence = request.ProductionContext?.ProductionEventIntelligence;
             var current = BuildCurrentEventLock(request);
-            var objects = ResolveV8Objects(current, intelligence);
-            var title = FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, request.EventId);
-            var eventType = FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, current.EventType, "Astronomy viewing guide");
-            var dateText = current.EventDate?.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date from guide";
-            var bestTime = FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, intelligence?.PreferredViewingWindow, "Best after twilight");
-            var direction = FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "Use the event-specific horizon direction");
-            var equipment = ResolveV8Equipment(current, intelligence);
-            var tips = ResolveV8Tips(current, intelligence);
-            return
-            [
-                Build("landscape", 3840, 2160, "16:9", "Wide YouTube thumbnail: left glassmorphism information panel occupying about 28% width, cinematic sky scene on the right, title across top with generous safe margins, bottom footer tips bar spanning full width.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
-                Build("portrait", 2160, 3840, "9:16", "Vertical story/reel poster: stacked top header, tall glassmorphism information panel in the upper third, large central sky scene, footer tips bar above the bottom safe margin.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
-                Build("square", 2048, 2048, "1:1", "Square social poster: top header, compact left/upper information panel, central sky scene with balanced callouts, footer tips inside the lower safe area.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips)
-            ];
+            var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+            var builder = SelectBuilder(current);
+            var context = new ThumbnailV8PromptContext(
+                Current: current,
+                Intelligence: intelligence,
+                Title: FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, request.EventId),
+                EventType: FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, current.EventType, "Astronomy viewing guide"),
+                DateText: current.EventDate?.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date from guide",
+                BestTime: FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, intelligence?.PreferredViewingWindow, "Best after twilight"),
+                Direction: FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "Use the event-specific horizon direction"),
+                Equipment: ResolveV8Equipment(current, intelligence),
+                Tips: ResolveV8Tips(current, intelligence),
+                Objects: ResolveV8Objects(current, intelligence));
+
+            return AspectSpecs.Select(aspect => builder.Build(aspect, context)).ToArray();
         }
 
-        private static ThumbnailV8Prompt Build(string name, int width, int height, string aspect, string layout, string title, string eventType, CurrentEventLock current, IReadOnlyList<string> objects, string dateText, string bestTime, string direction, string equipment, IReadOnlyList<string> tips)
+        private static IThumbnailV8FamilyPromptBuilder SelectBuilder(CurrentEventLock current)
         {
-            var familyRules = BuildFamilyRules(current, objects);
-            var objectText = objects.Count > 0 ? string.Join(", ", objects) : title;
-            var prompt = $$"""
-Create a complete AI-native astronomy infographic thumbnail poster for social media and YouTube. Generate the full finished thumbnail in one image; do not create a background-only image and do not leave space for manual overlays.
-
-STYLE:
-- Premium space-science infographic
-- National Geographic + NASA style
-- Clean modern UI
-- Cinematic twilight sky
-- High contrast
-- Educational poster
-- Professional typography
-- Dark blue and gold color palette
-- Ultra sharp
-- Realistic astronomical objects
-- No cartoon elements
-
-LAYOUT:
-{{layout}}
-
-TOP HEADER:
-Large title:
-"{{title}}"
-
-Subtitle:
-"{{eventType}}"
-
-Small description:
-"{{FirstNonEmpty(current.RegionId, "Visibility guide for this sky event")}}"
-
-LEFT INFORMATION PANEL:
-Include modern glassmorphism panel with icons and labels.
-
-Sections:
-📅 DATE
-{{dateText}}
-
-🕒 BEST VIEWING TIME
-{{bestTime}}
-
-🧭 DIRECTION
-{{direction}}
-
-👁 OBJECTS VISIBLE
-{{objectText}}
-
-🔭 EQUIPMENT
-{{equipment}}
-
-MAIN SKY SCENE:
-Show realistic evening twilight or night sky depending on event type.
-Show horizon or sky context appropriate for the event.
-Show Jupiter and Venus only as the celestial objects for this thumbnail.
-Do not add Mercury, Mars, Saturn, the Moon, extra stars as labeled objects, or unrelated planets/objects.
-Use realistic astronomical appearance.
-Use elegant callout labels for Jupiter and Venus.
-Include a clear WEST marker near the horizon/direction cue.
-{{familyRules}}
-
-BOTTOM FOOTER BAR:
-Three educational tips with icons:
-{{tips[0]}}
-{{tips[1]}}
-{{tips[2]}}
-
-DESIGN REQUIREMENTS:
-- Real astronomical appearance
-- Accurate planet/moon/meteor/eclipse visual style
-- Sharp typography
-- Clean spacing
-- Modern astronomy magazine style
-- Professional infographic design
-- Consistent icon style
-- Golden accent color
-- Dark blue space background
-- No watermark
-- No branding
-- No extra objects
-- No text outside canvas
-- No overlapping text
-- Suitable for YouTube thumbnail and Instagram post
-
-OUTPUT:
-{{width}}x{{height}}
-{{aspect}} aspect ratio
-""";
-            return new(name, width, height, aspect, prompt);
-        }
-
-        private static string BuildFamilyRules(CurrentEventLock current, IReadOnlyList<string> objects)
-        {
-            var objectText = string.Join(" and ", objects);
-            if (IsMeteorEvent(current.EventType, current.Title))
-                return $"Meteor shower: use the meteor radiant, multiple realistic meteor streaks, dark sky, no telescope needed, and include the event moon condition if provided. Use Geminids-style information architecture.";
-            if (IsMoonEvent(current.EventType, current.Title))
-                return $"Moon event: make a large realistic Moon the main visual. Use the moon type/name from the title: {current.Title}. Include rise/set or best viewing time, direction, visibility, and equipment.";
-            if (IsEclipseEvent(current.EventType, current.Title))
-                return $"Eclipse: use eclipse-specific visuals for {current.EventType}; include date, timing, and safe viewing instruction. If this is a solar eclipse, include a clear solar viewing safety warning.";
-            if (IsPlanetaryEvent(current.EventType))
-                return $"Planet conjunction/alignment: mention exact visible objects only: {objectText}. Do not include Mercury unless Mercury is listed above. For Jupiter + Venus, do not include Mercury. Use realistic bright points with subtle planet-texture callouts and the {FirstNonEmpty(current.SkyDirectionHint, "correct")} horizon.";
-            return "Use only event-relevant astronomical objects and labels.";
+            var token = NormalizeEventTypeToken(current.EventType);
+            if (token is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETALIGNMENT" || IsPlanetaryEvent(current.EventType)) return new PlanetaryObservationGuidePromptBuilder();
+            if (token == "METEORSHOWER" || IsMeteorEvent(current.EventType, current.Title)) return new MeteorShowerObservationGuidePromptBuilder();
+            if (token is "NAMEDFULLMOON" or "MOON" || IsMoonEvent(current.EventType, current.Title)) return new MoonObservationGuidePromptBuilder();
+            if (token is "SOLARECLIPSE" or "LUNARECLIPSE" || IsEclipseEvent(current.EventType, current.Title)) return new EclipseObservationGuidePromptBuilder();
+            return new PlanetaryObservationGuidePromptBuilder();
         }
 
         private static IReadOnlyList<string> ResolveV8Objects(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
-            return ["Jupiter", "Venus"];
+            var objects = NormalizeObjectList((current.PrimaryObjects ?? []).Concat(current.SecondaryObjects ?? []).Concat(current.RequiredVisualObjects ?? []));
+            if (objects.Count == 0 && IsPlanetaryEvent(current.EventType)) objects = ExtractPlanetObjectNames(FirstNonEmpty(current.ShortTitle, current.Title)).ToArray();
+            if (objects.Count == 0 && IsMeteorEvent(current.EventType, current.Title)) objects = [CleanMeteorDisplayName(FirstNonEmpty(current.ShortTitle, current.Title, "Meteor shower radiant"))];
+            if (objects.Count == 0 && IsMoonEvent(current.EventType, current.Title)) objects = [FirstNonEmpty(ResolveMoonPhaseName(current), current.ShortTitle, "Full Moon")];
+            if (objects.Count == 0 && IsEclipseEvent(current.EventType, current.Title)) objects = IsSolarEclipse(current) ? ["Sun", "Moon"] : ["Moon", "Earth shadow"];
+            var distinct = objects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var titleText = FirstNonEmpty(current.ShortTitle, current.Title);
+            var jupiterVenusEvent = titleText.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && titleText.Contains("Venus", StringComparison.OrdinalIgnoreCase) && !titleText.Contains("Mercury", StringComparison.OrdinalIgnoreCase);
+            return jupiterVenusEvent ? distinct.Where(value => !value.Equals("Mercury", StringComparison.OrdinalIgnoreCase)).ToArray() : distinct;
         }
 
         private static string ResolveV8Equipment(CurrentEventLock current, ProductionEventIntelligence? intelligence)
-            => IsMeteorEvent(current.EventType, current.Title) ? "No telescope needed; use dark skies and your eyes" : FirstNonEmpty(intelligence?.ViewerInstructions?.FirstOrDefault(v => v.Contains("binocular", StringComparison.OrdinalIgnoreCase) || v.Contains("telescope", StringComparison.OrdinalIgnoreCase)), "Eyes or binoculars; telescope optional");
+            => IsMeteorEvent(current.EventType, current.Title) ? "No telescope needed; use dark skies and your eyes" : FirstNonEmpty(intelligence?.ViewerInstructions?.FirstOrDefault(v => v.Contains("binocular", StringComparison.OrdinalIgnoreCase) || v.Contains("telescope", StringComparison.OrdinalIgnoreCase)), IsSolarEclipse(current) ? "Certified solar eclipse glasses / solar filter" : "Eyes or binoculars; telescope optional");
 
         private static IReadOnlyList<string> ResolveV8Tips(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
@@ -2763,6 +2700,100 @@ OUTPUT:
             return tips.Take(3).ToArray();
         }
     }
+
+    private interface IThumbnailV8FamilyPromptBuilder
+    {
+        ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext context);
+    }
+
+    private sealed class PlanetaryObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
+    {
+        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        {
+            var objectText = c.Objects.Count > 0 ? string.Join(" + ", c.Objects) : "event planets only";
+            var prompt = CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
+FAMILY-SPECIFIC TEMPLATE: Premium planetary observation guide poster using the Jupiter/Venus/Mercury reference as the design contract, adapted to the exact event objects only.
+VISUAL SCENE: realistic twilight sky, dark blue to amber horizon gradient, planet objects on the right side only. Show only these event objects: {{objectText}}. For Jupiter + Venus, show only Jupiter and Venus; do not add Mercury. No extra celestial objects, no Moon unless listed as an event object, no random planets.
+UI ARCHITECTURE: left glassmorphism information card with DATE, BEST VIEWING TIME, DIRECTION, OBJECTS VISIBLE, EQUIPMENT. Professional callout cards connected to the visible planets. Clear direction marker near the horizon. Footer tips with polished vector-style icons.
+PALETTE: dark blue + gold, premium astronomy magazine typography, crisp panels, elegant glow.
+""" + CommonData(c, objectText);
+            return Final(aspect, c, prompt, nameof(PlanetaryObservationGuidePromptBuilder), "PlanetaryObservationGuide", $"Planetary guide with left glass card, {objectText} only, right-side planet callouts, direction marker, footer tips.");
+        }
+    }
+
+    private sealed class MeteorShowerObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
+    {
+        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        {
+            var name = FirstNonEmpty(c.Title, c.Current.Title, "Meteor Shower");
+            var prompt = CommonOpening(aspect, c, "Meteor shower observation guide poster") + $$"""
+FAMILY-SPECIFIC TEMPLATE: Meteor shower observation guide poster using the Geminids reference as the design contract.
+VISUAL SCENE: dark realistic night sky with a clear radiant marker, multiple natural meteor streaks emanating from the radiant, atmospheric horizon, no random planets and no unrelated conjunction imagery.
+UI ARCHITECTURE: left information card with DATE, PEAK TIME, RADIANT / WHERE TO LOOK, MOON CONDITIONS, EQUIPMENT. Include a strong direction cue and bottom footer tips with polished icons.
+EVENT NAME: {{name}}. Make the radiant and meteor streaks the visual focus.
+""" + CommonData(c, name);
+            return Final(aspect, c, prompt, nameof(MeteorShowerObservationGuidePromptBuilder), "MeteorShowerObservationGuide", "Meteor shower guide with radiant marker, meteor streaks, left information card, direction cue, footer tips, no planets.");
+        }
+    }
+
+    private sealed class MoonObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
+    {
+        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        {
+            var moonType = FirstNonEmpty(ResolveMoonPhaseName(c.Current), c.Title, "Full Moon");
+            var prompt = CommonOpening(aspect, c, "Professional full moon observation guide") + $$"""
+FAMILY-SPECIFIC TEMPLATE: professional full moon observation guide.
+VISUAL SCENE: one large realistic Moon as the hero object, detailed lunar texture, atmospheric horizon and subtle landscape silhouette. Moon type title must be visible: {{moonType}} (Wolf Moon / Blue Moon / Strawberry Moon style when applicable). No extra planets or unrelated celestial objects.
+UI ARCHITECTURE: left information card with MOONRISE, DIRECTION, BEST TIME, EQUIPMENT, VISIBILITY. Include elegant Moon callout, atmospheric horizon direction cue, and footer tips with icons.
+""" + CommonData(c, moonType);
+            return Final(aspect, c, prompt, nameof(MoonObservationGuidePromptBuilder), "MoonObservationGuide", $"Moon guide with large realistic {moonType}, left information card, moonrise/direction/best time/equipment, footer tips.");
+        }
+    }
+
+    private sealed class EclipseObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
+    {
+        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        {
+            var solar = IsSolarEclipse(c.Current);
+            var prompt = CommonOpening(aspect, c, "Professional eclipse observation guide") + $$"""
+FAMILY-SPECIFIC TEMPLATE: professional eclipse observation guide.
+VISUAL SCENE: realistic eclipse scene with accurate Sun/Moon alignment, dramatic sky and visibility context. Show the eclipse bodies only; no random planets or unrelated celestial objects.
+UI ARCHITECTURE: left information card with TIMING, SAFETY, VISIBILITY, DIRECTION, EQUIPMENT. Include alignment callouts and bottom footer tips.
+SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOLAR FILTER REQUIRED. Never look at the Sun directly without approved protection." : "Lunar eclipse safety: safe to view with eyes or binoculars; note visibility and timing clearly.")}}
+""" + CommonData(c, solar ? "Sun + Moon alignment" : "Moon + Earth shadow alignment");
+            return Final(aspect, c, prompt, nameof(EclipseObservationGuidePromptBuilder), "EclipseObservationGuide", "Eclipse guide with realistic alignment, timing/safety/visibility card, solar safety when applicable, footer tips.");
+        }
+    }
+
+    private sealed record ThumbnailV8AspectSpec(string Name, int Width, int Height, string AspectRatio, string LayoutInstruction);
+    private sealed record ThumbnailV8PromptContext(CurrentEventLock Current, ProductionEventIntelligence? Intelligence, string Title, string EventType, string DateText, string BestTime, string Direction, string Equipment, IReadOnlyList<string> Tips, IReadOnlyList<string> Objects);
+
+    private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
+Generate final finished thumbnail image: {{posterType}}.
+Include all text, icons, panels, callouts, labels, and footer inside the image. No manual overlay will be added later. No cropping. Do not reuse or crop another aspect-ratio prompt. No extra celestial objects.
+OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
+ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
+TITLE TEXT: "{{c.Title}}"
+SUBTITLE TEXT: "{{c.EventType}}"
+REGION / CONTEXT TEXT: "{{FirstNonEmpty(c.Current.RegionId, "Visibility guide")}}"
+""";
+
+    private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
+DATA TO RENDER IN THE IMAGE:
+- Date: {{c.DateText}}
+- Best viewing time: {{c.BestTime}}
+- Direction: {{c.Direction}}
+- Visible event objects only: {{objectText}}
+- Equipment: {{c.Equipment}}
+- Footer tip 1: {{c.Tips[0]}}
+- Footer tip 2: {{c.Tips[1]}}
+- Footer tip 3: {{c.Tips[2]}}
+QUALITY RULES: sharp readable typography, no watermark, no branding, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette.
+NEGATIVE RULES: no generic sky poster, no background-only image, no placeholder panels, no random planets, no invented celestial objects, no cropping, no later overlay.
+""";
+
+    private static ThumbnailV8Prompt Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string prompt, string builder, string template, string summary)
+        => new(aspect.Name, aspect.Width, aspect.Height, aspect.AspectRatio, prompt, builder, template, summary);
 
     private sealed class DefaultHttpClientFactory : IHttpClientFactory
     {
