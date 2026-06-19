@@ -5530,6 +5530,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var backgroundAudioPathForDiagnostics = backgroundMusicConfigForDiagnostics.ConfiguredPath;
         var backgroundAudioFound = backgroundMusicConfigForDiagnostics.Enabled && !string.IsNullOrWhiteSpace(backgroundAudioPathForDiagnostics) && File.Exists(backgroundAudioPathForDiagnostics);
         var totalScenes = shortSceneCount + longSceneCount;
+        const string phase18RendererVersion = "V3";
+        const bool shimmerMitigationApplied = true;
+        const bool zoompanFrameDriven = true;
+        const int phase18Fps = 30;
+        const string phase18Scaler = "lanczos";
+        var phase18ZoompanDValue = totalScenes > 0 ? "totalFrames" : "0";
+        var perSceneFilterLogged = (shortSceneCount == 0 || File.Exists(Path.Combine(Path.GetDirectoryName(shortVideoPath)!, "phase-18-per-scene-filters.json")))
+            && (previewOnly || longSceneCount == 0 || File.Exists(Path.Combine(Path.GetDirectoryName(longVideoPath)!, "phase-18-per-scene-filters.json")));
         var scenesWithZoom = totalScenes;
         var scenesWithPan = totalScenes;
         var scenesWithTransitions = totalScenes;
@@ -5579,7 +5587,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var cinematicDiagnosticsPath = Path.Combine(videoRoot, "phase-18-cinematic-diagnostics.json");
         await File.WriteAllTextAsync(cinematicDiagnosticsPath, JsonSerializer.Serialize(new
         {
-            rendererVersion = "V2",
+            rendererVersion = phase18RendererVersion,
+            shimmerMitigationApplied,
+            zoompanFrameDriven,
+            zoompanDValue = phase18ZoompanDValue,
+            scaler = phase18Scaler,
+            fps = phase18Fps,
+            perSceneFilterLogged,
             motionTypeApplied = true,
             motionPlanPath = NormalizePath(motionPlanPath),
             requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength,
@@ -5611,8 +5625,8 @@ public sealed partial class ProductionPipelineExecutionService(
             scenesWithTransitions,
             transitionType = "crossfade",
             transitionDurationSec = 0.8,
-            fadeInApplied = true,
-            fadeOutApplied = true,
+            fadeInApplied = false,
+            fadeOutApplied = false,
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
             backgroundAudioFound,
             backgroundAudioMixed,
@@ -5678,11 +5692,17 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = "V2", motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
-            rendererVersion = "V2",
+            rendererVersion = phase18RendererVersion,
+            shimmerMitigationApplied,
+            zoompanFrameDriven,
+            zoompanDValue = phase18ZoompanDValue,
+            scaler = phase18Scaler,
+            fps = phase18Fps,
+            perSceneFilterLogged,
             motionTypeApplied = true,
             inputPathsChecked = inputPathsChecked.Select(NormalizePath),
             selectedSceneAssetsRoot = NormalizePath(sceneAssetsRoot),
@@ -5783,7 +5803,7 @@ public sealed partial class ProductionPipelineExecutionService(
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = "V2", motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Cinematic Video Assembly V2 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
@@ -5930,16 +5950,33 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
             var clipPaths = new List<string>();
+            var perSceneFilters = new List<object>();
             for (var i = 0; i < items.Count; i++)
             {
                 var item = items[i];
                 var clipPath = Path.Combine(tempRoot, $"{i:000}-{SanitizeFileName(item.SceneId)}.mp4");
                 var duration = Math.Max(0.5, item.SceneDurationSec);
                 var vf = BuildPhase18MotionFilter(item, i);
-                var result = await RunProcessAsync(ffmpegPath, ["-y", "-loop", "1", "-i", item.SceneImagePath, "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", clipPath], cancellationToken);
+                var totalFrames = Math.Max(15, (int)Math.Round(item.SceneDurationSec * 30.0));
+                perSceneFilters.Add(new
+                {
+                    sceneId = item.SceneId,
+                    rendererVersion = "V3",
+                    shimmerMitigationApplied = true,
+                    zoompanFrameDriven = true,
+                    zoompanDValue = totalFrames,
+                    scaler = "lanczos",
+                    fps = 30,
+                    filter = vf
+                });
+                var result = await RunProcessAsync(ffmpegPath, ["-y", "-loop", "1", "-i", item.SceneImagePath, "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-vf", vf, "-r", "30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", clipPath], cancellationToken);
                 if (result.ExitCode != 0 || !File.Exists(clipPath)) throw new InvalidOperationException($"Unable to render scene clip {item.SceneId}: {result.Error}");
                 clipPaths.Add(clipPath);
             }
+            await File.WriteAllTextAsync(
+                Path.Combine(Path.GetDirectoryName(outputPath)!, "phase-18-per-scene-filters.json"),
+                JsonSerializer.Serialize(new { rendererVersion = "V3", perSceneFilterLogged = true, filters = perSceneFilters }, JsonOptions),
+                cancellationToken);
             var videoOnlyPath = Path.Combine(tempRoot, "video-only.mp4");
             await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
 
@@ -6140,8 +6177,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var zoomExpression = $"{z0}+(({z1})-({z0}))*{progress}";
         var xExpression = $"iw/2-(iw/zoom/2)+(({px0}+(({px1})-({px0}))*{progress})/100)*(iw-iw/zoom)";
         var yExpression = $"ih/2-(ih/zoom/2)+(({py0}+(({py1})-({py0}))*{progress})/100)*(ih-ih/zoom)";
-        var fadeOutStart = Math.Max(0.0, item.SceneDurationSec - 1.0).ToString("0.###", CultureInfo.InvariantCulture);
-        return $"scale=1536:864:force_original_aspect_ratio=increase,crop=1536:864,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d={frameCount}:s=1280x720:fps={fps},trim=duration={item.SceneDurationSec.ToString("0.###", CultureInfo.InvariantCulture)},setpts=PTS-STARTPTS,fade=t=in:st=0:d=0.4,fade=t=out:st={fadeOutStart}:d=1.0,format=yuv420p";
+        return $"scale=2560:1440:force_original_aspect_ratio=increase:flags=lanczos,crop=2560:1440,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d={frameCount}:s=1280x720:fps={fps},trim=duration={item.SceneDurationSec.ToString("0.###", CultureInfo.InvariantCulture)},setpts=PTS-STARTPTS,fps={fps},format=yuv420p";
     }
 
     private static async Task CrossfadeSceneClipsAsync(IReadOnlyList<string> clipPaths, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string ffmpegPath, CancellationToken cancellationToken)
@@ -6163,7 +6199,7 @@ public sealed partial class ProductionPipelineExecutionService(
             offset += Math.Max(0.1, items[i - 1].SceneDurationSec - 0.8);
             filter.Append(FormattableString.Invariant($";[x{i - 1}][v{i}]xfade=transition=fade:duration=0.8:offset={offset:0.###}[x{i}]"));
         }
-        args.AddRange(["-filter_complex", filter.ToString(), "-map", $"[x{clipPaths.Count - 1}]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outputPath]);
+        args.AddRange(["-filter_complex", filter.ToString(), "-map", $"[x{clipPaths.Count - 1}]", "-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outputPath]);
         var result = await RunProcessStaticAsync(ffmpegPath, args, cancellationToken);
         if (result.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to crossfade scene clips: {result.Error}");
     }
