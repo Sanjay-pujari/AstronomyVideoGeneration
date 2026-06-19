@@ -277,6 +277,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<ThumbnailOptions>()
             .Bind(configuration.GetSection(ThumbnailOptions.SectionName))
+            .Configure(options => configuration.GetSection("Thumbnail").Bind(options))
             .Validate(opt => opt.LongThumbnailWidth > 0 && opt.LongThumbnailHeight > 0 && opt.ShortThumbnailWidth > 0 && opt.ShortThumbnailHeight > 0, "Thumbnail dimensions must be > 0.")
             .Validate(opt => opt.MaxSupportObjectsLong is >= 0 and <= 2, "ThumbnailGeneration:MaxSupportObjectsLong must be between 0 and 2.")
             .Validate(opt => opt.MaxSupportObjectsShort is >= 0 and <= 1, "ThumbnailGeneration:MaxSupportObjectsShort must be between 0 and 1.")

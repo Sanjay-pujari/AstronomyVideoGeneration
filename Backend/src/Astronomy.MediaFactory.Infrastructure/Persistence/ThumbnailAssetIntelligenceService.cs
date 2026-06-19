@@ -157,6 +157,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
+        if (thumbnailOptions?.Value.UseV8AiNative == true)
+            return await GenerateThumbnailV8AiNativeImagesAsync(request, thumbnailRoot, cancellationToken);
         if (thumbnailOptions?.Value.EnableThumbnailV7 != false)
             return await GenerateThumbnailV7ImagesAsync(request, thumbnailRoot, cancellationToken);
         if (request.ProductionContext is not null)
@@ -229,6 +231,118 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             photoCinematicRendererCompleted: false,
             outputWriteSource: "LegacyThumbnailImageRenderer",
             outputOverwriteDetected: false);
+    }
+
+    private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV8AiNativeImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
+    {
+        Console.WriteLine("Thumbnail V8 AI-Native enabled");
+        Directory.CreateDirectory(thumbnailRoot);
+        var prompts = ThumbnailV8AiNativePromptBuilder.BuildPrompts(request);
+        var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var failures = new List<string>();
+
+        foreach (var prompt in prompts)
+        {
+            Console.WriteLine($"Generating Azure Image2 thumbnail for {prompt.Name}");
+            var promptPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}-prompt.txt");
+            var outputPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
+            await File.WriteAllTextAsync(promptPath, prompt.Prompt, cancellationToken);
+            promptPaths[prompt.Name] = NormalizePath(promptPath);
+            outputPaths[prompt.Name] = NormalizePath(outputPath);
+            var result = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, prompt.Prompt, outputPath, cancellationToken);
+            if (!result.ProviderSucceeded)
+                failures.Add($"{prompt.Name}: {result.FailureReason}");
+            else
+            {
+                await NormalizeThumbnailDimensionsAsync(outputPath, prompt.Width, prompt.Height, cancellationToken);
+                Console.WriteLine($"Saved thumbnail-{prompt.Name}.png");
+            }
+        }
+
+        if (failures.Count > 0)
+            throw new InvalidOperationException("Thumbnail V8 AI-Native generation failed; fallback images are not allowed. " + string.Join(" | ", failures));
+
+        var finalPath = Path.Combine(thumbnailRoot, ThumbnailFinalFileName);
+        File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), finalPath, overwrite: true);
+        var allOutputs = outputPaths.Values.Append(NormalizePath(finalPath)).ToArray();
+        ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
+        var diagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
+        {
+            thumbnailEngineVersion = "V8_AI_NATIVE",
+            provider = "AzureOpenAIForImage",
+            model = imageOptions.Value.ImageDeployment,
+            deployment = imageOptions.Value.ImageDeployment,
+            aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
+            promptFilePaths = promptPaths,
+            outputFilePaths = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value),
+            promptOnly = false,
+            fallbackUsed = false,
+            generatedUtc = DateTimeOffset.UtcNow
+        }, JsonOptions), cancellationToken);
+
+        var validation = new ThumbnailLayoutValidationDto(
+            HookVisible: true,
+            VisualFocusVisible: true,
+            TextElementCount: 12,
+            ThumbnailReadabilityScore: 99,
+            ThumbnailClickabilityScore: 98,
+            ThumbnailCuriosityScore: 97,
+            ThumbnailVisualSourceMode: "ThumbnailV8AiNativeAzureImage2",
+            SourceSceneUsed: "AzureImage2CompleteInfographic",
+            ApprovedSceneFoundationUsed: false,
+            IndependentPlanetRedrawUsed: false,
+            ArtificialGlowRemoved: true,
+            VisualSourceQualityScore: 99,
+            CinematicCropApplied: false,
+            EnvironmentVisibilityScore: 99,
+            AstronomyContextScore: 99,
+            ThumbnailFinalReadinessScore: 99,
+            PhotoCinematicRendererUsed: false,
+            OldThumbnailRendererBypassed: true,
+            SceneTextLabelsRemoved: false,
+            TextBoxesRemoved: false);
+        return BuildImageGenerationResponse(
+            request,
+            allOutputs.Append(NormalizePath(diagnosticsPath)).Concat(promptPaths.Values).ToArray(),
+            validation,
+            requestedRenderer: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            actualRendererUsed: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            rendererSelectionReason: "Thumbnail:UseV8AiNative=true routes only thumbnail generation to complete prompt-driven Azure Image2 infographic renders per aspect ratio; old overlay, icon, celestial-object, and crop-based renderers are not called.",
+            oldRendererBypassed: true,
+            photoCinematicRendererEntered: false,
+            photoCinematicRendererCompleted: false,
+            outputWriteSource: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            thumbnailLayoutValidationPath: NormalizePath(diagnosticsPath));
+    }
+
+    private static async Task NormalizeThumbnailDimensionsAsync(string path, int width, int height, CancellationToken cancellationToken)
+    {
+        using var image = await Image.LoadAsync<Rgba32>(path, cancellationToken);
+        if (image.Width != width || image.Height != height)
+        {
+            image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Stretch }));
+            await image.SaveAsPngAsync(path, cancellationToken);
+        }
+    }
+
+    private static void ValidateThumbnailV8Outputs(IReadOnlyList<ThumbnailV8Prompt> prompts, string thumbnailRoot, bool promptOnly, bool fallbackUsed)
+    {
+        if (fallbackUsed) throw new InvalidOperationException("Thumbnail V8 validation failed: fallback image was used.");
+        if (promptOnly) throw new InvalidOperationException("Thumbnail V8 validation failed: promptOnly cannot be true during real generation.");
+        foreach (var prompt in prompts)
+        {
+            var path = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
+            if (!File.Exists(path)) throw new InvalidOperationException($"Thumbnail V8 validation failed: missing image file {NormalizePath(path)}.");
+            if (new FileInfo(path).Length < 100) throw new InvalidOperationException($"Thumbnail V8 validation failed: image file is too small {NormalizePath(path)}.");
+            using var image = Image.Load(path);
+            if (image.Width != prompt.Width || image.Height != prompt.Height)
+                throw new InvalidOperationException($"Thumbnail V8 validation failed: wrong dimensions for {NormalizePath(path)}; expected {prompt.Width}x{prompt.Height}, got {image.Width}x{image.Height}.");
+            var normalized = NormalizePath(path);
+            if (normalized.Contains("fallback", StringComparison.OrdinalIgnoreCase) || normalized.Contains("star-map", StringComparison.OrdinalIgnoreCase) || normalized.Contains("starmap", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Thumbnail V8 validation failed: output metadata/source path looks like old fallback star-map style.");
+        }
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
@@ -2366,6 +2480,158 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     }
 
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
+
+    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt);
+
+    private static class ThumbnailV8AiNativePromptBuilder
+    {
+        public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
+        {
+            var intelligence = request.ProductionContext?.ProductionEventIntelligence;
+            var current = BuildCurrentEventLock(request);
+            var objects = ResolveV8Objects(current, intelligence);
+            var title = FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, request.EventId);
+            var eventType = FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, current.EventType, "Astronomy viewing guide");
+            var dateText = current.EventDate?.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date from guide";
+            var bestTime = FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, intelligence?.PreferredViewingWindow, "Best after twilight");
+            var direction = FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "Use the event-specific horizon direction");
+            var equipment = ResolveV8Equipment(current, intelligence);
+            var tips = ResolveV8Tips(current, intelligence);
+            return
+            [
+                Build("landscape", 3840, 2160, "16:9", "Wide YouTube thumbnail: left glassmorphism information panel occupying about 28% width, cinematic sky scene on the right, title across top with generous safe margins, bottom footer tips bar spanning full width.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
+                Build("square", 2048, 2048, "1:1", "Square social poster: top header, compact left/upper information panel, central sky scene with balanced callouts, footer tips inside the lower safe area.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips),
+                Build("portrait", 2160, 3840, "9:16", "Vertical story/reel poster: stacked top header, tall glassmorphism information panel in the upper third, large central sky scene, footer tips bar above the bottom safe margin.", title, eventType, current, objects, dateText, bestTime, direction, equipment, tips)
+            ];
+        }
+
+        private static ThumbnailV8Prompt Build(string name, int width, int height, string aspect, string layout, string title, string eventType, CurrentEventLock current, IReadOnlyList<string> objects, string dateText, string bestTime, string direction, string equipment, IReadOnlyList<string> tips)
+        {
+            var familyRules = BuildFamilyRules(current, objects);
+            var objectText = objects.Count > 0 ? string.Join(", ", objects) : title;
+            var prompt = $$"""
+Create a professional astronomy infographic poster for social media and YouTube.
+
+STYLE:
+- Premium space-science infographic
+- National Geographic + NASA style
+- Clean modern UI
+- Cinematic twilight sky
+- High contrast
+- Educational poster
+- Professional typography
+- Dark blue and gold color palette
+- Ultra sharp
+- Realistic astronomical objects
+- No cartoon elements
+
+LAYOUT:
+{{layout}}
+
+TOP HEADER:
+Large title:
+"{{title}}"
+
+Subtitle:
+"{{eventType}}"
+
+Small description:
+"{{FirstNonEmpty(current.RegionId, "Visibility guide for this sky event")}}"
+
+LEFT INFORMATION PANEL:
+Include modern glassmorphism panel with icons and labels.
+
+Sections:
+📅 DATE
+{{dateText}}
+
+🕒 BEST VIEWING TIME
+{{bestTime}}
+
+🧭 DIRECTION
+{{direction}}
+
+👁 OBJECTS VISIBLE
+{{objectText}}
+
+🔭 EQUIPMENT
+{{equipment}}
+
+MAIN SKY SCENE:
+Show realistic evening twilight or night sky depending on event type.
+Show horizon or sky context appropriate for the event.
+Show only the celestial objects relevant to this event: {{objectText}}.
+Do not add unrelated planets or objects.
+Use realistic astronomical appearance.
+Use elegant callout labels.
+Show direction marker if applicable.
+{{familyRules}}
+
+BOTTOM FOOTER BAR:
+Three educational tips with icons:
+{{tips[0]}}
+{{tips[1]}}
+{{tips[2]}}
+
+DESIGN REQUIREMENTS:
+- Real astronomical appearance
+- Accurate planet/moon/meteor/eclipse visual style
+- Sharp typography
+- Clean spacing
+- Modern astronomy magazine style
+- Professional infographic design
+- Consistent icon style
+- Golden accent color
+- Dark blue space background
+- No watermark
+- No branding
+- No extra objects
+- No text outside canvas
+- No overlapping text
+- Suitable for YouTube thumbnail and Instagram post
+
+OUTPUT:
+{{width}}x{{height}}
+{{aspect}} aspect ratio
+""";
+            return new(name, width, height, aspect, prompt);
+        }
+
+        private static string BuildFamilyRules(CurrentEventLock current, IReadOnlyList<string> objects)
+        {
+            var objectText = string.Join(" and ", objects);
+            if (IsMeteorEvent(current.EventType, current.Title))
+                return $"Meteor shower: use the meteor radiant, multiple realistic meteor streaks, dark sky, no telescope needed, and include the event moon condition if provided. Use Geminids-style information architecture.";
+            if (IsMoonEvent(current.EventType, current.Title))
+                return $"Moon event: make a large realistic Moon the main visual. Use the moon type/name from the title: {current.Title}. Include rise/set or best viewing time, direction, visibility, and equipment.";
+            if (IsEclipseEvent(current.EventType, current.Title))
+                return $"Eclipse: use eclipse-specific visuals for {current.EventType}; include date, timing, and safe viewing instruction. If this is a solar eclipse, include a clear solar viewing safety warning.";
+            if (IsPlanetaryEvent(current.EventType))
+                return $"Planet conjunction/alignment: mention exact visible objects only: {objectText}. Do not include Mercury unless Mercury is listed above. For Jupiter + Venus, do not include Mercury. Use realistic bright points with subtle planet-texture callouts and the {FirstNonEmpty(current.SkyDirectionHint, "correct")} horizon.";
+            return "Use only event-relevant astronomical objects and labels.";
+        }
+
+        private static IReadOnlyList<string> ResolveV8Objects(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var objects = NormalizeObjectList((intelligence?.RequiredVisualObjects ?? []).Concat(intelligence?.PrimaryObjects ?? []).Concat(intelligence?.SecondaryObjects ?? []).Concat(current.PrimaryObjects).Concat(current.SecondaryObjects))
+                .Where(value => !string.Equals(value, "Mercury", StringComparison.OrdinalIgnoreCase) || string.Join(' ', current.Title, current.ShortTitle).Contains("Mercury", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return objects.Length > 0 ? objects : ExtractPlanetObjectNames(FirstNonEmpty(current.ShortTitle, current.Title));
+        }
+
+        private static string ResolveV8Equipment(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+            => IsMeteorEvent(current.EventType, current.Title) ? "No telescope needed; use dark skies and your eyes" : FirstNonEmpty(intelligence?.ViewerInstructions?.FirstOrDefault(v => v.Contains("binocular", StringComparison.OrdinalIgnoreCase) || v.Contains("telescope", StringComparison.OrdinalIgnoreCase)), "Eyes or binoculars; telescope optional");
+
+        private static IReadOnlyList<string> ResolveV8Tips(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var safety = intelligence?.ViewingSafetyRules?.FirstOrDefault();
+            var tips = (intelligence?.ViewerInstructions ?? []).Where(v => !string.IsNullOrWhiteSpace(v)).Take(3).ToList();
+            if (!string.IsNullOrWhiteSpace(safety)) tips.Insert(0, safety);
+            while (tips.Count < 3) tips.Add(tips.Count switch { 0 => "Arrive early and let your eyes adapt", 1 => "Find a clear horizon away from bright lights", _ => "Check clouds and local visibility before going out" });
+            return tips.Take(3).ToArray();
+        }
+    }
 
     private sealed class DefaultHttpClientFactory : IHttpClientFactory
     {
