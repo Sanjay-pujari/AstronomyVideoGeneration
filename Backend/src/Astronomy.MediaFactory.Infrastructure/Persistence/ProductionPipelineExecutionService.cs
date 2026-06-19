@@ -4076,8 +4076,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var missingAudioFiles = new List<string>();
         var warnings = new List<string>();
         var errors = new List<string>();
-        var shortItems = await BuildMotionV2PreviewItemsAsync(durationPlanPath, "short", shortSceneRoot, 5d, missingAudioFiles, errors, cancellationToken);
-        var longItems = await BuildMotionV2PreviewItemsAsync(durationPlanPath, "long", longSceneRoot, 8d, missingAudioFiles, errors, cancellationToken);
+        var motionV2Strength = ResolveMotionV2Strength(context.PipelineRequest.MotionV2Strength);
+        var shortItems = await BuildMotionV2PreviewItemsAsync(durationPlanPath, "short", shortSceneRoot, 5d, motionV2Strength, missingAudioFiles, errors, cancellationToken);
+        var longItems = await BuildMotionV2PreviewItemsAsync(durationPlanPath, "long", longSceneRoot, 8d, motionV2Strength, missingAudioFiles, errors, cancellationToken);
         warnings.AddRange(missingAudioFiles.Select(p => $"Audio missing (preview warning only): {p}"));
 
         var validationPassed = errors.Count == 0;
@@ -4086,6 +4087,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             motionVersion = "V2",
             motionPreviewOnly = true,
+            motionV2Strength,
             audioRequired = false,
             @short = new { sceneCount = shortItems.Count, items = shortItems },
             @long = new { sceneCount = longItems.Count, items = longItems }
@@ -4096,6 +4098,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             motionVersion = "V2",
             motionPreviewOnly = true,
+            motionV2Strength,
             audioRequired = false,
             generatedUtc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             @short = shortItems,
@@ -4107,6 +4110,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             motionVersion = "V2",
             motionPreviewOnly = true,
+            motionV2Strength,
             audioRequired = false,
             missingAudioFiles,
             warnings,
@@ -4122,6 +4126,7 @@ public sealed partial class ProductionPipelineExecutionService(
             status = validationPassed ? "Succeeded" : "Failed",
             motionVersion = "V2",
             motionPreviewOnly = true,
+            motionV2Strength,
             audioRequired = false,
             motionPlanPath = NormalizePath(motionPlanPath),
             motionDebugPath = NormalizePath(motionDebugPath),
@@ -4135,7 +4140,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return [motionPlanPath, motionDebugPath, diagnosticsPath, validationPath];
     }
 
-    private static async Task<IReadOnlyList<MotionV2PreviewItem>> BuildMotionV2PreviewItemsAsync(string durationPlanPath, string format, string sceneRoot, double defaultDurationSec, List<string> missingAudioFiles, List<string> errors, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<MotionV2PreviewItem>> BuildMotionV2PreviewItemsAsync(string durationPlanPath, string format, string sceneRoot, double defaultDurationSec, string motionV2Strength, List<string> missingAudioFiles, List<string> errors, CancellationToken cancellationToken)
     {
         var durationItems = new JsonArray();
         if (File.Exists(durationPlanPath))
@@ -4156,7 +4161,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var audioPath = GetString(durationItem, "audioPath") ?? string.Empty;
             if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
             var motionType = ResolveMotionV2Type(sceneId, i, count);
-            var motion = ResolveMotionV2Values(motionType, sceneId);
+            var motion = ResolveMotionV2Values(motionType, sceneId, motionV2Strength);
             items.Add(new MotionV2PreviewItem("V2", true, false, sceneId, format, motionType, RoundDuration(duration), motion.StartScale, motion.EndScale, motion.StartX, motion.EndX, "EaseInOutSine", true));
         }
         return items;
@@ -4172,16 +4177,40 @@ public sealed partial class ProductionPipelineExecutionService(
             : index % 4 == 3 ? "PanLeft"
             : "None";
 
-    private static MotionV2Values ResolveMotionV2Values(string motionType, string sceneId) => motionType switch
+    private static MotionV2Values ResolveMotionV2Values(string motionType, string sceneId, string motionV2Strength)
     {
-        "SlowZoomIn" when IsBestTimeScene(sceneId) => new(1.00d, 1.04d, 0d, 0d),
-        "SlowZoomIn" => new(1.00d, 1.12d, 0d, 0d),
-        "SlowZoomOut" => new(1.12d, 1.00d, 0d, 0d),
-        "PanLeft" => new(1.08d, 1.08d, 0.05d, 0.00d),
-        "PanRight" => new(1.04d, 1.08d, -0.03d, 0.03d),
-        "PushToObject" => new(1.00d, 1.18d, 0d, 0d),
-        _ => new(1.00d, 1.00d, 0d, 0d)
-    };
+        if (IsExperimentalMotionV2Strength(motionV2Strength))
+        {
+            return motionType switch
+            {
+                "SlowZoomIn" when IsBestTimeScene(sceneId) => new(1.00d, 1.10d, 0d, 0d),
+                "PanRight" when IsAccurateSkyGuideScene(sceneId) => new(1.08d, 1.12d, -0.06d, 0.06d),
+                "SlowZoomIn" => new(1.00d, 1.25d, 0d, 0d),
+                "SlowZoomOut" => new(1.25d, 1.00d, 0d, 0d),
+                "PanLeft" => new(1.12d, 1.16d, 0.08d, -0.08d),
+                "PanRight" => new(1.12d, 1.16d, -0.08d, 0.08d),
+                "PushToObject" => new(1.00d, 1.30d, 0d, 0d),
+                _ => new(1.00d, 1.00d, 0d, 0d)
+            };
+        }
+
+        return motionType switch
+        {
+            "SlowZoomIn" when IsBestTimeScene(sceneId) => new(1.00d, 1.04d, 0d, 0d),
+            "SlowZoomIn" => new(1.00d, 1.12d, 0d, 0d),
+            "SlowZoomOut" => new(1.12d, 1.00d, 0d, 0d),
+            "PanLeft" => new(1.08d, 1.08d, 0.05d, 0.00d),
+            "PanRight" => new(1.04d, 1.08d, -0.03d, 0.03d),
+            "PushToObject" => new(1.00d, 1.18d, 0d, 0d),
+            _ => new(1.00d, 1.00d, 0d, 0d)
+        };
+    }
+
+    private static string ResolveMotionV2Strength(string? motionV2Strength)
+        => IsExperimentalMotionV2Strength(motionV2Strength) ? "Experimental" : "Default";
+
+    private static bool IsExperimentalMotionV2Strength(string? motionV2Strength)
+        => string.Equals(motionV2Strength, "Experimental", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsAccurateSkyGuideScene(string sceneId)
         => sceneId.Equals("003-accurate-sky-guide", StringComparison.OrdinalIgnoreCase)
@@ -5404,6 +5433,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var motionRoot = motionPlanFound
             ? JsonNode.Parse(await File.ReadAllTextAsync(motionPlanPath, cancellationToken)) ?? new JsonObject()
             : BuildDefaultPhase18MotionPlan(sceneAssetsRoot, syncPath, ttsPath);
+        var motionV2StrengthUsed = ResolveMotionV2Strength(GetString(motionRoot, "motionV2Strength") ?? context.PipelineRequest.MotionV2Strength);
         {
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
             var shortItems = ReadVideoAssemblyItems(planRoot, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
@@ -5531,6 +5561,7 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(cinematicDiagnosticsPath, JsonSerializer.Serialize(new
         {
             motionPlanPath = NormalizePath(motionPlanPath),
+            motionV2StrengthUsed,
             motionPlanFound,
             defaultMotionGenerated,
             cinematicOutroEnabled,
@@ -5623,7 +5654,7 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { motionV2StrengthUsed, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -5633,6 +5664,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedTtsPath = NormalizePath(ttsPath),
             selectedDurationPlanPath = NormalizePath(durationPlanPath),
             selectedMotionPlanPath = NormalizePath(motionPlanPath),
+            motionV2StrengthUsed,
             motionDebugFound,
             motionDebugPath = NormalizePath(motionDebugPath),
             oldPathsChecked = oldPaths.Select(NormalizePath),

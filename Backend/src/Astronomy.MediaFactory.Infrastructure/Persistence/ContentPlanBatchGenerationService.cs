@@ -117,6 +117,7 @@ public sealed class ContentPlanBatchGenerationService(
                 EnableSubtitles: request.EnableSubtitles,
                 PublishApproved: request.PublishApproved,
                 MotionPreviewOnly: request.MotionPreviewOnly,
+                MotionV2Strength: request.MotionV2Strength,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
 
             ValidateExactPlanIdExecutionResult(request.PlanId, execution.PlanId, exactPlanIdMode);
