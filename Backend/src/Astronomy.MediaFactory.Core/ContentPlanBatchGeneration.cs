@@ -44,6 +44,7 @@ public sealed record BatchGenerateFromPlansRequest(
     bool RebuildIntelligence = false,
     bool EnableSceneVariants = false,
     bool EnableSceneAssetsV3 = false,
+    bool? EnableAccurateSkyGuideV2 = null,
     bool EnableSubtitles = false,
     bool PublishApproved = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
@@ -241,6 +242,7 @@ public sealed record ContentPlanProductionExecutionRequest(
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
     bool EnableSceneAssetsV3 = false,
+    bool? EnableAccurateSkyGuideV2 = null,
     bool EnableSubtitles = false,
     bool PublishApproved = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
@@ -317,6 +319,7 @@ public sealed record ProductionPipelineRequest(
     int? RequestedStartPhaseNo = null,
     int? RequestedEndPhaseNo = null,
     bool EnableSceneAssetsV3 = false,
+    bool? EnableAccurateSkyGuideV2 = null,
     bool EnableSubtitles = false,
     bool PublishApproved = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);

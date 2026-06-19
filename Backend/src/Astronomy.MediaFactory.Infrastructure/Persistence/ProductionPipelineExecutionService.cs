@@ -716,7 +716,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 d["actualOutputRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", format));
             }, cancellationToken);
 
-            var response = await sceneAssetsV3Service.GenerateAsync(new SceneAssetsV3Request(context.OutputRoot, generateShort, generateLong, context.OverwriteExisting), cancellationToken);
+            var response = await sceneAssetsV3Service.GenerateAsync(new SceneAssetsV3Request(context.OutputRoot, generateShort, generateLong, context.OverwriteExisting, context.PipelineRequest.EnableAccurateSkyGuideV2), cancellationToken);
             if (!Directory.Exists(Path.Combine(context.OutputRoot, "scene-assets-v3")))
                 throw new InvalidOperationException("Scene Assets V3 folder is missing after V3 generation.");
 

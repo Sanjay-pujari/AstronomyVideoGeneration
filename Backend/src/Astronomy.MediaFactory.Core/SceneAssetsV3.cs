@@ -4,7 +4,8 @@ public sealed record SceneAssetsV3Request(
     string? WorkingDirectoryRoot = null,
     bool GenerateShort = true,
     bool GenerateLong = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    bool? EnableAccurateSkyGuideV2 = null);
 
 public sealed record SceneAssetsV3Response(
     string OutputRoot,
