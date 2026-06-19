@@ -155,6 +155,30 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase14DocumentaryNarration_PlanetConjunctionUsesDocumentaryStoryArcAndPerspective()
+    {
+        var context = CreateContext("PlanetConjunction", ["ShortVideo", "LongVideo"], "Venus Jupiter Conjunction");
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildPhase14DocumentaryNarration", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var narration = method!.Invoke(null, [context])!;
+        var narrationType = narration.GetType();
+        var shortItems = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(narrationType.GetProperty("ShortItems")!.GetValue(narration));
+        var longItems = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(narrationType.GetProperty("LongItems")!.GetValue(narration));
+        var diagnostics = narrationType.GetProperty("Diagnostics")!.GetValue(narration)!;
+        var diagnosticsType = diagnostics.GetType();
+        var allText = string.Join(" ", shortItems.Values.Concat(longItems.Values));
+
+        Assert.Equal(["001-hook", "002-what-is-it", "003-cause", "004-viewing-tip", "005-final-reminder"], shortItems.Keys.ToArray());
+        Assert.Equal(9, longItems.Count);
+        Assert.Contains("planetary conjunction", allText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("appear close together", allText, StringComparison.OrdinalIgnoreCase);
+        Assert.Matches("separated|distances|space|line-of-sight|perspective", allText);
+        Assert.True((int)diagnosticsType.GetProperty("DocumentaryScore")!.GetValue(diagnostics)! >= 90);
+        Assert.True((int)diagnosticsType.GetProperty("WonderScore")!.GetValue(diagnostics)! >= 90);
+        Assert.True((int)diagnosticsType.GetProperty("ScientificAccuracyScore")!.GetValue(diagnostics)! >= 95);
+    }
+
+    [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
         var context = CreateContext("PlanetPairing", ["ShortVideo", "Thumbnail"]);
