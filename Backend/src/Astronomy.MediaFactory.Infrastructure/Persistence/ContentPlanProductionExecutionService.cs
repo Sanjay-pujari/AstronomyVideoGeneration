@@ -106,6 +106,7 @@ public sealed class ContentPlanProductionExecutionService(
                 EnableAccurateSkyGuideV2: request.EnableAccurateSkyGuideV2,
                 EnableSubtitles: request.EnableSubtitles,
                 PublishApproved: request.PublishApproved,
+                MotionPreviewOnly: request.MotionPreviewOnly,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);

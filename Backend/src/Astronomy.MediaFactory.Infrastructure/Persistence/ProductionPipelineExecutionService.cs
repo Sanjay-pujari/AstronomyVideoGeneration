@@ -3956,6 +3956,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseMotionLayerV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        if (context.PipelineRequest.MotionPreviewOnly)
+            return await PhaseMotionLayerV2PreviewAsync(context, cancellationToken);
+
         var planRoot = context.OutputRoot;
         var motionRoot = Path.Combine(planRoot, "motion");
         var validationRoot = context.ExecutionContext.ValidationRoot!;
@@ -4058,6 +4061,127 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!validationPassed) throw new InvalidOperationException("Phase 17 Motion Layer V1 failed: " + string.Join(" | ", errors));
         return [motionPlanPath, validationPath, diagnosticsPath];
     }
+
+    private async Task<IReadOnlyList<string>> PhaseMotionLayerV2PreviewAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var planRoot = context.OutputRoot;
+        var motionRoot = Path.Combine(planRoot, "motion");
+        var validationRoot = context.ExecutionContext.ValidationRoot!;
+        Directory.CreateDirectory(motionRoot);
+        Directory.CreateDirectory(validationRoot);
+
+        var durationPlanPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
+        var shortSceneRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+        var longSceneRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
+        var missingAudioFiles = new List<string>();
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var shortItems = await BuildMotionV2PreviewItemsAsync(durationPlanPath, "short", shortSceneRoot, 5d, missingAudioFiles, errors, cancellationToken);
+        var longItems = await BuildMotionV2PreviewItemsAsync(durationPlanPath, "long", longSceneRoot, 8d, missingAudioFiles, errors, cancellationToken);
+        warnings.AddRange(missingAudioFiles.Select(p => $"Audio missing (preview warning only): {p}"));
+
+        var validationPassed = errors.Count == 0;
+        var motionPlanPath = Path.Combine(motionRoot, "motion-plan-v2-preview.json");
+        await File.WriteAllTextAsync(motionPlanPath, JsonSerializer.Serialize(new
+        {
+            motionVersion = "V2",
+            motionPreviewOnly = true,
+            audioRequired = false,
+            @short = new { sceneCount = shortItems.Count, items = shortItems },
+            @long = new { sceneCount = longItems.Count, items = longItems }
+        }, JsonOptions), cancellationToken);
+
+        var motionDebugPath = Path.Combine(motionRoot, "motion-debug-v2-preview.json");
+        await File.WriteAllTextAsync(motionDebugPath, JsonSerializer.Serialize(new
+        {
+            motionVersion = "V2",
+            motionPreviewOnly = true,
+            audioRequired = false,
+            generatedUtc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            @short = shortItems,
+            @long = longItems
+        }, JsonOptions), cancellationToken);
+
+        var diagnosticsPath = Path.Combine(validationRoot, "phase-17-motion-v2-diagnostics.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
+        {
+            motionVersion = "V2",
+            motionPreviewOnly = true,
+            audioRequired = false,
+            missingAudioFiles,
+            warnings,
+            scenes = shortItems.Concat(longItems),
+            validationPassed
+        }, JsonOptions), cancellationToken);
+
+        var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 17,
+            phaseName = "Motion Layer V2 Preview",
+            status = validationPassed ? "Succeeded" : "Failed",
+            motionVersion = "V2",
+            motionPreviewOnly = true,
+            audioRequired = false,
+            motionPlanPath = NormalizePath(motionPlanPath),
+            motionDebugPath = NormalizePath(motionDebugPath),
+            diagnosticsPath = NormalizePath(diagnosticsPath),
+            missingAudioFiles,
+            warnings,
+            validationPassed,
+            errors
+        }, JsonOptions), cancellationToken);
+        if (!validationPassed) throw new InvalidOperationException("Phase 17 Motion Layer V2 Preview failed: " + string.Join(" | ", errors));
+        return [motionPlanPath, motionDebugPath, diagnosticsPath, validationPath];
+    }
+
+    private static async Task<IReadOnlyList<MotionV2PreviewItem>> BuildMotionV2PreviewItemsAsync(string durationPlanPath, string format, string sceneRoot, double defaultDurationSec, List<string> missingAudioFiles, List<string> errors, CancellationToken cancellationToken)
+    {
+        var durationItems = new JsonArray();
+        if (File.Exists(durationPlanPath))
+            durationItems = JsonNode.Parse(await File.ReadAllTextAsync(durationPlanPath, cancellationToken))?[format]?["items"]?.AsArray() ?? [];
+        var manifestPath = Path.Combine(sceneRoot, "scene-manifest-v3.json");
+        var manifestScenes = File.Exists(manifestPath) ? ReadJsonArray(manifestPath, "scenes") : new JsonArray();
+        var count = Math.Max(durationItems.Count, manifestScenes.Count);
+        if (count == 0) errors.Add($"{format} scene metadata missing for Motion V2 preview.");
+        var items = new List<MotionV2PreviewItem>();
+        for (var i = 0; i < count; i++)
+        {
+            var durationItem = durationItems.ElementAtOrDefault(i);
+            var manifest = manifestScenes.ElementAtOrDefault(i);
+            var sceneId = FirstNonEmpty(GetString(durationItem, "sceneId"), GetString(manifest, "sceneId"), $"{format}-{i + 1:000}");
+            var duration = GetDouble(durationItem, "sceneDurationSec", "durationSec", "visualDurationSec")
+                ?? GetDouble(manifest, "sceneDurationSec", "durationSec", "visualDurationSec")
+                ?? defaultDurationSec;
+            var audioPath = GetString(durationItem, "audioPath") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
+            var motionType = ResolveMotionV2Type(i, count);
+            var motion = ResolveMotionV2Values(motionType);
+            items.Add(new MotionV2PreviewItem("V2", true, false, sceneId, format, motionType, RoundDuration(duration), motion.StartScale, motion.EndScale, motion.StartX, motion.EndX, "EaseInOutSine", true));
+        }
+        return items;
+    }
+
+    private static string ResolveMotionV2Type(int index, int count)
+        => index == 0 ? "SlowZoomIn"
+            : index == count - 1 ? "SlowZoomOut"
+            : index % 4 == 1 ? "PanRight"
+            : index % 4 == 2 ? "PushToObject"
+            : index % 4 == 3 ? "PanLeft"
+            : "None";
+
+    private static MotionV2Values ResolveMotionV2Values(string motionType) => motionType switch
+    {
+        "SlowZoomIn" => new(1.00d, 1.12d, 0d, 0d),
+        "SlowZoomOut" => new(1.12d, 1.00d, 0d, 0d),
+        "PanLeft" => new(1.08d, 1.08d, 0.05d, 0.00d),
+        "PanRight" => new(1.08d, 1.08d, -0.05d, 0.00d),
+        "PushToObject" => new(1.00d, 1.18d, 0d, 0d),
+        _ => new(1.00d, 1.00d, 0d, 0d)
+    };
+
+    private sealed record MotionV2Values(double StartScale, double EndScale, double StartX, double EndX);
+    private sealed record MotionV2PreviewItem(string MotionVersion, bool MotionPreviewOnly, bool AudioRequired, string SceneId, string Format, string MotionType, double DurationSec, double StartScale, double EndScale, double StartX, double EndX, string Easing, bool ValidationPassed);
 
     private static IReadOnlyList<MotionPlanItem> BuildMotionPlanItems(JsonNode durationRoot, string format, string sceneRoot, int expectedCount, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> invalidDurations, List<string> unsupportedMotionStyles, IReadOnlyList<string> oldPaths, List<string> oldPathUsageReasons)
     {

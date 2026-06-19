@@ -116,6 +116,7 @@ public sealed class ContentPlanBatchGenerationService(
                 EnableAccurateSkyGuideV2: request.EnableAccurateSkyGuideV2,
                 EnableSubtitles: request.EnableSubtitles,
                 PublishApproved: request.PublishApproved,
+                MotionPreviewOnly: request.MotionPreviewOnly,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
 
             ValidateExactPlanIdExecutionResult(request.PlanId, execution.PlanId, exactPlanIdMode);
