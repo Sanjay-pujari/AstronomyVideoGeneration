@@ -310,6 +310,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
+            locationRemovedFromPrompt = true,
+            mobileOptimizedCopy = true,
+            dedicatedLandscapePrompt = true,
+            dedicatedPortraitPrompt = true,
+            dedicatedSquarePrompt = true,
             selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
@@ -345,6 +350,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
+            locationRemovedFromPrompt = true,
+            mobileOptimizedCopy = true,
+            dedicatedLandscapePrompt = true,
+            dedicatedPortraitPrompt = true,
+            dedicatedSquarePrompt = true,
             selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
@@ -427,6 +437,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
+            locationRemovedFromPrompt = true,
+            mobileOptimizedCopy = true,
+            dedicatedLandscapePrompt = true,
+            dedicatedPortraitPrompt = true,
+            dedicatedSquarePrompt = true,
             selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
@@ -453,8 +468,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         if (fallbackUsed) throw new InvalidOperationException("Thumbnail V8 validation failed: fallback image was used.");
         if (promptOnly) throw new InvalidOperationException("Thumbnail V8 validation failed: promptOnly cannot be true during real generation.");
+        var forbiddenPromptTokens = new[] { "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "around Jun", "visibility window", "ThumbnailV7", "V7", "background-only image", "manual overlay" };
         foreach (var prompt in prompts)
         {
+            var matchedPromptToken = forbiddenPromptTokens.FirstOrDefault(token => prompt.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase));
+            if (matchedPromptToken is not null) throw new InvalidOperationException($"Thumbnail V8 validation failed: forbidden prompt token '{matchedPromptToken}' appeared in {prompt.Name} prompt.");
             var path = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
             if (!File.Exists(path)) throw new InvalidOperationException($"Thumbnail V8 validation failed: missing image file {NormalizePath(path)}.");
             if (new FileInfo(path).Length < 100) throw new InvalidOperationException($"Thumbnail V8 validation failed: image file is too small {NormalizePath(path)}.");
@@ -2640,9 +2658,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
         [
-            new("landscape", 3840, 2160, "16:9", "Landscape 3840x2160: wide premium poster, left glassmorphism information card occupying 28-32% width, main astronomical scene on the right, callouts in the right visual field, bottom footer tips inside the image."),
-            new("portrait", 2160, 3840, "9:16", "Portrait 2160x3840: vertical premium poster, title/header at top, tall left/upper glassmorphism information card, main astronomical scene filling middle and lower visual area, footer tips above bottom safe margin."),
-            new("square", 2048, 2048, "1:1", "Square 2048x2048: balanced premium poster, compact left information card, main astronomical scene on right/center, callouts with generous spacing, footer tips inside lower safe area.")
+            new("landscape", 3840, 2160, "16:9", "Wide YouTube thumbnail. Title top-left. Left glass information panel uses only 28-32% of width. Celestial objects large on the right. Footer tips run full width along the bottom safe area."),
+            new("portrait", 2160, 3840, "9:16", "Shorts/Reels cover layout. Title at top. Celestial objects large in center / upper-middle. Information card in lower third. Footer above bottom safe area. Avoid squeezed landscape layout, tiny text, and dense panels."),
+            new("square", 2048, 2048, "1:1", "Instagram post layout. Title top-left. Objects upper/right or center/right. Compact info card lower-left / lower third. Footer at bottom. Avoid squeezed landscape layout.")
         ];
 
         public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
@@ -2653,11 +2671,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var context = new ThumbnailV8PromptContext(
                 Current: current,
                 Intelligence: intelligence,
-                Title: FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, request.EventId),
-                EventType: FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, current.EventType, "Astronomy viewing guide"),
-                DateText: current.EventDate?.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date from guide",
-                BestTime: FirstNonEmpty(current.BestViewingWindowLocal, current.LocalPeakTime, intelligence?.PreferredViewingWindow, "Best after twilight"),
-                Direction: FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "Use the event-specific horizon direction"),
+                Title: SanitizeThumbnailV8PromptText(FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, current.ShortTitle, current.Title, request.EventId)),
+                EventType: SanitizeThumbnailV8PromptText(FirstNonEmpty(request.ProductionContext?.EventType, intelligence?.EventType, current.EventType, "Astronomy viewing guide")),
+                DateText: current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date",
+                BestTime: ResolveShortBestTime(current, intelligence),
+                Direction: ResolveShortDirection(current, intelligence),
                 Equipment: ResolveV8Equipment(current, intelligence),
                 Tips: ResolveV8Tips(current, intelligence),
                 Objects: ResolveV8Objects(current, intelligence));
@@ -2668,9 +2686,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         private static IThumbnailV8FamilyPromptBuilder SelectBuilder(CurrentEventLock current)
         {
             var token = NormalizeEventTypeToken(current.EventType);
-            if (token is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETALIGNMENT" || IsPlanetaryEvent(current.EventType)) return new PlanetaryObservationGuidePromptBuilder();
-            if (token == "METEORSHOWER" || IsMeteorEvent(current.EventType, current.Title)) return new MeteorShowerObservationGuidePromptBuilder();
-            if (token is "NAMEDFULLMOON" or "MOON" || IsMoonEvent(current.EventType, current.Title)) return new MoonObservationGuidePromptBuilder();
+            if (token is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETALIGNMENT" or "PLANETPARADE" or "MOONPLANETCONJUNCTION" || IsPlanetaryEvent(current.EventType)) return new PlanetaryObservationGuidePromptBuilder();
+            if (token == "METEORSHOWER" || IsMeteorEvent(current.EventType, current.Title)) return new MeteorObservationGuidePromptBuilder();
+            if (token is "NAMEDFULLMOON" or "FULLMOON" or "SUPERMOON" or "BLUEMOON" or "WOLFMOON" or "STRAWBERRYMOON" || IsMoonEvent(current.EventType, current.Title)) return new MoonObservationGuidePromptBuilder();
             if (token is "SOLARECLIPSE" or "LUNARECLIPSE" || IsEclipseEvent(current.EventType, current.Title)) return new EclipseObservationGuidePromptBuilder();
             return new PlanetaryObservationGuidePromptBuilder();
         }
@@ -2688,8 +2706,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return jupiterVenusEvent ? distinct.Where(value => !value.Equals("Mercury", StringComparison.OrdinalIgnoreCase)).ToArray() : distinct;
         }
 
+        private static string ResolveShortBestTime(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var value = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "After Sunset");
+            if (value.Contains("sunset", StringComparison.OrdinalIgnoreCase)) return "After Sunset";
+            if (value.Contains("dawn", StringComparison.OrdinalIgnoreCase) || value.Contains("pre-dawn", StringComparison.OrdinalIgnoreCase)) return "Pre-Dawn";
+            if (value.Contains("midnight", StringComparison.OrdinalIgnoreCase)) return "Around Midnight";
+            var match = System.Text.RegularExpressions.Regex.Match(value, @"\b\d{1,2}:\d{2}\s*(AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            return match.Success ? match.Value.ToUpperInvariant() : "After Sunset";
+        }
+
+        private static string ResolveShortDirection(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var value = FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "West");
+            foreach (var direction in new[] { "West", "East", "South", "North", "Southwest", "Southeast", "Northwest", "Northeast" })
+                if (value.Contains(direction, StringComparison.OrdinalIgnoreCase)) return direction;
+            return "West";
+        }
+
         private static string ResolveV8Equipment(CurrentEventLock current, ProductionEventIntelligence? intelligence)
-            => IsMeteorEvent(current.EventType, current.Title) ? "No telescope needed; use dark skies and your eyes" : FirstNonEmpty(intelligence?.ViewerInstructions?.FirstOrDefault(v => v.Contains("binocular", StringComparison.OrdinalIgnoreCase) || v.Contains("telescope", StringComparison.OrdinalIgnoreCase)), IsSolarEclipse(current) ? "Certified solar eclipse glasses / solar filter" : "Eyes or binoculars; telescope optional");
+            => IsMeteorEvent(current.EventType, current.Title) ? "No telescope needed; use dark skies and your eyes" : IsPlanetaryEvent(current.EventType) ? "Naked Eye" : FirstNonEmpty(intelligence?.ViewerInstructions?.FirstOrDefault(v => v.Contains("binocular", StringComparison.OrdinalIgnoreCase) || v.Contains("telescope", StringComparison.OrdinalIgnoreCase)), IsSolarEclipse(current) ? "Certified solar eclipse glasses / solar filter" : "Naked Eye / binoculars");
 
         private static IReadOnlyList<string> ResolveV8Tips(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
@@ -2721,7 +2757,7 @@ PALETTE: dark blue + gold, premium astronomy magazine typography, crisp panels, 
         }
     }
 
-    private sealed class MeteorShowerObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
+    private sealed class MeteorObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
     {
         public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
         {
@@ -2732,7 +2768,7 @@ VISUAL SCENE: dark realistic night sky with a clear radiant marker, multiple nat
 UI ARCHITECTURE: left information card with DATE, PEAK TIME, RADIANT / WHERE TO LOOK, MOON CONDITIONS, EQUIPMENT. Include a strong direction cue and bottom footer tips with polished icons.
 EVENT NAME: {{name}}. Make the radiant and meteor streaks the visual focus.
 """ + CommonData(c, name);
-            return Final(aspect, c, prompt, nameof(MeteorShowerObservationGuidePromptBuilder), "MeteorShowerObservationGuide", "Meteor shower guide with radiant marker, meteor streaks, left information card, direction cue, footer tips, no planets.");
+            return Final(aspect, c, prompt, nameof(MeteorObservationGuidePromptBuilder), "MeteorObservationGuide", "Meteor shower guide with radiant marker, meteor streaks, left information card, direction cue, footer tips, no planets.");
         }
     }
 
@@ -2770,12 +2806,11 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
 
     private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
 Generate final finished thumbnail image: {{posterType}}.
-Include all text, icons, panels, callouts, labels, and footer inside the image. No manual overlay will be added later. No cropping. Do not reuse or crop another aspect-ratio prompt. No extra celestial objects.
+Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. No cropping. Do not reuse or crop another aspect-ratio prompt. No extra celestial objects.
 OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 TITLE TEXT: "{{c.Title}}"
 SUBTITLE TEXT: "{{c.EventType}}"
-REGION / CONTEXT TEXT: "{{FirstNonEmpty(c.Current.RegionId, "Visibility guide")}}"
 """;
 
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
@@ -2789,11 +2824,23 @@ DATA TO RENDER IN THE IMAGE:
 - Footer tip 2: {{c.Tips[1]}}
 - Footer tip 3: {{c.Tips[2]}}
 QUALITY RULES: sharp readable typography, no watermark, no branding, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette.
-NEGATIVE RULES: no generic sky poster, no background-only image, no placeholder panels, no random planets, no invented celestial objects, no cropping, no later overlay.
+CTR INSTRUCTIONS: This is a professional YouTube thumbnail and social cover. Optimize for maximum click-through rate, mobile readability, large celestial objects, large typography, strong visual hierarchy, and clean premium astronomy-magazine design.
+AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter.
+NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping.
 """;
 
     private static ThumbnailV8Prompt Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string prompt, string builder, string template, string summary)
-        => new(aspect.Name, aspect.Width, aspect.Height, aspect.AspectRatio, prompt, builder, template, summary);
+        => new(aspect.Name, aspect.Width, aspect.Height, aspect.AspectRatio, SanitizeThumbnailV8PromptText(prompt), builder, template, summary);
+
+    private static string SanitizeThumbnailV8PromptText(string value)
+    {
+        var sanitized = value ?? string.Empty;
+        foreach (var forbidden in new[] { "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "regionId" })
+            sanitized = sanitized.Replace(forbidden, string.Empty, StringComparison.OrdinalIgnoreCase);
+        sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+over\s*(?=[;,.\n])", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s{2,}", " ", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return sanitized.Trim();
+    }
 
     private sealed class DefaultHttpClientFactory : IHttpClientFactory
     {
@@ -4580,7 +4627,7 @@ NEGATIVE RULES: no generic sky poster, no background-only image, no placeholder 
         => eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || title.Contains("Meteor", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPlanetaryEvent(string eventType)
-        => NormalizeEventTypeToken(eventType) is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETPAIRING" or "PLANETPARADE" or "PLANETALIGNMENT" or "MOONPLANETPAIRING";
+        => NormalizeEventTypeToken(eventType) is "PLANETCONJUNCTION" or "PLANETGROUPING" or "PLANETPAIRING" or "PLANETPARADE" or "PLANETALIGNMENT" or "MOONPLANETPAIRING" or "MOONPLANETCONJUNCTION";
 
     private static bool IsEclipseEvent(string eventType, string? title = null)
         => NormalizeEventTypeToken(eventType) is "ECLIPSE" or "SOLARECLIPSE" or "LUNARECLIPSE" or "TOTALSOLARECLIPSE" or "PARTIALSOLARECLIPSE" or "ANNULARSOLARECLIPSE" or "TOTALLUNARECLIPSE" or "PARTIALLUNARECLIPSE" or "PENUMBRALLUNARECLIPSE"
