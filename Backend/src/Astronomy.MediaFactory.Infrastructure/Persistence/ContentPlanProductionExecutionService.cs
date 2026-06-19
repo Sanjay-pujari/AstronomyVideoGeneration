@@ -107,6 +107,7 @@ public sealed class ContentPlanProductionExecutionService(
                 EnableSubtitles: request.EnableSubtitles,
                 PublishApproved: request.PublishApproved,
                 MotionPreviewOnly: request.MotionPreviewOnly,
+                MotionV2Strength: request.MotionV2Strength,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);

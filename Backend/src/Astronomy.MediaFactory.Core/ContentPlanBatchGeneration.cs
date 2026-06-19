@@ -48,6 +48,7 @@ public sealed record BatchGenerateFromPlansRequest(
     bool EnableSubtitles = false,
     bool PublishApproved = false,
     bool MotionPreviewOnly = false,
+    string? MotionV2Strength = null,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 public sealed record BatchGenerateFromPlansResponse(
@@ -247,6 +248,7 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool EnableSubtitles = false,
     bool PublishApproved = false,
     bool MotionPreviewOnly = false,
+    string? MotionV2Strength = null,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 public sealed record ProductionExecutionContext(
@@ -325,6 +327,7 @@ public sealed record ProductionPipelineRequest(
     bool EnableSubtitles = false,
     bool PublishApproved = false,
     bool MotionPreviewOnly = false,
+    string? MotionV2Strength = null,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
