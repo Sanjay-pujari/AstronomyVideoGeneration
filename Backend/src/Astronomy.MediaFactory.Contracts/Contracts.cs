@@ -399,6 +399,7 @@ public sealed class RenderingOptions
     public int FinalShortRenderTimeoutSeconds { get; set; } = 300;
     public int FinalMetaRenderTimeoutSeconds { get; set; } = 300;
     public bool WriteSegmentDiagnostics { get; set; } = true;
+    public bool EnableAccurateSkyGuideV2 { get; set; } = false;
     public bool KeepIntermediateFiles { get; set; } = true;
     public bool EnableKenBurns { get; set; } = true;
     public double KenBurnsZoomStart { get; set; } = 1.0d;

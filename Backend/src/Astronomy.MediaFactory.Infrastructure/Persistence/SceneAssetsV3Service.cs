@@ -67,8 +67,10 @@ public sealed class SceneAssetsV3Service(
         var metadataPath = Path.Combine(dir, "scene-timeline-metadata.json");
         var diagnosticsPath = Path.Combine(dir, "scene-assets-v3-diagnostics.json");
         var visualPromptDiagnosticsPath = Path.Combine(dir, "visual-prompt-diagnostics.json");
+        var accurateSkyGuideV2DiagnosticsPath = Path.Combine(dir, "accurate-sky-guide-v2-diagnostics.json");
         var manifestScenes = new List<SceneAssetsV3ManifestScene>();
         var sceneDiagnostics = new List<object>();
+        var accurateSkyGuideV2Diagnostics = new List<object>();
         var errors = new List<string>();
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "visualTimeline", new SceneAssetsV3Timeline(Version, format, beats), context.ForbiddenTerms);
 
@@ -80,21 +82,40 @@ public sealed class SceneAssetsV3Service(
             foreach (var beat in beats)
             {
                 var imagePath = Path.Combine(dir, beat.SceneId + ".png");
-                var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene";
+                var guideV2Enabled = renderingOptions.Value.EnableAccurateSkyGuideV2 && beat.RenderMode == "AccurateSkyGuideScene";
+                var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene" || guideV2Enabled;
                 var providerSucceeded = false;
+                var fallbackUsed = false;
+                string? accurateSkyGuidePromptPath = null;
                 if ((!File.Exists(imagePath) || overwrite) && providerCalled)
                 {
+                    var prompt = guideV2Enabled ? BuildAccurateSkyGuideV2Prompt(context, beat) : beat.VisualPrompt;
+                    if (guideV2Enabled)
+                    {
+                        accurateSkyGuidePromptPath = Path.Combine(dir, beat.SceneId + "-accurate-sky-guide-v2-prompt.txt");
+                        await File.WriteAllTextAsync(accurateSkyGuidePromptPath, prompt, ct);
+                        files.Add(accurateSkyGuidePromptPath);
+                    }
+
                     var result = await imageGenerator.GenerateAsync(new AICinematicAssetRequest(
                         $"scene-assets-v3-{format}-{beat.SceneId}", beat.SceneId, beat.RenderMode, format, beat.SceneId,
-                        "scene-background", beat.VisualIntent, beat.CompositionType, StyleFor(beat.RenderMode), beat.VisualPrompt,
-                        "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath), ct);
+                        "scene-background", beat.VisualIntent, beat.CompositionType, guideV2Enabled ? "Accurate Sky Guide V2, premium astronomy observation guide, NASA and National Geographic style" : StyleFor(beat.RenderMode), prompt,
+                        guideV2Enabled ? "dashboard UI, technical chart, crowded text, location text, watermark, branding, logo" : "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath), ct);
                     providerSucceeded = result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(imagePath);
                     if (!providerSucceeded)
                         warnings.Add($"Azure Image2 did not produce {format}/{beat.SceneId}; deterministic Scene V3 fallback was rendered. Status={result.GenerationStatus}.");
                 }
 
                 if (!File.Exists(imagePath) || overwrite && !providerSucceeded)
+                {
+                    fallbackUsed = true;
                     await RenderDeterministicSceneAsync(imagePath, beat, ct);
+                }
+
+                if (beat.RenderMode == "AccurateSkyGuideScene")
+                {
+                    accurateSkyGuideV2Diagnostics.Add(new { enabled = renderingOptions.Value.EnableAccurateSkyGuideV2, format, beat.SceneId, family = ResolveAccurateSkyGuideV2Family(context.EventType), providerCalled, promptPath = accurateSkyGuidePromptPath ?? string.Empty, outputPath = imagePath, fallbackUsed, imageExists = File.Exists(imagePath) });
+                }
 
                 var forbiddenDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beat.NarrationBeat, beat.VisualIntent, beat.VisualPrompt, beat.OverlayText, beat.SupportingText ?? string.Empty), context.ForbiddenTerms);
                 var providerName = providerCalled ? imageGenerator.GetType().Name : "DeterministicRenderer";
@@ -155,6 +176,7 @@ public sealed class SceneAssetsV3Service(
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
         await WriteJsonAsync(diagnosticsPath, new { version = Version, format, currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms, blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0, staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
+        await WriteJsonAsync(accurateSkyGuideV2DiagnosticsPath, accurateSkyGuideV2Diagnostics, ct); files.Add(accurateSkyGuideV2DiagnosticsPath);
         await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, sceneGuideType = b.SceneGuideType, guideRenderer = b.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{b.SceneGuideType}GuideRenderer" : string.Empty, eventType = context.EventType, guideElementsUsed = b.GuideElementsUsed ?? Array.Empty<string>(), observationGuideDiagnostics = b.RenderMode == "AccurateSkyGuideScene" ? BuildObservationGuideDiagnostics(b.SceneGuideType) : null, galleryDiagnostics = new { galleryVersion = "V3", dateAdded = !string.IsNullOrWhiteSpace(context.EventDateText), timeAdded = !string.IsNullOrWhiteSpace(context.PeakTimeText), locationAdded = !string.IsNullOrWhiteSpace(context.PrimaryViewingDirection), eventTypeAdded = !string.IsNullOrWhiteSpace(context.EventType) }, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
         var duplicate = manifestScenes.GroupBy(s => s.Hash, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
@@ -178,6 +200,36 @@ public sealed class SceneAssetsV3Service(
         var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, beats.All(b => !string.IsNullOrWhiteSpace(b.VisualIntent)), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, relativeDateWordsDetected, distinctCompositionTypes, errors, BuildFontDiagnostics());
         await WriteJsonAsync(validationPath, validation, ct); files.Add(validationPath);
         return validationPath;
+    }
+
+
+    private static string ResolveAccurateSkyGuideV2Family(string eventType)
+    {
+        if (eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "Meteor";
+        if (eventType.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "Moon";
+        return "Planetary";
+    }
+
+    private static string BuildAccurateSkyGuideV2Prompt(SceneAssetsV3TimelineContext context, SceneAssetsV3Beat beat)
+    {
+        var family = ResolveAccurateSkyGuideV2Family(context.EventType);
+        var common = $"""
+Generate one professional observation guide screen for a sky event.
+Universal style: premium astronomy observation guide, NASA + National Geographic style, cinematic sky background, clean modern labels, direction marker, 2-3 short viewing tips, mobile-readable.
+Avoid: dashboard look, technical chart look, crowded text, unnecessary location text, watermark, branding, logo.
+Use only event-relevant objects: {JoinNatural(context.EventObjectContext.ObjectNames)}.
+Event family: {family}. Event title: {FirstNonEmpty(context.Title, context.EventType)}. Direction cue: {FirstNonEmpty(context.PrimaryViewingDirection, context.SkyGuideTheme, "event direction")}. Best viewing time cue: {FirstNonEmpty(context.PeakTimeText, "best local viewing window")}.
+Scene goal: {beat.SceneId}; {beat.NarrationBeat}
+""";
+        var familyPrompt = family switch
+        {
+            "Meteor" => "Dark sky / Milky Way, meteor streaks, radiant marker, include a moonlight note if available, short tip: Look up after midnight.",
+            "Moon" => "Large realistic moon, moonrise direction, phase/name label, short tip: Watch near moonrise.",
+            "Eclipse" => "Eclipse visual, timing and safety cue, if solar eclipse include safe viewing message, short tip: Use certified solar filter.",
+            _ => "Realistic twilight sky, visible event objects only, object labels, direction marker such as WEST when direction supports it, short tip: Look west after sunset when appropriate, show horizon cue."
+        };
+        return common + Environment.NewLine + familyPrompt;
     }
 
     private async Task RenderDeterministicSceneAsync(string path, SceneAssetsV3Beat beat, CancellationToken ct)
