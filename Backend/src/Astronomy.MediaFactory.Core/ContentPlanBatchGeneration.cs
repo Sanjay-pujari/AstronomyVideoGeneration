@@ -47,6 +47,7 @@ public sealed record BatchGenerateFromPlansRequest(
     bool? EnableAccurateSkyGuideV2 = null,
     bool EnableSubtitles = false,
     bool PublishApproved = false,
+    bool MotionPreviewOnly = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 public sealed record BatchGenerateFromPlansResponse(
@@ -245,6 +246,7 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool? EnableAccurateSkyGuideV2 = null,
     bool EnableSubtitles = false,
     bool PublishApproved = false,
+    bool MotionPreviewOnly = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 public sealed record ProductionExecutionContext(
@@ -322,6 +324,7 @@ public sealed record ProductionPipelineRequest(
     bool? EnableAccurateSkyGuideV2 = null,
     bool EnableSubtitles = false,
     bool PublishApproved = false,
+    bool MotionPreviewOnly = false,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
