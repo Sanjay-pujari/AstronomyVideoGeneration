@@ -4,6 +4,8 @@ public sealed class MotionProfileSelector
 {
     private const double Center = 0d;
     private const double GentlePan = 0.018d;
+    private const double SkyGuidePanStart = -0.03d;
+    private const double SkyGuidePanEnd = 0.03d;
 
     public MotionProfile Select(RenderPlanScene scene, int sceneIndex, int sceneCount)
     {
@@ -27,7 +29,7 @@ public sealed class MotionProfileSelector
 
             if (ContainsAny(role, "skyguide", "sky guide", "finder", "scan", "constellation", "stellarium", "where to look"))
             {
-                return new MotionProfile(MotionProfileKind.SkyGuide, MotionProfileType.PanRight, MotionEasingKind.EaseInOutSine, 1.035d, 1.035d, -GentlePan, GentlePan, Center, Center, "Motion Layer V2 conjunction slow right pan");
+                return new MotionProfile(MotionProfileKind.SkyGuide, MotionProfileType.PanRight, MotionEasingKind.EaseInOutSine, 1.040d, 1.080d, SkyGuidePanStart, SkyGuidePanEnd, Center, Center, "Motion Layer V2 conjunction accurate sky guide right pan");
             }
 
             if (ContainsAny(role, "viewingtip", "viewing tip", "tip", "observe", "observation", "safety", "safe"))

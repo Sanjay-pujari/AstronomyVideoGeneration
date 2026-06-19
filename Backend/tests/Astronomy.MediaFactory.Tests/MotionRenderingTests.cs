@@ -31,6 +31,11 @@ public sealed class MotionRenderingTests
         Assert.True(hook.ValidationPassed);
         Assert.Equal(MotionProfileKind.SkyGuide, skyGuide.Kind);
         Assert.Equal(MotionProfileType.PanRight, skyGuide.MotionType);
+        Assert.Equal(MotionEasingKind.EaseInOutSine, skyGuide.Easing);
+        Assert.Equal(1.04d, skyGuide.StartScale);
+        Assert.Equal(1.08d, skyGuide.EndScale);
+        Assert.Equal(-0.03d, skyGuide.PanXStart);
+        Assert.Equal(0.03d, skyGuide.PanXEnd);
         Assert.Equal("right", skyGuide.PanDirection);
         Assert.Equal(MotionProfileKind.Closing, closing.Kind);
         Assert.Equal(MotionProfileType.SlowZoomOut, closing.MotionType);

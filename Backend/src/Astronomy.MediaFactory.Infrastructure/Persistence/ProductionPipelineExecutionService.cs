@@ -4155,15 +4155,16 @@ public sealed partial class ProductionPipelineExecutionService(
                 ?? defaultDurationSec;
             var audioPath = GetString(durationItem, "audioPath") ?? string.Empty;
             if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
-            var motionType = ResolveMotionV2Type(i, count);
+            var motionType = ResolveMotionV2Type(sceneId, i, count);
             var motion = ResolveMotionV2Values(motionType);
             items.Add(new MotionV2PreviewItem("V2", true, false, sceneId, format, motionType, RoundDuration(duration), motion.StartScale, motion.EndScale, motion.StartX, motion.EndX, "EaseInOutSine", true));
         }
         return items;
     }
 
-    private static string ResolveMotionV2Type(int index, int count)
-        => index == 0 ? "SlowZoomIn"
+    private static string ResolveMotionV2Type(string sceneId, int index, int count)
+        => IsAccurateSkyGuideScene(sceneId) ? "PanRight"
+            : index == 0 ? "SlowZoomIn"
             : index == count - 1 ? "SlowZoomOut"
             : index % 4 == 1 ? "PanRight"
             : index % 4 == 2 ? "PushToObject"
@@ -4175,10 +4176,14 @@ public sealed partial class ProductionPipelineExecutionService(
         "SlowZoomIn" => new(1.00d, 1.12d, 0d, 0d),
         "SlowZoomOut" => new(1.12d, 1.00d, 0d, 0d),
         "PanLeft" => new(1.08d, 1.08d, 0.05d, 0.00d),
-        "PanRight" => new(1.08d, 1.08d, -0.05d, 0.00d),
+        "PanRight" => new(1.04d, 1.08d, -0.03d, 0.03d),
         "PushToObject" => new(1.00d, 1.18d, 0d, 0d),
         _ => new(1.00d, 1.00d, 0d, 0d)
     };
+
+    private static bool IsAccurateSkyGuideScene(string sceneId)
+        => sceneId.Equals("003-accurate-sky-guide", StringComparison.OrdinalIgnoreCase)
+            || sceneId.Equals("006-accurate-sky-guide", StringComparison.OrdinalIgnoreCase);
 
     private sealed record MotionV2Values(double StartScale, double EndScale, double StartX, double EndX);
     private sealed record MotionV2PreviewItem(string MotionVersion, bool MotionPreviewOnly, bool AudioRequired, string SceneId, string Format, string MotionType, double DurationSec, double StartScale, double EndScale, double StartX, double EndX, string Easing, bool ValidationPassed);
@@ -4300,7 +4305,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         "Hook" => new MotionDefaults(100, 115, 0, 0, 0, 0),
         "Discovery" => new MotionDefaults(100, 108, -3, 3, 2, -2),
-        "SkyGuide" => new MotionDefaults(104, 104, -6, 6, 0, 0),
+        "SkyGuide" => new MotionDefaults(104, 108, -3, 3, 0, 0),
         "ViewingTip" => new MotionDefaults(102, 106, -2, 2, -2, 2),
         "Closing" => new MotionDefaults(110, 100, 0, 0, 0, 0),
         "static" => new MotionDefaults(100, 100, 0, 0, 0, 0),
