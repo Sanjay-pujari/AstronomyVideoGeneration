@@ -4156,14 +4156,15 @@ public sealed partial class ProductionPipelineExecutionService(
             var audioPath = GetString(durationItem, "audioPath") ?? string.Empty;
             if (string.IsNullOrWhiteSpace(audioPath) || !File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
             var motionType = ResolveMotionV2Type(sceneId, i, count);
-            var motion = ResolveMotionV2Values(motionType);
+            var motion = ResolveMotionV2Values(motionType, sceneId);
             items.Add(new MotionV2PreviewItem("V2", true, false, sceneId, format, motionType, RoundDuration(duration), motion.StartScale, motion.EndScale, motion.StartX, motion.EndX, "EaseInOutSine", true));
         }
         return items;
     }
 
     private static string ResolveMotionV2Type(string sceneId, int index, int count)
-        => IsAccurateSkyGuideScene(sceneId) ? "PanRight"
+        => IsBestTimeScene(sceneId) ? "SlowZoomIn"
+            : IsAccurateSkyGuideScene(sceneId) ? "PanRight"
             : index == 0 ? "SlowZoomIn"
             : index == count - 1 ? "SlowZoomOut"
             : index % 4 == 1 ? "PanRight"
@@ -4171,8 +4172,9 @@ public sealed partial class ProductionPipelineExecutionService(
             : index % 4 == 3 ? "PanLeft"
             : "None";
 
-    private static MotionV2Values ResolveMotionV2Values(string motionType) => motionType switch
+    private static MotionV2Values ResolveMotionV2Values(string motionType, string sceneId) => motionType switch
     {
+        "SlowZoomIn" when IsBestTimeScene(sceneId) => new(1.00d, 1.04d, 0d, 0d),
         "SlowZoomIn" => new(1.00d, 1.12d, 0d, 0d),
         "SlowZoomOut" => new(1.12d, 1.00d, 0d, 0d),
         "PanLeft" => new(1.08d, 1.08d, 0.05d, 0.00d),
@@ -4184,6 +4186,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool IsAccurateSkyGuideScene(string sceneId)
         => sceneId.Equals("003-accurate-sky-guide", StringComparison.OrdinalIgnoreCase)
             || sceneId.Equals("006-accurate-sky-guide", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsBestTimeScene(string sceneId)
+        => sceneId.Equals("005-best-time", StringComparison.OrdinalIgnoreCase);
 
     private sealed record MotionV2Values(double StartScale, double EndScale, double StartX, double EndX);
     private sealed record MotionV2PreviewItem(string MotionVersion, bool MotionPreviewOnly, bool AudioRequired, string SceneId, string Format, string MotionType, double DurationSec, double StartScale, double EndScale, double StartX, double EndX, string Easing, bool ValidationPassed);
@@ -4308,6 +4313,7 @@ public sealed partial class ProductionPipelineExecutionService(
         "SkyGuide" => new MotionDefaults(104, 108, -3, 3, 0, 0),
         "ViewingTip" => new MotionDefaults(102, 106, -2, 2, -2, 2),
         "Closing" => new MotionDefaults(110, 100, 0, 0, 0, 0),
+        "BestTime" => new MotionDefaults(100, 104, 0, 0, 0, 0),
         "static" => new MotionDefaults(100, 100, 0, 0, 0, 0),
         _ => null
     };
@@ -4322,6 +4328,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (normalized.Contains("002") || normalized.Contains("cause")) return "Discovery";
         if (normalized.Contains("003") || normalized.Contains("sky") || normalized.Contains("guide")) return "SkyGuide";
         if (normalized.Contains("004") || normalized.Contains("viewing") || normalized.Contains("tip")) return "ViewingTip";
+        if (normalized.Contains("best-time")) return "BestTime";
         if (normalized.Contains("005") || normalized.Contains("final") || normalized.Contains("reminder") || normalized.Contains("closing")) return "Closing";
         return "Discovery";
     }
@@ -4329,7 +4336,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolveMotionProfile(string sceneId, string? requestedMotion)
     {
         var requested = (requestedMotion ?? string.Empty).Trim();
-        if (requested is "Hook" or "Discovery" or "SkyGuide" or "ViewingTip" or "Closing") return requested;
+        if (requested is "Hook" or "Discovery" or "SkyGuide" or "ViewingTip" or "Closing" or "BestTime") return requested;
         return ResolveMotionPurpose(sceneId);
     }
 
