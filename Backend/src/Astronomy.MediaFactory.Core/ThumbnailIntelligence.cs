@@ -14,6 +14,8 @@ public sealed class ThumbnailAssetGenerationRequest
 
     public bool OverwriteExisting { get; set; }
 
+    public bool EnableThumbnailV8 { get; set; }
+
     public string ThumbnailStyle { get; set; } = string.Empty;
 
     public string ThumbnailVisualStyle { get; set; } = string.Empty;
