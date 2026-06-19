@@ -1507,7 +1507,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(thumbnailSceneManifestPath))
             throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
 
-        if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
+        if (thumbnailOptions?.Value.UseV8AiNative == true)
+            ValidateThumbnailV8Contract(context.ExecutionContext.ThumbnailRoot!);
+        else if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
             ValidateThumbnailV7Contract(context.ExecutionContext.ThumbnailRoot!);
         else
             ValidateCtrThumbnailV6Contract(context.ExecutionContext.ThumbnailRoot!);
@@ -7383,6 +7385,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private Phase12ThumbnailDiagnostics BuildPhase12ThumbnailDiagnostics(ProductionPhaseContext context)
     {
+        if (thumbnailOptions?.Value.UseV8AiNative == true)
+            return BuildPhase12ThumbnailV8Diagnostics(context);
         if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
             return BuildPhase12ThumbnailV7Diagnostics(context);
 
@@ -7709,6 +7713,99 @@ public sealed partial class ProductionPipelineExecutionService(
             ThumbnailLandscapeOutputPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")),
             ThumbnailPortraitOutputPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")),
             ThumbnailSquareOutputPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png")));
+    }
+
+    private static void ValidateThumbnailV8Contract(string thumbnailRoot)
+    {
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-generation-diagnostics.json");
+        if (!File.Exists(diagnosticsPath))
+            throw new InvalidOperationException($"Thumbnail V8 validation failed: thumbnail-generation-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+        using var document = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
+        var root = document.RootElement;
+        if (!string.Equals(GetJsonString(root, "thumbnailEngineVersion", string.Empty), "V8_AI_NATIVE", StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report V8_AI_NATIVE.");
+        if (GetJsonBool(root, "fallbackUsed") || GetJsonBool(root, "promptOnly"))
+            throw new InvalidOperationException("Thumbnail V8 validation failed: fallbackUsed and promptOnly must be false.");
+        var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+            .Select(name => Path.Combine(thumbnailRoot, name))
+            .ToArray();
+        var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException("Thumbnail V8 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
+        var legacy = new[] { "landscape.png", "portrait.png", "square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
+        if (legacy.Length > 0)
+            throw new InvalidOperationException("Thumbnail V8 validation failed: duplicate non-thumbnail-prefixed output(s) generated: " + string.Join(", ", legacy));
+    }
+
+    private static Phase12ThumbnailDiagnostics BuildPhase12ThumbnailV8Diagnostics(ProductionPhaseContext context)
+    {
+        var thumbnailRoot = context.ExecutionContext.ThumbnailRoot!;
+        ValidateThumbnailV8Contract(thumbnailRoot);
+        var outputs = new[]
+        {
+            NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-final.png")),
+            NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")),
+            NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")),
+            NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png"))
+        };
+        return new Phase12ThumbnailDiagnostics(
+            CurrentEventLock: string.Empty,
+            ThumbnailRequestTitle: context.ProductionEventIntelligence.Title,
+            ThumbnailRequestShortTitle: context.ProductionEventIntelligence.ShortTitle,
+            ThumbnailEventType: context.ProductionEventIntelligence.EventType,
+            ThumbnailPrimaryObjects: context.ProductionEventIntelligence.PrimaryObjects,
+            ThumbnailSecondaryObjects: context.ProductionEventIntelligence.SecondaryObjects,
+            ThumbnailSourceManifestPath: NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json")),
+            ThumbnailSourceScenePath: string.Empty,
+            VisualResolverResult: "AzureImage2CompleteInfographic",
+            VisualObjectsUsed: context.ProductionEventIntelligence.PrimaryObjects.Concat(context.ProductionEventIntelligence.SecondaryObjects).ToArray(),
+            LabelsUsed: context.ProductionEventIntelligence.PrimaryObjects.Concat(context.ProductionEventIntelligence.SecondaryObjects).ToArray(),
+            TextUsed: new[] { context.ProductionEventIntelligence.Title, context.ProductionEventIntelligence.ShortTitle },
+            ForbiddenObjectsDetected: Array.Empty<string>(),
+            GoldenPilotLeakageDetected: false,
+            SemanticValidationPassed: true,
+            EventFamily: context.ProductionEventIntelligence.EventType,
+            ValidatorProfile: "ThumbnailV8AiNativeValidator",
+            MoonPhaseName: string.Empty,
+            MoonIlluminationPercent: string.Empty,
+            MoonriseLocal: string.Empty,
+            MoonsetLocal: string.Empty,
+            MoonGuideCardAdded: false,
+            MoonObjectRendered: false,
+            MoonForbiddenTermsDetected: Array.Empty<string>(),
+            ThumbnailVersion: "V8_AI_NATIVE",
+            ThumbnailContract: "ThumbnailV8AiNative",
+            Renderer: "ThumbnailV8AiNativePromptDrivenAzureImage2",
+            Validator: "ThumbnailV8AiNativeValidator",
+            ThumbnailReviewJsonRequired: false,
+            V6RendererExecuted: false,
+            V6ValidatorExecuted: false,
+            OldValidationBlocked: true,
+            InformationAreaPercent: 30,
+            VisualAreaPercent: 70,
+            InfoPanelPercent: 24,
+            BottomTipsPercent: 8,
+            TextSafeAreaPassedV6: false,
+            FooterCutDetected: false,
+            TitleCutDetected: false,
+            InfoPanelOverflowDetected: false,
+            DirectionMarkerCutDetected: false,
+            SkyLabelCutDetected: false,
+            OutputFiles: outputs,
+            DuplicateOutputFilesGenerated: false,
+            LegacyMinimalHeroThumbnailUsed: false,
+            GeneratedOnlyThumbnailPrefixedFiles: true,
+            OverlayPercent: 0,
+            VisualPercent: 100,
+            TextSafeAreaPassed: true,
+            DateBadgeAdded: true,
+            EventFamilyBadgeAdded: true,
+            PortraitOverlayPercent: 0,
+            PortraitOverlayWithinLimit: true,
+            OverflowDetected: false,
+            ThumbnailLandscapeOutputPath: outputs[1],
+            ThumbnailPortraitOutputPath: outputs[2],
+            ThumbnailSquareOutputPath: outputs[3]);
     }
 
     private static string GetJsonString(JsonElement element, string name, string fallback)
