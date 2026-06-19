@@ -312,6 +312,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             cropFromLandscape = false,
             locationRemovedFromPrompt = true,
             mobileOptimizedCopy = true,
+            maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
+            visibleInformationFields = new[] { "Date", "Direction", "Equipment" },
+            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "region names", "location names", "scientific descriptions" },
+            informationAreaPercentMax = 20,
+            portraitObjectsAreaPercentMin = 30,
+            squareObjectsAreaPercentMin = 25,
+            portraitComposition = "Native Shorts/Reels cover: top 12% title, center 60% dominant objects, lower 18% compact observation card, bottom 10% footer tips.",
+            squareComposition = "Native Instagram/Facebook post: top-left title, center/upper-right dominant objects, lower-left small observation badge, bottom footer tips.",
+            phase12ThumbnailV8Status = "COMPLETE",
+            architectureStatus = "LOCKED",
             aspectPromptsGenerated = true,
             dedicatedLandscapePrompt = true,
             dedicatedPortraitPrompt = true,
@@ -354,6 +364,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             cropFromLandscape = false,
             locationRemovedFromPrompt = true,
             mobileOptimizedCopy = true,
+            maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
+            visibleInformationFields = new[] { "Date", "Direction", "Equipment" },
+            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "region names", "location names", "scientific descriptions" },
+            informationAreaPercentMax = 20,
+            portraitObjectsAreaPercentMin = 30,
+            squareObjectsAreaPercentMin = 25,
+            portraitComposition = "Native Shorts/Reels cover: top 12% title, center 60% dominant objects, lower 18% compact observation card, bottom 10% footer tips.",
+            squareComposition = "Native Instagram/Facebook post: top-left title, center/upper-right dominant objects, lower-left small observation badge, bottom footer tips.",
+            phase12ThumbnailV8Status = "COMPLETE",
+            architectureStatus = "LOCKED",
             aspectPromptsGenerated = true,
             dedicatedLandscapePrompt = true,
             dedicatedPortraitPrompt = true,
@@ -455,6 +475,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
             semanticValidationPassed = true,
+            maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
+            informationAreaPercentMax = 20,
+            portraitObjectsAreaPercentMin = 30,
+            squareObjectsAreaPercentMin = 25,
+            portraitNoLandscapePanel = true,
+            noOverlappingTextRequired = true,
+            noSqueezedLayoutRequired = true,
+            phase12ThumbnailV8Status = "COMPLETE",
+            architectureStatus = "LOCKED",
             outputFiles,
             requiredOutputFiles = outputFiles
         }, JsonOptions), cancellationToken);
@@ -2665,8 +2694,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
         [
             new("landscape", 3840, 2160, "16:9", "Wide YouTube thumbnail. Title top-left. Large left observation card, max 32% width. Realistic celestial objects on right. Elegant callout cards. Direction marker near horizon. Footer tips run full width along the bottom safe area."),
-            new("square", 2048, 2048, "1:1", "Native Instagram/Facebook square composition. Title top-left within safe margins. Celestial objects upper-right or center-right. Compact observation card lower-left or lower third. Footer at bottom. Do not squeeze landscape; do not use oversized cut-off title."),
-            new("portrait", 2160, 3840, "9:16", "Native Shorts/Reels vertical cover. Title at top within safe margins. Large celestial objects in center/upper-middle. Observation card in lower third. Footer above bottom safe area. No left landscape panel, no squeezed landscape layout, no tiny text.")
+            new("square", 2048, 2048, "1:1", "NATIVE INSTAGRAM / FACEBOOK POST. Top left: title only. Center / upper right: large celestial objects dominate and occupy at least 25% of canvas. Lower left: small observation badge only, less than 20% of canvas, with Date, Direction, Equipment. Bottom: three compact footer tips. Avoid oversized cards and crowded composition."),
+            new("portrait", 2160, 3840, "9:16", "NATIVE SHORTS / REELS COVER. Top 12%: large title only; no subtitle block, no information card. Center 60%: celestial objects are primary hero, visually dominant, occupying 30-40% of image area; large recognizable Jupiter/Venus when present; professional callouts only if space allows. Lower 18%: compact observation card only, with Date, Direction, Equipment. Bottom 10%: three compact footer tips. No landscape-style left panel, no large information card, no scientific poster, no squeezed layout.")
         ];
 
         public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
@@ -2770,8 +2799,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var prompt = CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Premium planetary observation guide poster using the Jupiter/Venus/Mercury reference as the design contract, adapted to the exact event objects only.
 VISUAL SCENE: realistic twilight sky, dark blue to amber horizon gradient, planet objects on the right side only. Show only these event objects: {{objectText}}. For Jupiter + Venus, show only Jupiter and Venus; do not add Mercury. No extra celestial objects, no Moon unless listed as an event object, no random planets.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Objects, Equipment. Professional callout cards connected to the visible planets. West marker near horizon. Footer tips: Look West, After Sunset, Naked Eye.
-PALETTE: dark blue + gold, premium astronomy magazine typography, crisp panels, elegant glow.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields visible in mobile variants: Date, Direction, Equipment only. Do not render Best Time, Objects, time-span block, long date range, region, location, or scientific description as visible fields. Professional callouts connected to planets only if space allows and never competing with planets. West marker near horizon. Footer tips exactly: WEST, AFTER SUNSET, NAKED EYE.
+PLANETARY CTR RULE: This is a click-through-rate optimized thumbnail.
+Celestial objects are more important than the information panel.
+Objects must dominate visual hierarchy.
+Information supports the image and must never compete with the celestial objects.
+Large recognizable celestial bodies.
+Do not render planets as tiny points of light.
+PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact panels, elegant glow.
 """ + CommonData(c, objectText);
             return Final(aspect, c, prompt, nameof(PlanetaryObservationGuidePromptBuilder), "Planetary", $"Planetary guide with aspect-native observation card, {objectText} only, planet callouts, West marker, short footer tips.");
         }
@@ -2831,17 +2866,17 @@ OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 TITLE TEXT: "{{c.Title}}"
 SUBTITLE TEXT: "{{c.EventType}}"
+MOBILE INFORMATION LIMIT: maximum visible information is Date, Direction, Equipment. Do not display time-span blocks, long date ranges, region names, location names, or scientific descriptions.
 """;
 
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
 DATA TO RENDER IN THE IMAGE:
 - Date: {{c.DateText}}
-- Best Time: {{c.BestTime}}
 - Direction: {{c.Direction}}
-- Objects: {{objectText}}
 - Equipment: {{c.Equipment}}
+- Objects to render visually, not as observation-card fields: {{objectText}}
 - Footer tips: use the three short tips specified in the family template above.
-QUALITY RULES: sharp readable typography, no watermark, no branding, no location text, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette.
+QUALITY RULES: sharp readable typography, no watermark, no branding, no location text, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette. Information area must be 20% of canvas or less.
 CTR INSTRUCTIONS: This is a professional YouTube thumbnail and social cover. Optimize for maximum click-through rate, mobile readability, large celestial objects, large typography, strong visual hierarchy, and clean premium astronomy-magazine design.
 AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter.
 NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping.
