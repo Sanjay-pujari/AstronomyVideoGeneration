@@ -542,6 +542,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();
         services.AddScoped<IHeroCompositionEngine, HeroCompositionEngine>();
         services.AddScoped<IHeroAssetStoryGenerator, HeroAssetStoryGenerator>();
+        services.AddScoped<ThumbnailV8AiNativeRenderer>();
+        services.AddScoped(_ => new ThumbnailV7CinematicOverlayRenderer());
         services.AddScoped<IThumbnailAssetIntelligenceService, ThumbnailAssetIntelligenceService>();
         services.AddScoped<IVideoAssemblyIntelligenceService, VideoAssemblyIntelligenceService>();
         services.AddScoped<IQuestionScenePlanner, QuestionScenePlanner>();

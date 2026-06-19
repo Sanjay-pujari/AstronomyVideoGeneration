@@ -1507,7 +1507,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var outputs = new List<string>();
         foreach (var phase in new[] { "Intelligence", "Composition", "SceneSelection", "Images" })
         {
-            var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = phase, DryRun = false, OverwriteExisting = context.OverwriteExisting, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
+            var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = phase, DryRun = false, OverwriteExisting = context.OverwriteExisting, EnableThumbnailV8 = IsThumbnailV8Enabled(), ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
             if (IsThumbnailV8Enabled()
                 && (response.RequestedRenderer.Contains("V7", StringComparison.OrdinalIgnoreCase)
                     || response.ActualRendererUsed.Contains("V7", StringComparison.OrdinalIgnoreCase)
@@ -6871,9 +6871,9 @@ public sealed partial class ProductionPipelineExecutionService(
             phase12ThumbnailDiagnostics,
             thumbnailVersion = phase12ThumbnailDiagnostics?.ThumbnailVersion,
             selectedRenderer = phase12ThumbnailDiagnostics?.Renderer,
-            selectedTemplate = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "AiNativePromptBased" : null,
-            backgroundSource = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "AzureImage2" : null,
-            cropMode = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "PerAspectGenerated" : null,
+            selectedTemplate = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "AiNativePromptBasedThumbnail" : null,
+            layoutFamily = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "AiGeneratedObservationGuide" : null,
+            backgroundMode = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "PerAspectAzureImage2" : null,
             renderer = phase12ThumbnailDiagnostics?.Renderer,
             validator = phase12ThumbnailDiagnostics?.Validator,
             thumbnailReviewJsonRequired = phase12ThumbnailDiagnostics?.ThumbnailReviewJsonRequired,
@@ -7747,10 +7747,10 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report full AI-native generation without manual overlay, background-only mode, or landscape crop.");
         if (File.ReadAllText(diagnosticsPath).Contains("V7", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V8 validation failed: V7 appeared in thumbnail-v8-diagnostics.json while V8 is enabled.");
-        if (!string.Equals(GetJsonString(root, "selectedTemplate", string.Empty), "AiNativePromptBased", StringComparison.Ordinal)
-            || !string.Equals(GetJsonString(root, "backgroundSource", string.Empty), "AzureImage2", StringComparison.Ordinal)
-            || !string.Equals(GetJsonString(root, "cropMode", string.Empty), "PerAspectGenerated", StringComparison.Ordinal))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report AiNativePromptBased, AzureImage2, and PerAspectGenerated.");
+        if (!string.Equals(GetJsonString(root, "selectedTemplate", string.Empty), "AiNativePromptBasedThumbnail", StringComparison.Ordinal)
+            || !string.Equals(GetJsonString(root, "layoutFamily", string.Empty), "AiGeneratedObservationGuide", StringComparison.Ordinal)
+            || !string.Equals(GetJsonString(root, "backgroundMode", string.Empty), "PerAspectAzureImage2", StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report AiNativePromptBasedThumbnail, AiGeneratedObservationGuide, and PerAspectAzureImage2.");
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
@@ -7772,6 +7772,26 @@ public sealed partial class ProductionPipelineExecutionService(
         var legacy = new[] { "landscape.png", "portrait.png", "square.png", "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
         if (legacy.Length > 0)
             throw new InvalidOperationException("Thumbnail V8 validation failed: duplicate non-thumbnail-prefixed output(s) generated: " + string.Join(", ", legacy));
+        EnsureNoV7ThumbnailJsonOutputs(thumbnailRoot);
+    }
+
+
+    private static void EnsureNoV7ThumbnailJsonOutputs(string thumbnailRoot)
+    {
+        var forbiddenTerms = new[]
+        {
+            "ThumbnailV7",
+            "V7Template",
+            "ThumbnailV7CinematicOverlayRenderer",
+            "ThumbnailV7Validator"
+        };
+        foreach (var path in Directory.EnumerateFiles(thumbnailRoot, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            var text = File.ReadAllText(path);
+            var matched = forbiddenTerms.FirstOrDefault(term => text.Contains(term, StringComparison.Ordinal));
+            if (matched is not null)
+                throw new InvalidOperationException($"Thumbnail V8 validation failed: forbidden V7 token '{matched}' appeared in {NormalizePath(path)}.");
+        }
     }
 
     private static Phase12ThumbnailDiagnostics BuildPhase12ThumbnailV8Diagnostics(ProductionPhaseContext context)

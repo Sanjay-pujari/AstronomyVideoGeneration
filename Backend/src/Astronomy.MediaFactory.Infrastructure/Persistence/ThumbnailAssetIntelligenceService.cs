@@ -72,12 +72,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     }
 
 
-    private bool IsThumbnailV8Enabled()
+    private bool IsThumbnailV8Enabled(ThumbnailAssetGenerationRequest? request = null)
     {
         var options = thumbnailOptions?.Value;
-        return options?.UseThumbnailV8 == true
-            || options?.UseV8AiNative == true
-            || string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase);
+        return Phase12ThumbnailRouter.IsThumbnailV8Enabled(options, request);
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailCompositionModelAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
@@ -101,7 +99,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             EnsureApprovedSceneOutputs(request.EventId, request.RegionId, sceneManifest);
         }
 
-        var model = IsThumbnailV8Enabled()
+        var model = IsThumbnailV8Enabled(request)
             ? BuildThumbnailV8CompositionModel(request, thumbnailIntelligence)
             : thumbnailOptions?.Value.EnableThumbnailV7 != false && request.ProductionContext is not null
                 ? BuildThumbnailV7CompositionModel(request, thumbnailIntelligence)
@@ -140,7 +138,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ThumbnailSceneManifestDto manifest;
         if (request.ProductionContext is not null)
         {
-            manifest = IsThumbnailV8Enabled()
+            manifest = IsThumbnailV8Enabled(request)
                 ? BuildThumbnailV8Manifest(request, thumbnailRoot)
                 : thumbnailOptions?.Value.EnableThumbnailV7 != false
                     ? BuildThumbnailV7Manifest(request, thumbnailRoot)
@@ -172,13 +170,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
-        if (IsThumbnailV8Enabled())
-        {
-            Console.WriteLine("PHASE 12 THUMBNAIL ROUTER: V8 selected");
-            return await GenerateThumbnailV8AiNativeImagesAsync(request, thumbnailRoot, cancellationToken);
-        }
-        if (thumbnailOptions?.Value.EnableThumbnailV7 != false)
-            return await GenerateThumbnailV7ImagesAsync(request, thumbnailRoot, cancellationToken);
+        var routed = await Phase12ThumbnailRouter.RouteAsync(
+            thumbnailOptions?.Value,
+            request,
+            () => GenerateThumbnailV8AiNativeImagesAsync(request, thumbnailRoot, cancellationToken),
+            () => GenerateThumbnailV7ImagesAsync(request, thumbnailRoot, cancellationToken),
+            cancellationToken);
+        if (routed is not null)
+            return routed;
         if (request.ProductionContext is not null)
             return await GeneratePureV3ThumbnailImagesAsync(request, thumbnailRoot, cancellationToken);
         if (IsMeteorShowerThumbnail(request))
@@ -299,9 +298,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
-            selectedTemplate = "AiNativePromptBased",
+            selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
+            layoutFamily = "AiGeneratedObservationGuide",
+            backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
@@ -323,9 +324,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
-            selectedTemplate = "AiNativePromptBased",
+            selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
+            layoutFamily = "AiGeneratedObservationGuide",
+            backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
@@ -335,6 +338,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             fallbackUsed = false,
             generatedUtc = DateTimeOffset.UtcNow
         }, JsonOptions), cancellationToken);
+        EnsureNoV7ThumbnailJsonOutputs(thumbnailRoot);
 
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
@@ -393,9 +397,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
-            selectedTemplate = "AiNativePromptBased",
+            selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
+            layoutFamily = "AiGeneratedObservationGuide",
+            backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
             semanticValidationPassed = true,
             outputFiles,
@@ -431,6 +437,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
         var forbidden = new[] { "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
         if (forbidden.Length > 0) throw new InvalidOperationException("Thumbnail V8 validation failed: V7 background output(s) must not exist: " + string.Join(", ", forbidden));
+    }
+
+
+    private static void EnsureNoV7ThumbnailJsonOutputs(string thumbnailRoot)
+    {
+        if (!Directory.Exists(thumbnailRoot)) return;
+        var forbiddenTerms = new[]
+        {
+            "ThumbnailV7",
+            "V7Template",
+            "ThumbnailV7CinematicOverlayRenderer",
+            "ThumbnailV7Validator"
+        };
+        foreach (var path in Directory.EnumerateFiles(thumbnailRoot, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            var text = File.ReadAllText(path);
+            var matched = forbiddenTerms.FirstOrDefault(term => text.Contains(term, StringComparison.Ordinal));
+            if (matched is not null)
+                throw new InvalidOperationException($"Thumbnail V8 validation failed: forbidden V7 token '{matched}' appeared in {NormalizePath(path)}.");
+        }
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV7ImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
@@ -2858,8 +2884,8 @@ OUTPUT:
         return model with
         {
             Architecture = ThumbnailV8AiNativeRendererName,
-            LayoutStyle = "AiNativePromptBased",
-            LayoutFamily = "AiNativePromptBased"
+            LayoutStyle = "AiNativePromptBasedThumbnail",
+            LayoutFamily = "AiGeneratedObservationGuide"
         };
     }
 
@@ -2965,8 +2991,8 @@ OUTPUT:
         var isV7 = string.Equals(model.Architecture, ThumbnailV7Architecture, StringComparison.OrdinalIgnoreCase);
         if (isV8)
         {
-            if (!string.Equals(model.LayoutStyle, "AiNativePromptBased", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiNativePromptBased", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Thumbnail V8 composition validation failed: layoutStyle and layoutFamily must be AiNativePromptBased.");
+            if (!string.Equals(model.LayoutStyle, "AiNativePromptBasedThumbnail", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiGeneratedObservationGuide", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail V8 composition validation failed: layoutStyle must be AiNativePromptBasedThumbnail and layoutFamily must be AiGeneratedObservationGuide.");
         }
         else if (isV7)
         {
@@ -3344,11 +3370,11 @@ OUTPUT:
                 ["thumbnailVersion"] = "V8",
                 ["thumbnailArchitecture"] = ThumbnailV8AiNativeRendererName,
                 ["selectedRenderer"] = ThumbnailV8AiNativeRendererName,
-                ["selectedTemplate"] = "AiNativePromptBased",
+                ["selectedTemplate"] = "AiNativePromptBasedThumbnail",
                 ["backgroundSource"] = "AzureImage2",
                 ["cropMode"] = "PerAspectGenerated",
                 ["cropFromLandscape"] = "False",
-                ["layoutFamily"] = "AiNativePromptBased",
+                ["layoutFamily"] = "AiGeneratedObservationGuide",
                 ["heroSceneManifestRequired"] = "False",
                 ["thumbnailSceneManifestRequired"] = "True",
                 ["approvedSceneAssetsRequired"] = "False"
