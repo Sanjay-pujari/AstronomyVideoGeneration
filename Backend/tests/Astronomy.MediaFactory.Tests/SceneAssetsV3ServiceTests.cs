@@ -187,6 +187,65 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         Assert.DoesNotContain("alignment", guideElements);
     }
 
+    [Fact]
+    public async Task GenerateAsync_AccurateSkyGuideV2Enabled_CallsProviderForOnlyGuideScenesAndWritesDiagnostics()
+    {
+        var generator = new CapturingAICinematicImageGenerator(createImage: true);
+        var service = new SceneAssetsV3Service(
+            Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot, EnableAccurateSkyGuideV2 = true }),
+            generator,
+            NullLogger<SceneAssetsV3Service>.Instance);
+
+        var result = await service.GenerateAsync(new SceneAssetsV3Request(GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);
+
+        Assert.Contains(generator.Requests, r => r.AssetCode == "003-accurate-sky-guide" && r.Prompt.Contains("Accurate Sky Guide", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(generator.Requests, r => r.AssetCode == "004-viewing-tip" && r.Prompt.Contains("Accurate Sky Guide", StringComparison.OrdinalIgnoreCase));
+        var diagnostics = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "accurate-sky-guide-v2-diagnostics.json"));
+        Assert.Contains("\"enabled\": true", diagnostics);
+        Assert.Contains("\"sceneId\": \"003-accurate-sky-guide\"", diagnostics);
+        Assert.Contains("\"providerCalled\": true", diagnostics);
+        Assert.Contains("\"fallbackUsed\": false", diagnostics);
+        Assert.True(File.Exists(Path.Combine(result.OutputRoot, "short", "003-accurate-sky-guide-accurate-sky-guide-v2-prompt.txt")));
+    }
+
+    [Fact]
+    public async Task GenerateAsync_AccurateSkyGuideV2Enabled_FallsBackWhenProviderFails()
+    {
+        var service = new SceneAssetsV3Service(
+            Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot, EnableAccurateSkyGuideV2 = true }),
+            new CapturingAICinematicImageGenerator(createImage: false),
+            NullLogger<SceneAssetsV3Service>.Instance);
+
+        var result = await service.GenerateAsync(new SceneAssetsV3Request(GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(result.OutputRoot, "short", "003-accurate-sky-guide.png")));
+        var diagnostics = await File.ReadAllTextAsync(Path.Combine(result.OutputRoot, "short", "accurate-sky-guide-v2-diagnostics.json"));
+        Assert.Contains("\"providerCalled\": true", diagnostics);
+        Assert.Contains("\"fallbackUsed\": true", diagnostics);
+        Assert.Contains("\"imageExists\": true", diagnostics);
+    }
+
+    private sealed class CapturingAICinematicImageGenerator(bool createImage) : IAICinematicImageGenerator
+    {
+        public List<AICinematicAssetRequest> Requests { get; } = new();
+        public bool IsConfigured => true;
+        public string DeploymentName => "test-image2";
+
+        public async Task<AICinematicProviderResult> GenerateAsync(AICinematicAssetRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            if (!createImage)
+            {
+                return new AICinematicProviderResult("Failed", null, ProviderConfigured: true, ["test failure"]);
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(request.PlannedImagePath) ?? ".");
+            using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(32, 32, SixLabors.ImageSharp.Color.Navy);
+            await image.SaveAsPngAsync(request.PlannedImagePath, cancellationToken);
+            return new AICinematicProviderResult("Generated", request.PlannedImagePath, ProviderConfigured: true, []);
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_outputRoot)) Directory.Delete(_outputRoot, recursive: true);
