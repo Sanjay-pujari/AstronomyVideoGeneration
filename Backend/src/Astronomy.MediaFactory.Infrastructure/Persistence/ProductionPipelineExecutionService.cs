@@ -297,7 +297,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var outputs = (await action(context, cancellationToken)).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var missing = outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, [], missing, missing.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics);
+            var warnings = phaseNo == 18 ? ReadPhase18Warnings(context) : [];
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, warnings, missing, missing.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
@@ -4209,6 +4210,15 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolveMotionV2Strength(string? motionV2Strength)
         => IsExperimentalMotionV2Strength(motionV2Strength) ? "Experimental" : "Default";
 
+    private static string ResolvePhase18MotionV2Strength(string? requestMotionV2Strength, string? planMotionV2Strength)
+        => IsExperimentalMotionV2Strength(requestMotionV2Strength)
+            ? "Experimental"
+            : ResolveMotionV2Strength(planMotionV2Strength);
+
+    private static bool ShouldWarnMotionV2StrengthRequestOverride(string? requestMotionV2Strength, string? planMotionV2Strength)
+        => IsExperimentalMotionV2Strength(requestMotionV2Strength)
+            && string.Equals(planMotionV2Strength, "Default", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsExperimentalMotionV2Strength(string? motionV2Strength)
         => string.Equals(motionV2Strength, "Experimental", StringComparison.OrdinalIgnoreCase);
 
@@ -5433,7 +5443,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var motionRoot = motionPlanFound
             ? JsonNode.Parse(await File.ReadAllTextAsync(motionPlanPath, cancellationToken)) ?? new JsonObject()
             : BuildDefaultPhase18MotionPlan(sceneAssetsRoot, syncPath, ttsPath);
-        var motionV2StrengthUsed = ResolveMotionV2Strength(GetString(motionRoot, "motionV2Strength") ?? context.PipelineRequest.MotionV2Strength);
+        var motionV2StrengthWarning = ShouldWarnMotionV2StrengthRequestOverride(context.PipelineRequest.MotionV2Strength, GetString(motionRoot, "motionV2Strength"))
+            ? "Motion plan strength differs from request; request override applied."
+            : null;
+        var warnings = string.IsNullOrWhiteSpace(motionV2StrengthWarning) ? Array.Empty<string>() : new[] { motionV2StrengthWarning };
+        var motionV2StrengthUsed = ResolvePhase18MotionV2Strength(context.PipelineRequest.MotionV2Strength, GetString(motionRoot, "motionV2Strength"));
         {
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
             var shortItems = ReadVideoAssemblyItems(planRoot, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
@@ -5566,6 +5580,7 @@ public sealed partial class ProductionPipelineExecutionService(
             motionTypeApplied = true,
             motionPlanPath = NormalizePath(motionPlanPath),
             motionV2StrengthUsed,
+            warnings,
             motionPlanFound,
             defaultMotionGenerated,
             cinematicOutroEnabled,
@@ -5658,7 +5673,7 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = "V2", motionTypeApplied = true, motionV2StrengthUsed, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = "V2", motionTypeApplied = true, motionV2StrengthUsed, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -5671,6 +5686,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedDurationPlanPath = NormalizePath(durationPlanPath),
             selectedMotionPlanPath = NormalizePath(motionPlanPath),
             motionV2StrengthUsed,
+            warnings,
             motionDebugFound,
             motionDebugPath = NormalizePath(motionDebugPath),
             oldPathsChecked = oldPaths.Select(NormalizePath),
@@ -5760,7 +5776,7 @@ public sealed partial class ProductionPipelineExecutionService(
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = "V2", motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = "V2", motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Cinematic Video Assembly V2 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
@@ -6938,6 +6954,25 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "content-plan-production-request.json"), JsonSerializer.Serialize(request, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "production-event-intelligence.json"), JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
+    }
+
+    private static IReadOnlyList<string> ReadPhase18Warnings(ProductionPhaseContext context)
+    {
+        var diagnosticsPath = Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-18-video-diagnostics.json");
+        if (!File.Exists(diagnosticsPath)) return [];
+        try
+        {
+            var diagnostics = JsonNode.Parse(File.ReadAllText(diagnosticsPath));
+            return diagnostics?["warnings"]?.AsArray()
+                .Select(warning => warning?.GetValue<string>() ?? string.Empty)
+                .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null)

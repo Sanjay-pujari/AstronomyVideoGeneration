@@ -49,6 +49,27 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase18MotionV2Strength_RequestExperimentalOverridesDefaultPlan()
+    {
+        Assert.Equal("Experimental", InvokePhase18MotionV2StrengthResolver("Experimental", "Default"));
+    }
+
+    [Fact]
+    public void Phase18MotionV2Strength_UsesPlanBeforeDefaultWhenRequestIsNotExperimental()
+    {
+        Assert.Equal("Experimental", InvokePhase18MotionV2StrengthResolver(null, "Experimental"));
+        Assert.Equal("Default", InvokePhase18MotionV2StrengthResolver(null, null));
+    }
+
+    [Fact]
+    public void Phase18MotionV2Strength_WarnsWhenRequestOverridesDefaultPlan()
+    {
+        Assert.True(InvokePhase18MotionV2StrengthOverrideWarning("Experimental", "Default"));
+        Assert.False(InvokePhase18MotionV2StrengthOverrideWarning("Experimental", "Experimental"));
+        Assert.False(InvokePhase18MotionV2StrengthOverrideWarning(null, "Default"));
+    }
+
+    [Fact]
     public void PhaseGating_NamedFullMoonShortOnly_SkipsLongNarration()
     {
         var context = CreateContext("NamedFullMoon", ["ShortVideo"]);
@@ -573,6 +594,20 @@ public sealed class ProductionPipelineExecutionServiceTests
         var method = typeof(ProductionPipelineExecutionService).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
         return (bool)method!.Invoke(null, [diagnostics])!;
+    }
+
+    private static string InvokePhase18MotionV2StrengthResolver(string? requestMotionV2Strength, string? planMotionV2Strength)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase18MotionV2Strength", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (string)method!.Invoke(null, [requestMotionV2Strength, planMotionV2Strength])!;
+    }
+
+    private static bool InvokePhase18MotionV2StrengthOverrideWarning(string? requestMotionV2Strength, string? planMotionV2Strength)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ShouldWarnMotionV2StrengthRequestOverride", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method!.Invoke(null, [requestMotionV2Strength, planMotionV2Strength])!;
     }
 
     private static void WritePhase10SceneAssets(string root, string profile, int count, int? skipFinalSceneNumber = null)
