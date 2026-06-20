@@ -104,9 +104,9 @@ public sealed class ProductionPipelineExecutionServiceTests
                 {
                     items = new[]
                     {
-                        new { format = "short", sceneId = "001", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
-                        new { format = "short", sceneId = "001", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 },
-                        new { format = "short", sceneId = "002", cueIndex = 3, cueText = "Third cue.", audioDurationSec = 7.0 }
+                        new { format = "short", sceneId = "001-hook", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
+                        new { format = "short", sceneId = "001-hook", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 },
+                        new { format = "short", sceneId = "002-cause", cueIndex = 3, cueText = "Third cue.", audioDurationSec = 7.0 }
                     }
                 },
                 @long = new
@@ -123,8 +123,8 @@ public sealed class ProductionPipelineExecutionServiceTests
 
             var durations = (IReadOnlyDictionary<string, double>)method!.Invoke(null, [planRoot, "short"])!;
 
-            Assert.Equal(6.602, durations["001"], 3);
-            Assert.Equal(7.0, durations["002"], 3);
+            Assert.Equal(6.602, durations["001-hook"], 3);
+            Assert.Equal(7.0, durations["002-cause"], 3);
         }
         finally
         {
@@ -145,9 +145,9 @@ public sealed class ProductionPipelineExecutionServiceTests
                 {
                     items = new[]
                     {
-                        new { format = "short", sceneId = "001", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
-                        new { format = "short", sceneId = "001", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 },
-                        new { format = "short", sceneId = "002", cueIndex = 3, cueText = "Third cue.", audioDurationSec = 7.0 }
+                        new { format = "short", sceneId = "001-hook", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
+                        new { format = "short", sceneId = "001-hook", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 },
+                        new { format = "short", sceneId = "002-cause", cueIndex = 3, cueText = "Third cue.", audioDurationSec = 7.0 }
                     }
                 }
             }));
@@ -159,8 +159,8 @@ public sealed class ProductionPipelineExecutionServiceTests
                 {
                     items = new[]
                     {
-                        new { sceneId = "001", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "001.png"), durationSec = 2.0 },
-                        new { sceneId = "002", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "002.png"), durationSec = 3.0 }
+                        new { sceneId = "1-hook", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "001.png"), durationSec = 2.0 },
+                        new { sceneId = "002-cause", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "002.png"), durationSec = 3.0 }
                     }
                 }
             }))!;

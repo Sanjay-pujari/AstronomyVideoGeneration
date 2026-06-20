@@ -3445,8 +3445,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format)
         => ReadCanonicalTtsTimelineItems(planRoot, format)
-            .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
-            .GroupBy(item => NormalizeSceneIdForOrder(item.SceneId), StringComparer.OrdinalIgnoreCase)
+            .Where(item => string.Equals(item.Format, format, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.SceneId))
+            .GroupBy(item => NormalizeSceneIdForDurationMatch(item.SceneId), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => RoundDuration(group.Sum(item => Math.Max(0, item.AudioDurationSec))),
@@ -4456,6 +4456,18 @@ public sealed partial class ProductionPipelineExecutionService(
         var leadingNumber = Regex.Match(sanitized, @"^\d+");
         if (leadingNumber.Success && int.TryParse(leadingNumber.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericSceneId))
             return numericSceneId.ToString(CultureInfo.InvariantCulture);
+
+        return sanitized;
+    }
+
+    private static string NormalizeSceneIdForDurationMatch(string? sceneId)
+    {
+        var sanitized = SanitizeFileName(sceneId ?? string.Empty).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(sanitized)) return string.Empty;
+
+        var match = Regex.Match(sanitized, @"^0*(\d+)(.*)$");
+        if (match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericSceneId))
+            return numericSceneId.ToString("000", CultureInfo.InvariantCulture) + match.Groups[2].Value;
 
         return sanitized;
     }
@@ -6457,7 +6469,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var durationPlanItem = durationPlanBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matchedDurationPlanItem)
                 ? matchedDurationPlanItem
                 : items.Count < durationPlanItems.Count ? durationPlanItems[items.Count] : null;
-            var normalizedSceneId = NormalizeSceneIdForOrder(sceneId);
+            var normalizedSceneId = NormalizeSceneIdForDurationMatch(sceneId);
             var calibratedSceneDuration = cueLevelDurationsBySceneId.TryGetValue(normalizedSceneId, out var cueLevelSceneDuration) && cueLevelSceneDuration > 0
                 ? cueLevelSceneDuration
                 : durationPlanItem?.AudioDurationSec > 0
@@ -6578,8 +6590,25 @@ public sealed partial class ProductionPipelineExecutionService(
             : 1 - Math.Pow(1 - t, 3);
     }
 
+
+    private static IReadOnlyList<VideoAssemblyItem> OverrideRenderSceneDurationsFromTtsTimeline(string planRoot, string format, IReadOnlyList<VideoAssemblyItem> items)
+    {
+        var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
+        if (cueLevelDurationsBySceneId.Count == 0) return items;
+
+        return items.Select(item =>
+        {
+            var normalizedSceneId = NormalizeSceneIdForDurationMatch(item.SceneId);
+            return cueLevelDurationsBySceneId.TryGetValue(normalizedSceneId, out var cueDuration) && cueDuration > 0
+                ? item with { SceneDurationSec = cueDuration }
+                : item;
+        }).ToArray();
+    }
+
     private async Task RenderVideoAssemblyAsync(string planRoot, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
     {
+        var renderItems = OverrideRenderSceneDurationsFromTtsTimeline(planRoot, format, items);
+        await WriteMotionDebugAsync(planRoot, renderItems, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var tempRoot = Path.Combine(Path.GetTempPath(), "astro-video-assembly-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
@@ -6588,9 +6617,9 @@ public sealed partial class ProductionPipelineExecutionService(
             var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
             var clipPaths = new List<string>();
             var perSceneFilters = new List<object>();
-            for (var i = 0; i < items.Count; i++)
+            for (var i = 0; i < renderItems.Count; i++)
             {
-                var item = items[i];
+                var item = renderItems[i];
                 var clipPath = Path.Combine(tempRoot, $"{i:000}-{SanitizeFileName(item.SceneId)}.mp4");
                 var duration = Math.Max(0.5, item.SceneDurationSec);
                 var vf = BuildPhase18MotionFilter(item, i);
@@ -6604,6 +6633,8 @@ public sealed partial class ProductionPipelineExecutionService(
                     zoompanDValue = totalFrames,
                     scaler = "lanczos",
                     fps = 30,
+                    durationSeconds = duration,
+                    totalFrames,
                     filter = vf
                 });
                 var result = await RunProcessAsync(ffmpegPath, ["-y", "-loop", "1", "-i", item.SceneImagePath, "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-vf", vf, "-r", "30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", clipPath], cancellationToken);
@@ -6624,7 +6655,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             else
             {
-                await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
+                await CrossfadeSceneClipsAsync(clipPaths, renderItems, videoOnlyPath, ffmpegPath, cancellationToken);
             }
 
             if (hasNarrationAudio) await ConcatenateNarrationTrackAsync(narrationItems, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
@@ -6637,8 +6668,8 @@ public sealed partial class ProductionPipelineExecutionService(
             if (hasNarrationAudio)
             {
                 var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
-                var perSceneDeltas = items
-                    .Select(scene => cueLevelDurationsBySceneId.TryGetValue(NormalizeSceneIdForOrder(scene.SceneId), out var cueDuration)
+                var perSceneDeltas = renderItems
+                    .Select(scene => cueLevelDurationsBySceneId.TryGetValue(NormalizeSceneIdForDurationMatch(scene.SceneId), out var cueDuration)
                         ? Math.Abs(scene.SceneDurationSec - cueDuration)
                         : double.PositiveInfinity)
                     .ToArray();
