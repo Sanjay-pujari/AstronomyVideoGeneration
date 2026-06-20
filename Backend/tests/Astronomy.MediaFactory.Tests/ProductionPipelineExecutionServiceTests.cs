@@ -189,6 +189,36 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase18VisualAssembly_MatchesNumericPrefixTtsSceneDurations()
+    {
+        var cueDurations = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001"] = 6.602,
+            ["002"] = 7.0,
+            ["003"] = 9.5
+        };
+
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("MatchCueLevelSceneDuration", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var match = method!.Invoke(null, [cueDurations, "001-hook", 2.0])!;
+
+        Assert.Equal("001-hook", ReadString(match, "RenderSceneId"));
+        Assert.Equal("001-hook", ReadString(match, "NormalizedRenderSceneId"));
+        Assert.Equal("001", ReadString(match, "MatchedTtsSceneId"));
+        Assert.Equal("NumericPrefix", ReadString(match, "MatchMode"));
+        Assert.Equal(6.602, ReadDouble(match, "GroupedCueDurationSec"), 3);
+        Assert.Equal(2.0, ReadDouble(match, "OriginalSceneDurationSec"), 3);
+        Assert.Equal(6.602, ReadDouble(match, "ExpandedSceneDurationSec"), 3);
+
+        static string? ReadString(object item, string propertyName)
+            => (string?)item.GetType().GetProperty(propertyName)!.GetValue(item);
+
+        static double ReadDouble(object item, string propertyName)
+            => (double)item.GetType().GetProperty(propertyName)!.GetValue(item)!;
+    }
+
+    [Fact]
     public void Phase14SubtitleSegmentation_SplitsNarrationIntoReadableCues()
     {
         const string narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";
