@@ -92,6 +92,47 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase18VisualDurations_GroupCueLevelTtsTimelineDurationsByScene()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase18-visual-duration-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts"));
+            File.WriteAllText(Path.Combine(planRoot, "tts", "tts-timeline.json"), JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
+                        new { format = "short", sceneId = "001", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 },
+                        new { format = "short", sceneId = "002", cueIndex = 3, cueText = "Third cue.", audioDurationSec = 7.0 }
+                    }
+                },
+                @long = new
+                {
+                    items = new[]
+                    {
+                        new { format = "long", sceneId = "001", cueIndex = 1, cueText = "Long first cue.", audioDurationSec = 2.0 }
+                    }
+                }
+            }));
+
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildCueLevelSceneDurationsFromTtsTimeline", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var durations = (IReadOnlyDictionary<string, double>)method!.Invoke(null, [planRoot, "short"])!;
+
+            Assert.Equal(6.602, durations["001"], 3);
+            Assert.Equal(7.0, durations["002"], 3);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+    [Fact]
     public void Phase14SubtitleSegmentation_SplitsNarrationIntoReadableCues()
     {
         const string narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";

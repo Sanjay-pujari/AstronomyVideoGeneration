@@ -3443,6 +3443,15 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
     }
 
+    private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format)
+        => ReadCanonicalTtsTimelineItems(planRoot, format)
+            .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
+            .GroupBy(item => NormalizeSceneIdForOrder(item.SceneId), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => RoundDuration(group.Sum(item => Math.Max(0, item.AudioDurationSec))),
+                StringComparer.OrdinalIgnoreCase);
+
     private sealed record CueLevelSubtitleValidationResult(bool Passed, IReadOnlyList<double> DriftMs, double MaxCueDriftMs, double AverageCueDriftMs, int CueCount, string SubtitleSourcePath, string TimingSource, IReadOnlyList<object> CueLevelValidation);
 
     private static CueLevelSubtitleValidationResult ValidateCueLevelSubtitleSync(string planRoot, string format, string srtPath)
@@ -6409,6 +6418,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var items = new List<VideoAssemblyItem>();
         var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
+        var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
         var durationPlanBySceneId = durationPlanItems
             .Where(i => !string.IsNullOrWhiteSpace(i.SceneId))
             .GroupBy(i => NormalizeSceneIdForOrder(i.SceneId), StringComparer.OrdinalIgnoreCase)
@@ -6431,9 +6441,12 @@ public sealed partial class ProductionPipelineExecutionService(
             var durationPlanItem = durationPlanBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matchedDurationPlanItem)
                 ? matchedDurationPlanItem
                 : items.Count < durationPlanItems.Count ? durationPlanItems[items.Count] : null;
-            var calibratedSceneDuration = durationPlanItem?.AudioDurationSec > 0
-                ? durationPlanItem.AudioDurationSec
-                : GetDouble(item, "audioDurationSec") ?? GetDouble(item, "sceneAudioDurationSec") ?? GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
+            var normalizedSceneId = NormalizeSceneIdForOrder(sceneId);
+            var calibratedSceneDuration = cueLevelDurationsBySceneId.TryGetValue(normalizedSceneId, out var cueLevelSceneDuration) && cueLevelSceneDuration > 0
+                ? cueLevelSceneDuration
+                : durationPlanItem?.AudioDurationSec > 0
+                    ? durationPlanItem.AudioDurationSec
+                    : GetDouble(item, "audioDurationSec") ?? GetDouble(item, "sceneAudioDurationSec") ?? GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
             items.Add(new VideoAssemblyItem(
                 sceneId,
                 imagePath,
@@ -6607,7 +6620,12 @@ public sealed partial class ProductionPipelineExecutionService(
             var narrationDuration = hasNarrationAudio ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
             if (hasNarrationAudio)
             {
-                var perSceneDeltas = items.Zip(narrationItems, (scene, cue) => Math.Abs(scene.SceneDurationSec - cue.AudioDurationSec)).ToArray();
+                var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
+                var perSceneDeltas = items
+                    .Select(scene => cueLevelDurationsBySceneId.TryGetValue(NormalizeSceneIdForOrder(scene.SceneId), out var cueDuration)
+                        ? Math.Abs(scene.SceneDurationSec - cueDuration)
+                        : double.PositiveInfinity)
+                    .ToArray();
                 if (perSceneDeltas.Any(delta => delta > 0.1))
                     throw new InvalidOperationException($"Phase 18 scene-level audio/video sync failed: perSceneAudioVideoDurationDeltaSec max={perSceneDeltas.Max():0.###}s.");
                 var narrationVideoDelta = Math.Abs(videoDuration - narrationDuration);
