@@ -390,7 +390,7 @@ public sealed class WeeklySkyForecastV2NarrationTextGenerator : IWeeklySkyForeca
             "BestObservationNight" => $"Circle {s.TargetDate:MMMM d}. Once the sky darkens, this timing gives you the most practical chance to spot the full grouping with confidence. If clouds interrupt your first attempt, stay patient for a second look shortly after twilight before the objects sink near the horizon.",
             "MoonPlanetHighlight" => $"The Moon adds a calm silver glow, while {objects} keep the western dusk layered and easy to follow. Venus and Saturn can anchor the planet highlight when Skyfield marks them visible, creating quiet beauty that lingers long after twilight rather than forcing an unsupported planet into the story.",
             "ViewingPhotographyTip" => $"Use a steady phone tripod, keep the horizon low in frame, and let the brighter objects guide focus—simple choices that make your shot feel intentional.",
-            "ClosingCTA" => $"Before the week slips by, take ten peaceful minutes outside and look west—you might find this becomes your favorite sky memory of the week. Share the moment with someone nearby, because the best sky stories are the ones remembered together.",
+            "ClosingCTA" => $"Keep watching for more sky events. Until then, enjoy stargazing.",
             _ => $"{objects} {diversifier.Next("visible_west_after_sunset")}."
         };
         return new WeeklyGeneratedNarrationSegment(s.SegmentCode, s.SegmentTitle, text, EstimateDurationSeconds(text), s.TargetObjects, s.RecommendedVisualStrategy, s.VisualPurpose);

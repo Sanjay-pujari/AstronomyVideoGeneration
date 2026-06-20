@@ -352,10 +352,10 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
                         ?? "this week";
         return shortPlan.ShortCode switch
         {
-            "short_hero" => $"Look west after sunset this week over {regionName}. The Moon, Jupiter, and Venus create a beautiful evening lineup. Step outside after dusk, find a clear western horizon, and watch the brightest objects appear together. Follow AstroPulse for your next sky guide.",
-            "short_best_night" => $"The best sky-watching moment this week comes on {bestNight} after sunset, when the western sky is still glowing over {regionName}. Look for the Moon near Jupiter, with Venus shining nearby. Give your eyes a few minutes to adjust and enjoy the view. Follow AstroPulse for more weekly sky timing guides.",
-            "short_moon" => $"This week, the Moon appears close to Jupiter in the evening sky over {regionName}. The bright Moon makes the scene easy to find, while Jupiter glows nearby like a golden planet. Look west after sunset and hold the view for a few quiet minutes. Follow AstroPulse for more sky events.",
-            _ => $"Look west after sunset this week over {regionName}. Bright evening targets are easy to spot, and {bestNight} offers a great viewing window. Step outside after dusk, let your eyes adjust, and enjoy the sky. Follow AstroPulse for your next sky guide."
+            "short_hero" => $"Look west after sunset this week over {regionName}. The Moon, Jupiter, and Venus create a beautiful evening lineup. Step outside after dusk, find a clear western horizon, and watch the brightest objects appear together. Keep watching for more sky events. Until then, enjoy stargazing.",
+            "short_best_night" => $"The best sky-watching moment this week comes on {bestNight} after sunset, when the western sky is still glowing over {regionName}. Look for the Moon near Jupiter, with Venus shining nearby. Give your eyes a few minutes to adjust and enjoy the view. Keep watching for more sky events. Until then, enjoy stargazing.",
+            "short_moon" => $"This week, the Moon appears close to Jupiter in the evening sky over {regionName}. The bright Moon makes the scene easy to find, while Jupiter glows nearby like a golden planet. Look west after sunset and hold the view for a few quiet minutes. Keep watching for more sky events. Until then, enjoy stargazing.",
+            _ => $"Look west after sunset this week over {regionName}. Bright evening targets are easy to spot, and {bestNight} offers a great viewing window. Step outside after dusk, let your eyes adjust, and enjoy the sky. Keep watching for more sky events. Until then, enjoy stargazing."
         };
     }
 

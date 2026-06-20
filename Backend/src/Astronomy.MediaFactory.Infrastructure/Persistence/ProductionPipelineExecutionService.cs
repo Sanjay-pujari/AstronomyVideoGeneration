@@ -4432,7 +4432,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var audioDuration = File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : timelineDuration;
             if (audioDuration <= 0) missingDurationItems.Add($"{format}:{sceneId}");
             var metadata = metadataBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
-            var sceneDuration = Math.Max(minimumSceneDurationSec, audioDuration);
+            var sceneDuration = audioDuration > 0 ? audioDuration : minimumSceneDurationSec;
             items.Add(new SceneDurationPlanItem(format, sceneId, audioPath, RoundDuration(audioDuration), RoundDuration(sceneDuration), RoundDuration(transitionPaddingSec), "cut", ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion"))));
         }
         return items;
@@ -6026,9 +6026,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortSrtDuration = shortSrtExists ? ReadSrtFinalEndSeconds(shortSrtPath) : 0;
         var longSrtDuration = longSrtExists ? ReadSrtFinalEndSeconds(longSrtPath) : 0;
         var shortPlanAudioDuration = ReadSceneDurationPlanTotal(planRoot, "short", "totalAudioDurationSec", shortAudioDuration);
-        var shortPlanVideoDuration = ReadSceneDurationPlanTotal(planRoot, "short", "totalVideoDurationSec", shortVideoDuration);
+        var shortPlanVideoDuration = ReadSceneDurationPlanTotal(planRoot, "short", "totalVideoDurationSec", shortPlanAudioDuration);
         var longPlanAudioDuration = ReadSceneDurationPlanTotal(planRoot, "long", "totalAudioDurationSec", longAudioDuration);
-        var longPlanVideoDuration = ReadSceneDurationPlanTotal(planRoot, "long", "totalVideoDurationSec", longVideoDuration);
+        var longPlanVideoDuration = ReadSceneDurationPlanTotal(planRoot, "long", "totalVideoDurationSec", longPlanAudioDuration);
         var subtitleBurnInErrors = new List<string>();
         var subtitleBurnInCommandShort = string.Empty;
         var subtitleBurnInCommandLong = string.Empty;
@@ -6077,9 +6077,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var longExpectedVideoDuration = longAudioDuration + (cinematicOutroEnabled ? cinematicOutroDurationSec : 0);
         var shortDurationDeltaAgainstExpected = Math.Abs(shortVideoDuration - shortExpectedVideoDuration);
         var longDurationDeltaAgainstExpected = Math.Abs(longVideoDuration - longExpectedVideoDuration);
-        var shortDurationValidationPassed = shortDurationDeltaAgainstExpected <= 1.0;
-        var longDurationValidationPassed = longDurationDeltaAgainstExpected <= 1.0;
-        var audioVideoDurationDeltaSec = Math.Max(Math.Abs(shortAudioDuration - shortVideoDuration), Math.Abs(longAudioDuration - longVideoDuration));
+        var shortDurationValidationPassed = shortDurationDeltaAgainstExpected <= 0.1;
+        var longDurationValidationPassed = longDurationDeltaAgainstExpected <= 0.1;
+        var perSceneAudioVideoDurationDeltaSec = Math.Max(Math.Abs(shortPlanAudioDuration - shortPlanVideoDuration), Math.Abs(longPlanAudioDuration - longPlanVideoDuration));
+        var audioVideoDurationDeltaSec = perSceneAudioVideoDurationDeltaSec;
         var durationDeltaAgainstExpectedSec = Math.Max(shortDurationDeltaAgainstExpected, longDurationDeltaAgainstExpected);
         var backgroundMusicConfigForDiagnostics = ResolvePhase18BackgroundMusicConfig(planRoot);
         var backgroundAudioPathForDiagnostics = backgroundMusicConfigForDiagnostics.ConfiguredPath;
@@ -6116,8 +6117,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!motionDebugFound) errors.Add($"motion-debug.json missing: {NormalizePath(motionDebugPath)}");
         if (motionV2StrengthMismatch) errors.Add($"MotionV2StrengthMismatch: request=Experimental, diagnostics={motionV2StrengthUsed}");
         if (!previewOnly && backgroundMusicConfigForDiagnostics.Enabled && !backgroundAudioFound) errors.Add($"Configured background music file missing: {NormalizePath(backgroundAudioPathForDiagnostics)}");
-        if (!previewOnly && !shortDurationValidationPassed) errors.Add($"short video duration differs from narration + cinematic outro by >1.0 sec; actual={RoundDuration(shortDurationDeltaAgainstExpected)}");
-        if (!previewOnly && !longDurationValidationPassed) errors.Add($"long video duration differs from narration + cinematic outro by >1.0 sec; actual={RoundDuration(longDurationDeltaAgainstExpected)}");
+        if (!previewOnly && perSceneAudioVideoDurationDeltaSec > 0.1) errors.Add($"perSceneAudioVideoDurationDeltaSec > 0.1 sec; actual={RoundDuration(perSceneAudioVideoDurationDeltaSec)}");
+        if (!previewOnly && !shortDurationValidationPassed) errors.Add($"short final video duration differs from narration + cinematic outro by >0.1 sec; actual={RoundDuration(shortDurationDeltaAgainstExpected)}");
+        if (!previewOnly && !longDurationValidationPassed) errors.Add($"long final video duration differs from narration + cinematic outro by >0.1 sec; actual={RoundDuration(longDurationDeltaAgainstExpected)}");
         if (!previewOnly && shortSrtExists && shortPlanAudioDuration - shortSrtDuration > 0.5) errors.Add($"short.srt ends more than 0.5 sec before planned audio; srt={RoundDuration(shortSrtDuration)}, audio={RoundDuration(shortPlanAudioDuration)}");
         if (!previewOnly && longSrtExists && longPlanAudioDuration - longSrtDuration > 0.5) errors.Add($"long.srt ends more than 0.5 sec before planned audio; srt={RoundDuration(longSrtDuration)}, audio={RoundDuration(longPlanAudioDuration)}");
         if (!previewOnly && shortSrtExists && Math.Abs(shortSrtDuration - shortPlanAudioDuration) > 0.1) errors.Add($"short.srt duration differs from planned audio duration by >0.1 sec; srt={RoundDuration(shortSrtDuration)}, audio={RoundDuration(shortPlanAudioDuration)}");
@@ -6203,6 +6205,7 @@ public sealed partial class ProductionPipelineExecutionService(
             finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
             finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
             audioVideoDurationDeltaSec = RoundDuration(audioVideoDurationDeltaSec),
+            perSceneAudioVideoDurationDeltaSec = RoundDuration(perSceneAudioVideoDurationDeltaSec),
             narrationAudioMixed,
             finalVideoHasAudio,
             finalVideoHasMotion,
@@ -6327,6 +6330,7 @@ public sealed partial class ProductionPipelineExecutionService(
             finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
             finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
             audioVideoDurationDeltaSec = RoundDuration(audioVideoDurationDeltaSec),
+            perSceneAudioVideoDurationDeltaSec = RoundDuration(perSceneAudioVideoDurationDeltaSec),
             cinematicOutroEnabled,
             cinematicOutroDurationSec,
             fadeToBlackEnabled,
@@ -6427,9 +6431,9 @@ public sealed partial class ProductionPipelineExecutionService(
             var durationPlanItem = durationPlanBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matchedDurationPlanItem)
                 ? matchedDurationPlanItem
                 : items.Count < durationPlanItems.Count ? durationPlanItems[items.Count] : null;
-            var calibratedSceneDuration = durationPlanItem?.SceneDurationSec > 0
-                ? durationPlanItem.SceneDurationSec
-                : GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
+            var calibratedSceneDuration = durationPlanItem?.AudioDurationSec > 0
+                ? durationPlanItem.AudioDurationSec
+                : GetDouble(item, "audioDurationSec") ?? GetDouble(item, "sceneAudioDurationSec") ?? GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
             items.Add(new VideoAssemblyItem(
                 sceneId,
                 imagePath,
@@ -6582,11 +6586,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 JsonSerializer.Serialize(new { rendererVersion = "V3", perSceneFilterLogged = true, filters = perSceneFilters }, JsonOptions),
                 cancellationToken);
             var videoOnlyPath = Path.Combine(tempRoot, "video-only.mp4");
-            await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
-
             var narrationItems = ReadCanonicalTtsTimelineItems(planRoot, format);
             var availableAudioItems = narrationItems.Where(i => !string.IsNullOrWhiteSpace(i.AudioPath) && File.Exists(i.AudioPath)).ToArray();
             var hasNarrationAudio = narrationItems.Count > 0 && availableAudioItems.Length == narrationItems.Count;
+            if (hasNarrationAudio)
+            {
+                await ConcatenateSceneClipsAsync(clipPaths, videoOnlyPath, tempRoot, ffmpegPath, cancellationToken);
+            }
+            else
+            {
+                await CrossfadeSceneClipsAsync(clipPaths, items, videoOnlyPath, ffmpegPath, cancellationToken);
+            }
+
             if (hasNarrationAudio) await ConcatenateNarrationTrackAsync(narrationItems, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
             if (!hasNarrationAudio && !previewOnly) throw new InvalidOperationException($"Phase 18 requires every {format} cue-level TTS audio item unless videoAssemblyPreviewOnly is enabled. Found {availableAudioItems.Length}/{narrationItems.Count}.");
             if (hasNarrationAudio && backgroundMusicConfig.Enabled && (string.IsNullOrWhiteSpace(backgroundMusicConfig.ConfiguredPath) || !File.Exists(backgroundMusicConfig.ConfiguredPath)))
@@ -6594,7 +6605,17 @@ public sealed partial class ProductionPipelineExecutionService(
 
             var videoDuration = await ProbeAudioDurationSecondsAsync(videoOnlyPath, cancellationToken);
             var narrationDuration = hasNarrationAudio ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
-            var finalDuration = hasNarrationAudio ? narrationDuration + 4.0 : videoDuration + 4.0;
+            if (hasNarrationAudio)
+            {
+                var perSceneDeltas = items.Zip(narrationItems, (scene, cue) => Math.Abs(scene.SceneDurationSec - cue.AudioDurationSec)).ToArray();
+                if (perSceneDeltas.Any(delta => delta > 0.1))
+                    throw new InvalidOperationException($"Phase 18 scene-level audio/video sync failed: perSceneAudioVideoDurationDeltaSec max={perSceneDeltas.Max():0.###}s.");
+                var narrationVideoDelta = Math.Abs(videoDuration - narrationDuration);
+                if (narrationVideoDelta > 0.1)
+                    throw new InvalidOperationException($"Phase 18 narration video duration must equal narration audio duration before outro. video={videoDuration:0.###}s audio={narrationDuration:0.###}s delta={narrationVideoDelta:0.###}s.");
+            }
+            var cinematicOutroDuration = 4.0;
+            var finalDuration = hasNarrationAudio ? narrationDuration + cinematicOutroDuration : videoDuration + cinematicOutroDuration;
             if (finalDuration <= 0) throw new InvalidOperationException("Phase 18 cannot determine final video/audio duration.");
 
             var finalMixedAudioPath = ResolvePhase18FinalMixedAudioPath(outputPath);
@@ -6810,6 +6831,14 @@ public sealed partial class ProductionPipelineExecutionService(
         args.AddRange(["-filter_complex", filter.ToString(), "-map", $"[x{clipPaths.Count - 1}]", "-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outputPath]);
         var result = await RunProcessStaticAsync(ffmpegPath, args, cancellationToken);
         if (result.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to crossfade scene clips: {result.Error}");
+    }
+
+    private static async Task ConcatenateSceneClipsAsync(IReadOnlyList<string> clipPaths, string outputPath, string tempRoot, string ffmpegPath, CancellationToken cancellationToken)
+    {
+        var concatPath = Path.Combine(tempRoot, "video-concat.txt");
+        await File.WriteAllLinesAsync(concatPath, clipPaths.Select(path => "file '" + path.Replace("'", "'\\''") + "'"), cancellationToken);
+        var result = await RunProcessStaticAsync(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-c", "copy", outputPath], cancellationToken);
+        if (result.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to concatenate scene clips: {result.Error}");
     }
 
     private static async Task<ProcessResult> RunProcessStaticAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)

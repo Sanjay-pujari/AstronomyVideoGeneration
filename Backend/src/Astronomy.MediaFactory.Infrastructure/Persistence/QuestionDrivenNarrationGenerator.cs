@@ -256,10 +256,10 @@ public sealed class QuestionDrivenNarrationGenerator(
             ("Eclipse", "MainStory") => "The most dramatic moments arrive slowly, then all at once, as the shadow deepens and the sky reveals motion we usually cannot feel.",
             ("PlanetGrouping", "MainStory") => "One world may be nearby by solar-system standards, the other vastly farther away, yet tonight perspective lets them share the same frame.",
             (_, "ViewingGuide") => $"For the practical view, look toward {direction} during {window}. Choose an open horizon, give your eyes time to adjust, and use binoculars only if they help you settle on the scene.",
-            ("Meteor", "EmotionalClosing") => "Clear skies. Tonight may be your best chance to see nature's fireworks. Find a dark place, look up, and let the night surprise you.",
-            ("Moon", "EmotionalClosing") => "The Wolf Moon will rise again next year. Tonight, take a moment to look up. Some views are familiar because they are worth returning to.",
-            ("Eclipse", "EmotionalClosing") => "Moments like this remind us how dynamic our sky really is. The shadow passes quickly, but the memory can stay with you for years.",
-            ("PlanetGrouping", "EmotionalClosing") => "These worlds will drift apart again soon. Do not miss the view. For a short time, the solar system feels close enough to hold in one glance.",
+            ("Meteor", "EmotionalClosing") => "Keep watching for more sky events. Until then, enjoy stargazing.",
+            ("Moon", "EmotionalClosing") => "Keep watching for more sky events. Until then, enjoy stargazing.",
+            ("Eclipse", "EmotionalClosing") => "Keep watching for more sky events. Until then, enjoy stargazing.",
+            ("PlanetGrouping", "EmotionalClosing") => "Keep watching for more sky events. Until then, enjoy stargazing.",
             _ => $"{title} is a brief sky story worth seeing while the moment is still here."
         };
     }
