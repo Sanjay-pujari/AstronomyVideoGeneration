@@ -808,6 +808,43 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
+    public async Task FfmpegVideoRenderService_BackgroundMusicContinuesThroughCinematicOutroAndFadesFinalSecond()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-outro-music");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var musicPath = Path.Combine(tempDir.FullName, "music.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(musicPath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(scenePath, [7, 8, 9]);
+
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 6d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d
+            }
+        };
+        var sut = CreateService(new InMemoryFileSystem(), processRunner, backgroundMusicPath: musicPath);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }]
+        }, CancellationToken.None);
+
+        var finalCommand = processRunner.Commands.Single(command => command.Contains(outputPath, StringComparison.Ordinal) && command.Contains("-filter_complex", StringComparison.Ordinal));
+        Assert.Contains("-stream_loop -1", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("afade=t=out:st=9:d=1[music]", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("amix=inputs=2:duration=longest:normalize=0[aout]", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-t 10", finalCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task FfmpegVideoRenderService_Fails_WhenCombinedDurationDoesNotMatchNarration()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-duration-mismatch");
@@ -1349,7 +1386,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true, bool enableYouTube1440pUpscale = true, int segmentRenderTimeoutSeconds = 180, int finalLongRenderTimeoutSeconds = 900, string youtubeLongQualityMode = "Balanced", Microsoft.Extensions.Logging.ILogger<FfmpegVideoRenderService>? logger = null)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true, bool enableYouTube1440pUpscale = true, int segmentRenderTimeoutSeconds = 180, int finalLongRenderTimeoutSeconds = 900, string youtubeLongQualityMode = "Balanced", Microsoft.Extensions.Logging.ILogger<FfmpegVideoRenderService>? logger = null, string? backgroundMusicPath = null)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -1381,7 +1418,8 @@ public sealed class FfmpegRenderingTests
             KenBurnsUseEasing = true,
             EnableDirectionalMotion = enableDirectionalMotion,
             DirectionalPanStrength = directionalPanStrength,
-            EnableYouTube1440pUpscale = enableYouTube1440pUpscale
+            EnableYouTube1440pUpscale = enableYouTube1440pUpscale,
+            BackgroundMusicPath = backgroundMusicPath
         });
 
         return new FfmpegVideoRenderService(
