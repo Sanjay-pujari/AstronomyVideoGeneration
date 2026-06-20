@@ -3698,6 +3698,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(validationRoot);
         var outputs = new List<string>();
         var diagnostics = new List<object>();
+        var phase16DurationInputs = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         var errors = new List<string>();
 
         var selectedShortSrt = ResolvePhase15SrtPath(planRoot, "en", "short");
@@ -3716,11 +3717,13 @@ public sealed partial class ProductionPipelineExecutionService(
             var sceneRoot = Path.Combine(planRoot, "tts", language, format);
             Directory.CreateDirectory(sceneRoot);
             var sceneAudio = new List<string>();
+            var sceneAudioDiagnostics = new List<TtsAudioContentDiagnostics>();
             foreach (var block in blocks)
             {
                 var audioPath = Path.Combine(sceneRoot, $"{SanitizeFileName(block.SceneId)}.mp3");
                 var validation = await GenerateAndValidateTtsAudioAsync(context, format, block.SceneId, block.Text, audioPath, cancellationToken);
                 sceneAudio.Add(audioPath);
+                sceneAudioDiagnostics.Add(validation);
                 outputs.Add(audioPath);
                 if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
                 if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
@@ -3735,10 +3738,36 @@ public sealed partial class ProductionPipelineExecutionService(
             var delta = Math.Abs(audioDurationSec - srtDurationSec);
             if (blocks.Count != sceneAudio.Count || sceneAudio.Any(p => !File.Exists(p))) errors.Add($"{language}:{format} every SRT block must have audio.");
             if (audioDurationSec <= 0) errors.Add($"{language}:{format} narration audio is silent or unreadable.");
-            if (delta > Math.Max(2.0, srtDurationSec * 0.35)) errors.Add($"{language}:{format} audio duration is not close to SRT duration; delta={delta:0.###} sec.");
             var srtText = string.Join("\n", blocks.Select(b => b.Text));
             if (language == "hi" && !ContainsHindiText(srtText)) errors.Add("Hindi SRT must contain Hindi text.");
             if (language == "en" && ContainsHindiText(srtText)) errors.Add("English SRT must remain English text.");
+
+            var roundedAudioDurationSec = Math.Round(audioDurationSec, 3, MidpointRounding.AwayFromZero);
+            var roundedSrtDurationSec = Math.Round(srtDurationSec, 3, MidpointRounding.AwayFromZero);
+            var roundedDeltaSec = Math.Round(delta, 3, MidpointRounding.AwayFromZero);
+
+            if (string.Equals(language, "en", StringComparison.OrdinalIgnoreCase))
+            {
+                phase16DurationInputs[format] = new
+                {
+                    items = blocks.Select((block, index) => new
+                    {
+                        format,
+                        sceneId = block.SceneId,
+                        audioPath = NormalizePath(sceneAudio[index]),
+                        narrationText = block.Text,
+                        durationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
+                        srtStartSec = Math.Round(block.Start.TotalSeconds, 3, MidpointRounding.AwayFromZero),
+                        srtEndSec = Math.Round(block.End.TotalSeconds, 3, MidpointRounding.AwayFromZero),
+                        srtDurationSec = Math.Round((block.End - block.Start).TotalSeconds, 3, MidpointRounding.AwayFromZero),
+                        ttsProviderCalled = true,
+                        ttsProviderSucceeded = File.Exists(sceneAudio[index])
+                    }).ToArray(),
+                    audioDurationSec = roundedAudioDurationSec,
+                    srtDurationSec = roundedSrtDurationSec,
+                    audioSrtDurationDeltaSec = roundedDeltaSec
+                };
+            }
 
             diagnostics.Add(new
             {
@@ -3751,12 +3780,25 @@ public sealed partial class ProductionPipelineExecutionService(
                 narrationTrackPath = NormalizePath(narrationTrackPath),
                 backgroundMusicMixed = false,
                 duckingApplied = false,
-                audioDurationSec = Math.Round(audioDurationSec, 3, MidpointRounding.AwayFromZero),
-                srtDurationSec = Math.Round(srtDurationSec, 3, MidpointRounding.AwayFromZero),
-                audioSrtDurationDeltaSec = Math.Round(delta, 3, MidpointRounding.AwayFromZero),
+                audioDurationSec = roundedAudioDurationSec,
+                srtDurationSec = roundedSrtDurationSec,
+                audioSrtDurationDeltaSec = roundedDeltaSec,
                 validationPassed = errors.Count == 0
             });
         }
+
+        var ttsTimelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(ttsTimelinePath)!);
+        await File.WriteAllTextAsync(ttsTimelinePath, JsonSerializer.Serialize(new
+        {
+            version = "phase15-real-tts-v2",
+            durationReconciliationOwner = "Phase16",
+            audioSrtDurationMismatchIsBlocking = false,
+            generatedUtc = DateTimeOffset.UtcNow,
+            @short = phase16DurationInputs.TryGetValue("short", out var shortInput) ? shortInput : new { items = Array.Empty<object>(), audioDurationSec = 0d, srtDurationSec = 0d, audioSrtDurationDeltaSec = 0d },
+            @long = phase16DurationInputs.TryGetValue("long", out var longInput) ? longInput : new { items = Array.Empty<object>(), audioDurationSec = 0d, srtDurationSec = 0d, audioSrtDurationDeltaSec = 0d }
+        }, JsonOptions), cancellationToken);
+        outputs.Add(ttsTimelinePath);
 
         var validationPassed = errors.Count == 0 && diagnostics.Count > 0;
         var diagnosticsPath = Path.Combine(validationRoot, "phase-15-real-tts-v2-diagnostics.json");
@@ -4072,12 +4114,20 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(longMetadataPath)) errors.Add($"long scene-timeline-metadata.json missing: {NormalizePath(longMetadataPath)}");
 
         var sourceTtsTimelineVersion = "v1";
+        var phase15DurationReconciliationOwner = string.Empty;
+        var phase15AudioSrtDurationMismatchIsBlocking = true;
+        var shortPhase15AudioSrtDurationDeltaSec = 0d;
+        var longPhase15AudioSrtDurationDeltaSec = 0d;
         var shortItems = new List<SceneDurationPlanItem>();
         var longItems = new List<SceneDurationPlanItem>();
         if (File.Exists(ttsTimelinePath))
         {
             var ttsRoot = JsonNode.Parse(await File.ReadAllTextAsync(ttsTimelinePath, cancellationToken)) ?? new JsonObject();
             sourceTtsTimelineVersion = GetString(ttsRoot, "version") ?? "v1";
+            phase15DurationReconciliationOwner = GetString(ttsRoot, "durationReconciliationOwner") ?? string.Empty;
+            phase15AudioSrtDurationMismatchIsBlocking = GetBool(ttsRoot, "audioSrtDurationMismatchIsBlocking") ?? true;
+            shortPhase15AudioSrtDurationDeltaSec = GetDouble(ttsRoot["short"], "audioSrtDurationDeltaSec") ?? 0;
+            longPhase15AudioSrtDurationDeltaSec = GetDouble(ttsRoot["long"], "audioSrtDurationDeltaSec") ?? 0;
             shortItems.AddRange(await BuildSceneDurationPlanItemsAsync(ttsRoot, "short", shortMetadataPath, 5, 12.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems, cancellationToken));
             longItems.AddRange(await BuildSceneDurationPlanItemsAsync(ttsRoot, "long", longMetadataPath, 9, 15.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems, cancellationToken));
         }
@@ -4100,6 +4150,10 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             version = "v2",
             audioDrivenDurationCalibration = true,
+            durationReconciliationOwner = "Phase16",
+            phase15DurationReconciliationOwner,
+            phase15AudioSrtDurationMismatchIsBlocking,
+            phase15AudioSrtDurationDeltaSec = new { @short = RoundDuration(shortPhase15AudioSrtDurationDeltaSec), @long = RoundDuration(longPhase15AudioSrtDurationDeltaSec) },
             audioDurationSource = "ActualMp3",
             subtitleTimingRecalculated = true,
             audioSubtitleSyncPassed = true,
