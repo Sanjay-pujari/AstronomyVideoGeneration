@@ -3417,7 +3417,22 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private sealed record CanonicalTtsTimelineItem(string Format, string SceneId, int CueIndex, string AudioPath, string CueText, double AudioDurationSec);
+    private sealed record CanonicalTtsTimelineItem(string Format, string SceneId, int CueIndex, string AudioPath, string CueText, double AudioDurationSec)
+    {
+        public string OriginalAudioPath { get; init; } = string.Empty;
+    }
+
+    private sealed record CueAudioDurationResolution(
+        string Format,
+        string SceneId,
+        int CueIndex,
+        string OriginalAudioPath,
+        string ResolvedAudioPath,
+        bool FileExists,
+        double ProbedDurationSec,
+        double TimelineDurationSec,
+        double FinalDurationSec,
+        string DurationSource);
 
     private static IReadOnlyList<CanonicalTtsTimelineItem> ReadCanonicalTtsTimelineItems(string planRoot, string format)
     {
@@ -3456,7 +3471,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
             var duration = GetDouble(item, "audioDurationSec", "durationSec") ?? 0;
             var cueIndex = GetInt(item, "cueIndex") ?? output.Count + 1;
-            var audioPath = GetString(item, "audioPath") ?? string.Empty;
+            var originalAudioPath = GetString(item, "audioPath") ?? string.Empty;
+            var audioPath = originalAudioPath;
             if (!string.IsNullOrWhiteSpace(audioPath) && planRoot is not null && !Path.IsPathRooted(audioPath)) audioPath = Path.Combine(planRoot, audioPath);
             output.Add(new CanonicalTtsTimelineItem(
                 format,
@@ -3464,7 +3480,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 cueIndex,
                 audioPath,
                 GetString(item, "cueText", "narrationText") ?? string.Empty,
-                duration));
+                duration) { OriginalAudioPath = originalAudioPath });
         }
     }
 
@@ -4421,6 +4437,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var inputPathsChecked = new[] { syncPath, ttsTimelinePath, shortMetadataPath, longMetadataPath };
         var errors = new List<string>();
         var missingDurationItems = new List<string>();
+        var cueAudioDiagnostics = new List<CueAudioDurationResolution>();
         if (!File.Exists(ttsTimelinePath)) errors.Add($"tts-timeline.json missing: {NormalizePath(ttsTimelinePath)}");
         if (!File.Exists(syncPath)) errors.Add($"scene-audio-sync.json missing: {NormalizePath(syncPath)}");
         if (!File.Exists(shortMetadataPath)) errors.Add($"short scene-timeline-metadata.json missing: {NormalizePath(shortMetadataPath)}");
@@ -4442,13 +4459,16 @@ public sealed partial class ProductionPipelineExecutionService(
             phase15AudioSrtDurationMismatchIsBlocking = GetBool(ttsRoot, "audioSrtDurationMismatchIsBlocking") ?? true;
             shortPhase15AudioSrtDurationDeltaSec = GetDouble(ttsRoot["short"], "audioSrtDurationDeltaSec") ?? 0;
             longPhase15AudioSrtDurationDeltaSec = GetDouble(ttsRoot["long"], "audioSrtDurationDeltaSec") ?? 0;
-            shortItems.AddRange(await BuildSceneDurationPlanItemsAsync(planRoot, ttsRoot, "short", shortMetadataPath, 5, 12.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems, cancellationToken));
-            longItems.AddRange(await BuildSceneDurationPlanItemsAsync(planRoot, ttsRoot, "long", longMetadataPath, 9, 15.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems, cancellationToken));
+            shortItems.AddRange(await BuildSceneDurationPlanItemsAsync(planRoot, ttsRoot, "short", shortMetadataPath, 5, 12.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems, cueAudioDiagnostics, cancellationToken));
+            longItems.AddRange(await BuildSceneDurationPlanItemsAsync(planRoot, ttsRoot, "long", longMetadataPath, 9, 15.0, transitionPaddingSec, minimumSceneDurationSec, missingDurationItems, cueAudioDiagnostics, cancellationToken));
         }
 
         if (shortItems.Count != 5) errors.Add($"short scene count != 5; actual={shortItems.Count}");
         if (longItems.Count != 9) errors.Add($"long scene count != 9; actual={longItems.Count}");
         errors.AddRange(missingDurationItems.Select(x => $"Audio duration missing: {x}"));
+        errors.AddRange(cueAudioDiagnostics
+            .Where(d => d.DurationSource.Equals("Missing", StringComparison.OrdinalIgnoreCase))
+            .Select(d => $"Cue audio duration missing: format={d.Format}; sceneId={d.SceneId}; cueIndex={d.CueIndex}; originalAudioPath={NormalizePath(d.OriginalAudioPath)}; resolvedAudioPath={NormalizePath(d.ResolvedAudioPath)}; fileExists={d.FileExists}; probedDurationSec={d.ProbedDurationSec}; timelineDurationSec={d.TimelineDurationSec}; finalDurationSec={d.FinalDurationSec}; durationSource={d.DurationSource}"));
         errors.AddRange(shortItems.Concat(longItems).Where(i => i.AudioDurationSec <= 0).Select(i => $"audioDurationSec <= 0: {i.Format}:{i.SceneId}"));
         errors.AddRange(shortItems.Concat(longItems).Where(i => i.SceneDurationSec < i.AudioDurationSec).Select(i => $"sceneDurationSec < audioDurationSec: {i.Format}:{i.SceneId}"));
         var oldPathUsed = false;
@@ -4520,6 +4540,9 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleTimingRecalculated = true,
             audioSubtitleSyncPassed = true,
             missingDurationItems,
+            cueAudioDiagnostics = cueAudioDiagnostics.Select(d => new { d.CueIndex, d.OriginalAudioPath, d.ResolvedAudioPath, d.FileExists, d.ProbedDurationSec, d.TimelineDurationSec, d.FinalDurationSec, d.DurationSource }),
+            shortProbedCueDurationSumSec = RoundDuration(cueAudioDiagnostics.Where(d => d.Format.Equals("short", StringComparison.OrdinalIgnoreCase)).Sum(d => d.FinalDurationSec)),
+            longProbedCueDurationSumSec = RoundDuration(cueAudioDiagnostics.Where(d => d.Format.Equals("long", StringComparison.OrdinalIgnoreCase)).Sum(d => d.FinalDurationSec)),
             validationPassed
         };
         var diagnosticsPath = Path.Combine(validationRoot, "phase-16-duration-diagnostics.json");
@@ -4550,23 +4573,48 @@ public sealed partial class ProductionPipelineExecutionService(
         return File.Exists(narrationTrackPath) ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
     }
 
-    private async Task<IReadOnlyList<CanonicalTtsTimelineItem>> ReadCanonicalTtsTimelineItemsWithActualDurationsAsync(string planRoot, JsonNode ttsRoot, string format, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<CanonicalTtsTimelineItem>> ReadCanonicalTtsTimelineItemsWithActualDurationsAsync(string planRoot, JsonNode ttsRoot, string format, CancellationToken cancellationToken, List<CueAudioDurationResolution>? cueDiagnostics = null)
     {
         var items = ReadCanonicalTtsTimelineItems(ttsRoot, format, planRoot);
         var actualItems = new List<CanonicalTtsTimelineItem>(items.Count);
         foreach (var item in items)
         {
-            var actualDuration = !string.IsNullOrWhiteSpace(item.AudioPath) && File.Exists(item.AudioPath)
-                ? await ProbeAudioDurationSecondsAsync(item.AudioPath, cancellationToken)
-                : 0;
-            actualItems.Add(item with { AudioDurationSec = RoundDuration(actualDuration) });
+            var resolution = await ResolveCueAudioDurationAsync(planRoot, ttsRoot, item, cancellationToken);
+            cueDiagnostics?.Add(resolution);
+            actualItems.Add(item with { AudioPath = resolution.ResolvedAudioPath, AudioDurationSec = RoundDuration(resolution.FinalDurationSec) });
         }
         return actualItems;
     }
 
+    private async Task<CueAudioDurationResolution> ResolveCueAudioDurationAsync(string planRoot, JsonNode ttsRoot, CanonicalTtsTimelineItem item, CancellationToken cancellationToken)
+    {
+        var originalAudioPath = FirstNonEmpty(item.OriginalAudioPath, item.AudioPath, string.Empty);
+        var resolvedAudioPath = ResolveCueAudioPath(planRoot, ttsRoot, item.Format, item.CueIndex, originalAudioPath);
+        var fileExists = !string.IsNullOrWhiteSpace(resolvedAudioPath) && File.Exists(resolvedAudioPath);
+        var probedDuration = fileExists ? await ProbeAudioDurationSecondsAsync(resolvedAudioPath, cancellationToken) : 0;
+        var timelineDuration = Math.Max(0, item.AudioDurationSec);
+        var finalDuration = probedDuration > 0 ? probedDuration : timelineDuration > 0 ? timelineDuration : 0;
+        var source = probedDuration > 0 ? "ProbedMp3" : timelineDuration > 0 ? "TimelineFallback" : "Missing";
+        return new CueAudioDurationResolution(item.Format, item.SceneId, item.CueIndex, originalAudioPath, resolvedAudioPath, fileExists, RoundDuration(probedDuration), RoundDuration(timelineDuration), RoundDuration(finalDuration), source);
+    }
+
+    private static string ResolveCueAudioPath(string planRoot, JsonNode ttsRoot, string format, int cueIndex, string audioPath)
+    {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(audioPath))
+        {
+            candidates.Add(Path.IsPathRooted(audioPath) ? audioPath : Path.Combine(planRoot, audioPath));
+            if (!Path.IsPathRooted(audioPath)) candidates.Add(Path.Combine(planRoot, "tts", audioPath));
+        }
+        var language = FirstNonEmpty(GetString(ttsRoot[format], "language"), GetString(ttsRoot, "language", "defaultLanguage"), "en");
+        candidates.Add(Path.Combine(planRoot, "tts", language, format, cueIndex.ToString(CultureInfo.InvariantCulture) + ".mp3"));
+        var existing = candidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+        return existing ?? candidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path)) ?? string.Empty;
+    }
+
     private async Task<IReadOnlyList<object>> BuildSceneDurationPlanDiagnosticsAsync(string planRoot, JsonNode ttsRoot, string format, string metadataPath, int expectedCount, CancellationToken cancellationToken)
     {
-        var assignment = await AssignCueTimelineItemsToVisualScenesAsync(planRoot, ttsRoot, format, metadataPath, expectedCount, cancellationToken);
+        var assignment = await AssignCueTimelineItemsToVisualScenesAsync(planRoot, ttsRoot, format, metadataPath, expectedCount, null, cancellationToken);
         return assignment.SceneAssignments
             .Select(scene => new
             {
@@ -4580,9 +4628,9 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
     }
 
-    private async Task<IReadOnlyList<SceneDurationPlanItem>> BuildSceneDurationPlanItemsAsync(string planRoot, JsonNode ttsRoot, string format, string metadataPath, int expectedCount, double maximumSceneDurationSec, double transitionPaddingSec, double minimumSceneDurationSec, List<string> missingDurationItems, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<SceneDurationPlanItem>> BuildSceneDurationPlanItemsAsync(string planRoot, JsonNode ttsRoot, string format, string metadataPath, int expectedCount, double maximumSceneDurationSec, double transitionPaddingSec, double minimumSceneDurationSec, List<string> missingDurationItems, List<CueAudioDurationResolution>? cueAudioDiagnostics, CancellationToken cancellationToken)
     {
-        var assignment = await AssignCueTimelineItemsToVisualScenesAsync(planRoot, ttsRoot, format, metadataPath, expectedCount, cancellationToken);
+        var assignment = await AssignCueTimelineItemsToVisualScenesAsync(planRoot, ttsRoot, format, metadataPath, expectedCount, cueAudioDiagnostics, cancellationToken);
         var items = new List<SceneDurationPlanItem>();
         foreach (var scene in assignment.SceneAssignments)
         {
@@ -4607,9 +4655,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record CueSceneAssignment(string SceneId, JsonNode? Metadata, List<CanonicalTtsTimelineItem> Cues);
     private sealed record CueSceneAssignmentResult(IReadOnlyList<CueSceneAssignment> SceneAssignments, IReadOnlyList<CanonicalTtsTimelineItem> UnassignedCues);
 
-    private async Task<CueSceneAssignmentResult> AssignCueTimelineItemsToVisualScenesAsync(string planRoot, JsonNode ttsRoot, string format, string metadataPath, int expectedCount, CancellationToken cancellationToken)
+    private async Task<CueSceneAssignmentResult> AssignCueTimelineItemsToVisualScenesAsync(string planRoot, JsonNode ttsRoot, string format, string metadataPath, int expectedCount, List<CueAudioDurationResolution>? cueAudioDiagnostics, CancellationToken cancellationToken)
     {
-        var ttsItems = (await ReadCanonicalTtsTimelineItemsWithActualDurationsAsync(planRoot, ttsRoot, format, cancellationToken))
+        var ttsItems = (await ReadCanonicalTtsTimelineItemsWithActualDurationsAsync(planRoot, ttsRoot, format, cancellationToken, cueAudioDiagnostics))
             .Where(ttsItem => string.Equals(ttsItem.Format, format, StringComparison.OrdinalIgnoreCase))
             .OrderBy(ttsItem => ttsItem.CueIndex)
             .ToArray();
