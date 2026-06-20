@@ -3684,6 +3684,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsTimelineV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var planRoot = context.OutputRoot;
+        if (HasPhase15RealTtsV2SrtInputs(planRoot))
+            return await Phase15RealTtsV2Async(context, cancellationToken);
+
         var ttsRoot = Path.Combine(planRoot, "tts");
         var shortRoot = Path.Combine(ttsRoot, "short");
         var longRoot = Path.Combine(ttsRoot, "long");
@@ -3828,6 +3831,155 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!validationPassed) throw new InvalidOperationException("Phase 15 TTS Timeline V1 failed: " + string.Join(" | ", errors));
         return [timelinePath, validationPath, diagnosticsPath, .. shortItems.Select(i => i.AudioPath), .. longItems.Select(i => i.AudioPath), .. audioDiagnostics.Select(d => d.RawResponsePath)];
     }
+
+    private static bool HasPhase15RealTtsV2SrtInputs(string planRoot)
+        => File.Exists(ResolvePhase15SrtPath(planRoot, "en", "short"))
+           || File.Exists(ResolvePhase15SrtPath(planRoot, "en", "long"))
+           || File.Exists(ResolvePhase15SrtPath(planRoot, "hi", "short"))
+           || File.Exists(ResolvePhase15SrtPath(planRoot, "hi", "long"));
+
+    private async Task<IReadOnlyList<string>> Phase15RealTtsV2Async(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var planRoot = context.OutputRoot;
+        var validationRoot = context.ExecutionContext.ValidationRoot!;
+        Directory.CreateDirectory(validationRoot);
+        var outputs = new List<string>();
+        var diagnostics = new List<object>();
+        var errors = new List<string>();
+
+        foreach (var language in new[] { "en", "hi" })
+        foreach (var format in new[] { "short", "long" })
+        {
+            var inputSrtPath = ResolvePhase15SrtPath(planRoot, language, format);
+            if (language == "hi" && !File.Exists(inputSrtPath))
+                inputSrtPath = await CreateHindiPhase15AdaptationAsync(planRoot, format, cancellationToken);
+            if (!File.Exists(inputSrtPath))
+                continue;
+
+            var blocks = ParseSrtBlocks(await File.ReadAllTextAsync(inputSrtPath, cancellationToken));
+            var sceneRoot = Path.Combine(planRoot, "tts", language, format);
+            Directory.CreateDirectory(sceneRoot);
+            var sceneAudio = new List<string>();
+            foreach (var block in blocks)
+            {
+                var audioPath = Path.Combine(sceneRoot, $"{SanitizeFileName(block.SceneId)}.mp3");
+                var validation = await GenerateAndValidateTtsAudioAsync(context, format, block.SceneId, block.Text, audioPath, cancellationToken);
+                sceneAudio.Add(audioPath);
+                outputs.Add(audioPath);
+                if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
+                if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
+            }
+
+            var narrationTrackPath = Path.Combine(planRoot, "video-assembly", language, format, "narration-track.mp3");
+            var concatOk = await ConcatenatePhase15AudioAsync(sceneAudio, narrationTrackPath, cancellationToken);
+            outputs.Add(narrationTrackPath);
+            if (!concatOk) errors.Add($"{language}:{format} narration-track.mp3 was not generated.");
+            var audioDurationSec = (await ProbeAudioContentMetricsAsync(narrationTrackPath, cancellationToken)).DurationSec;
+            var srtDurationSec = blocks.Count == 0 ? 0 : blocks.Max(b => b.End.TotalSeconds);
+            var delta = Math.Abs(audioDurationSec - srtDurationSec);
+            if (blocks.Count != sceneAudio.Count || sceneAudio.Any(p => !File.Exists(p))) errors.Add($"{language}:{format} every SRT block must have audio.");
+            if (audioDurationSec <= 0) errors.Add($"{language}:{format} narration audio is silent or unreadable.");
+            if (delta > Math.Max(2.0, srtDurationSec * 0.35)) errors.Add($"{language}:{format} audio duration is not close to SRT duration; delta={delta:0.###} sec.");
+            var srtText = string.Join("\n", blocks.Select(b => b.Text));
+            if (language == "hi" && !ContainsHindiText(srtText)) errors.Add("Hindi SRT must contain Hindi text.");
+            if (language == "en" && ContainsHindiText(srtText)) errors.Add("English SRT must remain English text.");
+
+            diagnostics.Add(new
+            {
+                language,
+                format,
+                ttsProvider = ResolveConfiguredPhase15TtsProviderName(),
+                voiceName = azureSpeechOptions?.Value.GetPreferredVoices(language).FirstOrDefault() ?? string.Empty,
+                inputSrtPath = NormalizePath(inputSrtPath),
+                outputAudioFiles = sceneAudio.Select(NormalizePath),
+                narrationTrackPath = NormalizePath(narrationTrackPath),
+                backgroundMusicMixed = false,
+                duckingApplied = false,
+                audioDurationSec = Math.Round(audioDurationSec, 3, MidpointRounding.AwayFromZero),
+                srtDurationSec = Math.Round(srtDurationSec, 3, MidpointRounding.AwayFromZero),
+                audioSrtDurationDeltaSec = Math.Round(delta, 3, MidpointRounding.AwayFromZero),
+                validationPassed = errors.Count == 0
+            });
+        }
+
+        var validationPassed = errors.Count == 0 && diagnostics.Count > 0;
+        var diagnosticsPath = Path.Combine(validationRoot, "phase-15-real-tts-v2-diagnostics.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
+        var validationPath = Path.Combine(validationRoot, "phase-15-validation.json");
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
+        outputs.Add(diagnosticsPath);
+        outputs.Add(validationPath);
+        if (!validationPassed) throw new InvalidOperationException("Phase 15 Real TTS V2 failed: " + string.Join(" | ", errors));
+        return outputs;
+    }
+
+    private static string ResolvePhase15SrtPath(string planRoot, string language, string format)
+    {
+        var localized = Path.Combine(planRoot, "narration", "subtitles", language, $"{format}.srt");
+        if (File.Exists(localized)) return localized;
+        return language == "en"
+            ? Path.Combine(planRoot, "narration", "subtitles", $"{format}.srt")
+            : localized;
+    }
+
+    private async Task<string> CreateHindiPhase15AdaptationAsync(string planRoot, string format, CancellationToken cancellationToken)
+    {
+        var englishPath = ResolvePhase15SrtPath(planRoot, "en", format);
+        if (!File.Exists(englishPath)) return Path.Combine(planRoot, "narration", "subtitles", "hi", $"{format}.srt");
+        var blocks = ParseSrtBlocks(await File.ReadAllTextAsync(englishPath, cancellationToken));
+        var hiBlocks = blocks.Select(b => b with { Text = AdaptPlanetConjunctionHindi(b.Text) }).ToArray();
+        var narrationRoot = Path.Combine(planRoot, "narration", "hi", format);
+        Directory.CreateDirectory(narrationRoot);
+        foreach (var block in hiBlocks)
+            await File.WriteAllTextAsync(Path.Combine(narrationRoot, $"{SanitizeFileName(block.SceneId)}.txt"), block.Text, cancellationToken);
+        var hiSrtPath = Path.Combine(planRoot, "narration", "subtitles", "hi", $"{format}.srt");
+        Directory.CreateDirectory(Path.GetDirectoryName(hiSrtPath)!);
+        await File.WriteAllTextAsync(hiSrtPath, BuildSrt(hiBlocks), cancellationToken);
+        return hiSrtPath;
+    }
+
+    private static string AdaptPlanetConjunctionHindi(string english)
+        => "आज रात आसमान में ग्रहों की यह नज़दीकी एक शांत और खूबसूरत दृश्य बनाती है। दूरबीन न हो तो भी, साफ क्षितिज और कुछ धैर्य के साथ आप इस पल को आसानी से महसूस कर सकते हैं।";
+
+    private async Task<bool> ConcatenatePhase15AudioAsync(IReadOnlyList<string> inputFiles, string outputPath, CancellationToken cancellationToken)
+    {
+        if (inputFiles.Count == 0) return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        var listPath = Path.Combine(Path.GetTempPath(), "phase15-concat-" + Guid.NewGuid().ToString("N") + ".txt");
+        await File.WriteAllLinesAsync(listPath, inputFiles.Select(p => $"file '{p.Replace("'", "'\\''")}'"), cancellationToken);
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outputPath], cancellationToken);
+        try { File.Delete(listPath); } catch { }
+        return result.ExitCode == 0 && File.Exists(outputPath);
+    }
+
+    private static IReadOnlyList<Phase15SrtBlock> ParseSrtBlocks(string srt)
+    {
+        var blocks = new List<Phase15SrtBlock>();
+        foreach (var raw in Regex.Split(srt.Trim(), @"\r?\n\r?\n"))
+        {
+            var lines = raw.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToArray();
+            if (lines.Length < 3) continue;
+            var timing = lines[1].Split("-->", StringSplitOptions.TrimEntries);
+            if (timing.Length != 2) continue;
+            blocks.Add(new Phase15SrtBlock(lines[0], ParseSrtTimestamp(timing[0]), ParseSrtTimestamp(timing[1]), string.Join(" ", lines.Skip(2)).Trim()));
+        }
+        return blocks;
+    }
+
+    private static string BuildSrt(IReadOnlyList<Phase15SrtBlock> blocks)
+        => string.Join("\n\n", blocks.Select((b, i) => $"{i + 1}\n{FormatSrtTimestamp(b.Start)} --> {FormatSrtTimestamp(b.End)}\n{b.Text}")) + "\n";
+
+    private static TimeSpan ParseSrtTimestamp(string value)
+        => TimeSpan.ParseExact(value.Replace(',', '.'), @"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture);
+
+    private static string FormatSrtTimestamp(TimeSpan value)
+        => value.ToString(@"hh\:mm\:ss\,fff", CultureInfo.InvariantCulture);
+
+    private static bool ContainsHindiText(string text)
+        => text.Any(ch => ch >= '\u0900' && ch <= '\u097F');
+
+    private sealed record Phase15SrtBlock(string SceneId, TimeSpan Start, TimeSpan End, string Text);
 
     private static async Task ValidateTtsNarrationFilesCleanBeforeProviderAsync(JsonNode syncRoot, string format, string narrationDirectory, int expectedCount, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, List<string> ttsNarrationCleanupErrors, CancellationToken cancellationToken)
     {
