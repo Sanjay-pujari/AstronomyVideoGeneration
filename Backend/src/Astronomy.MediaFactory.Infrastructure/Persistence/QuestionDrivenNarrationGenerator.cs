@@ -548,8 +548,9 @@ public sealed class QuestionDrivenNarrationGenerator(
                 current = phrase;
                 while (current.Length > 84)
                 {
-                    var cut = current.LastIndexOf(' ', Math.Min(84, current.Length - 1));
-                    if (cut < 35) cut = Math.Min(84, current.Length);
+                    var cut = FindSubtitleWhitespaceCut(current, 84, 35);
+                    if (cut < 0)
+                        throw new InvalidOperationException($"SRT validation failed: subtitle text contains a word longer than 84 characters and cannot be split without breaking a word. text={current}");
                     chunks.Add(current[..cut].Trim());
                     current = current[cut..].Trim();
                 }
@@ -562,9 +563,20 @@ public sealed class QuestionDrivenNarrationGenerator(
     private static IReadOnlyList<string> WrapSubtitle(string text)
     {
         if (text.Length <= 42) return [text];
-        var cut = text.LastIndexOf(' ', Math.Min(42, text.Length - 1));
-        if (cut < 20) cut = Math.Min(42, text.Length);
+        var minCut = Math.Max(1, text.Length - 42);
+        var maxCut = Math.Min(42, text.Length - 1);
+        var cut = text.LastIndexOf(' ', maxCut);
+        if (cut < minCut)
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be wrapped into two 42-character lines without splitting a word. text={text}");
         return [text[..cut].Trim(), text[cut..].Trim()];
+    }
+
+    private static int FindSubtitleWhitespaceCut(string text, int maxLength, int preferredMinimum)
+    {
+        var cut = text.LastIndexOf(' ', Math.Min(maxLength, text.Length - 1));
+        if (cut >= preferredMinimum) return cut;
+        var forwardCut = text.IndexOf(' ', Math.Min(maxLength, text.Length - 1));
+        return forwardCut > 0 && forwardCut <= maxLength ? forwardCut : -1;
     }
 
     private static string NormalizeSubtitleText(string text) => Regex.Replace(text.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();

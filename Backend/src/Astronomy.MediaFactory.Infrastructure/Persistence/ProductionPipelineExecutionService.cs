@@ -3150,7 +3150,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var target = Math.Clamp(chunk.Length / 2 + duplicateIndex % 7 - 3, 20, Math.Max(20, chunk.Length - 20));
         var cut = chunk.LastIndexOf(' ', Math.Min(target, chunk.Length - 1));
         if (cut < 20) cut = chunk.IndexOf(' ', Math.Min(target, chunk.Length - 1));
-        if (cut < 20 || cut > chunk.Length - 20) cut = Math.Clamp(chunk.Length / 2, 1, chunk.Length - 1);
+        if (cut < 20 || cut > chunk.Length - 20)
+            throw new InvalidOperationException($"SRT validation failed: duplicate subtitle chunk cannot be made unique without splitting a word. text={chunk}");
         return [chunk[..cut].Trim(), chunk[cut..].Trim()];
     }
 
@@ -3198,8 +3199,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 current = phrase;
                 while (current.Length > 84)
                 {
-                    var cut = current.LastIndexOf(' ', Math.Min(84, current.Length - 1));
-                    if (cut < 35) cut = Math.Min(84, current.Length);
+                    var cut = FindSubtitleWhitespaceCut(current, 84, 35);
+                    if (cut < 0)
+                        throw new InvalidOperationException($"SRT validation failed: subtitle text contains a word longer than 84 characters and cannot be split without breaking a word. text={current}");
                     chunks.Add(current[..cut].Trim());
                     current = current[cut..].Trim();
                 }
@@ -3207,6 +3209,14 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
         return chunks;
+    }
+
+    private static int FindSubtitleWhitespaceCut(string text, int maxLength, int preferredMinimum)
+    {
+        var cut = text.LastIndexOf(' ', Math.Min(maxLength, text.Length - 1));
+        if (cut >= preferredMinimum) return cut;
+        var forwardCut = text.IndexOf(' ', Math.Min(maxLength, text.Length - 1));
+        return forwardCut > 0 && forwardCut <= maxLength ? forwardCut : -1;
     }
 
     private static IReadOnlyList<double> AllocateSubtitleCueDurations(IReadOnlyList<string> cueChunks, double sceneDurationSeconds)
@@ -3228,13 +3238,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (text.Length <= 42) return [text];
         var minCut = Math.Max(1, text.Length - 42);
         var maxCut = Math.Min(42, text.Length - 1);
-        var target = Math.Clamp(text.Length / 2, minCut, maxCut);
         var cut = text.LastIndexOf(' ', maxCut);
         if (cut < minCut)
-        {
-            var forwardCut = text.IndexOf(' ', minCut);
-            cut = forwardCut >= minCut && forwardCut <= maxCut ? forwardCut : target;
-        }
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be wrapped into two 42-character lines without splitting a word. text={text}");
         return [text[..cut].Trim(), text[cut..].Trim()];
     }
 
