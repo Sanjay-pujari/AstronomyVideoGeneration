@@ -73,6 +73,36 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase14SubtitleSegmentation_DoesNotSplitInsideWords()
+    {
+        const string narration = "Tonight, turn your attention to the western horizon as a planetary conjunction gathers after sunset. Keep watching while Venus and Jupiter settle lower together.";
+
+        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethod("SplitSubtitleChunks", BindingFlags.NonPublic | BindingFlags.Static);
+        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethod("WrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(splitMethod);
+        Assert.NotNull(wrapMethod);
+
+        var chunks = (IReadOnlyList<string>)splitMethod!.Invoke(null, [narration])!;
+        var wrapped = chunks.Select(chunk => (IReadOnlyList<string>)wrapMethod!.Invoke(null, [chunk])!).ToArray();
+        var reconstructed = string.Join(" ", chunks);
+        var srtText = string.Join(" ", wrapped.SelectMany(lines => lines));
+
+        Assert.Equal(narration, reconstructed);
+        Assert.Equal(narration, srtText);
+        Assert.DoesNotContain("turn y", srtText);
+        Assert.DoesNotContain("our attention", srtText);
+        Assert.DoesNotContain("planet ary", srtText);
+        Assert.DoesNotContain("planet\nary", string.Join("\n", wrapped.SelectMany(lines => lines)));
+        Assert.All(chunks, chunk => Assert.InRange(chunk.Length, 1, 84));
+        Assert.All(wrapped, lines =>
+        {
+            Assert.InRange(lines.Count, 1, 2);
+            Assert.All(lines, line => Assert.InRange(line.Length, 1, 42));
+        });
+    }
+
+    [Fact]
     public void Phase18MotionV2Strength_RequestExperimentalDoesNotOverrideDefaultPlan()
     {
         Assert.Equal("Default", InvokePhase18MotionV2StrengthResolver("Experimental", "Default"));
