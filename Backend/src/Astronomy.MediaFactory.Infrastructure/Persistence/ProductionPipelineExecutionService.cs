@@ -6380,6 +6380,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var longMixedAudioPath = ResolvePhase18FinalMixedAudioPath(longVideoPath);
         var shortAudioDuration = File.Exists(shortAudioTrackPath) ? await ProbeAudioDurationSecondsAsync(shortAudioTrackPath, cancellationToken) : File.Exists(shortMixedAudioPath) ? await ProbeAudioDurationSecondsAsync(shortMixedAudioPath, cancellationToken) : 0;
         var longAudioDuration = File.Exists(longAudioTrackPath) ? await ProbeAudioDurationSecondsAsync(longAudioTrackPath, cancellationToken) : File.Exists(longMixedAudioPath) ? await ProbeAudioDurationSecondsAsync(longMixedAudioPath, cancellationToken) : 0;
+        var shortFinalMixedAudioDuration = File.Exists(shortMixedAudioPath) ? await ProbeAudioDurationSecondsAsync(shortMixedAudioPath, cancellationToken) : 0;
+        var longFinalMixedAudioDuration = File.Exists(longMixedAudioPath) ? await ProbeAudioDurationSecondsAsync(longMixedAudioPath, cancellationToken) : 0;
+        var shortFinalMp4AudioDuration = File.Exists(shortVideoPath) ? await ProbeAudioDurationSecondsAsync(shortVideoPath, cancellationToken) : 0;
+        var longFinalMp4AudioDuration = File.Exists(longVideoPath) ? await ProbeAudioDurationSecondsAsync(longVideoPath, cancellationToken) : 0;
+        var shortSilentTailDuration = File.Exists(shortVideoPath) ? await ProbeSilentTailDurationSecondsAsync(shortVideoPath, shortFinalMp4AudioDuration, cancellationToken) : 0;
+        var longSilentTailDuration = File.Exists(longVideoPath) ? await ProbeSilentTailDurationSecondsAsync(longVideoPath, longFinalMp4AudioDuration, cancellationToken) : 0;
         var shortHasAudioStream = File.Exists(shortVideoPath) && await HasAudioStreamAsync(shortVideoPath, cancellationToken);
         var longHasAudioStream = File.Exists(longVideoPath) && await HasAudioStreamAsync(longVideoPath, cancellationToken);
         var shortAudioMuxed = File.Exists(shortAudioTrackPath) && shortHasAudioStream;
@@ -6487,7 +6493,6 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!motionPlanFound) errors.Add($"motion-plan.json missing: {NormalizePath(motionPlanPath)}");
         if (!motionDebugFound) errors.Add($"motion-debug.json missing: {NormalizePath(motionDebugPath)}");
         if (motionV2StrengthMismatch) errors.Add($"MotionV2StrengthMismatch: request=Experimental, diagnostics={motionV2StrengthUsed}");
-        if (!previewOnly && backgroundMusicConfigForDiagnostics.Enabled && !backgroundAudioFound) errors.Add($"Configured background music file missing: {NormalizePath(backgroundAudioPathForDiagnostics)}");
         if (!previewOnly && perSceneAudioVideoDurationDeltaSec > 0.1) errors.Add($"perSceneAudioVideoDurationDeltaSec > 0.1 sec; actual={RoundDuration(perSceneAudioVideoDurationDeltaSec)}");
         if (!previewOnly && !shortDurationValidationPassed) errors.Add($"short final video duration differs from narration + cinematic outro by >0.1 sec; actual={RoundDuration(shortDurationDeltaAgainstExpected)}");
         if (!previewOnly && !longDurationValidationPassed) errors.Add($"long final video duration differs from narration + cinematic outro by >0.1 sec; actual={RoundDuration(longDurationDeltaAgainstExpected)}");
@@ -6500,7 +6505,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (oldPathUsed) errors.Add("Old scene asset path used");
         var shortBackgroundAudioMixed = File.Exists(shortMixedAudioPath) && shortHasAudioStream;
         var longBackgroundAudioMixed = File.Exists(longMixedAudioPath) && longHasAudioStream;
-        var backgroundAudioMixed = backgroundMusicConfigForDiagnostics.Enabled ? backgroundAudioFound && shortBackgroundAudioMixed && longBackgroundAudioMixed : false;
+        var backgroundAudioMixed = backgroundMusicConfigForDiagnostics.Enabled ? shortBackgroundAudioMixed && longBackgroundAudioMixed : false;
         var effectiveBackgroundVolume = backgroundAudioMixed ? backgroundMusicConfigForDiagnostics.Level : 0.0;
         var duckingAttempted = backgroundMusicConfigForDiagnostics.Enabled && backgroundMusicConfigForDiagnostics.DuckUnderNarration;
         var duckingSucceeded = duckingAttempted && File.Exists(shortMixedAudioPath) && File.Exists(longMixedAudioPath);
@@ -6562,6 +6567,8 @@ public sealed partial class ProductionPipelineExecutionService(
             fadeInApplied = false,
             fadeOutApplied = false,
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
+            backgroundMusicPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
+            backgroundMusicExists = backgroundAudioFound,
             backgroundAudioFound,
             backgroundAudioMixed,
             backgroundMusicEnabled = backgroundMusicConfigForDiagnostics.Enabled,
@@ -6577,7 +6584,9 @@ public sealed partial class ProductionPipelineExecutionService(
             effectiveBackgroundVolume,
             duckingApplied = duckingSucceeded,
             finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) },
-            finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
+            finalMixedAudioDurationSec = new { @short = RoundDuration(shortFinalMixedAudioDuration), @long = RoundDuration(longFinalMixedAudioDuration) },
+            finalMp4AudioDurationSec = new { @short = RoundDuration(shortFinalMp4AudioDuration), @long = RoundDuration(longFinalMp4AudioDuration) },
+            silentTailDurationSec = new { @short = RoundDuration(shortSilentTailDuration), @long = RoundDuration(longSilentTailDuration) },
             narrationAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
             narrationVideoDurationSec = new { @short = RoundDuration(shortNarrationVideoDuration), @long = RoundDuration(longNarrationVideoDuration) },
             narrationVideoAudioDeltaSec = new { @short = RoundDuration(shortNarrationVideoAudioDelta), @long = RoundDuration(longNarrationVideoAudioDelta) },
@@ -6683,6 +6692,8 @@ public sealed partial class ProductionPipelineExecutionService(
             shortFinalMixedAudioPath = NormalizePath(shortMixedAudioPath),
             longFinalMixedAudioPath = NormalizePath(longMixedAudioPath),
             backgroundAudioPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
+            backgroundMusicPath = NormalizePath(backgroundAudioPathForDiagnostics ?? string.Empty),
+            backgroundMusicExists = backgroundAudioFound,
             backgroundAudioFound,
             backgroundAudioMixed,
             backgroundMusicEnabled = backgroundMusicConfigForDiagnostics.Enabled,
@@ -7056,8 +7067,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
             if (hasNarrationAudio) await ConcatenateNarrationTrackAsync(narrationItems, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
             if (!hasNarrationAudio && !previewOnly) throw new InvalidOperationException($"Phase 18 requires every {format} cue-level TTS audio item unless videoAssemblyPreviewOnly is enabled. Found {availableAudioItems.Length}/{narrationItems.Count}.");
-            if (hasNarrationAudio && backgroundMusicConfig.Enabled && (string.IsNullOrWhiteSpace(backgroundMusicConfig.ConfiguredPath) || !File.Exists(backgroundMusicConfig.ConfiguredPath)))
-                throw new InvalidOperationException($"Phase 18 background music is enabled but configured file is missing: {NormalizePath(backgroundMusicConfig.ConfiguredPath)}");
+            var backgroundMusicExists = backgroundMusicConfig.Enabled && !string.IsNullOrWhiteSpace(backgroundMusicConfig.ConfiguredPath) && File.Exists(backgroundMusicConfig.ConfiguredPath);
 
             var videoDuration = await ProbeAudioDurationSecondsAsync(videoOnlyPath, cancellationToken);
             var narrationDuration = hasNarrationAudio ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
@@ -7084,27 +7094,30 @@ public sealed partial class ProductionPipelineExecutionService(
             if (finalDuration <= 0) throw new InvalidOperationException("Phase 18 cannot determine final video/audio duration.");
 
             var finalMixedAudioPath = ResolvePhase18FinalMixedAudioPath(outputPath);
-            var fadeOutStart = Math.Max(0, finalDuration - 1.5);
             var finalDurationText = finalDuration.ToString("0.###", CultureInfo.InvariantCulture);
-            var fadeOutStartText = fadeOutStart.ToString("0.###", CultureInfo.InvariantCulture);
-            if (hasNarrationAudio && backgroundMusicConfig.Enabled)
+            var narrationDurationText = narrationDuration.ToString("0.###", CultureInfo.InvariantCulture);
+            var cinematicOutroDurationText = cinematicOutroDuration.ToString("0.###", CultureInfo.InvariantCulture);
+            if (hasNarrationAudio)
             {
-                var musicLevelText = backgroundMusicConfig.Level.ToString("0.###", CultureInfo.InvariantCulture);
-                var audioFilter = backgroundMusicConfig.DuckUnderNarration
-                    ? $"[2:a]volume={musicLevelText},afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[bg][1:a]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[ducked];[1:a][ducked]amix=inputs=2:duration=longest:normalize=0[aout]"
-                    : $"[1:a]volume=1.0[narr];[2:a]volume={musicLevelText},afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[narr][bg]amix=inputs=2:duration=longest:normalize=0[aout]";
-                var mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundMusicConfig.ConfiguredPath, "-filter_complex", audioFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
-                if (mixResult.ExitCode != 0 && backgroundMusicConfig.DuckUnderNarration)
+                var mixArgs = BuildPhase18FinalAudioMixArgs(
+                    narrationTrackPath,
+                    backgroundMusicConfig,
+                    backgroundMusicExists,
+                    finalMixedAudioPath,
+                    finalDurationText,
+                    narrationDurationText,
+                    cinematicOutroDurationText);
+                var mixResult = await RunProcessAsync(ffmpegPath, mixArgs, cancellationToken);
+                if (mixResult.ExitCode != 0 && backgroundMusicConfig.Enabled && backgroundMusicConfig.DuckUnderNarration)
                 {
-                    var fallbackDuckLevel = (backgroundMusicConfig.Level * 0.45).ToString("0.###", CultureInfo.InvariantCulture);
-                    var fallbackFilter = $"[1:a]volume=1.0[narr];[2:a]volume='if(gt(t,0),{fallbackDuckLevel},{musicLevelText})',afade=t=in:st=0:d=1,afade=t=out:st={fadeOutStartText}:d=1.5[bg];[narr][bg]amix=inputs=2:duration=longest:normalize=0[aout]";
-                    mixResult = await RunProcessAsync(ffmpegPath, ["-y", "-i", videoOnlyPath, "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundMusicConfig.ConfiguredPath, "-filter_complex", fallbackFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath], cancellationToken);
+                    var fallbackConfig = backgroundMusicConfig with { DuckUnderNarration = false, Level = backgroundMusicConfig.Level * 0.45 };
+                    mixArgs = BuildPhase18FinalAudioMixArgs(narrationTrackPath, fallbackConfig, backgroundMusicExists, finalMixedAudioPath, finalDurationText, narrationDurationText, cinematicOutroDurationText);
+                    mixResult = await RunProcessAsync(ffmpegPath, mixArgs, cancellationToken);
                 }
                 if (mixResult.ExitCode != 0 || !File.Exists(finalMixedAudioPath)) throw new InvalidOperationException($"Unable to mix narration and background ambience: {mixResult.Error}");
-            }
-            else if (hasNarrationAudio)
-            {
-                File.Copy(narrationTrackPath, finalMixedAudioPath, true);
+
+                var mixedDuration = await ProbeAudioDurationSecondsAsync(finalMixedAudioPath, cancellationToken);
+                if (mixedDuration + 0.1 < finalDuration) throw new InvalidOperationException($"Phase 18 final mixed audio is shorter than final video. audio={mixedDuration:0.###}s video={finalDuration:0.###}s.");
             }
 
             var videoExtension = Math.Max(0, finalDuration - videoDuration);
@@ -7115,6 +7128,26 @@ public sealed partial class ProductionPipelineExecutionService(
                 : new[] { "-y", "-i", videoOnlyPath, "-filter:v", videoFilter, "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-t", finalDurationText, outputPath };
             var muxResult = await RunProcessAsync(ffmpegPath, muxArgs, cancellationToken);
             if (muxResult.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to mux final video: {muxResult.Error}");
+
+            if (hasNarrationAudio)
+            {
+                var finalMixedAudioDuration = await ProbeAudioDurationSecondsAsync(finalMixedAudioPath, cancellationToken);
+                var finalMp4AudioDuration = await ProbeAudioDurationSecondsAsync(outputPath, cancellationToken);
+                var silentTailDuration = await ProbeSilentTailDurationSecondsAsync(outputPath, finalDuration, cancellationToken);
+                if (finalMp4AudioDuration + 0.1 < finalDuration) throw new InvalidOperationException($"Phase 18 final MP4 audio is shorter than final video. audio={finalMp4AudioDuration:0.###}s video={finalDuration:0.###}s.");
+                if (silentTailDuration > 0.5) throw new InvalidOperationException($"Phase 18 final MP4 has a silent tail longer than 0.5 seconds: {silentTailDuration:0.###}s.");
+                await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(outputPath)!, $"phase-18-{format}-final-audio-diagnostics.json"), JsonSerializer.Serialize(new
+                {
+                    narrationDurationSec = Math.Round(narrationDuration, 3, MidpointRounding.AwayFromZero),
+                    cinematicOutroDurationSec = Math.Round(cinematicOutroDuration, 3, MidpointRounding.AwayFromZero),
+                    finalVideoDurationSec = Math.Round(finalDuration, 3, MidpointRounding.AwayFromZero),
+                    backgroundMusicPath = NormalizePath(backgroundMusicConfig.ConfiguredPath),
+                    backgroundMusicExists,
+                    finalMixedAudioDurationSec = Math.Round(finalMixedAudioDuration, 3, MidpointRounding.AwayFromZero),
+                    finalMp4AudioDurationSec = Math.Round(finalMp4AudioDuration, 3, MidpointRounding.AwayFromZero),
+                    silentTailDurationSec = Math.Round(silentTailDuration, 3, MidpointRounding.AwayFromZero)
+                }, JsonOptions), cancellationToken);
+            }
         }
         finally
         {
@@ -7124,6 +7157,44 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
         => Path.Combine(Path.GetDirectoryName(outputPath)!, "final-mixed-audio.m4a");
+
+    private static string[] BuildPhase18FinalAudioMixArgs(
+        string narrationTrackPath,
+        Phase18BackgroundMusicConfig backgroundMusicConfig,
+        bool backgroundMusicExists,
+        string finalMixedAudioPath,
+        string finalDurationText,
+        string narrationDurationText,
+        string cinematicOutroDurationText)
+    {
+        var narrationFilter = $"[0:a]atrim=0:{narrationDurationText},apad=whole_dur={finalDurationText},atrim=0:{finalDurationText}[narr]";
+        var musicLevelText = Math.Max(0, backgroundMusicConfig.Level).ToString("0.###", CultureInfo.InvariantCulture);
+        var backgroundFilter = $"[1:a]volume={musicLevelText},atrim=0:{finalDurationText},afade=t=out:st={narrationDurationText}:d={cinematicOutroDurationText}[bg]";
+        var mixFilter = backgroundMusicConfig.Enabled
+            ? backgroundMusicConfig.DuckUnderNarration
+                ? $"{narrationFilter};{backgroundFilter};[bg][narr]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[ducked];[narr][ducked]amix=inputs=2:duration=longest:normalize=0,atrim=0:{finalDurationText}[aout]"
+                : $"{narrationFilter};{backgroundFilter};[narr][bg]amix=inputs=2:duration=longest:normalize=0,atrim=0:{finalDurationText}[aout]"
+            : $"{narrationFilter};[narr]anull[aout]";
+
+        if (!backgroundMusicConfig.Enabled)
+            return ["-y", "-i", narrationTrackPath, "-filter_complex", mixFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath];
+
+        return backgroundMusicExists
+            ? ["-y", "-i", narrationTrackPath, "-stream_loop", "-1", "-i", backgroundMusicConfig.ConfiguredPath, "-filter_complex", mixFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath]
+            : ["-y", "-i", narrationTrackPath, "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.02:sample_rate=48000", "-filter_complex", mixFilter, "-map", "[aout]", "-c:a", "aac", "-t", finalDurationText, finalMixedAudioPath];
+    }
+
+    private async Task<double> ProbeSilentTailDurationSecondsAsync(string audioPath, double finalDurationSeconds, CancellationToken cancellationToken)
+    {
+        var tailWindowSeconds = Math.Min(0.6, Math.Max(0.1, finalDurationSeconds));
+        var startSeconds = Math.Max(0, finalDurationSeconds - tailWindowSeconds);
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, ["-hide_banner", "-ss", startSeconds.ToString("0.###", CultureInfo.InvariantCulture), "-t", tailWindowSeconds.ToString("0.###", CultureInfo.InvariantCulture), "-i", audioPath, "-af", "astats=metadata=1:reset=0", "-f", "null", "-"], cancellationToken);
+        if (result.ExitCode != 0) return 0;
+
+        var rmsDb = ParseLastDbValue(result.Output + "\n" + result.Error, "RMS level dB");
+        return rmsDb <= -60 ? tailWindowSeconds : 0;
+    }
 
     private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error, int FontSize = 0, int MaxCharsPerLine = 42, int MaxLines = 2);
 
