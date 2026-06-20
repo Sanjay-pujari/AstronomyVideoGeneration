@@ -114,7 +114,12 @@ public sealed record BatchGenerateFromPlansResponse(
     string? SelectionMode = null,
     bool PublishGateChecked = false,
     bool PublishApproved = false,
-    bool Phase19ReviewApproved = false);
+    bool Phase19ReviewApproved = false,
+    string? RequestedPlanLanguage = null,
+    string? RequestedLanguage = null,
+    bool LanguageMismatchDetected = false,
+    bool SiblingPlanFound = false,
+    bool SiblingPlanCreated = false);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
