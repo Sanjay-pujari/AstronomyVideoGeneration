@@ -723,6 +723,38 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Contains(deleted, path => path.Contains("phase-13-validation.json", StringComparison.OrdinalIgnoreCase));
     }
 
+
+    [Fact]
+    public void PlanetConjunctionNarrationV22_HumanizesBestTimeAndSkyGuideFragments()
+    {
+        var naturalTime = typeof(ProductionPipelineExecutionService).GetMethod("NaturalViewingWindow", BindingFlags.NonPublic | BindingFlags.Static);
+        var naturalDirection = typeof(ProductionPipelineExecutionService).GetMethod("NaturalSkyDirection", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var time = (string)naturalTime!.Invoke(null, ["Jun 9, 2026 7:23 PM"])!;
+        var direction = (string)naturalDirection!.Invoke(null, ["the western sky after sunset horizon"])!;
+
+        Assert.Equal("June ninth", time);
+        Assert.Equal("the western horizon", direction);
+        Assert.DoesNotContain("7:23", time);
+        Assert.DoesNotContain("after sunset horizon", direction);
+    }
+
+    [Fact]
+    public void PlanetConjunctionNarrationV22_DiagnosticsCatchCauseSkyGuideAndBestTimeQuality()
+    {
+        var causeMethod = typeof(ProductionPipelineExecutionService).GetMethod("DetectCauseDuplication", BindingFlags.NonPublic | BindingFlags.Static);
+        var skyGuideMethod = typeof(ProductionPipelineExecutionService).GetMethod("SkyGuideGrammarPassed", BindingFlags.NonPublic | BindingFlags.Static);
+        var bestTimeMethod = typeof(ProductionPipelineExecutionService).GetMethod("BestTimeHumanizationPassed", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var causeDuplicationDetected = (bool)causeMethod!.Invoke(null, [new[] { "Although the planets appear close together, they are separated by distance. Their apparent closeness is because they appear close from perspective. This repeats the alignment perspective again." }])!;
+        var skyGuideGrammarPassed = (bool)skyGuideMethod!.Invoke(null, [new[] { "About thirty minutes after sunset, turn your attention toward the western horizon. There you'll find two bright planets appearing unusually close together above the skyline." }])!;
+        var bestTimeHumanizationPassed = (bool)bestTimeMethod!.Invoke(null, [new[] { "The conjunction reaches its finest appearance during the evenings surrounding June ninth. Arriving a little before sunset gives your eyes time to adjust as the sky slowly darkens." }])!;
+
+        Assert.True(causeDuplicationDetected);
+        Assert.True(skyGuideGrammarPassed);
+        Assert.True(bestTimeHumanizationPassed);
+    }
+
     private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null, bool enableSceneVariants = false)
     {
         var planId = Guid.NewGuid();

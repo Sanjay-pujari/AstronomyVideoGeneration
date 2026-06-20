@@ -2156,7 +2156,10 @@ public sealed partial class ProductionPipelineExecutionService(
             openingQualityScore = ScoreOpeningQuality(narration.ShortItems.Values.Concat(narration.LongItems.Values).FirstOrDefault() ?? string.Empty),
             hostPresenceScore = ScoreHostPresence(allText),
             sceneContinuityScore = ScoreSceneContinuity(allText),
+            causeDuplicationDetected = DetectCauseDuplication(narration.ShortItems.Concat(narration.LongItems).Where(item => string.Equals(ResolvePhase14ScenePurpose(item.Key), "cause", StringComparison.OrdinalIgnoreCase)).Select(item => item.Value)),
+            skyGuideGrammarPassed = SkyGuideGrammarPassed(narration.ShortItems.Concat(narration.LongItems).Where(item => string.Equals(ResolvePhase14ScenePurpose(item.Key), "accurate-sky-guide", StringComparison.OrdinalIgnoreCase)).Select(item => item.Value)),
             metadataLeakScore = ScoreMetadataLeak(allText),
+            bestTimeHumanizationPassed = BestTimeHumanizationPassed(narration.ShortItems.Concat(narration.LongItems).Where(item => string.Equals(ResolvePhase14ScenePurpose(item.Key), "best-time", StringComparison.OrdinalIgnoreCase)).Select(item => item.Value)),
             wonderScore = narration.Diagnostics.WonderScore,
             closingQualityScore = ScoreClosingQuality(narration.ShortItems.Values.Concat(narration.LongItems.Values).LastOrDefault() ?? string.Empty),
             scientificAccuracyScore = narration.Diagnostics.ScientificAccuracyScore,
@@ -2168,6 +2171,17 @@ public sealed partial class ProductionPipelineExecutionService(
         return path;
     }
 
+
+
+    private static bool DetectCauseDuplication(IEnumerable<string> causeTexts)
+        => causeTexts.Any(text => Regex.Matches(text ?? string.Empty, @"\b(appear|close|together|perspective|align|separated|distance)\b", RegexOptions.IgnoreCase).Count > 7
+            && SplitNarrationSentences(text).Count(sentence => Regex.IsMatch(sentence, @"\b(appear|close|together|perspective|align|separated|distance)\b", RegexOptions.IgnoreCase)) > 2);
+
+    private static bool SkyGuideGrammarPassed(IEnumerable<string> skyGuideTexts)
+        => skyGuideTexts.All(text => !Regex.IsMatch(text ?? string.Empty, @"\b(the\s+the|after sunset horizon|western sky after sunset horizon|toward\s+the\s+western\s+sky\s+after\s+sunset)\b", RegexOptions.IgnoreCase));
+
+    private static bool BestTimeHumanizationPassed(IEnumerable<string> bestTimeTexts)
+        => bestTimeTexts.All(text => !Regex.IsMatch(text ?? string.Empty, @"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?\b|\b\d{1,2}:\d{2}\s*(?:AM|PM)\b", RegexOptions.IgnoreCase));
 
     private static int ScoreOpeningQuality(string text)
     {
@@ -2287,6 +2301,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var time = NaturalViewingWindow(context.LocalPeakTime);
         var direction = NaturalSkyDirection(context.SkyDirectionHint);
+        var objectLabel = PlanetConjunctionObjectLabel(context.ShortTitle);
         foreach (var sceneId in texts.Keys.ToArray())
         {
             var purpose = ResolvePhase14ScenePurpose(sceneId);
@@ -2294,10 +2309,10 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 "hook" => $"Hello, fellow stargazers. Over the next few evenings, {CleanPhase14Title(context.ShortTitle)} offers a quiet chance to watch two bright planets gather in the twilight. At first it looks simple, but the closer we look, the more the scene becomes a story of distance, motion, and perspective. Let’s take a closer look.",
                 "what-is-it" => "That opening view leads us into a planetary conjunction: not a physical meeting, but a shared direction in our sky.",
-                "cause" => "Although the planets appear close together, they remain separated by hundreds of millions of kilometers while their paths briefly align from Earth's perspective.",
+                "cause" => $"Although {objectLabel} appear remarkably close together in our evening sky, they remain separated by hundreds of millions of kilometers in space. Their apparent meeting is created by perspective, as Earth and the two planets briefly align from our point of view.",
                 "interesting-fact" => "From night to night, the changing gap lets you sense the solar system moving, not as a diagram, but as a quiet shift above the horizon.",
-                "best-time" => $"The conjunction reaches its finest appearance during the evenings surrounding {time}.",
-                "accurate-sky-guide" => $"About thirty minutes after sunset, turn your attention toward {direction} and look for the two bright planetary points close to the horizon.",
+                "best-time" => $"The conjunction reaches its finest appearance during the evenings surrounding {time}. Arriving a little before sunset gives your eyes time to adjust as the sky slowly darkens.",
+                "accurate-sky-guide" => $"About thirty minutes after sunset, turn your attention toward {direction}. There you'll find two bright planets appearing unusually close together above the skyline.",
                 "what-you-will-see" => "By then, one world may look brilliant and sharp while the other appears steadier, with their apparent closeness held only by our line of sight.",
                 "viewing-tips" => "From there, give the view a few quiet minutes, keep phones dim, and let binoculars become a second look rather than the first step.",
                 "final-reminder" => "In a few nights, the planets will drift apart once again. Their brief meeting in our evening sky will end, just as all celestial alignments eventually do. But for those who pause to look up, the memory of seeing two distant worlds share the same patch of sky can remain long after the conjunction itself has passed.",
@@ -2314,17 +2329,45 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
         if (string.IsNullOrWhiteSpace(cleaned)) return "the peak date";
-        cleaned = Regex.Replace(cleaned, @"\b(best viewing window|local viewing window|best local viewing window)\b", "", RegexOptions.IgnoreCase).Trim(' ', ':', '-', '–', '—');
+        cleaned = Regex.Replace(cleaned, @"\b(best viewing window|local viewing window|best local viewing window|best time)\b", "", RegexOptions.IgnoreCase).Trim(' ', ':', '-', '–', '—');
+        cleaned = Regex.Replace(cleaned, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b", "", RegexOptions.IgnoreCase).Trim(' ', ',', ':', '-', '–', '—');
+        if (DateTimeOffset.TryParse(cleaned, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var dto))
+            return $"{dto:MMMM} {OrdinalWord(dto.Day)}";
+        var match = Regex.Match(cleaned, @"\b(?<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(?<day>\d{1,2})\b", RegexOptions.IgnoreCase);
+        if (match.Success && int.TryParse(match.Groups["day"].Value, out var day))
+            return $"{CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Groups["month"].Value.TrimEnd('.').ToLowerInvariant())} {OrdinalWord(day)}";
         return string.IsNullOrWhiteSpace(cleaned) ? "the peak date" : cleaned;
     }
 
     private static string NaturalSkyDirection(string? value)
     {
-        var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+        var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim().Trim(' ', '.', ',');
         if (string.IsNullOrWhiteSpace(cleaned)) return "the western horizon";
-        cleaned = Regex.Replace(cleaned, @"^look\s+toward\s+", "", RegexOptions.IgnoreCase).Trim(' ', '.', ',');
-        return cleaned.Contains("horizon", StringComparison.OrdinalIgnoreCase) ? cleaned : $"the {cleaned} horizon";
+        cleaned = Regex.Replace(cleaned, @"\b(after sunset|about thirty minutes|thirty minutes|look|turn|face|toward|find|begin|start|scan|use|clear|unobstructed)\b", "", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, @"\b(the\s+)+", "the ", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim(' ', '.', ',');
+        if (Regex.IsMatch(cleaned, @"\bwest(?:ern)?\b", RegexOptions.IgnoreCase)) return "the western horizon";
+        if (Regex.IsMatch(cleaned, @"\beast(?:ern)?\b", RegexOptions.IgnoreCase)) return "the eastern horizon";
+        if (Regex.IsMatch(cleaned, @"\bnorth(?:ern)?\b", RegexOptions.IgnoreCase)) return "the northern horizon";
+        if (Regex.IsMatch(cleaned, @"\bsouth(?:ern)?\b", RegexOptions.IgnoreCase)) return "the southern horizon";
+        return "the western horizon";
     }
+
+    private static string PlanetConjunctionObjectLabel(string? title)
+    {
+        var text = title ?? string.Empty;
+        if (text.Contains("Venus", StringComparison.OrdinalIgnoreCase) && text.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) return "Venus and Jupiter";
+        return "the two planets";
+    }
+
+    private static string OrdinalWord(int day) => day switch
+    {
+        1 => "first", 2 => "second", 3 => "third", 4 => "fourth", 5 => "fifth", 6 => "sixth", 7 => "seventh", 8 => "eighth", 9 => "ninth",
+        10 => "tenth", 11 => "eleventh", 12 => "twelfth", 13 => "thirteenth", 14 => "fourteenth", 15 => "fifteenth", 16 => "sixteenth",
+        17 => "seventeenth", 18 => "eighteenth", 19 => "nineteenth", 20 => "twentieth", 21 => "twenty first", 22 => "twenty second",
+        23 => "twenty third", 24 => "twenty fourth", 25 => "twenty fifth", 26 => "twenty sixth", 27 => "twenty seventh", 28 => "twenty eighth",
+        29 => "twenty ninth", 30 => "thirtieth", 31 => "thirty first", _ => day.ToString(CultureInfo.InvariantCulture)
+    };
 
     private static string RewriteBannedNarrationPhrases(string text)
     {
@@ -2384,6 +2427,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
             kept = MergeCauseNarration(kept, family);
+        if (string.Equals(scenePurpose, "accurate-sky-guide", StringComparison.OrdinalIgnoreCase) && string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            kept = ["About thirty minutes after sunset, turn your attention toward the western horizon.", "There you'll find two bright planets appearing unusually close together above the skyline."];
 
         var sanitized = string.Join(" ", kept.Where(sentence => !string.IsNullOrWhiteSpace(sentence))).Trim();
         if (string.IsNullOrWhiteSpace(sanitized) && string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
@@ -2397,6 +2442,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static List<string> MergeCauseNarration(IReadOnlyList<string> kept, string family)
     {
         var cause = BuildEventFamilyCauseNarration(family);
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)) return [cause];
         var first = kept.FirstOrDefault(sentence => !string.IsNullOrWhiteSpace(sentence));
         if (string.IsNullOrWhiteSpace(first)) return [cause];
         if (cause.Contains(first, StringComparison.OrdinalIgnoreCase) || first.Contains(cause, StringComparison.OrdinalIgnoreCase)) return [cause];
@@ -2408,7 +2454,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             "Moon" => "A full moon happens when the Moon is opposite the Sun from our point of view on Earth.",
             "Meteor" => "Meteor showers happen when Earth passes through a trail of comet debris, and tiny particles burn brightly in our atmosphere.",
-            "PlanetConjunction" => "Although the two planets appear close together, they remain separated by vast distances while their paths briefly align from Earth's perspective.",
+            "PlanetConjunction" => "Although the two planets appear remarkably close together in our evening sky, they remain separated by hundreds of millions of kilometers in space. Their apparent meeting is created by perspective, as Earth and the two planets briefly align from our point of view.",
             "PlanetGrouping" => "Planet groupings happen because planets move along the same broad path across our sky, so they can appear close together from Earth.",
             "Eclipse" => "A solar eclipse happens when the Moon passes between Earth and the Sun, briefly blocking part or all of the Sun’s disk.",
             _ => "This event happens because objects in space keep moving through predictable positions from our point of view on Earth."
