@@ -49,6 +49,30 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase14SubtitleSegmentation_SplitsNarrationIntoReadableCues()
+    {
+        const string narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";
+
+        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethod("SplitSubtitleChunks", BindingFlags.NonPublic | BindingFlags.Static);
+        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethod("WrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(splitMethod);
+        Assert.NotNull(wrapMethod);
+
+        var chunks = (IReadOnlyList<string>)splitMethod!.Invoke(null, [narration])!;
+        var wrapped = chunks.Select(chunk => (IReadOnlyList<string>)wrapMethod!.Invoke(null, [chunk])!).ToArray();
+
+        Assert.True(chunks.Count > 1);
+        Assert.Equal(narration, string.Join(" ", chunks));
+        Assert.All(chunks, chunk => Assert.InRange(chunk.Length, 1, 84));
+        Assert.All(wrapped, lines =>
+        {
+            Assert.InRange(lines.Count, 1, 2);
+            Assert.All(lines, line => Assert.InRange(line.Length, 1, 42));
+        });
+    }
+
+    [Fact]
     public void Phase18MotionV2Strength_RequestExperimentalDoesNotOverrideDefaultPlan()
     {
         Assert.Equal("Default", InvokePhase18MotionV2StrengthResolver("Experimental", "Default"));

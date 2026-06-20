@@ -2935,20 +2935,43 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!string.Equals(normalizedFileSceneId, normalizedPlanSceneId, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"SRT narration file scene id does not match scene duration plan scene id for {format}: file={sceneIdOrigin}, plan={durationPlanItem.SceneId}, normalizedFile={normalizedFileSceneId}, normalizedPlan={normalizedPlanSceneId}");
 
-            var cueStart = subtitleStart;
-            var cueEnd = subtitleStart + audioDuration;
-            var cueText = NormalizeNarrationWhitespace(text);
-            blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
+            var sceneStart = subtitleStart;
+            var sceneEnd = subtitleStart + audioDuration;
+            var sceneText = NormalizeNarrationWhitespace(text);
+            var cueChunks = SplitSubtitleChunks(sceneText);
+            var cueDurations = AllocateSubtitleCueDurations(cueChunks, audioDuration);
+            var cueStart = sceneStart;
+            for (var chunkIndex = 0; chunkIndex < cueChunks.Count; chunkIndex++)
+            {
+                var cueText = cueChunks[chunkIndex];
+                var cueEnd = chunkIndex == cueChunks.Count - 1
+                    ? sceneEnd
+                    : Math.Min(sceneEnd, cueStart + cueDurations[chunkIndex]);
+                blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
+                cueValidation.Add(new
+                {
+                    cueIndex = number - 1,
+                    cueText,
+                    sceneDurationPlanAudioPath = NormalizePath(durationPlanItem.AudioPath),
+                    audioDurationSec = RoundDuration(audioDuration),
+                    expectedStartSec = RoundDuration(cueStart),
+                    expectedEndSec = RoundDuration(cueEnd),
+                    srtStartSec = RoundDuration(cueStart),
+                    srtEndSec = RoundDuration(cueEnd),
+                    driftMs = 0.0
+                });
+                cueStart = cueEnd;
+            }
             cueValidation.Add(new
             {
-                cueIndex = number - 1,
-                cueText,
+                sceneId = durationPlanItem.SceneId,
+                cueCount = cueChunks.Count,
                 sceneDurationPlanAudioPath = NormalizePath(durationPlanItem.AudioPath),
                 audioDurationSec = RoundDuration(audioDuration),
-                expectedStartSec = RoundDuration(cueStart),
-                expectedEndSec = RoundDuration(cueEnd),
-                srtStartSec = RoundDuration(cueStart),
-                srtEndSec = RoundDuration(cueEnd),
+                expectedStartSec = RoundDuration(sceneStart),
+                expectedEndSec = RoundDuration(sceneEnd),
+                srtStartSec = RoundDuration(sceneStart),
+                srtEndSec = RoundDuration(sceneEnd),
                 driftMs = 0.0
             });
             perScene.Add(new
@@ -2956,8 +2979,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 sceneId = durationPlanItem.SceneId,
                 sceneDurationPlanAudioPath = NormalizePath(durationPlanItem.AudioPath),
                 audioDurationSec = RoundDuration(audioDuration),
-                subtitleStart = RoundDuration(cueStart),
-                subtitleEnd = RoundDuration(cueEnd),
+                subtitleStart = RoundDuration(sceneStart),
+                subtitleEnd = RoundDuration(sceneEnd),
+                subtitleCueCount = cueChunks.Count,
                 subtitleTextSource = "NarrationFile",
                 subtitleTextOrigin = NormalizePath(narrationFile),
                 sceneIdOrigin,
@@ -2965,7 +2989,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 normalizedSceneIdMatching = true,
                 generatorComponent = "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan"
             });
-            subtitleStart = cueEnd;
+            subtitleStart = sceneEnd;
         }
         var duplicateBlockGroups = blocks
             .Select(block => new { block.Number, block.SceneId, Text = string.Join(" ", block.Lines), NormalizedText = NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)) })
@@ -3185,11 +3209,32 @@ public sealed partial class ProductionPipelineExecutionService(
         return chunks;
     }
 
+    private static IReadOnlyList<double> AllocateSubtitleCueDurations(IReadOnlyList<string> cueChunks, double sceneDurationSeconds)
+    {
+        if (cueChunks.Count == 0) return [];
+        var totalWeight = cueChunks.Sum(chunk => Math.Max(1, CountSpokenWords(chunk)));
+        if (totalWeight <= 0) totalWeight = cueChunks.Sum(chunk => Math.Max(1, chunk.Length));
+        return cueChunks
+            .Select(chunk =>
+            {
+                var weight = Math.Max(1, CountSpokenWords(chunk));
+                return sceneDurationSeconds * weight / totalWeight;
+            })
+            .ToArray();
+    }
+
     private static IReadOnlyList<string> WrapSubtitleChunk(string text)
     {
         if (text.Length <= 42) return [text];
-        var cut = text.LastIndexOf(' ', Math.Min(42, text.Length - 1));
-        if (cut < 20) cut = Math.Min(42, text.Length);
+        var minCut = Math.Max(1, text.Length - 42);
+        var maxCut = Math.Min(42, text.Length - 1);
+        var target = Math.Clamp(text.Length / 2, minCut, maxCut);
+        var cut = text.LastIndexOf(' ', maxCut);
+        if (cut < minCut)
+        {
+            var forwardCut = text.IndexOf(' ', minCut);
+            cut = forwardCut >= minCut && forwardCut <= maxCut ? forwardCut : target;
+        }
         return [text[..cut].Trim(), text[cut..].Trim()];
     }
 
@@ -3200,6 +3245,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var errors = new List<string>();
         var sourceCombined = NormalizeNarrationForSrtComparison(string.Join(" ", sourceTexts));
         var srtCombined = NormalizeNarrationForSrtComparison(string.Join(" ", srtTexts));
+        var srtBlocks = ExtractSrtBlocks(srtPath);
         var missingSceneTexts = new List<string>();
         var extraUnexpectedTexts = new List<string>();
         var comparisonFailureReason = string.Empty;
@@ -3211,11 +3257,12 @@ public sealed partial class ProductionPipelineExecutionService(
             errors.Add($"{Path.GetFileName(srtPath)} reconstructed subtitle text does not match narration files");
         }
         if (srtTexts.Any(text => text.Length > 84)) errors.Add($"{Path.GetFileName(srtPath)} contains a cue longer than 84 characters");
+        if (srtBlocks.Any(block => block.Lines.Count > 2)) errors.Add($"{Path.GetFileName(srtPath)} contains a cue with more than 2 lines");
+        if (srtBlocks.Any(block => block.Lines.Any(line => line.Length > 42))) errors.Add($"{Path.GetFileName(srtPath)} contains a subtitle line longer than 42 characters");
         if (srtTexts.Any(ContainsAuthoringInstructionText)) errors.Add($"{Path.GetFileName(srtPath)} contains forbidden authoring phrases");
         if (srtTexts.Any(text => text.Contains("centers on", StringComparison.OrdinalIgnoreCase))
             && !sourceTexts.Any(text => text.Contains("centers on", StringComparison.OrdinalIgnoreCase)))
             errors.Add($"{Path.GetFileName(srtPath)} contains fallback phrase centers on outside narration files");
-        var srtBlocks = ExtractSrtBlocks(srtPath);
         var duplicateBlockGroups = srtBlocks
             .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
             .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
