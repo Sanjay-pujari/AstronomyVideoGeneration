@@ -4095,8 +4095,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseDurationCalibrationV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        const double transitionPaddingSec = 0.4;
-        const double minimumSceneDurationSec = 3.0;
+        const double transitionPaddingSec = 0.0;
+        const double minimumSceneDurationSec = 0.5;
         var planRoot = context.OutputRoot;
         var timingRoot = Path.Combine(planRoot, "timing");
         var validationRoot = context.ExecutionContext.ValidationRoot!;
@@ -4236,7 +4236,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var audioDuration = File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : timelineDuration;
             if (audioDuration <= 0) missingDurationItems.Add($"{format}:{sceneId}");
             var metadata = metadataBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
-            var sceneDuration = Math.Max(minimumSceneDurationSec, audioDuration + transitionPaddingSec);
+            var sceneDuration = Math.Max(minimumSceneDurationSec, audioDuration);
             items.Add(new SceneDurationPlanItem(format, sceneId, audioPath, RoundDuration(audioDuration), RoundDuration(sceneDuration), RoundDuration(transitionPaddingSec), "cut", ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion"))));
         }
         return items;
@@ -6159,6 +6159,11 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<VideoAssemblyItem> ReadVideoAssemblyItems(string planRoot, JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons)
     {
         var items = new List<VideoAssemblyItem>();
+        var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
+        var durationPlanBySceneId = durationPlanItems
+            .Where(i => !string.IsNullOrWhiteSpace(i.SceneId))
+            .GroupBy(i => NormalizeSceneIdForOrder(i.SceneId), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var isMotionV2 = string.Equals(GetString(motionRoot, "motionVersion"), "V2", StringComparison.OrdinalIgnoreCase);
         foreach (var item in (motionRoot[format]?["items"]?.AsArray() ?? []).Take(expectedCount))
         {
@@ -6174,11 +6179,17 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             var motionProfile = ResolveMotionProfile(sceneId, GetString(item, "motionStyle", "motionProfile"));
             var defaults = ResolveMotionDefaults(motionProfile) ?? ResolveMotionDefaults("Hook")!;
+            var durationPlanItem = durationPlanBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matchedDurationPlanItem)
+                ? matchedDurationPlanItem
+                : items.Count < durationPlanItems.Count ? durationPlanItems[items.Count] : null;
+            var calibratedSceneDuration = durationPlanItem?.SceneDurationSec > 0
+                ? durationPlanItem.SceneDurationSec
+                : GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
             items.Add(new VideoAssemblyItem(
                 sceneId,
                 imagePath,
                 audioPath,
-                GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0,
+                calibratedSceneDuration,
                 "crossfade",
                 isMotionV2 ? GetString(item, "motionType") ?? motionProfile : motionProfile,
                 GetString(item, "purpose") ?? ResolveMotionPurpose(sceneId),
@@ -6337,7 +6348,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
             var videoDuration = await ProbeAudioDurationSecondsAsync(videoOnlyPath, cancellationToken);
             var narrationDuration = hasNarrationAudio ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
-            var finalDuration = Math.Max(videoDuration, narrationDuration + 4.0);
+            var finalDuration = hasNarrationAudio ? narrationDuration + 4.0 : videoDuration + 4.0;
             if (finalDuration <= 0) throw new InvalidOperationException("Phase 18 cannot determine final video/audio duration.");
 
             var finalMixedAudioPath = ResolvePhase18FinalMixedAudioPath(outputPath);
