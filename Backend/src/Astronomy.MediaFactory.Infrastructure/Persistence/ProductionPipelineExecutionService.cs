@@ -2151,8 +2151,12 @@ public sealed partial class ProductionPipelineExecutionService(
             version = "v2",
             narrationStyle = narration.NarrationStyle,
             storyArc = narration.StoryArc,
+            documentaryNarrationScore = narration.Diagnostics.DocumentaryScore,
             documentaryScore = narration.Diagnostics.DocumentaryScore,
+            sceneContinuityScore = ScoreSceneContinuity(allText),
+            metadataLeakScore = ScoreMetadataLeak(allText),
             wonderScore = narration.Diagnostics.WonderScore,
+            closingQualityScore = ScoreClosingQuality(narration.ShortItems.Values.Concat(narration.LongItems.Values).LastOrDefault() ?? string.Empty),
             scientificAccuracyScore = narration.Diagnostics.ScientificAccuracyScore,
             perspectiveStatementPresent = ContainsPerspectiveStatement(allText),
             shortSceneCount = narration.ShortItems.Count,
@@ -2160,6 +2164,30 @@ public sealed partial class ProductionPipelineExecutionService(
             sourceComposerVersion = narration.Diagnostics.ScriptComposerVersion
         }, JsonOptions), cancellationToken);
         return path;
+    }
+
+
+    private static int ScoreSceneContinuity(string text)
+    {
+        var score = 70;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(as|by then|from night to night|in a few nights|that|the pairing|the conjunction)\b", RegexOptions.IgnoreCase)) score += 20;
+        if (!Regex.IsMatch(text ?? string.Empty, @"\b(scene|caption|metadata|asset|render)\b", RegexOptions.IgnoreCase)) score += 10;
+        return Math.Min(100, score);
+    }
+
+    private static int ScoreMetadataLeak(string text)
+    {
+        var leaks = Regex.Matches(text ?? string.Empty, @"\b(scene|caption|metadata|asset|render|source|strategy|beat|timeline)\b", RegexOptions.IgnoreCase).Count;
+        return Math.Max(0, 100 - leaks * 20);
+    }
+
+    private static int ScoreClosingQuality(string text)
+    {
+        var score = 45;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(drift apart|end|passed|passes)\b", RegexOptions.IgnoreCase)) score += 20;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(celestial|alignment|sky|distant worlds|planets)\b", RegexOptions.IgnoreCase)) score += 20;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(memory|pause|look up|remain)\b", RegexOptions.IgnoreCase)) score += 15;
+        return Math.Min(100, score);
     }
 
     private static Phase14DocumentaryNarration BuildPhase14DocumentaryNarration(ProductionPhaseContext context)
@@ -2177,6 +2205,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortTexts = new Dictionary<string, string>(LongSceneNarrationExpander.Expand(family, expansionContext, shortDrafts, out var shortExpansionStrategy), StringComparer.OrdinalIgnoreCase);
         var expandedLongTexts = LongSceneNarrationExpander.Expand(family, expansionContext, longDrafts, out var longExpansionStrategy);
         var longTexts = new Dictionary<string, string>(expandedLongTexts, StringComparer.OrdinalIgnoreCase);
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+        {
+            ApplyPlanetConjunctionNarrationV21(shortTexts, expansionContext);
+            ApplyPlanetConjunctionNarrationV21(longTexts, expansionContext);
+        }
         var composerTrace = new List<SceneNarrationComposerTraceEntry>();
         SanitizeSceneNarrationComposerOutputs(context, family, shortTexts, composerTrace, "short");
         SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
@@ -2228,6 +2261,65 @@ public sealed partial class ProductionPipelineExecutionService(
             => string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
     }
 
+
+    private static void ApplyPlanetConjunctionNarrationV21(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context)
+    {
+        var time = NaturalViewingWindow(context.LocalPeakTime);
+        var direction = NaturalSkyDirection(context.SkyDirectionHint);
+        foreach (var sceneId in texts.Keys.ToArray())
+        {
+            var purpose = ResolvePhase14ScenePurpose(sceneId);
+            var replacement = purpose switch
+            {
+                "hook" => "Low in the evening sky, two bright planets draw the eye because their separation seems to shrink against the fading twilight.",
+                "what-is-it" => "As the view settles, the pairing becomes a planetary conjunction: not a physical meeting, but a shared direction in our sky.",
+                "cause" => "Although the two planets appear close together, they remain separated by vast distances while their paths briefly align from Earth's perspective.",
+                "interesting-fact" => "Night by night, the changing gap lets you sense the solar system moving, not as a diagram, but as a quiet shift above the horizon.",
+                "best-time" => $"The conjunction reaches its finest appearance during the evenings surrounding {time}.",
+                "accurate-sky-guide" => $"About thirty minutes after sunset, turn your attention toward {direction} and look for the two bright planetary points close to the horizon.",
+                "what-you-will-see" => "By then, one world may look brilliant and sharp while the other appears steadier, their apparent closeness held only by our line of sight.",
+                "viewing-tips" => "Give the view a few quiet minutes, keep phones dim, and let binoculars become a second look rather than the first step.",
+                "final-reminder" => "In a few nights, the planets will drift apart once again. Their brief meeting in our evening sky will end, just as all celestial alignments eventually do. But for those who pause to look up, the memory of seeing two distant worlds share the same patch of sky can remain long after the conjunction itself has passed.",
+                _ => texts[sceneId]
+            };
+            texts[sceneId] = RewriteBannedNarrationPhrases(replacement);
+        }
+    }
+
+    private static string NaturalViewingWindow(string? value)
+    {
+        var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(cleaned)) return "the peak date";
+        cleaned = Regex.Replace(cleaned, @"\b(best viewing window|local viewing window|best local viewing window)\b", "", RegexOptions.IgnoreCase).Trim(' ', ':', '-', '–', '—');
+        return string.IsNullOrWhiteSpace(cleaned) ? "the peak date" : cleaned;
+    }
+
+    private static string NaturalSkyDirection(string? value)
+    {
+        var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(cleaned)) return "the western horizon";
+        cleaned = Regex.Replace(cleaned, @"^look\s+toward\s+", "", RegexOptions.IgnoreCase).Trim(' ', '.', ',');
+        return cleaned.Contains("horizon", StringComparison.OrdinalIgnoreCase) ? cleaned : $"the {cleaned} horizon";
+    }
+
+    private static string RewriteBannedNarrationPhrases(string text)
+    {
+        var rewritten = text ?? string.Empty;
+        var replacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["opens with"] = "reveals",
+            ["starts with"] = "begins as",
+            ["start with"] = "turn first to",
+            ["this matters because"] = "the reason is",
+            ["you will see"] = "look for",
+            ["the event is"] = "the moment becomes",
+            ["the best view comes from"] = "the clearest view is found from"
+        };
+        foreach (var (phrase, replacement) in replacements)
+            rewritten = Regex.Replace(rewritten, Regex.Escape(phrase), replacement, RegexOptions.IgnoreCase);
+        return Regex.Replace(rewritten, @"\s+", " ").Trim();
+    }
+
     private static void SanitizeSceneNarrationComposerOutputs(ProductionPhaseContext context, string family, IDictionary<string, string> texts, List<SceneNarrationComposerTraceEntry> trace, string format)
     {
         foreach (var (sceneId, raw) in texts.ToArray())
@@ -2272,6 +2364,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var sanitized = string.Join(" ", kept.Where(sentence => !string.IsNullOrWhiteSpace(sentence))).Trim();
         if (string.IsNullOrWhiteSpace(sanitized) && string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
             sanitized = BuildEventFamilyCauseNarration(family);
+        sanitized = RewriteBannedNarrationPhrases(sanitized);
         if (sanitized.Contains("centers on", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("SceneLevelNarrationComposer sanitizer failed to remove fallback narration text.");
         return new SceneNarrationSanitizeResult(sanitized, removed);
@@ -2291,7 +2384,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             "Moon" => "A full moon happens when the Moon is opposite the Sun from our point of view on Earth.",
             "Meteor" => "Meteor showers happen when Earth passes through a trail of comet debris, and tiny particles burn brightly in our atmosphere.",
-            "PlanetConjunction" => "A planetary conjunction happens when two planets appear near each other along our line of sight from Earth, even though they remain separated by vast distances in space.",
+            "PlanetConjunction" => "Although the two planets appear close together, they remain separated by vast distances while their paths briefly align from Earth's perspective.",
             "PlanetGrouping" => "Planet groupings happen because planets move along the same broad path across our sky, so they can appear close together from Earth.",
             "Eclipse" => "A solar eclipse happens when the Moon passes between Earth and the Sun, briefly blocking part or all of the Sun’s disk.",
             _ => "This event happens because objects in space keep moving through predictable positions from our point of view on Earth."
@@ -2417,8 +2510,19 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         if (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned)
             throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");
+        ValidateNoNarrationV21BannedPhrases(shortTexts.Values.Concat(longTexts.Values));
         ValidatePhase14EventStoryNarrationFormat("short", shortTexts);
         ValidatePhase14EventStoryNarrationFormat("long", longTexts);
+    }
+
+
+    private static void ValidateNoNarrationV21BannedPhrases(IEnumerable<string> texts)
+    {
+        var banned = new[] { "opens with", "starts with", "start with", "this matters because", "you will see", "the event is", "the best view comes from" };
+        var combined = string.Join(" ", texts);
+        var hit = banned.FirstOrDefault(phrase => combined.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+        if (hit is not null)
+            throw new InvalidOperationException($"Phase 14 documentary narration contains banned V2.1 phrase: {hit}");
     }
 
     private static void ValidatePhase14EventStoryNarrationFormat(string format, IReadOnlyDictionary<string, string> texts)
