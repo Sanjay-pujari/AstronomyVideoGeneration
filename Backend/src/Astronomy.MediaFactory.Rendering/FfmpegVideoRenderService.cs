@@ -533,7 +533,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private static void ValidateSegmentSynchronization(RenderPlanScene scene, int index, double audioDurationSeconds, double visualDurationSeconds)
     {
         var difference = Math.Abs(audioDurationSeconds - visualDurationSeconds);
-        if (difference > 0.25d)
+        if (difference > 0.1d)
         {
             throw new InvalidOperationException($"Segment synchronization failed for scene #{index + 1} ({scene.SceneId ?? scene.Caption}): audio={audioDurationSeconds:F3}s visual={visualDurationSeconds:F3}s difference={difference:F3}s.");
         }
@@ -552,7 +552,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             AudioDurationSeconds: Math.Round(audioDurationSeconds, 3, MidpointRounding.AwayFromZero),
             VisualDurationSeconds: Math.Round(visualDurationSeconds, 3, MidpointRounding.AwayFromZero),
             DurationDifference: Math.Round(difference, 3, MidpointRounding.AwayFromZero),
-            SynchronizationStatus: difference <= 0.25d ? "Synchronized" : "Mismatch",
+            SynchronizationStatus: difference <= 0.1d ? "Synchronized" : "Mismatch",
             NarrationWords: wordCount,
             EstimatedWordsPerMinute: Math.Round(CalculateWordsPerMinute(narrationText, audioDurationSeconds), 1, MidpointRounding.AwayFromZero),
             ObjectName: scene.ObjectName ?? string.Empty,

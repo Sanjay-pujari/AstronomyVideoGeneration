@@ -152,7 +152,7 @@ public sealed class FinalNarrationService(
         if (isOpening)
             return $"If the sky over {directorCut.LocationName} opens tonight, do not waste the first clear minutes. This window may be brief. Watch calmly, and let the evidence in the sky lead the moment.";
         if (isClosing)
-            return "If clouds win, the sky owes us nothing. But if it clears, you will know where to look, why it matters, and how to give the moment its best chance.";
+            return "Keep watching for more sky events. Until then, enjoy stargazing.";
 
         return segment.SceneNumber switch
         {
@@ -168,7 +168,7 @@ public sealed class FinalNarrationService(
         if (isOpening)
             return "Two bright worlds can seem to gather in one small patch of sky. They are not close together in space. Earth is giving us a clean line of sight.";
         if (isClosing)
-            return "That is the quiet magic of a conjunction. Real worlds remain far apart, yet from here, for a little while, they share one view.";
+            return "Keep watching for more sky events. Until then, enjoy stargazing.";
 
         return segment.SceneNumber switch
         {
@@ -185,7 +185,7 @@ public sealed class FinalNarrationService(
         if (isOpening)
             return "Tonight's pattern is not about one object stealing the show. It is about how separate lights create a shape that your eyes can follow.";
         if (isClosing)
-            return "Keep the memory simple. One light leads to the next, and the whole sky becomes easier to read.";
+            return "Keep watching for more sky events. Until then, enjoy stargazing.";
 
         return segment.SceneNumber switch
         {
@@ -201,7 +201,7 @@ public sealed class FinalNarrationService(
         if (isOpening)
             return $"This week above {directorCut.LocationName}, the night sky has a beginning, a middle, and a quiet final note. Do not treat it like a list. Follow its rhythm.";
         if (isClosing)
-            return "By the end of the week, the lesson is simple. The sky changes slowly enough to follow, and beautifully enough to remember.";
+            return "Keep watching for more sky events. Until then, enjoy stargazing.";
 
         return index switch
         {
@@ -218,7 +218,7 @@ public sealed class FinalNarrationService(
         if (isOpening)
             return $"Some sky moments ask for a slower look. Tonight over {directorCut.LocationName}, give this one enough quiet to reveal itself.";
         if (isClosing)
-            return "Step outside, let your eyes adjust, and leave room for the sky to surprise you.";
+            return "Keep watching for more sky events. Until then, enjoy stargazing.";
         return RewriteDirectorLine(segment.DirectorNarration);
     }
 
