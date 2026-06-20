@@ -3973,9 +3973,6 @@ public sealed partial class ProductionPipelineExecutionService(
     private static TimeSpan ParseSrtTimestamp(string value)
         => TimeSpan.ParseExact(value.Replace(',', '.'), @"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture);
 
-    private static string FormatSrtTimestamp(TimeSpan value)
-        => value.ToString(@"hh\:mm\:ss\,fff", CultureInfo.InvariantCulture);
-
     private static bool ContainsHindiText(string text)
         => text.Any(ch => ch >= '\u0900' && ch <= '\u097F');
 
