@@ -3192,31 +3192,50 @@ public sealed partial class ProductionPipelineExecutionService(
         var current = string.Empty;
         foreach (var phrase in phrases)
         {
-            if ((current + " " + phrase).Trim().Length <= 84) current = (current + " " + phrase).Trim();
-            else
+            var candidate = (current + " " + phrase).Trim();
+            if (CanWrapSubtitleChunk(candidate))
             {
-                if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
-                current = phrase;
-                while (current.Length > 84)
-                {
-                    var cut = FindSubtitleWhitespaceCut(current, 84, 35);
-                    if (cut < 0)
-                        throw new InvalidOperationException($"SRT validation failed: subtitle text contains a word longer than 84 characters and cannot be split without breaking a word. text={current}");
-                    chunks.Add(current[..cut].Trim());
-                    current = current[cut..].Trim();
-                }
+                current = candidate;
+                continue;
             }
+
+            if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+
+            var phraseChunks = SplitSubtitleChunkOnWhitespace(phrase);
+            chunks.AddRange(phraseChunks.Take(Math.Max(0, phraseChunks.Count - 1)));
+            current = phraseChunks.Count == 0 ? string.Empty : phraseChunks[^1];
         }
         if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
         return chunks;
     }
 
-    private static int FindSubtitleWhitespaceCut(string text, int maxLength, int preferredMinimum)
+    private static IReadOnlyList<string> SplitSubtitleChunkOnWhitespace(string text)
     {
-        var cut = text.LastIndexOf(' ', Math.Min(maxLength, text.Length - 1));
-        if (cut >= preferredMinimum) return cut;
-        var forwardCut = text.IndexOf(' ', Math.Min(maxLength, text.Length - 1));
-        return forwardCut > 0 && forwardCut <= maxLength ? forwardCut : -1;
+        var words = Regex.Split(text, @"\s+")
+            .Where(word => !string.IsNullOrWhiteSpace(word))
+            .ToArray();
+        var chunks = new List<string>();
+        var current = string.Empty;
+        foreach (var word in words)
+        {
+            if (word.Length > 42)
+                throw new InvalidOperationException($"SRT validation failed: subtitle text contains a word longer than 42 characters and cannot be wrapped without breaking a word. text={text}");
+
+            var candidate = (current + " " + word).Trim();
+            if (CanWrapSubtitleChunk(candidate))
+            {
+                current = candidate;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(current))
+                throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be split without breaking a word. text={text}");
+
+            chunks.Add(current);
+            current = word;
+        }
+        if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+        return chunks;
     }
 
     private static IReadOnlyList<double> AllocateSubtitleCueDurations(IReadOnlyList<string> cueChunks, double sceneDurationSeconds)
@@ -3242,6 +3261,17 @@ public sealed partial class ProductionPipelineExecutionService(
         if (cut < minCut)
             throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be wrapped into two 42-character lines without splitting a word. text={text}");
         return [text[..cut].Trim(), text[cut..].Trim()];
+    }
+
+    private static bool CanWrapSubtitleChunk(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 84) return false;
+        if (Regex.Split(text, @"\s+").Any(word => word.Length > 42)) return false;
+        if (text.Length <= 42) return true;
+        var minCut = Math.Max(1, text.Length - 42);
+        var maxCut = Math.Min(42, text.Length - 1);
+        var cut = text.LastIndexOf(' ', maxCut);
+        return cut >= minCut;
     }
 
     private static SrtValidationResult ValidateNarrationSrt(string srtPath, IReadOnlyList<string> narrationFiles, IReadOnlyList<SubtitleCueSource> subtitleCueSources)
