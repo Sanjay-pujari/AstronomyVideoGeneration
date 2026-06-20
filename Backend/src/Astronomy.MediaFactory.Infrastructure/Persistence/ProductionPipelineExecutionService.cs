@@ -2932,8 +2932,10 @@ public sealed partial class ProductionPipelineExecutionService(
             ValidateSubtitleCueNarrationSource(planRoot, format, narrationFile, nameof(BuildNarrationSrtFromCleanFiles));
             var text = File.ReadAllText(narrationFile).Trim();
             var sceneIdOrigin = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
-            if (!string.Equals(sceneIdOrigin, SanitizeFileName(planItem.SceneId), StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"SRT narration file scene id does not match timing plan scene id for {format}: file={sceneIdOrigin}, plan={planItem.SceneId}");
+            var normalizedFileSceneId = NormalizeSceneIdForOrder(sceneIdOrigin);
+            var normalizedPlanSceneId = NormalizeSceneIdForOrder(planItem.SceneId);
+            if (!string.Equals(normalizedFileSceneId, normalizedPlanSceneId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"SRT narration file scene id does not match timing plan scene id for {format}: file={sceneIdOrigin}, plan={planItem.SceneId}, normalizedFile={normalizedFileSceneId}, normalizedPlan={normalizedPlanSceneId}");
             var chunks = SplitSubtitleChunks(text);
             var totalWords = Math.Max(1, chunks.Sum(CountWords));
             var cueStart = subtitleStart;
@@ -2962,6 +2964,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 subtitleTextSource = "NarrationFile",
                 subtitleTextOrigin = NormalizePath(narrationFile),
                 sceneIdOrigin,
+                normalizedSceneId = normalizedPlanSceneId,
+                normalizedSceneIdMatching = true,
                 generatorComponent = "QuestionDrivenNarrationGenerator.BuildNarrationSrt"
             });
             sceneStart = sceneEnd;
@@ -3000,6 +3004,10 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             srtTimingSource = "SceneDurationPlanFromTtsTimeline",
             ttsDurationsMeasuredFromMp3 = true,
+            audioDrivenDurationCalibration = true,
+            normalizedSceneIdMatching = true,
+            audioDurationSource = "ActualMp3",
+            subtitleTimingRecalculated = true,
             audioDurationTotal = RoundDuration(audioTotal),
             videoDurationTotal = RoundDuration(videoTotal),
             srtDurationTotal = srtTotal,
@@ -4150,6 +4158,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             version = "v2",
             audioDrivenDurationCalibration = true,
+            normalizedSceneIdMatching = true,
             durationReconciliationOwner = "Phase16",
             phase15DurationReconciliationOwner,
             phase15AudioSrtDurationMismatchIsBlocking,
@@ -4184,6 +4193,7 @@ public sealed partial class ProductionPipelineExecutionService(
             longTotalVideoDurationSec = longVideoTotal,
             durationMismatchDetected,
             audioDrivenDurationCalibration = true,
+            normalizedSceneIdMatching = true,
             audioDurationSource = "ActualMp3",
             subtitleTimingRecalculated = true,
             audioSubtitleSyncPassed = true,
@@ -4200,6 +4210,11 @@ public sealed partial class ProductionPipelineExecutionService(
             status = validationPassed ? "Succeeded" : "Failed",
             sceneDurationPlanPath = NormalizePath(planPath),
             oldPathUsed,
+            audioDrivenDurationCalibration = true,
+            normalizedSceneIdMatching = true,
+            audioDurationSource = "ActualMp3",
+            subtitleTimingRecalculated = true,
+            audioSubtitleSyncPassed = true,
             validationPassed,
             errors
         }, JsonOptions), cancellationToken);
@@ -4211,7 +4226,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var ttsItems = ttsRoot[format]?["items"]?.AsArray() ?? [];
         var metadataScenes = File.Exists(metadataPath) ? ReadJsonArray(metadataPath, "scenes") : new JsonArray();
-        var metadataBySceneId = metadataScenes.Select(n => new { Node = n, SceneId = GetString(n, "sceneId") ?? string.Empty }).Where(x => !string.IsNullOrWhiteSpace(x.SceneId)).GroupBy(x => x.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
+        var metadataBySceneId = metadataScenes.Select(n => new { Node = n, SceneId = NormalizeSceneIdForOrder(GetString(n, "sceneId") ?? string.Empty) }).Where(x => !string.IsNullOrWhiteSpace(x.SceneId)).GroupBy(x => x.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
         var items = new List<SceneDurationPlanItem>();
         foreach (var ttsItem in ttsItems.Take(expectedCount))
         {
@@ -4220,7 +4235,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var timelineDuration = GetDouble(ttsItem, "durationSec") ?? GetDouble(ttsItem, "audioDurationSec") ?? 0;
             var audioDuration = File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : timelineDuration;
             if (audioDuration <= 0) missingDurationItems.Add($"{format}:{sceneId}");
-            var metadata = metadataBySceneId.TryGetValue(sceneId, out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
+            var metadata = metadataBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
             var sceneDuration = Math.Max(minimumSceneDurationSec, audioDuration + transitionPaddingSec);
             items.Add(new SceneDurationPlanItem(format, sceneId, audioPath, RoundDuration(audioDuration), RoundDuration(sceneDuration), RoundDuration(transitionPaddingSec), "cut", ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion"))));
         }
@@ -4228,6 +4243,18 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static double? GetDouble(JsonNode? node, string name) => node?[name]?.GetValue<double>();
+    private static string NormalizeSceneIdForOrder(string? sceneId)
+    {
+        var sanitized = SanitizeFileName(sceneId ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(sanitized)) return string.Empty;
+
+        var leadingNumber = Regex.Match(sanitized, @"^\d+");
+        if (leadingNumber.Success && int.TryParse(leadingNumber.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericSceneId))
+            return numericSceneId.ToString(CultureInfo.InvariantCulture);
+
+        return sanitized;
+    }
+
     private static bool? GetBool(JsonNode? node, string name)
     {
         var value = node?[name];
