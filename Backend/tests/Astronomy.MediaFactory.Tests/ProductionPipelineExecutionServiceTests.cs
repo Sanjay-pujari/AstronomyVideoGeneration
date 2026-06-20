@@ -146,6 +146,55 @@ public sealed class ProductionPipelineExecutionServiceTests
             => (double)item.GetType().GetProperty(propertyName)!.GetValue(item)!;
     }
 
+
+    [Fact]
+    public void Phase16CueTimelineDiagnostics_CountsAllCueLevelTtsItems()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase16-cue-diagnostics-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts"));
+            var timelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+            File.WriteAllText(timelinePath, JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new object[]
+                    {
+                        new { format = "short", sceneId = "001-hook", cues = new[]
+                        {
+                            new { cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
+                            new { cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 }
+                        }},
+                        new { format = "short", sceneId = "002-cause", cueIndex = 3, cueText = "Third cue.", durationSec = 7.0 }
+                    }
+                },
+                @long = new
+                {
+                    cueItems = new[]
+                    {
+                        new { format = "long", sceneId = "001", cueIndex = 1, cueText = "Long first cue.", audioDurationSec = 2.0 },
+                        new { format = "long", sceneId = "001", cueIndex = 2, cueText = "Long second cue.", audioDurationSec = 3.5 }
+                    }
+                }
+            }));
+
+            var countMethod = typeof(ProductionPipelineExecutionService).GetMethod("CountCueLevelTtsTimelineItems", BindingFlags.NonPublic | BindingFlags.Static);
+            var sumMethod = typeof(ProductionPipelineExecutionService).GetMethod("SumCueLevelTtsTimelineDurations", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(countMethod);
+            Assert.NotNull(sumMethod);
+
+            Assert.Equal(3, (int)countMethod!.Invoke(null, [timelinePath, "short"])!);
+            Assert.Equal(13.602, (double)sumMethod!.Invoke(null, [timelinePath, "short"])!, 3);
+            Assert.Equal(2, (int)countMethod.Invoke(null, [timelinePath, "long"])!);
+            Assert.Equal(5.5, (double)sumMethod!.Invoke(null, [timelinePath, "long"])!, 3);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
     [Fact]
     public void Phase18VisualDurations_GroupCueLevelTtsTimelineDurationsByScene()
     {
