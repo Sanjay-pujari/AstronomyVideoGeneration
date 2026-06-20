@@ -3337,6 +3337,81 @@ public sealed partial class ProductionPipelineExecutionService(
             + int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture) / 1000.0;
     }
 
+    private sealed record CueLevelSubtitleValidationResult(bool Passed, IReadOnlyList<double> DriftMs, double MaxCueDriftMs, double AverageCueDriftMs, int CueCount, string SubtitleSourcePath, string TimingSource);
+
+    private static CueLevelSubtitleValidationResult ValidateCueLevelSubtitleSync(string planRoot, string format, string srtPath)
+    {
+        if (!File.Exists(srtPath))
+            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "MissingSubtitleFile");
+
+        var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
+        var narrationRoot = Path.Combine(planRoot, "narration", format);
+        var narrationFiles = Directory.Exists(narrationRoot)
+            ? Directory.EnumerateFiles(narrationRoot, "*.txt").OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray()
+            : [];
+        if (durationPlanItems.Count == 0 || narrationFiles.Length == 0 || durationPlanItems.Count < narrationFiles.Length)
+            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "SceneDurationPlanFromTtsTimeline");
+
+        var actualCues = ParseSrtCueTimes(srtPath);
+        var expectedCues = new List<(double Start, double End)>();
+        var subtitleStart = 0.0;
+        for (var i = 0; i < narrationFiles.Length; i++)
+        {
+            var planItem = durationPlanItems[i];
+            var audioDuration = Math.Max(0, planItem.AudioDurationSec);
+            var text = File.ReadAllText(narrationFiles[i]).Trim();
+            var chunks = SplitSubtitleChunks(text);
+            var totalWords = Math.Max(1, chunks.Sum(CountWords));
+            var cueStart = subtitleStart;
+            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+            {
+                var cueEnd = chunkIndex == chunks.Count - 1
+                    ? subtitleStart + audioDuration
+                    : subtitleStart + audioDuration * chunks.Take(chunkIndex + 1).Sum(CountWords) / totalWords;
+                expectedCues.Add((cueStart, cueEnd));
+                cueStart = cueEnd;
+            }
+            subtitleStart += audioDuration;
+        }
+
+        var drift = new List<double>();
+        var count = Math.Min(actualCues.Count, expectedCues.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var startDriftMs = Math.Abs(actualCues[i].Start - expectedCues[i].Start) * 1000.0;
+            var endDriftMs = Math.Abs(actualCues[i].End - expectedCues[i].End) * 1000.0;
+            drift.Add(RoundDuration(Math.Max(startDriftMs, endDriftMs)));
+        }
+
+        if (actualCues.Count != expectedCues.Count)
+            drift.Add(Math.Abs(actualCues.Count - expectedCues.Count) * 1000.0);
+
+        var maxDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Max());
+        var averageDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Average());
+        return new CueLevelSubtitleValidationResult(
+            actualCues.Count == expectedCues.Count && maxDrift <= 100.0,
+            drift,
+            maxDrift,
+            averageDrift,
+            actualCues.Count,
+            NormalizePath(srtPath),
+            "SceneDurationPlanFromActualNarrationSegments");
+    }
+
+    private static IReadOnlyList<(double Start, double End)> ParseSrtCueTimes(string srtPath)
+        => Regex.Matches(File.ReadAllText(srtPath), @"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})")
+            .Select(match => (ParseSrtSeconds(match, 1), ParseSrtSeconds(match, 5)))
+            .ToArray();
+
+    private static double ParseSrtSeconds(Match match, int offset)
+        => int.Parse(match.Groups[offset].Value, CultureInfo.InvariantCulture) * 3600
+            + int.Parse(match.Groups[offset + 1].Value, CultureInfo.InvariantCulture) * 60
+            + int.Parse(match.Groups[offset + 2].Value, CultureInfo.InvariantCulture)
+            + int.Parse(match.Groups[offset + 3].Value, CultureInfo.InvariantCulture) / 1000.0;
+
+    private static bool FilesAreByteIdentical(string firstPath, string secondPath)
+        => new FileInfo(firstPath).Length == new FileInfo(secondPath).Length && File.ReadAllBytes(firstPath).SequenceEqual(File.ReadAllBytes(secondPath));
+
     private static string NormalizeNarrationForDuplicateCheck(string? value)
         => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
 
@@ -5795,8 +5870,6 @@ public sealed partial class ProductionPipelineExecutionService(
             if (shortItems.Count > 0) await RenderVideoAssemblyAsync(shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
             if (!previewOnly && longItems.Count > 0) await RenderVideoAssemblyAsync(longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
             if (previewOnly && File.Exists(longVideoPath)) File.Delete(longVideoPath);
-            if (File.Exists(shortVideoPath)) { Directory.CreateDirectory(Path.GetDirectoryName(legacyShortVideoPath)!); File.Copy(shortVideoPath, legacyShortVideoPath, true); }
-            if (!previewOnly && File.Exists(longVideoPath)) { Directory.CreateDirectory(Path.GetDirectoryName(legacyLongVideoPath)!); File.Copy(longVideoPath, legacyLongVideoPath, true); }
         }
 
         var shortVideoDuration = File.Exists(shortVideoPath) ? await ProbeAudioDurationSecondsAsync(shortVideoPath, cancellationToken) : 0;
@@ -5848,6 +5921,19 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
         var subtitleBurnInSucceeded = !enableSubtitles || subtitleBurnInErrors.Count == 0;
+        if (File.Exists(shortVideoPath)) { Directory.CreateDirectory(Path.GetDirectoryName(legacyShortVideoPath)!); File.Copy(shortVideoPath, legacyShortVideoPath, true); }
+        if (!previewOnly && File.Exists(longVideoPath)) { Directory.CreateDirectory(Path.GetDirectoryName(legacyLongVideoPath)!); File.Copy(longVideoPath, legacyLongVideoPath, true); }
+        var shortPublishedMatchesAssembly = File.Exists(shortVideoPath) && File.Exists(legacyShortVideoPath) && FilesAreByteIdentical(shortVideoPath, legacyShortVideoPath);
+        var longPublishedMatchesAssembly = previewOnly || (File.Exists(longVideoPath) && File.Exists(legacyLongVideoPath) && FilesAreByteIdentical(longVideoPath, legacyLongVideoPath));
+        var shortCueValidation = ValidateCueLevelSubtitleSync(planRoot, "short", shortSrtPath);
+        var longCueValidation = ValidateCueLevelSubtitleSync(planRoot, "long", longSrtPath);
+        var cueLevelSubtitleValidation = !enableSubtitles || (shortCueValidation.Passed && (previewOnly || longCueValidation.Passed));
+        var cueLevelSubtitleDriftMs = new { @short = shortCueValidation.DriftMs, @long = longCueValidation.DriftMs };
+        var maxCueDriftMs = Math.Max(shortCueValidation.MaxCueDriftMs, previewOnly ? 0 : longCueValidation.MaxCueDriftMs);
+        var averageCueDriftMs = RoundDuration(new[] { shortCueValidation.AverageCueDriftMs, previewOnly ? 0 : longCueValidation.AverageCueDriftMs }.Average());
+        if (!previewOnly && !cueLevelSubtitleValidation) errors.Add("Cue-level subtitle validation failed");
+        if (!shortPublishedMatchesAssembly) errors.Add("Published short video does not match subtitled video-assembly output");
+        if (!previewOnly && !longPublishedMatchesAssembly) errors.Add("Published long video does not match subtitled video-assembly output");
         const double cinematicOutroDurationSec = 4.0;
         const bool cinematicOutroEnabled = true;
         const bool fadeToBlackEnabled = true;
@@ -5916,7 +6002,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var narrationAudioMixed = previewOnly ? shortAudioMuxed : shortAudioMuxed && longAudioMuxed;
         var finalVideoHasAudio = previewOnly ? shortHasAudioStream : shortHasAudioStream && longHasAudioStream;
         var finalVideoHasMotion = scenesWithZoom >= totalScenes && scenesWithPan >= totalScenes && scenesWithTransitions >= Math.Max(0, totalScenes - 1);
-        var validationPassed = errors.Count == 0 && videoRendered && !oldPathUsed && (previewOnly || narrationAudioMixed) && (previewOnly || !backgroundMusicConfigForDiagnostics.Enabled || backgroundAudioMixed) && (previewOnly || finalVideoHasAudio) && finalVideoHasMotion && (previewOnly || (shortDurationValidationPassed && longDurationValidationPassed));
+        var validationPassed = errors.Count == 0 && videoRendered && !oldPathUsed && (previewOnly || narrationAudioMixed) && (previewOnly || !backgroundMusicConfigForDiagnostics.Enabled || backgroundAudioMixed) && (previewOnly || finalVideoHasAudio) && finalVideoHasMotion && (previewOnly || (shortDurationValidationPassed && longDurationValidationPassed)) && subtitleBurnInSucceeded && cueLevelSubtitleValidation && shortPublishedMatchesAssembly && longPublishedMatchesAssembly;
 
         var cinematicDiagnosticsPath = Path.Combine(videoRoot, "phase-18-cinematic-diagnostics.json");
         await File.WriteAllTextAsync(cinematicDiagnosticsPath, JsonSerializer.Serialize(new
@@ -6017,7 +6103,7 @@ public sealed partial class ProductionPipelineExecutionService(
             audioDrivenDurationCalibration = true,
             audioDurationSource = "ActualMp3",
             subtitleTimingRecalculated = true,
-            audioSubtitleSyncPassed = (!shortSrtExists || Math.Abs(shortSrtDuration - shortPlanAudioDuration) <= 0.1) && (previewOnly || !longSrtExists || Math.Abs(longSrtDuration - longPlanAudioDuration) <= 0.1),
+            audioSubtitleSyncPassed = cueLevelSubtitleValidation,
             subtitleFontScale = 0.5,
             subtitleMovedLower = true,
             subtitleSafeAreaPassed = true,
@@ -6027,6 +6113,17 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateNarrationFixed = false,
             duplicateSrtTextDetected = false,
             subtitleBurnInErrors,
+            subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) },
+            publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) },
+            publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) },
+            publishedVideosMatchVideoAssembly = shortPublishedMatchesAssembly && longPublishedMatchesAssembly,
+            cueLevelSubtitleValidation,
+            cueLevelSubtitleDriftMs,
+            maxCueDriftMs,
+            averageCueDriftMs,
+            shortCueLevelSubtitleValidation = shortCueValidation,
+            longCueLevelSubtitleValidation = longCueValidation,
             finalShortVideoPath = NormalizePath(shortVideoPath),
             finalLongVideoPath = NormalizePath(longVideoPath),
             validationPassed
@@ -6136,7 +6233,7 @@ public sealed partial class ProductionPipelineExecutionService(
             audioDrivenDurationCalibration = true,
             audioDurationSource = "ActualMp3",
             subtitleTimingRecalculated = true,
-            audioSubtitleSyncPassed = (!shortSrtExists || Math.Abs(shortSrtDuration - shortPlanAudioDuration) <= 0.1) && (previewOnly || !longSrtExists || Math.Abs(longSrtDuration - longPlanAudioDuration) <= 0.1),
+            audioSubtitleSyncPassed = cueLevelSubtitleValidation,
             subtitleFontScale = 0.5,
             subtitleMovedLower = true,
             subtitleSafeAreaPassed = true,
@@ -6146,12 +6243,23 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateNarrationFixed = false,
             duplicateSrtTextDetected = false,
             subtitleBurnInErrors,
+            subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) },
+            publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) },
+            publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) },
+            publishedVideosMatchVideoAssembly = shortPublishedMatchesAssembly && longPublishedMatchesAssembly,
+            cueLevelSubtitleValidation,
+            cueLevelSubtitleDriftMs,
+            maxCueDriftMs,
+            averageCueDriftMs,
+            shortCueLevelSubtitleValidation = shortCueValidation,
+            longCueLevelSubtitleValidation = longCueValidation,
             finalShortVideoPath = NormalizePath(shortVideoPath),
             finalLongVideoPath = NormalizePath(longVideoPath),
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), audioDrivenDurationCalibration = true, audioDurationSource = "ActualMp3", subtitleTimingRecalculated = true, audioSubtitleSyncPassed = (!shortSrtExists || Math.Abs(shortSrtDuration - shortPlanAudioDuration) <= 0.1) && (previewOnly || !longSrtExists || Math.Abs(longSrtDuration - longPlanAudioDuration) <= 0.1), subtitleFontScale = 0.5, subtitleMovedLower = true, subtitleSafeAreaPassed = true, subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), audioDrivenDurationCalibration = true, audioDurationSource = "ActualMp3", subtitleTimingRecalculated = true, audioSubtitleSyncPassed = cueLevelSubtitleValidation, subtitleFontScale = 0.5, subtitleMovedLower = true, subtitleSafeAreaPassed = true, subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) }, finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) }, publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) }, cueLevelSubtitleValidation, cueLevelSubtitleDriftMs, maxCueDriftMs, averageCueDriftMs, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Cinematic Video Assembly V2 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
