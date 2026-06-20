@@ -3323,9 +3323,16 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string NormalizeNarrationWhitespace(string text)
         => Regex.Replace(text ?? string.Empty, @"\s+", " ").Trim();
 
-    private static IReadOnlyList<(string Id, string Text)> ExtractSrtBlocks(string srtPath)
+    private static IReadOnlyList<(string Id, string Text, IReadOnlyList<string> Lines)> ExtractSrtBlocks(string srtPath)
         => Regex.Split(File.ReadAllText(srtPath), @"\r?\n\r?\n")
-            .Select((block, index) => (Id: $"{Path.GetFileName(srtPath)}:block-{index + 1}", Text: string.Join(" ", block.Split('\n').Select(line => line.Trim()).Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))).Trim()))
+            .Select((block, index) =>
+            {
+                var lines = block.Split('\n')
+                    .Select(line => line.Trim())
+                    .Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))
+                    .ToArray();
+                return (Id: $"{Path.GetFileName(srtPath)}:block-{index + 1}", Text: string.Join(" ", lines).Trim(), Lines: (IReadOnlyList<string>)lines);
+            })
             .Where(block => !string.IsNullOrWhiteSpace(block.Text))
             .ToArray();
 
