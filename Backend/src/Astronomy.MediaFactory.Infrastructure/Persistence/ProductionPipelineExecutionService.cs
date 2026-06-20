@@ -4040,19 +4040,22 @@ public sealed partial class ProductionPipelineExecutionService(
                 continue;
 
             var blocks = ParseSrtBlocks(await File.ReadAllTextAsync(inputSrtPath, cancellationToken));
+            var visualSceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, format, blocks);
             var sceneRoot = Path.Combine(planRoot, "tts", language, format);
             Directory.CreateDirectory(sceneRoot);
             var sceneAudio = new List<string>();
             var sceneAudioDiagnostics = new List<TtsAudioContentDiagnostics>();
             foreach (var block in blocks)
             {
+                var cuePosition = sceneAudio.Count;
+                var visualSceneId = cuePosition < visualSceneIdsByCue.Count ? visualSceneIdsByCue[cuePosition] : block.SceneId;
                 var audioPath = Path.Combine(sceneRoot, $"{SanitizeFileName(block.SceneId)}.mp3");
-                var validation = await GenerateAndValidateTtsAudioAsync(context, format, block.SceneId, block.Text, audioPath, cancellationToken);
+                var validation = await GenerateAndValidateTtsAudioAsync(context, format, visualSceneId, block.Text, audioPath, cancellationToken);
                 sceneAudio.Add(audioPath);
                 sceneAudioDiagnostics.Add(validation);
                 outputs.Add(audioPath);
-                if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
-                if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
+                if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
+                if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
             }
 
             var narrationTrackPath = Path.Combine(planRoot, "video-assembly", language, format, "narration-track.mp3");
@@ -4079,8 +4082,9 @@ public sealed partial class ProductionPipelineExecutionService(
                     items = blocks.Select((block, index) => new
                     {
                         format,
-                        sceneId = block.SceneId,
+                        sceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
                         cueIndex = index + 1,
+                        cueId = block.SceneId,
                         audioPath = NormalizePath(sceneAudio[index]),
                         narrationText = block.Text,
                         cueText = block.Text,
@@ -4196,6 +4200,53 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string BuildSrt(IReadOnlyList<Phase15SrtBlock> blocks)
         => string.Join("\n\n", blocks.Select((b, i) => $"{i + 1}\n{FormatSrtTimestamp(b.Start)} --> {FormatSrtTimestamp(b.End)}\n{b.Text}")) + "\n";
+
+    private static IReadOnlyList<string> ResolvePhase15VisualSceneIdsForSrtBlocks(string planRoot, string format, IReadOnlyList<Phase15SrtBlock> blocks)
+    {
+        if (blocks.Count == 0) return [];
+
+        var narrationRoot = Path.Combine(planRoot, "narration", format);
+        var narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, narrationRoot);
+        if (narrationFiles.Count == 0) return blocks.Select(block => block.SceneId).ToArray();
+
+        var sceneIds = new List<string>();
+        foreach (var narrationFile in narrationFiles)
+        {
+            if (!File.Exists(narrationFile)) continue;
+            var sceneId = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
+            var narrationText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
+            var cueCount = SplitSubtitleChunks(narrationText).Count;
+            for (var i = 0; i < cueCount; i++) sceneIds.Add(sceneId);
+        }
+
+        return sceneIds.Count == blocks.Count
+            ? sceneIds
+            : blocks.Select(block => block.SceneId).ToArray();
+    }
+
+    private static IReadOnlyList<string> ResolveOrderedPhase15NarrationFiles(string planRoot, string format, string narrationRoot)
+    {
+        var metadataPath = Path.Combine(planRoot, "scene-assets-v3", format, "scene-timeline-metadata.json");
+        var metadataSceneIds = File.Exists(metadataPath)
+            ? ReadJsonArray(metadataPath, "scenes")
+                .Select((scene, index) => GetString(scene, "sceneId") ?? $"{index + 1:000}")
+                .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
+                .ToArray()
+            : [];
+
+        if (metadataSceneIds.Length > 0)
+        {
+            var metadataFiles = metadataSceneIds
+                .Select(sceneId => Path.Combine(narrationRoot, $"{SanitizeFileName(sceneId)}.txt"))
+                .Where(File.Exists)
+                .ToArray();
+            if (metadataFiles.Length == metadataSceneIds.Length) return metadataFiles;
+        }
+
+        return Directory.Exists(narrationRoot)
+            ? Directory.EnumerateFiles(narrationRoot, "*.txt", SearchOption.TopDirectoryOnly).OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToArray()
+            : [];
+    }
 
     private static TimeSpan ParseSrtTimestamp(string value)
         => TimeSpan.ParseExact(value.Replace(',', '.'), @"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture);

@@ -48,6 +48,64 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.False(InvokePhase18DiagnosticsValidator("IsPhase18FadeToBlackValidated", diagnostics));
     }
 
+
+
+    [Fact]
+    public void Phase15VisualSceneIdResolution_MapsCueIdsBackToNarrationSceneFiles()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-scene-id-map-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var narrationRoot = Path.Combine(planRoot, "narration", "short");
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+            Directory.CreateDirectory(narrationRoot);
+            Directory.CreateDirectory(metadataRoot);
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = new[]
+                {
+                    new { sceneId = "001-hook" },
+                    new { sceneId = "002-cause" }
+                }
+            }));
+            File.WriteAllText(Path.Combine(narrationRoot, "001-hook.txt"), "Look west after sunset for the bright Moon near the horizon. Keep watching as the sky darkens and nearby stars appear. Use binoculars only after you have found the scene with your eyes.");
+            File.WriteAllText(Path.Combine(narrationRoot, "002-cause.txt"), "This happens because orbits line up in our sky.");
+
+            var srt = """
+1
+00:00:00,000 --> 00:00:01,000
+Look west after sunset for the bright Moon near the horizon.
+
+2
+00:00:01,000 --> 00:00:02,000
+Keep watching as the sky darkens and nearby stars appear.
+
+3
+00:00:02,000 --> 00:00:03,000
+Use binoculars only after you have found the scene with your eyes.
+
+4
+00:00:03,000 --> 00:00:04,000
+This happens because orbits line up in our sky.
+""";
+            var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var resolveMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdsForSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(parseMethod);
+            Assert.NotNull(resolveMethod);
+
+            var blocks = parseMethod!.Invoke(null, [srt]);
+            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, "short", blocks])!).Cast<string>().ToArray();
+
+            Assert.Equal(new[] { "001-hook", "001-hook", "001-hook", "002-cause" }, sceneIds);
+            Assert.Equal(4, sceneIds.Length);
+            Assert.Equal(2, sceneIds.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
     [Fact]
     public void Phase16SubtitleRegeneration_UsesCueLevelTtsTimelineDurations()
     {
