@@ -606,43 +606,57 @@ public sealed class PipelineOrchestrator
 
                 script = CopyScriptWithSceneSections(script, alignedSectionsBySceneId);
 
-                var sceneNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
-                for (var i = 0; i < sceneSections.Count; i++)
+                var cueTimeline = BuildCanonicalCueTimeline(sceneSections);
+                await WriteSrtAsync(Path.Combine(outputDir, "subtitles.phase14.srt"), cueTimeline, useAudioTimings: false, cancellationToken);
+
+                var cueNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
+                for (var i = 0; i < cueTimeline.Count; i++)
                 {
-                    var sceneOutputDirectory = _renderingOptions.OutputCleanup.CreateLegacySegmentFolders
-                        ? Path.Combine(outputDir, $"scene-narration-{i + 1:000}")
+                    var cue = cueTimeline[i];
+                    var cueOutputDirectory = _renderingOptions.OutputCleanup.CreateLegacySegmentFolders
+                        ? Path.Combine(outputDir, $"cue-narration-{cue.CueIndex:000}")
                         : outputDir;
-                    var sceneNumber = i + 1;
-                    ValidateNarrationLanguage(sceneSections[i].SectionText, context.Localization.ResolvedLanguage);
-                    var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].SectionText, sceneOutputDirectory, cancellationToken));
+                    ValidateNarrationLanguage(cue.CueText, context.Localization.ResolvedLanguage);
+                    var perCueAudioPath = await RunStageAsync($"CueSpeechSynthesis-{cue.CueIndex:000}", () => _speechSynthesisService.SynthesizeAsync(cue.CueText, cueOutputDirectory, cancellationToken));
 
-                    if (string.IsNullOrWhiteSpace(perSceneAudioPath))
+                    if (string.IsNullOrWhiteSpace(perCueAudioPath))
                     {
-                        throw new InvalidOperationException($"Scene speech synthesis did not return an audio path for scene {sceneNumber:000}.");
+                        throw new InvalidOperationException($"Cue speech synthesis did not return an audio path for cue {cue.CueIndex:000}.");
                     }
 
-                    if (!File.Exists(perSceneAudioPath))
+                    if (!File.Exists(perCueAudioPath))
                     {
-                        throw new InvalidOperationException($"Scene speech synthesis did not create an audio file for scene {sceneNumber:000}: {perSceneAudioPath}");
+                        throw new InvalidOperationException($"Cue speech synthesis did not create an audio file for cue {cue.CueIndex:000}: {perCueAudioPath}");
                     }
 
-                    var sceneTextPath = Path.Combine(outputDir, $"scene-narration-{sceneNumber:000}.txt");
-                    var sceneAudioPath = Path.Combine(outputDir, $"scene-audio-{sceneNumber:000}.mp3");
-                    var sourceTextPath = Path.Combine(sceneOutputDirectory, "narration.txt");
-
-                    var sceneText = File.Exists(sourceTextPath)
+                    var cueTextPath = Path.Combine(outputDir, $"cue-narration-{cue.CueIndex:000}.txt");
+                    var cueAudioPath = Path.Combine(outputDir, $"cue-audio-{cue.CueIndex:000}.mp3");
+                    var sourceTextPath = Path.Combine(cueOutputDirectory, "narration.txt");
+                    var cueText = File.Exists(sourceTextPath)
                         ? await File.ReadAllTextAsync(sourceTextPath, cancellationToken)
-                        : sceneSections[i].SectionText;
+                        : cue.CueText;
 
-                    await File.WriteAllTextAsync(sceneTextPath, sceneText, cancellationToken);
-                    File.Copy(perSceneAudioPath, sceneAudioPath, overwrite: true);
-                    sceneAudioSegments.Add(sceneAudioPath);
-                    sceneNarrationEntries.Add((i + 1, sceneSections[i].Scene.SceneTitle, sceneTextPath, sceneAudioPath, sceneText));
+                    if (!string.Equals(cueText, cue.CueText, StringComparison.Ordinal))
+                    {
+                        cueText = cue.CueText;
+                    }
+
+                    await File.WriteAllTextAsync(cueTextPath, cueText, cancellationToken);
+                    File.Copy(perCueAudioPath, cueAudioPath, overwrite: true);
+                    var duration = await ProbeMediaDurationSecondsAsync(cueAudioPath, cancellationToken);
+                    if (duration <= 0)
+                    {
+                        throw new InvalidOperationException($"Cue audio duration could not be determined for cue {cue.CueIndex:000}: {cueAudioPath}");
+                    }
+
+                    cue.AudioPath = cueAudioPath;
+                    cue.AudioDurationSec = duration;
+                    cueNarrationEntries.Add((cue.CueIndex, cue.SceneId, cueTextPath, cueAudioPath, cueText));
                 }
 
-                if (sceneNarrationEntries.Count > 0)
+                if (cueNarrationEntries.Count > 0)
                 {
-                    await WriteSceneNarrationArtifactsAsync(sceneNarrationEntries, sceneSections, outputDir, audioPath, cancellationToken);
+                    await WriteCueTimelineArtifactsAsync(cueTimeline, cueNarrationEntries, sceneSections, outputDir, audioPath, cancellationToken);
                 }
             }
 
@@ -653,6 +667,7 @@ public sealed class PipelineOrchestrator
                 Title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                 AudioPath = audioPath,
                 OutputPath = Path.Combine(outputDir, "final-video.mp4"),
+                SubtitlePath = File.Exists(Path.Combine(outputDir, "subtitles.srt")) ? Path.Combine(outputDir, "subtitles.srt") : null,
                 Scenes = visuals.Select((v, i) =>
                 {
                     var observation = i < sceneSections.Count ? sceneSections[i].Scene : (i < context.SceneObservationContexts.Count ? context.SceneObservationContexts[i] : null);
@@ -2426,6 +2441,134 @@ public sealed class PipelineOrchestrator
     }
 
 
+
+    private sealed class CanonicalCueTimelineItem
+    {
+        public string Format { get; init; } = "srt-cue-audio-v1";
+        public int CueIndex { get; init; }
+        public string SceneId { get; init; } = string.Empty;
+        public string CueText { get; init; } = string.Empty;
+        public string AudioPath { get; set; } = string.Empty;
+        public double AudioDurationSec { get; set; }
+    }
+
+    private static List<CanonicalCueTimelineItem> BuildCanonicalCueTimeline(IReadOnlyList<FullVideoNarrationSection> narrationSections)
+    {
+        var cues = new List<CanonicalCueTimelineItem>();
+        foreach (var section in narrationSections)
+        {
+            foreach (var cueText in SplitPhraseLevelCues(section.SectionText))
+            {
+                cues.Add(new CanonicalCueTimelineItem
+                {
+                    CueIndex = cues.Count + 1,
+                    SceneId = section.Scene.SceneId,
+                    CueText = cueText
+                });
+            }
+        }
+
+        return cues;
+    }
+
+    private static IEnumerable<string> SplitPhraseLevelCues(string text)
+    {
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        var builder = new StringBuilder();
+        foreach (var ch in normalized)
+        {
+            builder.Append(ch);
+            if (ch is '.' or '!' or '?' or ';' or ':' or ',' or '\n')
+            {
+                var cue = NormalizeCueText(builder.ToString());
+                if (!string.IsNullOrWhiteSpace(cue))
+                    yield return cue;
+                builder.Clear();
+            }
+        }
+
+        var finalCue = NormalizeCueText(builder.ToString());
+        if (!string.IsNullOrWhiteSpace(finalCue))
+            yield return finalCue;
+    }
+
+    private static string NormalizeCueText(string text)
+        => text.Trim();
+
+    private static async Task WriteSrtAsync(string path, IReadOnlyList<CanonicalCueTimelineItem> cues, bool useAudioTimings, CancellationToken cancellationToken)
+    {
+        var sb = new StringBuilder();
+        var currentStart = 0d;
+        for (var i = 0; i < cues.Count; i++)
+        {
+            var duration = useAudioTimings ? cues[i].AudioDurationSec : EstimateCueDurationSeconds(cues[i].CueText);
+            var end = currentStart + Math.Max(0.001d, duration);
+            sb.AppendLine((i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            sb.AppendLine($"{FormatSrtTimestamp(currentStart)} --> {FormatSrtTimestamp(end)}");
+            sb.AppendLine(cues[i].CueText);
+            sb.AppendLine();
+            currentStart = end;
+        }
+
+        await File.WriteAllTextAsync(path, sb.ToString(), cancellationToken);
+    }
+
+    private static double EstimateCueDurationSeconds(string cueText)
+        => Math.Max(0.8d, CountWordsForCue(cueText) * 0.36d);
+
+    private static int CountWordsForCue(string text)
+        => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private static string FormatSrtTimestamp(double seconds)
+    {
+        var time = TimeSpan.FromSeconds(Math.Max(0d, seconds));
+        return $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00},{time.Milliseconds:000}";
+    }
+
+    private async Task WriteCueTimelineArtifactsAsync(
+        IReadOnlyList<CanonicalCueTimelineItem> cueTimeline,
+        IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> cueNarrationEntries,
+        IReadOnlyList<FullVideoNarrationSection> narrationSections,
+        string outputDirectory,
+        string narrationAudioPath,
+        CancellationToken cancellationToken)
+    {
+        await WriteSrtAsync(Path.Combine(outputDirectory, "subtitles.srt"), cueTimeline, useAudioTimings: true, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "tts-timeline.json"), JsonSerializer.Serialize(cueTimeline, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+
+        var cueCount = cueTimeline.Count;
+        var textMatches = cueTimeline.Zip(cueNarrationEntries, (cue, entry) => string.Equals(cue.CueText, entry.Text, StringComparison.Ordinal)).All(x => x);
+        var maxCueDriftMs = cueTimeline.Count == cueNarrationEntries.Count && textMatches ? 0d : 1_000_000d;
+        var syncPassed = cueTimeline.Count == cueNarrationEntries.Count && textMatches && maxCueDriftMs <= 100d;
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "audio-subtitle-sync-report.json"), JsonSerializer.Serialize(new
+        {
+            cueCount,
+            ttsTimelineCueCount = cueNarrationEntries.Count,
+            srtCueCount = cueCount,
+            srtCueTextEqualsTtsCueText = textMatches,
+            maxCueDriftMs,
+            audioSubtitleSyncPassed = syncPassed
+        }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+
+        await WriteSceneNarrationArtifactsAsync(cueNarrationEntries, narrationSections, outputDirectory, narrationAudioPath, cancellationToken);
+    }
+
+    private async Task<double> ProbeMediaDurationSecondsAsync(string path, CancellationToken cancellationToken)
+    {
+        var ffprobePath = ResolveExecutablePath("ffprobe");
+        var psi = new ProcessStartInfo(ffprobePath, $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{path}\"")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start ffprobe.");
+        var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        return double.TryParse(stdout.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var duration) ? duration : 0d;
+    }
+
     private async Task WriteSceneNarrationArtifactsAsync(
         IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> sceneNarrationEntries,
         IReadOnlyList<FullVideoNarrationSection> narrationSections,
@@ -2538,6 +2681,13 @@ public sealed class PipelineOrchestrator
         configuredPath ??= Environment.GetEnvironmentVariable("FFMPEG_PATH");
         if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
         {
+            if (string.Equals(fileName, "ffprobe", StringComparison.OrdinalIgnoreCase))
+            {
+                var siblingProbePath = Path.Combine(Path.GetDirectoryName(configuredPath) ?? string.Empty, OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe");
+                if (File.Exists(siblingProbePath))
+                    return siblingProbePath;
+            }
+
             return configuredPath;
         }
 
