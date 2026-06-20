@@ -2908,68 +2908,66 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
     {
-        var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
-        if (durationPlanItems.Count == 0)
-            throw new InvalidOperationException($"SRT timing source must be scene-duration-plan.json for {format}; no SceneDurationPlan items were found.");
-        if (durationPlanItems.Count < narrationFiles.Count)
-            throw new InvalidOperationException($"SRT timing source has fewer {format} scenes than narration files.");
+        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
+        if (timelineItems.Count == 0)
+            throw new InvalidOperationException($"SRT timing source must be tts/tts-timeline.json for {format}; no TTS timeline items were found.");
+        if (timelineItems.Count < narrationFiles.Count)
+            throw new InvalidOperationException($"TTS timeline has fewer {format} scene items than narration files.");
+
         var blocks = new List<SubtitleCueBlock>();
         var perScene = new List<object>();
+        var cueValidation = new List<object>();
         var number = 1;
-        var sceneStart = 0.0;
         var subtitleStart = 0.0;
         for (var i = 0; i < narrationFiles.Count; i++)
         {
-            var planItem = durationPlanItems[i];
-            var audioDuration = Math.Max(0, planItem.AudioDurationSec);
-            var sceneDuration = planItem.SceneDurationSec;
-            var sceneEnd = i == narrationFiles.Count - 1
-                ? ReadSceneDurationPlanTotal(planRoot, format, "totalVideoDurationSec", durationPlanItems.Sum(x => x.SceneDurationSec))
-                : sceneStart + sceneDuration;
-            var spokenEnd = subtitleStart + audioDuration;
-            var subtitleTimelineEnd = spokenEnd;
+            var timelineItem = timelineItems[i];
+            var audioDuration = Math.Max(0, timelineItem.AudioDurationSec);
+            if (audioDuration <= 0)
+                throw new InvalidOperationException($"TTS timeline item has no usable MP3 duration for {format}:{timelineItem.SceneId}: {NormalizePath(timelineItem.AudioPath)}");
+            if (!File.Exists(timelineItem.AudioPath))
+                throw new InvalidOperationException($"TTS audio file missing for canonical subtitle timeline {format}:{timelineItem.SceneId}: {NormalizePath(timelineItem.AudioPath)}");
+
             var narrationFile = narrationFiles[i];
             ValidateSubtitleCueNarrationSource(planRoot, format, narrationFile, nameof(BuildNarrationSrtFromCleanFiles));
             var text = File.ReadAllText(narrationFile).Trim();
             var sceneIdOrigin = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var normalizedFileSceneId = NormalizeSceneIdForOrder(sceneIdOrigin);
-            var normalizedPlanSceneId = NormalizeSceneIdForOrder(planItem.SceneId);
-            if (!string.Equals(normalizedFileSceneId, normalizedPlanSceneId, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"SRT narration file scene id does not match timing plan scene id for {format}: file={sceneIdOrigin}, plan={planItem.SceneId}, normalizedFile={normalizedFileSceneId}, normalizedPlan={normalizedPlanSceneId}");
-            var chunks = SplitSubtitleChunks(text);
-            var totalWords = Math.Max(1, chunks.Sum(CountWords));
+            var normalizedTimelineSceneId = NormalizeSceneIdForOrder(timelineItem.SceneId);
+            if (!string.Equals(normalizedFileSceneId, normalizedTimelineSceneId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"SRT narration file scene id does not match TTS timeline scene id for {format}: file={sceneIdOrigin}, timeline={timelineItem.SceneId}, normalizedFile={normalizedFileSceneId}, normalizedTimeline={normalizedTimelineSceneId}");
+
             var cueStart = subtitleStart;
-            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+            var cueEnd = subtitleStart + audioDuration;
+            var cueText = NormalizeNarrationWhitespace(text);
+            blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText), timelineItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "TtsTimelineNarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromCanonicalTtsTimeline", DateTimeOffset.UtcNow));
+            cueValidation.Add(new
             {
-                var chunk = chunks[chunkIndex];
-                var cueEnd = chunkIndex == chunks.Count - 1
-                    ? subtitleTimelineEnd
-                    : subtitleStart + (spokenEnd - subtitleStart) * chunks.Take(chunkIndex + 1).Sum(CountWords) / totalWords;
-                if (cueStart < subtitleStart - 0.001)
-                    throw new InvalidOperationException($"SRT cue starts before audio segment: {format}:{planItem.SceneId}");
-                if (cueEnd > subtitleTimelineEnd + 0.001)
-                    throw new InvalidOperationException($"SRT cue extends beyond audio segment: {format}:{planItem.SceneId}");
-                blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(chunk), planItem.SceneId, chunk, text, SubtitleChunkHash(chunk), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "QuestionDrivenNarrationGenerator.BuildNarrationSrt", DateTimeOffset.UtcNow));
-                cueStart = cueEnd;
-            }
+                cueIndex = number - 1,
+                cueText,
+                ttsAudioPath = NormalizePath(timelineItem.AudioPath),
+                audioDurationSec = RoundDuration(audioDuration),
+                expectedStartSec = RoundDuration(cueStart),
+                expectedEndSec = RoundDuration(cueEnd),
+                srtStartSec = RoundDuration(cueStart),
+                srtEndSec = RoundDuration(cueEnd),
+                driftMs = 0.0
+            });
             perScene.Add(new
             {
-                sceneId = planItem.SceneId,
+                sceneId = timelineItem.SceneId,
+                ttsAudioPath = NormalizePath(timelineItem.AudioPath),
                 audioDurationSec = RoundDuration(audioDuration),
-                sceneDurationSec = RoundDuration(sceneDuration),
-                subtitleStart = RoundDuration(subtitleStart),
-                subtitleEnd = RoundDuration(subtitleTimelineEnd),
-                sceneStart = RoundDuration(sceneStart),
-                sceneEnd = RoundDuration(sceneEnd),
-                subtitleTextSource = "NarrationFile",
+                subtitleStart = RoundDuration(cueStart),
+                subtitleEnd = RoundDuration(cueEnd),
+                subtitleTextSource = "TtsTimelineNarrationFile",
                 subtitleTextOrigin = NormalizePath(narrationFile),
                 sceneIdOrigin,
-                normalizedSceneId = normalizedPlanSceneId,
+                normalizedSceneId = normalizedTimelineSceneId,
                 normalizedSceneIdMatching = true,
-                generatorComponent = "QuestionDrivenNarrationGenerator.BuildNarrationSrt"
+                generatorComponent = "ProductionPipelineExecutionService.BuildNarrationSrtFromCanonicalTtsTimeline"
             });
-            sceneStart = sceneEnd;
-            subtitleStart = subtitleTimelineEnd;
+            subtitleStart = cueEnd;
         }
         var duplicateBlockGroups = blocks
             .Select(block => new { block.Number, block.SceneId, Text = string.Join(" ", block.Lines), NormalizedText = NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)) })
@@ -2980,9 +2978,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicateSubtitleBlockIds = duplicateBlockGroups
             .SelectMany(group => group.Select(block => $"{format}:{block.SceneId}:cue-{block.Number}"))
             .ToArray();
-        var duplicateSubtitleTexts = duplicateBlockGroups
-            .Select(group => group.First().Text)
-            .ToArray();
+        var duplicateSubtitleTexts = duplicateBlockGroups.Select(group => group.First().Text).ToArray();
         if (duplicateSubtitleBlockIds.Length > 0)
             throw new InvalidOperationException("Phase 14 SRT validation failed: duplicateSubtitleBlockCount must be 0.");
         var srt = new StringBuilder();
@@ -2993,27 +2989,24 @@ public sealed partial class ProductionPipelineExecutionService(
             foreach (var line in block.Lines) srt.AppendLine(line);
             srt.AppendLine();
         }
-        var audioTotal = ReadSceneDurationPlanTotal(planRoot, format, "totalAudioDurationSec", durationPlanItems.Sum(x => x.AudioDurationSec));
-        var videoTotal = ReadSceneDurationPlanTotal(planRoot, format, "totalVideoDurationSec", durationPlanItems.Sum(x => x.SceneDurationSec));
+        var audioTotal = RoundDuration(timelineItems.Take(narrationFiles.Count).Sum(x => x.AudioDurationSec));
         var srtTotal = blocks.Count == 0 ? 0 : RoundDuration(blocks[^1].End.TotalSeconds);
-        if (audioTotal - srtTotal > 0.5)
-            throw new InvalidOperationException($"{format}.srt ends more than 0.5 sec before audio; srt={srtTotal}, audio={audioTotal}");
         if (Math.Abs(srtTotal - audioTotal) > 0.1)
-            throw new InvalidOperationException($"{format}.srt duration differs from audio duration by >0.1 sec; srt={srtTotal}, audio={audioTotal}");
+            throw new InvalidOperationException($"{format}.srt duration differs from canonical TTS audio timeline by >0.1 sec; srt={srtTotal}, audio={audioTotal}");
         var timingDiagnostics = new
         {
-            srtTimingSource = "SceneDurationPlanFromTtsTimeline",
+            srtTimingSource = "CanonicalTtsTimelineActualMp3Durations",
             ttsDurationsMeasuredFromMp3 = true,
             audioDrivenDurationCalibration = true,
             normalizedSceneIdMatching = true,
-            audioDurationSource = "ActualMp3",
+            audioDurationSource = "TtsTimelineActualMp3Duration",
             subtitleTimingRecalculated = true,
             audioDurationTotal = RoundDuration(audioTotal),
-            videoDurationTotal = RoundDuration(videoTotal),
             srtDurationTotal = srtTotal,
             srtMatchesAudioDuration = Math.Abs(srtTotal - audioTotal) <= 0.1,
-            srtMatchesVideoDuration = false,
-            audioSubtitleSyncPassed = Math.Abs(srtTotal - audioTotal) <= 0.1,
+            audioSubtitleSyncPassed = true,
+            maxCueDriftMs = 0.0,
+            cueLevelValidation = cueValidation,
             perSceneTiming = perScene
         };
         var subtitleBlocks = blocks.Select(block => new
@@ -3025,15 +3018,8 @@ public sealed partial class ProductionPipelineExecutionService(
             generatorComponent = block.GeneratorComponent
         }).ToArray();
         var subtitleCueSources = blocks.Select(block => new SubtitleCueSource(format, block.Number, block.SceneId, string.Join(" ", block.Lines), NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)), block.SubtitleTextSource, block.SubtitleTextOrigin, block.GeneratorComponent, block.CreatedUtc)).ToArray();
-        var traceCues = subtitleCueSources.Where(cue => ContainsSubtitleTraceText(cue.Text)).ToArray();
-        if (traceCues.Length > 0)
-        {
-            var tracePath = Path.Combine(planRoot, "validation", $"phase-14-{format}-subtitle-trace.json");
-            Directory.CreateDirectory(Path.GetDirectoryName(tracePath)!);
-            File.WriteAllText(tracePath, JsonSerializer.Serialize(traceCues.Select(cue => new { cue.Format, cue.CueId, cue.SceneId, cue.Text, cue.SourceFile, cue.GeneratorComponent, componentStack = cue.GeneratorComponent, exactTextExistsInSourceNarrationFile = File.Exists(cue.SourceFile) && File.ReadAllText(cue.SourceFile).Contains(cue.Text, StringComparison.OrdinalIgnoreCase) }), JsonOptions));
-        }
         var nonNarrationSubtitleCues = subtitleCueSources
-            .Where(cue => !string.Equals(cue.SourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase))
+            .Where(cue => !IsNarrationSubtitleSourceType(cue.SourceType))
             .ToArray();
         if (nonNarrationSubtitleCues.Length > 0)
             throw new InvalidOperationException("Non-narration subtitle cue detected");
@@ -3054,7 +3040,7 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleCueSources,
             nonNarrationSubtitleCues.Length,
             nonNarrationSubtitleCues,
-            "SceneNarrationFilesOnly",
+            "CanonicalTtsTimelineNarrationFilesOnly",
             true,
             false,
             false,
@@ -3072,16 +3058,20 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         foreach (var diagnostic in diagnostics)
         {
-            if (!string.Equals(diagnostic.SrtSourceMode, "SceneNarrationFilesOnly", StringComparison.OrdinalIgnoreCase)
+            if (!(string.Equals(diagnostic.SrtSourceMode, "SceneNarrationFilesOnly", StringComparison.OrdinalIgnoreCase) || string.Equals(diagnostic.SrtSourceMode, "CanonicalTtsTimelineNarrationFilesOnly", StringComparison.OrdinalIgnoreCase))
                 || !diagnostic.FallbackSubtitleSourcesDisabled
                 || diagnostic.EventProductionIntelligenceUsedForSrt
                 || diagnostic.VideoAssemblyIntelligenceUsedForSrt
                 || diagnostic.DocumentaryNarrationComposerUsedForSrt
                 || diagnostic.NonNarrationSubtitleCueCount != 0
-                || diagnostic.SubtitleCueSources.Any(cue => !string.Equals(cue.SourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase)))
+                || diagnostic.SubtitleCueSources.Any(cue => !IsNarrationSubtitleSourceType(cue.SourceType)))
                 throw new InvalidOperationException("Non-narration subtitle cue detected");
         }
     }
+
+    private static bool IsNarrationSubtitleSourceType(string sourceType)
+        => string.Equals(sourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sourceType, "TtsTimelineNarrationFile", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateSubtitleCueNarrationSource(string planRoot, string format, string narrationFile, string generatorComponent)
     {
@@ -3337,50 +3327,72 @@ public sealed partial class ProductionPipelineExecutionService(
             + int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture) / 1000.0;
     }
 
-    private sealed record CueLevelSubtitleValidationResult(bool Passed, IReadOnlyList<double> DriftMs, double MaxCueDriftMs, double AverageCueDriftMs, int CueCount, string SubtitleSourcePath, string TimingSource);
+
+    private sealed record CanonicalTtsTimelineItem(string Format, string SceneId, string AudioPath, string NarrationText, double AudioDurationSec);
+
+    private static IReadOnlyList<CanonicalTtsTimelineItem> ReadCanonicalTtsTimelineItems(string planRoot, string format)
+    {
+        var path = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        if (!File.Exists(path)) return [];
+        var root = JsonNode.Parse(File.ReadAllText(path));
+        return (root?[format]?["items"]?.AsArray() ?? [])
+            .Select((item, index) =>
+            {
+                var audioPath = GetString(item, "audioPath") ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(audioPath) && !Path.IsPathRooted(audioPath)) audioPath = Path.Combine(planRoot, audioPath);
+                return new CanonicalTtsTimelineItem(
+                    format,
+                    GetString(item, "sceneId") ?? $"{index + 1:000}",
+                    audioPath,
+                    GetString(item, "narrationText") ?? string.Empty,
+                    GetDouble(item, "durationSec", "audioDurationSec") ?? 0);
+            })
+            .ToArray();
+    }
+
+    private sealed record CueLevelSubtitleValidationResult(bool Passed, IReadOnlyList<double> DriftMs, double MaxCueDriftMs, double AverageCueDriftMs, int CueCount, string SubtitleSourcePath, string TimingSource, IReadOnlyList<object> CueLevelValidation);
 
     private static CueLevelSubtitleValidationResult ValidateCueLevelSubtitleSync(string planRoot, string format, string srtPath)
     {
         if (!File.Exists(srtPath))
-            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "MissingSubtitleFile");
+            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "MissingSubtitleFile", []);
 
-        var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
-        var narrationRoot = Path.Combine(planRoot, "narration", format);
-        var narrationFiles = Directory.Exists(narrationRoot)
-            ? Directory.EnumerateFiles(narrationRoot, "*.txt").OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray()
-            : [];
-        if (durationPlanItems.Count == 0 || narrationFiles.Length == 0 || durationPlanItems.Count < narrationFiles.Length)
-            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "SceneDurationPlanFromTtsTimeline");
+        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
+        if (timelineItems.Count == 0)
+            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "CanonicalTtsTimelineActualMp3Durations", []);
 
-        var actualCues = ParseSrtCueTimes(srtPath);
-        var expectedCues = new List<(double Start, double End)>();
-        var subtitleStart = 0.0;
-        for (var i = 0; i < narrationFiles.Length; i++)
+        var actualCues = ParseSrtCues(srtPath);
+        var expectedCues = new List<(int CueIndex, string CueText, string TtsAudioPath, double AudioDurationSec, double Start, double End)>();
+        var start = 0.0;
+        for (var i = 0; i < timelineItems.Count; i++)
         {
-            var planItem = durationPlanItems[i];
-            var audioDuration = Math.Max(0, planItem.AudioDurationSec);
-            var text = File.ReadAllText(narrationFiles[i]).Trim();
-            var chunks = SplitSubtitleChunks(text);
-            var totalWords = Math.Max(1, chunks.Sum(CountWords));
-            var cueStart = subtitleStart;
-            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
-            {
-                var cueEnd = chunkIndex == chunks.Count - 1
-                    ? subtitleStart + audioDuration
-                    : subtitleStart + audioDuration * chunks.Take(chunkIndex + 1).Sum(CountWords) / totalWords;
-                expectedCues.Add((cueStart, cueEnd));
-                cueStart = cueEnd;
-            }
-            subtitleStart += audioDuration;
+            var item = timelineItems[i];
+            var duration = Math.Max(0, item.AudioDurationSec);
+            expectedCues.Add((i + 1, NormalizeNarrationWhitespace(item.NarrationText), item.AudioPath, duration, start, start + duration));
+            start += duration;
         }
 
         var drift = new List<double>();
+        var details = new List<object>();
         var count = Math.Min(actualCues.Count, expectedCues.Count);
         for (var i = 0; i < count; i++)
         {
             var startDriftMs = Math.Abs(actualCues[i].Start - expectedCues[i].Start) * 1000.0;
             var endDriftMs = Math.Abs(actualCues[i].End - expectedCues[i].End) * 1000.0;
-            drift.Add(RoundDuration(Math.Max(startDriftMs, endDriftMs)));
+            var cueDriftMs = RoundDuration(Math.Max(startDriftMs, endDriftMs));
+            drift.Add(cueDriftMs);
+            details.Add(new
+            {
+                cueIndex = i + 1,
+                cueText = actualCues[i].Text,
+                ttsAudioPath = NormalizePath(expectedCues[i].TtsAudioPath),
+                audioDurationSec = RoundDuration(expectedCues[i].AudioDurationSec),
+                expectedStartSec = RoundDuration(expectedCues[i].Start),
+                expectedEndSec = RoundDuration(expectedCues[i].End),
+                srtStartSec = RoundDuration(actualCues[i].Start),
+                srtEndSec = RoundDuration(actualCues[i].End),
+                driftMs = cueDriftMs
+            });
         }
 
         if (actualCues.Count != expectedCues.Count)
@@ -3395,13 +3407,26 @@ public sealed partial class ProductionPipelineExecutionService(
             averageDrift,
             actualCues.Count,
             NormalizePath(srtPath),
-            "SceneDurationPlanFromActualNarrationSegments");
+            "CanonicalTtsTimelineActualMp3Durations",
+            details);
     }
 
     private static IReadOnlyList<(double Start, double End)> ParseSrtCueTimes(string srtPath)
-        => Regex.Matches(File.ReadAllText(srtPath), @"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})")
-            .Select(match => (ParseSrtSeconds(match, 1), ParseSrtSeconds(match, 5)))
-            .ToArray();
+        => ParseSrtCues(srtPath).Select(cue => (cue.Start, cue.End)).ToArray();
+
+    private static IReadOnlyList<(double Start, double End, string Text)> ParseSrtCues(string srtPath)
+    {
+        var cues = new List<(double Start, double End, string Text)>();
+        foreach (var raw in Regex.Split(File.ReadAllText(srtPath).Trim(), @"\r?\n\r?\n"))
+        {
+            var lines = raw.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).ToArray();
+            if (lines.Length < 3) continue;
+            var match = Regex.Match(lines[1], @"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})");
+            if (!match.Success) continue;
+            cues.Add((ParseSrtSeconds(match, 1), ParseSrtSeconds(match, 5), string.Join(" ", lines.Skip(2)).Trim()));
+        }
+        return cues;
+    }
 
     private static double ParseSrtSeconds(Match match, int offset)
         => int.Parse(match.Groups[offset].Value, CultureInfo.InvariantCulture) * 3600
