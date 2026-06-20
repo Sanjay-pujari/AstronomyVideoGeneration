@@ -445,7 +445,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var finalFps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
         var finalDurationText = combinedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         var finalAudioFilter = hasBackgroundMusic
-            ? BuildFinalAudioFilter(combinedDurationSeconds)
+            ? BuildFinalAudioFilter(combinedDurationSeconds, CinematicEndingComposer.DefaultOutroDurationSeconds)
             : string.Empty;
         var finalArguments = hasBackgroundMusic
             ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -stream_loop -1 -i \"{NormalizePath(_options.BackgroundMusicPath!)}\" -filter_complex \"[0:v]{finalFilter}[vout];{finalAudioFilter}\" -map \"[vout]\" -map \"[aout]\" -t {finalDurationText} {BuildVideoEncodeArguments(finalPreset)} -r {finalFps} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\""
@@ -970,12 +970,15 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             ? BuildExactOutputFilter(preset.Width, preset.Height, preset.ScaleFlags)
             : $"scale={preset.Width}:{preset.Height}:flags={preset.ScaleFlags}:force_original_aspect_ratio=decrease,pad={preset.Width}:{preset.Height}:(ow-iw)/2:(oh-ih)/2,setsar=1";
 
-    private static string BuildFinalAudioFilter(double finalDurationSeconds)
+    private static string BuildFinalAudioFilter(double finalDurationSeconds, double outroDurationSeconds)
     {
-        var fadeOutStartSeconds = Math.Max(0d, finalDurationSeconds - 1d);
+        var safeOutroDurationSeconds = Math.Clamp(outroDurationSeconds, 0d, finalDurationSeconds);
+        var fadeOutStartSeconds = Math.Max(0d, finalDurationSeconds - safeOutroDurationSeconds);
+        var finalDuration = finalDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         var fadeOutStart = fadeOutStartSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        var fadeOutDuration = safeOutroDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
-        return $"[2:a]volume=0.20,afade=t=out:st={fadeOutStart}:d=1[music];[1:a][music]amix=inputs=2:duration=longest:normalize=0[aout]";
+        return $"[1:a]apad=whole_dur={finalDuration}[narration];[2:a]volume=0.20,atrim=0:{finalDuration},afade=t=out:st={fadeOutStart}:d={fadeOutDuration}[music];[narration][music]amix=inputs=2:duration=first:normalize=0[aout]";
     }
 
     private static int GetShortSafeFps()

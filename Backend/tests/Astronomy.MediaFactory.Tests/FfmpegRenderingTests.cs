@@ -808,7 +808,7 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_BackgroundMusicContinuesThroughCinematicOutroAndFadesFinalSecond()
+    public async Task FfmpegVideoRenderService_BackgroundMusicContinuesThroughCinematicOutroAndFadesOverOutro()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-outro-music");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
@@ -839,8 +839,9 @@ public sealed class FfmpegRenderingTests
 
         var finalCommand = processRunner.Commands.Single(command => command.Contains(outputPath, StringComparison.Ordinal) && command.Contains("-filter_complex", StringComparison.Ordinal));
         Assert.Contains("-stream_loop -1", finalCommand, StringComparison.Ordinal);
-        Assert.Contains("afade=t=out:st=9:d=1[music]", finalCommand, StringComparison.Ordinal);
-        Assert.Contains("amix=inputs=2:duration=longest:normalize=0[aout]", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("[1:a]apad=whole_dur=10[narration]", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("atrim=0:10,afade=t=out:st=6:d=4[music]", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("amix=inputs=2:duration=first:normalize=0[aout]", finalCommand, StringComparison.Ordinal);
         Assert.Contains("-t 10", finalCommand, StringComparison.Ordinal);
     }
 
