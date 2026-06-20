@@ -2153,6 +2153,8 @@ public sealed partial class ProductionPipelineExecutionService(
             storyArc = narration.StoryArc,
             documentaryNarrationScore = narration.Diagnostics.DocumentaryScore,
             documentaryScore = narration.Diagnostics.DocumentaryScore,
+            openingQualityScore = ScoreOpeningQuality(narration.ShortItems.Values.Concat(narration.LongItems.Values).FirstOrDefault() ?? string.Empty),
+            hostPresenceScore = ScoreHostPresence(allText),
             sceneContinuityScore = ScoreSceneContinuity(allText),
             metadataLeakScore = ScoreMetadataLeak(allText),
             wonderScore = narration.Diagnostics.WonderScore,
@@ -2166,6 +2168,25 @@ public sealed partial class ProductionPipelineExecutionService(
         return path;
     }
 
+
+    private static int ScoreOpeningQuality(string text)
+    {
+        var score = 55;
+        if (Regex.IsMatch(text ?? string.Empty, @"^\s*(Hello|Greetings)\b", RegexOptions.IgnoreCase)) score += 20;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(Over the next few evenings|Tonight we're exploring|chance|opportunity)\b", RegexOptions.IgnoreCase)) score += 10;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(curious|closer look|the closer we look|story)\b", RegexOptions.IgnoreCase)) score += 10;
+        if (!Regex.IsMatch(text ?? string.Empty, @"\b(opens with|starts with|start with|this matters because|low in the evening sky|you will see)\b", RegexOptions.IgnoreCase)) score += 5;
+        return Math.Min(100, score);
+    }
+
+    private static int ScoreHostPresence(string text)
+    {
+        var score = 65;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(fellow stargazers|astronomy lovers|let's|we look|our sky)\b", RegexOptions.IgnoreCase)) score += 20;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(quiet chance|take a closer look|from there|by then)\b", RegexOptions.IgnoreCase)) score += 10;
+        if (!Regex.IsMatch(text ?? string.Empty, @"\b(scene|caption|metadata|asset|render)\b", RegexOptions.IgnoreCase)) score += 5;
+        return Math.Min(100, score);
+    }
 
     private static int ScoreSceneContinuity(string text)
     {
@@ -2207,8 +2228,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var longTexts = new Dictionary<string, string>(expandedLongTexts, StringComparer.OrdinalIgnoreCase);
         if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
         {
-            ApplyPlanetConjunctionNarrationV21(shortTexts, expansionContext);
-            ApplyPlanetConjunctionNarrationV21(longTexts, expansionContext);
+            ApplyPlanetConjunctionNarrationV22(shortTexts, expansionContext);
+            ApplyPlanetConjunctionNarrationV22(longTexts, expansionContext);
         }
         var composerTrace = new List<SceneNarrationComposerTraceEntry>();
         SanitizeSceneNarrationComposerOutputs(context, family, shortTexts, composerTrace, "short");
@@ -2229,7 +2250,7 @@ public sealed partial class ProductionPipelineExecutionService(
             WonderScore = ScoreWonderLanguage(combinedCandidateText(shortTexts, longTexts)),
             ScientificAccuracyScore = ScoreScientificAccuracy(family, combinedCandidateText(shortTexts, longTexts))
         };
-        ValidatePhase14EventStoryNarration(shortTexts, longTexts, diagnostics);
+        ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, diagnostics);
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
             .ToArray();
@@ -2262,7 +2283,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private static void ApplyPlanetConjunctionNarrationV21(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context)
+    private static void ApplyPlanetConjunctionNarrationV22(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context)
     {
         var time = NaturalViewingWindow(context.LocalPeakTime);
         var direction = NaturalSkyDirection(context.SkyDirectionHint);
@@ -2271,20 +2292,23 @@ public sealed partial class ProductionPipelineExecutionService(
             var purpose = ResolvePhase14ScenePurpose(sceneId);
             var replacement = purpose switch
             {
-                "hook" => "Low in the evening sky, two bright planets draw the eye because their separation seems to shrink against the fading twilight.",
-                "what-is-it" => "As the view settles, the pairing becomes a planetary conjunction: not a physical meeting, but a shared direction in our sky.",
-                "cause" => "Although the two planets appear close together, they remain separated by vast distances while their paths briefly align from Earth's perspective.",
-                "interesting-fact" => "Night by night, the changing gap lets you sense the solar system moving, not as a diagram, but as a quiet shift above the horizon.",
+                "hook" => $"Hello, fellow stargazers. Over the next few evenings, {CleanPhase14Title(context.ShortTitle)} offers a quiet chance to watch two bright planets gather in the twilight. At first it looks simple, but the closer we look, the more the scene becomes a story of distance, motion, and perspective. Let’s take a closer look.",
+                "what-is-it" => "That opening view leads us into a planetary conjunction: not a physical meeting, but a shared direction in our sky.",
+                "cause" => "Although the planets appear close together, they remain separated by hundreds of millions of kilometers while their paths briefly align from Earth's perspective.",
+                "interesting-fact" => "From night to night, the changing gap lets you sense the solar system moving, not as a diagram, but as a quiet shift above the horizon.",
                 "best-time" => $"The conjunction reaches its finest appearance during the evenings surrounding {time}.",
                 "accurate-sky-guide" => $"About thirty minutes after sunset, turn your attention toward {direction} and look for the two bright planetary points close to the horizon.",
-                "what-you-will-see" => "By then, one world may look brilliant and sharp while the other appears steadier, their apparent closeness held only by our line of sight.",
-                "viewing-tips" => "Give the view a few quiet minutes, keep phones dim, and let binoculars become a second look rather than the first step.",
+                "what-you-will-see" => "By then, one world may look brilliant and sharp while the other appears steadier, with their apparent closeness held only by our line of sight.",
+                "viewing-tips" => "From there, give the view a few quiet minutes, keep phones dim, and let binoculars become a second look rather than the first step.",
                 "final-reminder" => "In a few nights, the planets will drift apart once again. Their brief meeting in our evening sky will end, just as all celestial alignments eventually do. But for those who pause to look up, the memory of seeing two distant worlds share the same patch of sky can remain long after the conjunction itself has passed.",
                 _ => texts[sceneId]
             };
             texts[sceneId] = RewriteBannedNarrationPhrases(replacement);
         }
     }
+
+    private static string CleanPhase14Title(string? value)
+        => string.IsNullOrWhiteSpace(value) ? "this planetary conjunction" : Regex.Replace(value, @"\s+", " ").Trim();
 
     private static string NaturalViewingWindow(string? value)
     {
@@ -2467,7 +2491,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static object BuildPhase14StoryArc() => new
     {
         @short = new[] { "Hook", "What is happening", "Why it happens", "How to observe", "Reflection" },
-        @long = new[] { "Opening wonder", "What is happening", "Why it happens", "Interesting fact", "Best viewing time", "Sky guide", "What you will see", "Viewing tips", "Closing reflection" }
+        @long = new[] { "Opening wonder", "What is happening", "Why it happens", "Interesting fact", "Best viewing time", "Sky guide", "Observed view", "Viewing tips", "Closing reflection" }
     };
 
     private static int ScoreWonderLanguage(string text)
@@ -2499,16 +2523,19 @@ public sealed partial class ProductionPipelineExecutionService(
         ? "Use certified solar eclipse glasses before and after totality, keep cameras filtered, and supervise children throughout the event."
         : "Bring warm layers, avoid bright phone screens, and give yourself several quiet minutes for the sky to reveal faint detail.";
 
-    private static void ValidatePhase14EventStoryNarration(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts, EventStoryComposerDiagnostics diagnostics)
+    private static void ValidatePhase14EventStoryNarration(string family, IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts, EventStoryComposerDiagnostics diagnostics)
     {
-        var forbiddenOpening = new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow" };
+        var isPlanetConjunction = string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase);
+        var forbiddenOpening = isPlanetConjunction ? new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow", "Open", "Opens", "Start", "Starts" } : new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow" };
         foreach (var opening in new[] { shortTexts["001-hook"], longTexts["001-hook"] })
         {
             var first = Regex.Match(opening.Trim(), @"^\w+").Value;
             if (forbiddenOpening.Contains(first, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Phase 14 EventStoryComposer opening starts with forbidden word: {first}");
+            if (isPlanetConjunction && !Regex.IsMatch(opening, @"^\s*(Hello, fellow stargazers|Greetings, astronomy lovers)\b", RegexOptions.IgnoreCase))
+                throw new InvalidOperationException("Phase 14 PlanetConjunction opening must begin with a documentary-host greeting.");
         }
-        if (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned)
+        if (!isPlanetConjunction && (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned))
             throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");
         ValidateNoNarrationV21BannedPhrases(shortTexts.Values.Concat(longTexts.Values));
         ValidatePhase14EventStoryNarrationFormat("short", shortTexts);
@@ -2518,7 +2545,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ValidateNoNarrationV21BannedPhrases(IEnumerable<string> texts)
     {
-        var banned = new[] { "opens with", "starts with", "start with", "this matters because", "you will see", "the event is", "the best view comes from" };
+        var banned = new[] { "opens with", "starts with", "start with", "this matters because", "low in the evening sky", "you will see", "the event is", "the best view comes from" };
         var combined = string.Join(" ", texts);
         var hit = banned.FirstOrDefault(phrase => combined.Contains(phrase, StringComparison.OrdinalIgnoreCase));
         if (hit is not null)

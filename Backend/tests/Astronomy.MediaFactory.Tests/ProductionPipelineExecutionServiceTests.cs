@@ -170,9 +170,16 @@ public sealed class ProductionPipelineExecutionServiceTests
 
         Assert.Equal(["001-hook", "002-what-is-it", "003-cause", "004-viewing-tip", "005-final-reminder"], shortItems.Keys.ToArray());
         Assert.Equal(9, longItems.Count);
+        Assert.StartsWith("Hello, fellow stargazers.", shortItems["001-hook"]);
+        Assert.Contains("Over the next few evenings", shortItems["001-hook"], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Let’s take a closer look.", shortItems["001-hook"], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("planetary conjunction", allText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("appear close together", allText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hundreds of millions of kilometers", allText, StringComparison.OrdinalIgnoreCase);
         Assert.Matches("separated|distances|space|line-of-sight|perspective", allText);
+        Assert.DoesNotContain("low in the evening sky", allText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("start with", allText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("you will see", allText, StringComparison.OrdinalIgnoreCase);
         Assert.True((int)diagnosticsType.GetProperty("DocumentaryScore")!.GetValue(diagnostics)! >= 90);
         Assert.True((int)diagnosticsType.GetProperty("WonderScore")!.GetValue(diagnostics)! >= 90);
         Assert.True((int)diagnosticsType.GetProperty("ScientificAccuracyScore")!.GetValue(diagnostics)! >= 95);
