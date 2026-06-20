@@ -3424,24 +3424,55 @@ public sealed partial class ProductionPipelineExecutionService(
         var path = Path.Combine(planRoot, "tts", "tts-timeline.json");
         if (!File.Exists(path)) return [];
         var root = JsonNode.Parse(File.ReadAllText(path));
-        return (root?[format]?["items"]?.AsArray() ?? [])
-            .Where(item => string.IsNullOrWhiteSpace(GetString(item, "format")) || string.Equals(GetString(item, "format"), format, StringComparison.OrdinalIgnoreCase))
-            .Select((item, index) =>
-            {
-                var audioPath = GetString(item, "audioPath") ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(audioPath) && !Path.IsPathRooted(audioPath)) audioPath = Path.Combine(planRoot, audioPath);
-                var cueIndex = GetInt(item, "cueIndex") ?? index + 1;
-                return new CanonicalTtsTimelineItem(
-                    format,
-                    GetString(item, "sceneId") ?? $"{index + 1:000}",
-                    cueIndex,
-                    audioPath,
-                    GetString(item, "cueText", "narrationText") ?? string.Empty,
-                    GetDouble(item, "audioDurationSec", "durationSec") ?? 0);
-            })
-            .OrderBy(item => item.CueIndex)
-            .ToArray();
+        return ReadCanonicalTtsTimelineItems(root, format, planRoot);
     }
+
+    private static IReadOnlyList<CanonicalTtsTimelineItem> ReadCanonicalTtsTimelineItems(JsonNode? root, string format, string? planRoot = null)
+    {
+        var items = new List<CanonicalTtsTimelineItem>();
+        var formatRoot = root?[format];
+        AddCanonicalTtsTimelineItems(items, formatRoot?["items"]?.AsArray(), format, planRoot, null);
+        AddCanonicalTtsTimelineItems(items, formatRoot?["cues"]?.AsArray(), format, planRoot, null);
+        AddCanonicalTtsTimelineItems(items, formatRoot?["cueItems"]?.AsArray(), format, planRoot, null);
+        AddCanonicalTtsTimelineItems(items, formatRoot?["timelineItems"]?.AsArray(), format, planRoot, null);
+        return items.OrderBy(item => item.CueIndex).ToArray();
+    }
+
+    private static void AddCanonicalTtsTimelineItems(List<CanonicalTtsTimelineItem> output, JsonArray? sourceItems, string format, string? planRoot, string? parentSceneId)
+    {
+        if (sourceItems is null) return;
+        foreach (var item in sourceItems)
+        {
+            if (item is null) continue;
+            if (!string.IsNullOrWhiteSpace(GetString(item, "format")) && !string.Equals(GetString(item, "format"), format, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var sceneId = GetString(item, "sceneId") ?? parentSceneId ?? $"{output.Count + 1:000}";
+            var nestedCueArrays = new[] { item["cues"]?.AsArray(), item["cueItems"]?.AsArray(), item["timelineItems"]?.AsArray() }.Where(array => array is not null).ToArray();
+            if (nestedCueArrays.Length > 0)
+            {
+                foreach (var nestedCueArray in nestedCueArrays) AddCanonicalTtsTimelineItems(output, nestedCueArray, format, planRoot, sceneId);
+                continue;
+            }
+
+            var duration = GetDouble(item, "audioDurationSec", "durationSec") ?? 0;
+            var cueIndex = GetInt(item, "cueIndex") ?? output.Count + 1;
+            var audioPath = GetString(item, "audioPath") ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(audioPath) && planRoot is not null && !Path.IsPathRooted(audioPath)) audioPath = Path.Combine(planRoot, audioPath);
+            output.Add(new CanonicalTtsTimelineItem(
+                format,
+                sceneId,
+                cueIndex,
+                audioPath,
+                GetString(item, "cueText", "narrationText") ?? string.Empty,
+                duration));
+        }
+    }
+
+    private static int CountCueLevelTtsTimelineItems(string ttsTimelinePath, string format)
+        => File.Exists(ttsTimelinePath) ? ReadCanonicalTtsTimelineItems(JsonNode.Parse(File.ReadAllText(ttsTimelinePath)), format).Count : 0;
+
+    private static double SumCueLevelTtsTimelineDurations(string ttsTimelinePath, string format)
+        => File.Exists(ttsTimelinePath) ? RoundDuration(ReadCanonicalTtsTimelineItems(JsonNode.Parse(File.ReadAllText(ttsTimelinePath)), format).Sum(item => Math.Max(0, item.AudioDurationSec))) : 0;
 
     private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format)
         => ReadCanonicalTtsTimelineItems(planRoot, format)
@@ -4446,6 +4477,10 @@ public sealed partial class ProductionPipelineExecutionService(
             oldPathUsed,
             shortSceneCount = shortItems.Count,
             longSceneCount = longItems.Count,
+            shortCueTimelineItemCount = CountCueLevelTtsTimelineItems(ttsTimelinePath, "short"),
+            longCueTimelineItemCount = CountCueLevelTtsTimelineItems(ttsTimelinePath, "long"),
+            shortCueTimelineDurationSumSec = SumCueLevelTtsTimelineDurations(ttsTimelinePath, "short"),
+            longCueTimelineDurationSumSec = SumCueLevelTtsTimelineDurations(ttsTimelinePath, "long"),
             shortTotalAudioDurationSec = shortAudioTotal,
             longTotalAudioDurationSec = longAudioTotal,
             shortTotalVideoDurationSec = shortVideoTotal,
@@ -4484,17 +4519,17 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task<IReadOnlyList<SceneDurationPlanItem>> BuildSceneDurationPlanItemsAsync(JsonNode ttsRoot, string format, string metadataPath, int expectedCount, double maximumSceneDurationSec, double transitionPaddingSec, double minimumSceneDurationSec, List<string> missingDurationItems, CancellationToken cancellationToken)
     {
         await Task.CompletedTask;
-        var ttsItems = ttsRoot[format]?["items"]?.AsArray() ?? [];
+        var ttsItems = ReadCanonicalTtsTimelineItems(ttsRoot, format);
         var metadataScenes = File.Exists(metadataPath) ? ReadJsonArray(metadataPath, "scenes") : new JsonArray();
         var metadataBySceneId = metadataScenes.Select(n => new { Node = n, SceneId = NormalizeSceneIdForOrder(GetString(n, "sceneId") ?? string.Empty) }).Where(x => !string.IsNullOrWhiteSpace(x.SceneId)).GroupBy(x => x.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
         var cueGroups = ttsItems
-            .Where(ttsItem => string.IsNullOrWhiteSpace(GetString(ttsItem, "format")) || string.Equals(GetString(ttsItem, "format"), format, StringComparison.OrdinalIgnoreCase))
-            .Select((ttsItem, index) => new
+            .Where(ttsItem => string.Equals(ttsItem.Format, format, StringComparison.OrdinalIgnoreCase))
+            .Select(ttsItem => new
             {
-                SceneId = GetString(ttsItem, "sceneId") ?? $"{index + 1:000}",
-                AudioPath = GetString(ttsItem, "audioPath") ?? string.Empty,
-                DurationSec = Math.Max(0, GetDouble(ttsItem, "audioDurationSec", "durationSec") ?? 0),
-                FirstCueIndex = GetInt(ttsItem, "cueIndex") ?? index + 1
+                ttsItem.SceneId,
+                ttsItem.AudioPath,
+                DurationSec = Math.Max(0, ttsItem.AudioDurationSec),
+                FirstCueIndex = ttsItem.CueIndex
             })
             .GroupBy(item => NormalizeSceneIdForDurationMatch(item.SceneId), StringComparer.OrdinalIgnoreCase)
             .Select(group => new
