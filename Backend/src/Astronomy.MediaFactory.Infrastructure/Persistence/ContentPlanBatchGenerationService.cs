@@ -47,7 +47,10 @@ public sealed class ContentPlanBatchGenerationService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var maxPlans = Math.Clamp(request.MaxPlans <= 0 ? DefaultMaxPlans : request.MaxPlans, 1, MaxPlanLimit);
-        var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, request.Language, cancellationToken);
+        var requestedLanguage = NormalizeLanguage(request.Language);
+        var languageMismatch = await ResolveLanguageMismatchSiblingAsync(request, cancellationToken);
+        var effectivePlanId = languageMismatch.SelectedPlanId ?? request.PlanId;
+        var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, requestedLanguage, cancellationToken);
 
         IReadOnlyList<BatchGenerateFromPlansWarning> recoveryWarnings = request.DryRun
             ? Array.Empty<BatchGenerateFromPlansWarning>()
@@ -58,7 +61,7 @@ public sealed class ContentPlanBatchGenerationService(
         var recoveryMode = executionMode == ContentPlanExecutionMode.RecoverRunning;
         var exactPlanIdMode = IsExactPlanIdMode(request);
         var manualPlanExecution = request.PlanId.HasValue;
-        var selection = SelectPlans(candidates, requestedTitles, request.PlanId, request.OnlyHighPriority, maxPlans, executionMode, recoveryMode, ResolveRunningPlanRecoveryStaleAfter(request), request.AllowCompletedPlanRerun, request.UseProductionPipeline, exactPlanIdMode);
+        var selection = SelectPlans(candidates, requestedTitles, effectivePlanId, request.OnlyHighPriority, maxPlans, executionMode, recoveryMode, ResolveRunningPlanRecoveryStaleAfter(request), request.AllowCompletedPlanRerun, request.UseProductionPipeline, exactPlanIdMode);
         var selectedPlanEntities = selection.SelectedPlans;
         var warnings = recoveryWarnings.Concat(selection.Warnings).ToArray();
         var selectedPlans = selectedPlanEntities
@@ -66,7 +69,7 @@ public sealed class ContentPlanBatchGenerationService(
             .ToArray();
 
         LogExactPlanIdDiagnostics(request, selectedPlanEntities, candidates, requestedTitles, exactPlanIdMode);
-        ValidateExactPlanIdSelection(request.PlanId, selectedPlanEntities, exactPlanIdMode);
+        ValidateExactPlanIdSelection(effectivePlanId, selectedPlanEntities, exactPlanIdMode);
 
         if (selectedPlans.Length == 0)
         {
@@ -87,7 +90,12 @@ public sealed class ContentPlanBatchGenerationService(
                 ManualPlanExecution: manualPlanExecution,
                 AutoGenerateAllowed: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed : null,
                 AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities.Count == 1 && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
-                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic");
+                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic",
+                RequestedPlanLanguage: languageMismatch.RequestedPlanLanguage,
+                RequestedLanguage: languageMismatch.RequestedLanguage,
+                LanguageMismatchDetected: languageMismatch.LanguageMismatchDetected,
+                SiblingPlanFound: languageMismatch.SiblingPlanFound,
+                SiblingPlanCreated: languageMismatch.SiblingPlanCreated);
         }
 
         if (request.UseProductionPipeline)
@@ -120,7 +128,7 @@ public sealed class ContentPlanBatchGenerationService(
                 MotionV2Strength: request.MotionV2Strength,
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
 
-            ValidateExactPlanIdExecutionResult(request.PlanId, execution.PlanId, exactPlanIdMode);
+            ValidateExactPlanIdExecutionResult(effectivePlanId, execution.PlanId, exactPlanIdMode);
 
             return new BatchGenerateFromPlansResponse(
                 Success: execution.Success,
@@ -178,7 +186,12 @@ public sealed class ContentPlanBatchGenerationService(
                 SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic",
                 PublishGateChecked: execution.PublishGateChecked,
                 PublishApproved: execution.PublishApproved,
-                Phase19ReviewApproved: execution.Phase19ReviewApproved);
+                Phase19ReviewApproved: execution.Phase19ReviewApproved,
+                RequestedPlanLanguage: languageMismatch.RequestedPlanLanguage,
+                RequestedLanguage: languageMismatch.RequestedLanguage,
+                LanguageMismatchDetected: languageMismatch.LanguageMismatchDetected,
+                SiblingPlanFound: languageMismatch.SiblingPlanFound,
+                SiblingPlanCreated: languageMismatch.SiblingPlanCreated);
         }
 
         logger.LogInformation("Using placeholder planning pipeline");
@@ -200,7 +213,12 @@ public sealed class ContentPlanBatchGenerationService(
                 ManualPlanExecution: manualPlanExecution,
                 AutoGenerateAllowed: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed : null,
                 AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities.Count == 1 && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
-                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic");
+                SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic",
+                RequestedPlanLanguage: languageMismatch.RequestedPlanLanguage,
+                RequestedLanguage: languageMismatch.RequestedLanguage,
+                LanguageMismatchDetected: languageMismatch.LanguageMismatchDetected,
+                SiblingPlanFound: languageMismatch.SiblingPlanFound,
+                SiblingPlanCreated: languageMismatch.SiblingPlanCreated);
         }
 
         var planIds = selectedPlans.Select(p => p.ContentGenerationPlanId).ToArray();
@@ -270,7 +288,12 @@ public sealed class ContentPlanBatchGenerationService(
             ManualPlanExecution: manualPlanExecution,
             AutoGenerateAllowed: selectedPlanEntities.Count == 1 ? selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed : null,
             AutoGenerateAllowedIgnoredForManualRun: manualPlanExecution && selectedPlanEntities.Count == 1 && selectedPlanEntities[0].AstronomyEventIntelligence?.AutoGenerateAllowed == false,
-            SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic");
+            SelectionMode: manualPlanExecution ? "ManualPlanId" : "Automatic",
+            RequestedPlanLanguage: languageMismatch.RequestedPlanLanguage,
+            RequestedLanguage: languageMismatch.RequestedLanguage,
+            LanguageMismatchDetected: languageMismatch.LanguageMismatchDetected,
+            SiblingPlanFound: languageMismatch.SiblingPlanFound,
+            SiblingPlanCreated: languageMismatch.SiblingPlanCreated);
     }
 
     public async Task<PlansReadyForGenerationResponse> GetPlansReadyForGenerationAsync(
@@ -311,6 +334,148 @@ public sealed class ContentPlanBatchGenerationService(
             .Where(p => p.ScheduledUtc.HasValue && p.ScheduledUtc.Value >= yearStart && p.ScheduledUtc.Value < yearEnd)
             .ToArrayAsync(cancellationToken);
     }
+
+    private async Task<LanguageMismatchPlanResolution> ResolveLanguageMismatchSiblingAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.PlanId.HasValue) return LanguageMismatchPlanResolution.None(request.Language);
+
+        var requestedLanguage = NormalizeLanguage(request.Language);
+        var sourcePlan = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+            .FirstOrDefaultAsync(p => p.Id == request.PlanId.Value, cancellationToken);
+
+        if (sourcePlan is null) return LanguageMismatchPlanResolution.None(request.Language);
+
+        var sourceLanguage = NormalizeLanguage(sourcePlan.Language);
+        if (string.Equals(sourceLanguage, requestedLanguage, StringComparison.OrdinalIgnoreCase))
+            return new LanguageMismatchPlanResolution(sourcePlan.Language, requestedLanguage, false, false, false, sourcePlan.Id);
+
+        var sibling = await FindSiblingPlanAsync(sourcePlan, request.RegionId, requestedLanguage, cancellationToken);
+        if (sibling is not null)
+            return new LanguageMismatchPlanResolution(sourcePlan.Language, requestedLanguage, true, true, false, sibling.Id);
+
+        sibling = await CreateSiblingPlanAsync(sourcePlan, requestedLanguage, cancellationToken);
+        return new LanguageMismatchPlanResolution(sourcePlan.Language, requestedLanguage, true, false, true, sibling.Id);
+    }
+
+    private async Task<ContentGenerationPlan?> FindSiblingPlanAsync(ContentGenerationPlan sourcePlan, string requestedRegionId, string requestedLanguage, CancellationToken cancellationToken)
+    {
+        var externalIds = new[]
+            {
+                sourcePlan.AstronomyEventIntelligence?.ExternalEventId,
+                sourcePlan.SourceExternalEventId
+            }
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (externalIds.Length == 0) return null;
+
+        return await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+            .Where(p => p.RegionId == requestedRegionId && p.Language == requestedLanguage)
+            .Where(p => (p.SourceExternalEventId != null && externalIds.Contains(p.SourceExternalEventId))
+                || (p.AstronomyEventIntelligence != null && externalIds.Contains(p.AstronomyEventIntelligence.ExternalEventId)))
+            .OrderByDescending(p => p.PriorityScore ?? 0m)
+            .ThenBy(p => p.Priority)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private async Task<ContentGenerationPlan> CreateSiblingPlanAsync(ContentGenerationPlan sourcePlan, string requestedLanguage, CancellationToken cancellationToken)
+    {
+        var sourceEvent = sourcePlan.AstronomyEventIntelligence;
+        var siblingEvent = sourceEvent is null
+            ? null
+            : await db.AstronomyEventIntelligences
+                .FirstOrDefaultAsync(e => e.ExternalEventId == sourceEvent.ExternalEventId
+                    && e.RegionId == sourceEvent.RegionId
+                    && e.Language == requestedLanguage, cancellationToken);
+
+        if (sourceEvent is not null && siblingEvent is null)
+        {
+            siblingEvent = CopyEventForLanguage(sourceEvent, requestedLanguage);
+            db.AstronomyEventIntelligences.Add(siblingEvent);
+        }
+
+        var siblingPlan = new ContentGenerationPlan
+        {
+            ContentCategoryCode = sourcePlan.ContentCategoryCode,
+            PipelineRunId = sourcePlan.PipelineRunId,
+            Title = sourcePlan.Title,
+            Language = requestedLanguage,
+            RegionId = sourcePlan.RegionId,
+            ScheduledUtc = sourcePlan.ScheduledUtc,
+            Status = "Planned",
+            AstronomyContentOpportunityId = sourcePlan.AstronomyContentOpportunityId,
+            AstronomyEventIntelligenceId = siblingEvent?.Id ?? sourcePlan.AstronomyEventIntelligenceId,
+            AstronomyEventIntelligence = siblingEvent ?? sourcePlan.AstronomyEventIntelligence,
+            SourceExternalEventId = sourcePlan.SourceExternalEventId ?? sourceEvent?.ExternalEventId,
+            RequestedOutputTypesJson = sourcePlan.RequestedOutputTypesJson,
+            SourceEventObjectIdsJson = sourcePlan.SourceEventObjectIdsJson,
+            PlannedObjectNamesJson = sourcePlan.PlannedObjectNamesJson,
+            PlanStatus = "Planned",
+            PlannedFormat = sourcePlan.PlannedFormat,
+            PriorityScore = sourcePlan.PriorityScore,
+            PrimaryCelestialObjectCode = sourcePlan.PrimaryCelestialObjectCode,
+            PrimaryAstronomyEventTypeCode = sourcePlan.PrimaryAstronomyEventTypeCode,
+            HookStyleCode = sourcePlan.HookStyleCode,
+            NarrationStyleCode = sourcePlan.NarrationStyleCode,
+            ThumbnailStyleCode = sourcePlan.ThumbnailStyleCode,
+            GeneratedByAi = sourcePlan.GeneratedByAi,
+            ManualValidation = sourcePlan.ManualValidation,
+            Priority = sourcePlan.Priority,
+            PlanningReason = $"Created as {requestedLanguage} sibling for source plan {sourcePlan.Id:D}.",
+            AssetPlanJson = sourcePlan.AssetPlanJson,
+            AssetPlanStatus = "Planned"
+        };
+
+        db.ContentGenerationPlans.Add(siblingPlan);
+        await db.SaveChangesAsync(cancellationToken);
+        return siblingPlan;
+    }
+
+    private static AstronomyEventIntelligence CopyEventForLanguage(AstronomyEventIntelligence sourceEvent, string requestedLanguage)
+        => new()
+        {
+            EventCode = BuildSiblingEventCode(sourceEvent.EventCode, requestedLanguage),
+            ExternalEventId = sourceEvent.ExternalEventId,
+            Year = sourceEvent.Year,
+            Language = requestedLanguage,
+            VerificationStatus = sourceEvent.VerificationStatus,
+            AutoGenerateAllowed = sourceEvent.AutoGenerateAllowed,
+            ContentStrategy = sourceEvent.ContentStrategy,
+            EventType = sourceEvent.EventType,
+            Title = sourceEvent.Title,
+            Summary = sourceEvent.Summary,
+            Description = sourceEvent.Description,
+            StartUtc = sourceEvent.StartUtc,
+            PeakUtc = sourceEvent.PeakUtc,
+            EndUtc = sourceEvent.EndUtc,
+            RegionId = sourceEvent.RegionId,
+            LocationName = sourceEvent.LocationName,
+            TimeZone = sourceEvent.TimeZone,
+            RecommendedCategory = sourceEvent.RecommendedCategory,
+            Status = sourceEvent.Status,
+            SourcePipelineRunId = sourceEvent.SourcePipelineRunId,
+            ConfidenceScore = sourceEvent.ConfidenceScore,
+            RarityScore = sourceEvent.RarityScore,
+            VisibilityScore = sourceEvent.VisibilityScore,
+            AudienceInterestScore = sourceEvent.AudienceInterestScore,
+            TimingUrgencyScore = sourceEvent.TimingUrgencyScore,
+            ContentOpportunityScore = sourceEvent.ContentOpportunityScore,
+            RawDataJson = sourceEvent.RawDataJson,
+            RulesAppliedJson = sourceEvent.RulesAppliedJson,
+            MetadataJson = sourceEvent.MetadataJson
+        };
+
+    private static string BuildSiblingEventCode(string sourceEventCode, string requestedLanguage)
+        => string.IsNullOrWhiteSpace(sourceEventCode)
+            ? requestedLanguage
+            : $"{sourceEventCode}-{requestedLanguage}";
+
+    private static string NormalizeLanguage(string? language)
+        => string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
 
     private static SelectionResult SelectPlans(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, Guid? requestedPlanId, bool onlyHighPriority, int maxPlans, ContentPlanExecutionMode executionMode, bool recoveryMode, TimeSpan runningPlanRecoveryStaleAfter, bool allowCompletedPlanRerun, bool useProductionPipeline, bool exactPlanIdMode)
     {
@@ -884,4 +1049,16 @@ public sealed class ContentPlanBatchGenerationService(
     }
 
     private sealed record SelectionResult(IReadOnlyList<ContentGenerationPlan> SelectedPlans, IReadOnlyList<BatchGenerateFromPlansWarning> Warnings);
+
+    private sealed record LanguageMismatchPlanResolution(
+        string? RequestedPlanLanguage,
+        string? RequestedLanguage,
+        bool LanguageMismatchDetected,
+        bool SiblingPlanFound,
+        bool SiblingPlanCreated,
+        Guid? SelectedPlanId)
+    {
+        public static LanguageMismatchPlanResolution None(string? requestedLanguage)
+            => new(null, NormalizeLanguage(requestedLanguage), false, false, false, null);
+    }
 }

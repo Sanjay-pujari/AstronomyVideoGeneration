@@ -96,6 +96,47 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
+    public async Task GenerateFromPlansAsync_PlanIdLanguageMismatch_CreatesAndSelectsSiblingPlan()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db);
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "hi",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: true,
+            UseProductionPipeline: true,
+            PlanId: GeminidsPlanId), CancellationToken.None);
+
+        var sibling = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+            .SingleAsync(p => p.Language == "hi");
+
+        Assert.True(response.Success);
+        Assert.Equal(1, response.SelectedPlanCount);
+        Assert.Equal(GeminidsPlanId, response.RequestedPlanId);
+        Assert.Equal(sibling.Id, response.SelectedPlanId);
+        Assert.Equal("en", response.RequestedPlanLanguage);
+        Assert.Equal("hi", response.RequestedLanguage);
+        Assert.True(response.LanguageMismatchDetected);
+        Assert.False(response.SiblingPlanFound);
+        Assert.True(response.SiblingPlanCreated);
+        Assert.Equal("geminids-2026", sibling.SourceExternalEventId);
+        Assert.Equal("IN-RJ-UDAIPUR", sibling.RegionId);
+        Assert.Equal("[\"Short\",\"Long\"]", sibling.RequestedOutputTypesJson);
+        Assert.Equal("hi", sibling.AstronomyEventIntelligence?.Language);
+        Assert.Equal("geminids-2026", sibling.AstronomyEventIntelligence?.ExternalEventId);
+        Assert.Equal(sibling.Id, production.CapturedPlanId);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
     public async Task GenerateFromPlansAsync_ExactManualValidationTitle_DoesNotBypassAutoGenerateAllowed()
     {
         await using var db = CreateDb();
