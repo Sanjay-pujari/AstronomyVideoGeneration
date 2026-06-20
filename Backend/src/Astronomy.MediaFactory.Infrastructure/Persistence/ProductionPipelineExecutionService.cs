@@ -157,7 +157,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (12, "Generate Thumbnails", PhaseGenerateThumbnailsAsync),
         (13, "Generate Gallery", PhaseGenerateGalleryAsync),
         (14, "Scene Audio Sync V1", PhaseSceneAudioSyncAsync),
-        (15, "TTS Timeline V1", PhaseGenerateTtsTimelineV1Async),
+        (15, "Real TTS V2", PhaseGenerateTtsTimelineV1Async),
         (16, "Duration Calibration V1", PhaseDurationCalibrationV1Async),
         (17, "Motion Layer V1", PhaseMotionLayerV1Async),
         (18, "Cinematic Video Assembly V2", PhaseVideoAssemblyV1Async),
@@ -3682,161 +3682,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
 
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsTimelineV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
-    {
-        var planRoot = context.OutputRoot;
-        if (HasPhase15RealTtsV2SrtInputs(planRoot))
-            return await Phase15RealTtsV2Async(context, cancellationToken);
-
-        var ttsRoot = Path.Combine(planRoot, "tts");
-        var shortRoot = Path.Combine(ttsRoot, "short");
-        var longRoot = Path.Combine(ttsRoot, "long");
-        var validationRoot = context.ExecutionContext.ValidationRoot!;
-        Directory.CreateDirectory(shortRoot);
-        Directory.CreateDirectory(longRoot);
-        Directory.CreateDirectory(validationRoot);
-
-        var syncPath = Path.Combine(planRoot, "sync", "scene-audio-sync.json");
-        var narrationRoot = Path.Combine(planRoot, "narration");
-        var oldPaths = new[]
-        {
-            Path.Combine(planRoot, "question-engine", "scene-approval-v3", "scene-assets"),
-            Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
-            Path.Combine(planRoot, "scene-assets")
-        };
-        var inputPathsChecked = new[] { syncPath, Path.Combine(narrationRoot, "short"), Path.Combine(narrationRoot, "long") };
-        var missingAudioFiles = new List<string>();
-        var durationReadFailures = new List<string>();
-        var audioDiagnostics = new List<TtsAudioContentDiagnostics>();
-        var missingNarrationFiles = new List<string>();
-        var emptyNarrationFiles = new List<string>();
-        var ttsNarrationCleanupErrors = new List<string>();
-        var selectedNarrationFiles = new List<string>();
-        var errors = new List<string>();
-        if (!File.Exists(syncPath)) errors.Add($"scene-audio-sync.json missing: {NormalizePath(syncPath)}");
-        if (!Directory.Exists(narrationRoot)) errors.Add($"narration folder missing: {NormalizePath(narrationRoot)}");
-
-        var shortItems = new List<TtsTimelineItem>();
-        var longItems = new List<TtsTimelineItem>();
-        var sourceSyncVersion = "v1";
-        if (File.Exists(syncPath))
-        {
-            var root = JsonNode.Parse(await File.ReadAllTextAsync(syncPath, cancellationToken)) ?? new JsonObject();
-            sourceSyncVersion = GetString(root, "version") ?? "v1";
-            await ValidateTtsNarrationFilesCleanBeforeProviderAsync(root, "short", Path.Combine(narrationRoot, "short"), 5, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, ttsNarrationCleanupErrors, cancellationToken);
-            await ValidateTtsNarrationFilesCleanBeforeProviderAsync(root, "long", Path.Combine(narrationRoot, "long"), 9, selectedNarrationFiles, missingNarrationFiles, emptyNarrationFiles, ttsNarrationCleanupErrors, cancellationToken);
-            if (ttsNarrationCleanupErrors.Count == 0 && missingNarrationFiles.Count == 0 && emptyNarrationFiles.Count == 0)
-            {
-                await BuildTtsTimelineItemsAsync(context, root, "short", shortRoot, Path.Combine(narrationRoot, "short"), 5, shortItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, cancellationToken);
-                await BuildTtsTimelineItemsAsync(context, root, "long", longRoot, Path.Combine(narrationRoot, "long"), 9, longItems, missingAudioFiles, durationReadFailures, audioDiagnostics, selectedNarrationFiles, cancellationToken);
-            }
-        }
-
-        if (shortItems.Count != 5) errors.Add($"short audio count != 5; actual={shortItems.Count}");
-        if (longItems.Count != 9) errors.Add($"long audio count != 9; actual={longItems.Count}");
-        var shortDuplicateGroups = BuildDuplicateNarrationTextGroups(shortItems);
-        var longDuplicateGroups = BuildDuplicateNarrationTextGroups(longItems);
-        var duplicateNarrationTextGroups = shortDuplicateGroups.Concat(longDuplicateGroups).ToArray();
-        var duplicateNarrationTextDetected = duplicateNarrationTextGroups.Length > 0;
-        if (duplicateNarrationTextDetected) errors.Add("Duplicate narrationText detected within a format");
-        errors.AddRange(missingNarrationFiles.Select(p => $"Narration txt missing: {p}"));
-        errors.AddRange(emptyNarrationFiles.Select(p => $"Narration txt empty: {p}"));
-        errors.AddRange(ttsNarrationCleanupErrors);
-        errors.AddRange(shortItems.Concat(longItems).Where(i => string.IsNullOrWhiteSpace(i.NarrationText)).Select(i => $"Missing narrationText: {i.Format}:{i.SceneId}"));
-        errors.AddRange(shortItems.Concat(longItems).Where(i => i.DurationSec <= 0).Select(i => $"durationSec = 0: {i.Format}:{i.SceneId}"));
-        errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
-        errors.AddRange(durationReadFailures.Select(p => $"Duration read failed: {p}"));
-        errors.AddRange(audioDiagnostics.Where(d => !d.ValidationPassed).Select(d => $"Audio content validation failed: {d.Format}:{d.SceneId} {d.AudioPath} ({string.Join("; ", d.Errors)})"));
-        errors.AddRange(audioDiagnostics.Where(d => IsForbiddenPhase15TtsConfiguration(d)).Select(d => $"Forbidden Phase 15 TTS provider configuration: {d.Format}:{d.SceneId} provider={d.TtsProvider}, model={d.TtsModel}, voice={d.TtsVoice}"));
-        errors.AddRange(audioDiagnostics.Where(d => d.ProviderRequestTextLength > 0 && !d.RealProviderCalled).Select(d => $"Real TTS provider was not called: {d.Format}:{d.SceneId}"));
-        errors.AddRange(audioDiagnostics.Where(d => !d.RealProviderSucceeded).Select(d => $"Real TTS provider did not succeed: {d.Format}:{d.SceneId}"));
-        errors.AddRange(audioDiagnostics.Where(d => d.FallbackUsed).Select(d => $"TTS fallback was used: {d.Format}:{d.SceneId} {d.FallbackReason}"));
-
-        var timelinePath = Path.Combine(ttsRoot, "tts-timeline.json");
-        await File.WriteAllTextAsync(timelinePath, JsonSerializer.Serialize(new
-        {
-            version = "v1",
-            sourceSyncVersion,
-            @short = new { itemCount = shortItems.Count, items = shortItems },
-            @long = new { itemCount = longItems.Count, items = longItems }
-        }, JsonOptions), cancellationToken);
-        if (!File.Exists(timelinePath)) errors.Add($"tts-timeline.json missing: {NormalizePath(timelinePath)}");
-
-        var validationPassed = errors.Count == 0;
-        var diagnostics = new
-        {
-            inputPathsChecked = inputPathsChecked.Select(NormalizePath),
-            selectedSyncPath = NormalizePath(syncPath),
-            selectedNarrationDirectory = NormalizePath(narrationRoot),
-            selectedNarrationFiles = selectedNarrationFiles.Select(NormalizePath),
-            cleanupApplied = true,
-            cleanedNarrationFiles = selectedNarrationFiles.Select(NormalizePath),
-            subtitleFilesGenerated = File.Exists(Path.Combine(narrationRoot, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationRoot, "subtitles", "long.srt")),
-            shortSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "short.srt")),
-            longSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "long.srt")),
-            ttsNarrationCleanupErrors,
-            missingNarrationFiles,
-            emptyNarrationFiles,
-            narrationCharacterCount = shortItems.Concat(longItems).Sum(i => i.NarrationText?.Length ?? 0),
-            oldPathsChecked = oldPaths.Select(NormalizePath),
-            oldPathsIgnored = oldPaths.Select(NormalizePath),
-            oldPathUsed = false,
-            shortAudioCount = shortItems.Count,
-            longAudioCount = longItems.Count,
-            duplicateNarrationTextDetected,
-            duplicateNarrationTextGroups,
-            shortUniqueNarrationTextCount = CountUniqueNarrationText(shortItems),
-            longUniqueNarrationTextCount = CountUniqueNarrationText(longItems),
-            missingAudioFiles,
-            durationReadFailures,
-            configuredTtsProvider = ResolveConfiguredPhase15TtsProviderName(),
-            realProviderCalled = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderCalled),
-            realProviderSucceeded = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderSucceeded),
-            fallbackUsed = audioDiagnostics.Any(d => d.FallbackUsed),
-            fallbackReason = string.Join(" | ", audioDiagnostics.Select(d => d.FallbackReason).Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.OrdinalIgnoreCase)),
-            ttsProviderCalled = shortItems.Concat(longItems).All(i => i.TtsProviderCalled),
-            ttsProviderSucceeded = shortItems.Concat(longItems).All(i => i.TtsProviderSucceeded),
-            silentAudioCount = audioDiagnostics.Count(d => d.IsSilent),
-            audioDiagnostics,
-            validationPassed
-        };
-        var diagnosticsPath = Path.Combine(validationRoot, "phase-15-tts-diagnostics.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
-        var validationPath = Path.Combine(validationRoot, "phase-15-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
-        {
-            phaseNo = 15,
-            phaseName = "TTS Timeline V1",
-            status = validationPassed ? "Succeeded" : "Failed",
-            ttsTimelinePath = NormalizePath(timelinePath),
-            shortAudioCount = shortItems.Count,
-            longAudioCount = longItems.Count,
-            duplicateNarrationTextDetected,
-            duplicateNarrationTextGroups,
-            shortUniqueNarrationTextCount = CountUniqueNarrationText(shortItems),
-            longUniqueNarrationTextCount = CountUniqueNarrationText(longItems),
-            silentAudioCount = audioDiagnostics.Count(d => d.IsSilent),
-            realProviderCalled = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderCalled),
-            realProviderSucceeded = audioDiagnostics.Count > 0 && audioDiagnostics.All(d => d.RealProviderSucceeded),
-            fallbackUsed = audioDiagnostics.Any(d => d.FallbackUsed),
-            isSyntheticTone = audioDiagnostics.Any(d => d.IsSyntheticTone),
-            oldPathUsed = false,
-            validationPassed,
-            cleanupApplied = true,
-            cleanedNarrationFiles = selectedNarrationFiles.Select(NormalizePath),
-            subtitleFilesGenerated = File.Exists(Path.Combine(narrationRoot, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationRoot, "subtitles", "long.srt")),
-            shortSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "short.srt")),
-            longSrtPath = NormalizePath(Path.Combine(narrationRoot, "subtitles", "long.srt")),
-            errors
-        }, JsonOptions), cancellationToken);
-        if (!validationPassed) throw new InvalidOperationException("Phase 15 TTS Timeline V1 failed: " + string.Join(" | ", errors));
-        return [timelinePath, validationPath, diagnosticsPath, .. shortItems.Select(i => i.AudioPath), .. longItems.Select(i => i.AudioPath), .. audioDiagnostics.Select(d => d.RawResponsePath)];
-    }
+        => await Phase15RealTtsV2Async(context, cancellationToken);
 
     private static bool HasPhase15RealTtsV2SrtInputs(string planRoot)
         => File.Exists(ResolvePhase15SrtPath(planRoot, "en", "short"))
-           || File.Exists(ResolvePhase15SrtPath(planRoot, "en", "long"))
-           || File.Exists(ResolvePhase15SrtPath(planRoot, "hi", "short"))
-           || File.Exists(ResolvePhase15SrtPath(planRoot, "hi", "long"));
+           && File.Exists(ResolvePhase15SrtPath(planRoot, "en", "long"));
 
     private async Task<IReadOnlyList<string>> Phase15RealTtsV2Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
@@ -3847,12 +3697,15 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnostics = new List<object>();
         var errors = new List<string>();
 
+        var selectedShortSrt = ResolvePhase15SrtPath(planRoot, "en", "short");
+        var selectedLongSrt = ResolvePhase15SrtPath(planRoot, "en", "long");
+        if (!File.Exists(selectedShortSrt)) errors.Add($"short.srt missing: {NormalizePath(selectedShortSrt)}");
+        if (!File.Exists(selectedLongSrt)) errors.Add($"long.srt missing: {NormalizePath(selectedLongSrt)}");
+
         foreach (var language in new[] { "en", "hi" })
         foreach (var format in new[] { "short", "long" })
         {
             var inputSrtPath = ResolvePhase15SrtPath(planRoot, language, format);
-            if (language == "hi" && !File.Exists(inputSrtPath))
-                inputSrtPath = await CreateHindiPhase15AdaptationAsync(planRoot, format, cancellationToken);
             if (!File.Exists(inputSrtPath))
                 continue;
 
@@ -3904,9 +3757,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var validationPassed = errors.Count == 0 && diagnostics.Count > 0;
         var diagnosticsPath = Path.Combine(validationRoot, "phase-15-real-tts-v2-diagnostics.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-15-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
         outputs.Add(diagnosticsPath);
         outputs.Add(validationPath);
         if (!validationPassed) throw new InvalidOperationException("Phase 15 Real TTS V2 failed: " + string.Join(" | ", errors));
