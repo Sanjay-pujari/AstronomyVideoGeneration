@@ -3452,6 +3452,60 @@ public sealed partial class ProductionPipelineExecutionService(
                 group => RoundDuration(group.Sum(item => Math.Max(0, item.AudioDurationSec))),
                 StringComparer.OrdinalIgnoreCase);
 
+    private sealed record SceneDurationExpansionMatch(
+        string RenderSceneId,
+        string NormalizedRenderSceneId,
+        string? MatchedTtsSceneId,
+        string MatchMode,
+        double GroupedCueDurationSec,
+        double OriginalSceneDurationSec,
+        double ExpandedSceneDurationSec);
+
+    private static SceneDurationExpansionMatch MatchCueLevelSceneDuration(
+        IReadOnlyDictionary<string, double> cueLevelDurationsBySceneId,
+        string renderSceneId,
+        double originalSceneDurationSec)
+    {
+        var normalizedRenderSceneId = NormalizeSceneIdForDurationMatch(renderSceneId);
+        if (!string.IsNullOrWhiteSpace(normalizedRenderSceneId)
+            && cueLevelDurationsBySceneId.TryGetValue(normalizedRenderSceneId, out var exactCueDuration)
+            && exactCueDuration > 0)
+        {
+            return new SceneDurationExpansionMatch(
+                renderSceneId,
+                normalizedRenderSceneId,
+                normalizedRenderSceneId,
+                "Exact",
+                exactCueDuration,
+                originalSceneDurationSec,
+                exactCueDuration);
+        }
+
+        var numericPrefix = ResolveNormalizedSceneIdNumericPrefix(normalizedRenderSceneId);
+        if (!string.IsNullOrWhiteSpace(numericPrefix)
+            && cueLevelDurationsBySceneId.TryGetValue(numericPrefix, out var numericPrefixCueDuration)
+            && numericPrefixCueDuration > 0)
+        {
+            return new SceneDurationExpansionMatch(
+                renderSceneId,
+                normalizedRenderSceneId,
+                numericPrefix,
+                "NumericPrefix",
+                numericPrefixCueDuration,
+                originalSceneDurationSec,
+                numericPrefixCueDuration);
+        }
+
+        return new SceneDurationExpansionMatch(
+            renderSceneId,
+            normalizedRenderSceneId,
+            null,
+            "Missing",
+            0,
+            originalSceneDurationSec,
+            originalSceneDurationSec);
+    }
+
     private sealed record CueLevelSubtitleValidationResult(bool Passed, IReadOnlyList<double> DriftMs, double MaxCueDriftMs, double AverageCueDriftMs, int CueCount, string SubtitleSourcePath, string TimingSource, IReadOnlyList<object> CueLevelValidation);
 
     private static CueLevelSubtitleValidationResult ValidateCueLevelSubtitleSync(string planRoot, string format, string srtPath)
@@ -4470,6 +4524,12 @@ public sealed partial class ProductionPipelineExecutionService(
             return numericSceneId.ToString("000", CultureInfo.InvariantCulture) + match.Groups[2].Value;
 
         return sanitized;
+    }
+
+    private static string ResolveNormalizedSceneIdNumericPrefix(string? normalizedSceneId)
+    {
+        var match = Regex.Match(normalizedSceneId ?? string.Empty, @"^(\d{3})(?:\D|$)");
+        return match.Success ? match.Groups[1].Value : string.Empty;
     }
 
     private static bool? GetBool(JsonNode? node, string name)
@@ -6469,9 +6529,12 @@ public sealed partial class ProductionPipelineExecutionService(
             var durationPlanItem = durationPlanBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matchedDurationPlanItem)
                 ? matchedDurationPlanItem
                 : items.Count < durationPlanItems.Count ? durationPlanItems[items.Count] : null;
-            var normalizedSceneId = NormalizeSceneIdForDurationMatch(sceneId);
-            var calibratedSceneDuration = cueLevelDurationsBySceneId.TryGetValue(normalizedSceneId, out var cueLevelSceneDuration) && cueLevelSceneDuration > 0
-                ? cueLevelSceneDuration
+            var fallbackSceneDuration = durationPlanItem?.AudioDurationSec > 0
+                ? durationPlanItem.AudioDurationSec
+                : GetDouble(item, "audioDurationSec") ?? GetDouble(item, "sceneAudioDurationSec") ?? GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
+            var durationExpansionMatch = MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, sceneId, fallbackSceneDuration);
+            var calibratedSceneDuration = durationExpansionMatch.MatchMode is "Exact" or "NumericPrefix"
+                ? durationExpansionMatch.ExpandedSceneDurationSec
                 : durationPlanItem?.AudioDurationSec > 0
                     ? durationPlanItem.AudioDurationSec
                     : GetDouble(item, "audioDurationSec") ?? GetDouble(item, "sceneAudioDurationSec") ?? GetDouble(item, "sceneDurationSec", "durationSec") ?? 3.0;
@@ -6598,15 +6661,16 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return items.Select(item =>
         {
-            var normalizedSceneId = NormalizeSceneIdForDurationMatch(item.SceneId);
-            return cueLevelDurationsBySceneId.TryGetValue(normalizedSceneId, out var cueDuration) && cueDuration > 0
-                ? item with { SceneDurationSec = cueDuration }
+            var durationExpansionMatch = MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, item.SceneId, item.SceneDurationSec);
+            return durationExpansionMatch.MatchMode is "Exact" or "NumericPrefix"
+                ? item with { SceneDurationSec = durationExpansionMatch.ExpandedSceneDurationSec }
                 : item;
         }).ToArray();
     }
 
     private async Task RenderVideoAssemblyAsync(string planRoot, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
     {
+        var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
         var renderItems = OverrideRenderSceneDurationsFromTtsTimeline(planRoot, format, items);
         await WriteMotionDebugAsync(planRoot, renderItems, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -6624,9 +6688,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 var duration = Math.Max(0.5, item.SceneDurationSec);
                 var vf = BuildPhase18MotionFilter(item, i);
                 var totalFrames = Math.Max(15, (int)Math.Round(item.SceneDurationSec * 30.0));
+                var originalSceneDurationSec = i < items.Count ? items[i].SceneDurationSec : item.SceneDurationSec;
+                var durationExpansionMatch = MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, item.SceneId, originalSceneDurationSec);
                 perSceneFilters.Add(new
                 {
                     sceneId = item.SceneId,
+                    renderSceneId = durationExpansionMatch.RenderSceneId,
+                    normalizedRenderSceneId = durationExpansionMatch.NormalizedRenderSceneId,
+                    matchedTtsSceneId = durationExpansionMatch.MatchedTtsSceneId,
+                    matchMode = durationExpansionMatch.MatchMode,
+                    groupedCueDurationSec = durationExpansionMatch.GroupedCueDurationSec,
+                    originalSceneDurationSec = durationExpansionMatch.OriginalSceneDurationSec,
+                    expandedSceneDurationSec = durationExpansionMatch.ExpandedSceneDurationSec,
                     rendererVersion = "V3",
                     shimmerMitigationApplied = true,
                     zoompanFrameDriven = true,
@@ -6667,11 +6740,14 @@ public sealed partial class ProductionPipelineExecutionService(
             var narrationDuration = hasNarrationAudio ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
             if (hasNarrationAudio)
             {
-                var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
                 var perSceneDeltas = renderItems
-                    .Select(scene => cueLevelDurationsBySceneId.TryGetValue(NormalizeSceneIdForDurationMatch(scene.SceneId), out var cueDuration)
-                        ? Math.Abs(scene.SceneDurationSec - cueDuration)
-                        : double.PositiveInfinity)
+                    .Select(scene =>
+                    {
+                        var durationExpansionMatch = MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, scene.SceneId, scene.SceneDurationSec);
+                        return durationExpansionMatch.MatchMode is "Exact" or "NumericPrefix"
+                            ? Math.Abs(scene.SceneDurationSec - durationExpansionMatch.GroupedCueDurationSec)
+                            : double.PositiveInfinity;
+                    })
                     .ToArray();
                 if (perSceneDeltas.Any(delta => delta > 0.1))
                     throw new InvalidOperationException($"Phase 18 scene-level audio/video sync failed: perSceneAudioVideoDurationDeltaSec max={perSceneDeltas.Max():0.###}s.");
