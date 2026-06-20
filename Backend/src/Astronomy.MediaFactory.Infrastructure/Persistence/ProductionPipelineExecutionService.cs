@@ -6654,6 +6654,44 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
+    private void OutputPhase18DurationValidationDiagnostics(
+        string format,
+        IReadOnlyDictionary<string, double> cueLevelDurationsBySceneId,
+        IReadOnlyList<VideoAssemblyItem> renderItems,
+        double audioDurationTotal)
+    {
+        var renderScenes = renderItems
+            .Select(item => new
+            {
+                renderSceneId = item.SceneId,
+                renderSceneDurationSec = RoundDuration(item.SceneDurationSec)
+            })
+            .ToArray();
+        var groupedTtsScenes = cueLevelDurationsBySceneId
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new
+            {
+                sceneId = pair.Key,
+                groupedCueDurationBySceneId = RoundDuration(pair.Value)
+            })
+            .ToArray();
+        var validationSceneDurationTotal = RoundDuration(groupedTtsScenes.Sum(scene => scene.groupedCueDurationBySceneId));
+        var renderSceneDurationTotal = RoundDuration(renderScenes.Sum(scene => scene.renderSceneDurationSec));
+        var diagnostics = new
+        {
+            phase = "Phase18DurationValidationDiagnostics",
+            format,
+            renderScenes,
+            groupedTtsScenes,
+            validationSceneDurationTotal,
+            renderSceneDurationTotal,
+            audioDurationTotal = RoundDuration(audioDurationTotal)
+        };
+        var diagnosticsJson = JsonSerializer.Serialize(diagnostics, JsonOptions);
+        logger.LogWarning("PHASE_18_DURATION_VALIDATION_DIAGNOSTICS {Diagnostics}", diagnosticsJson);
+        Console.Error.WriteLine(diagnosticsJson);
+    }
+
     private static IReadOnlyList<VideoAssemblyItem> OverrideRenderSceneDurationsFromTtsTimeline(string planRoot, string format, IReadOnlyList<VideoAssemblyItem> items)
     {
         var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
@@ -6740,6 +6778,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var narrationDuration = hasNarrationAudio ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
             if (hasNarrationAudio)
             {
+                OutputPhase18DurationValidationDiagnostics(format, cueLevelDurationsBySceneId, renderItems, narrationDuration);
                 var perSceneDeltas = renderItems
                     .Select(scene =>
                     {
