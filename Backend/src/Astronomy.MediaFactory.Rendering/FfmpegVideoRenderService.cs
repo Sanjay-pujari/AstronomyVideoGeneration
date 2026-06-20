@@ -203,7 +203,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         var productionPreset = ResolveFinalEncodingPreset(manifest);
-        var finalFilter = BuildFinalOutputFilter(productionPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
+        var finalFilter = BuildFinalOutputFilter(productionPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop, manifest.SubtitlePath);
         var finalArguments = $"-y -i \"{NormalizePath(combinedPath)}\" -vf \"{finalFilter}\" {BuildVideoEncodeArguments(productionPreset)} -r {(IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate))} -c:a aac -b:a {productionPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(manifest.OutputPath)}\"";
         var inputDurationSeconds = await ProbeMediaDurationSecondsAsync(combinedPath, cancellationToken);
         var timeoutSeconds = CalculateEffectiveFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest), GetConfiguredFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest)), inputDurationSeconds);
@@ -396,7 +396,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         var finalPreset = ResolveFinalEncodingPreset(manifest);
-        var finalFilter = BuildFinalOutputFilter(finalPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
+        var finalFilter = BuildFinalOutputFilter(finalPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop, manifest.SubtitlePath);
         var finalArguments = $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -vf \"{finalFilter}\" {BuildVideoEncodeArguments(finalPreset)} -r {(IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate))} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
@@ -815,10 +815,19 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private static string BuildExactOutputFilter(int outputWidth, int outputHeight, string scaleFlags = "bicubic")
         => $"scale={outputWidth}:{outputHeight}:flags={scaleFlags}:force_original_aspect_ratio=increase,crop={outputWidth}:{outputHeight},pad={outputWidth}:{outputHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1";
 
-    private static string BuildFinalOutputFilter(VideoEncodingPreset preset, bool cropToFill)
-        => cropToFill
+    private static string BuildFinalOutputFilter(VideoEncodingPreset preset, bool cropToFill, string? subtitlePath = null)
+    {
+        var baseFilter = cropToFill
             ? BuildExactOutputFilter(preset.Width, preset.Height, preset.ScaleFlags)
             : $"scale={preset.Width}:{preset.Height}:flags={preset.ScaleFlags}:force_original_aspect_ratio=decrease,pad={preset.Width}:{preset.Height}:(ow-iw)/2:(oh-ih)/2,setsar=1";
+
+        return string.IsNullOrWhiteSpace(subtitlePath)
+            ? baseFilter
+            : $"{baseFilter},subtitles='{EscapeSubtitleFilterPath(subtitlePath)}'";
+    }
+
+    private static string EscapeSubtitleFilterPath(string path)
+        => NormalizePath(path).Replace("\\", "/", StringComparison.Ordinal).Replace(":" , "\\:", StringComparison.Ordinal).Replace("'", "'\\\\''", StringComparison.Ordinal);
 
     private static int GetShortSafeFps()
         => 30;

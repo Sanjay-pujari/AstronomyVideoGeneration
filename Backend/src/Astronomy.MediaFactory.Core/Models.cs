@@ -367,6 +367,7 @@ public sealed class RenderManifest
     public string ScriptBody { get; set; } = "";
     public string AudioPath { get; set; } = "";
     public string OutputPath { get; set; } = "";
+    public string? SubtitlePath { get; set; }
     public string? IntroVisualPath { get; set; }
     public string? OutroVisualPath { get; set; }
     public int? OutputWidth { get; set; }
