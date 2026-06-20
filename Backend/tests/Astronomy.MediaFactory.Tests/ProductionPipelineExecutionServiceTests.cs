@@ -91,6 +91,61 @@ public sealed class ProductionPipelineExecutionServiceTests
         }
     }
 
+
+    [Fact]
+    public void Phase16SceneDurationPlan_GroupsCueLevelTtsDurationsByScene()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase16-scene-duration-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+            Directory.CreateDirectory(metadataRoot);
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = new[]
+                {
+                    new { sceneId = "001-hook", recommendedMotion = "push-in" },
+                    new { sceneId = "002-cause", recommendedMotion = "pan" }
+                }
+            }));
+
+            var ttsRoot = JsonNode.Parse(JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001", cueIndex = 1, audioPath = "tts/short/001-001.mp3", audioDurationSec = 5.352 },
+                        new { format = "short", sceneId = "001", cueIndex = 2, audioPath = "tts/short/001-002.mp3", audioDurationSec = 1.25 },
+                        new { format = "short", sceneId = "002-cause", cueIndex = 3, audioPath = "tts/short/002-001.mp3", audioDurationSec = 7.0 }
+                    }
+                }
+            }))!;
+            var missingDurationItems = new List<string>();
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildSceneDurationPlanItemsAsync", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            var task = (Task)method!.Invoke(null, [ttsRoot, "short", Path.Combine(metadataRoot, "scene-timeline-metadata.json"), 2, 12.0, 0.0, 0.5, missingDurationItems, CancellationToken.None])!;
+            task.GetAwaiter().GetResult();
+            var result = ((System.Collections.IEnumerable)task.GetType().GetProperty("Result")!.GetValue(task)!).Cast<object>().ToArray();
+
+            Assert.Empty(missingDurationItems);
+            Assert.Equal(2, result.Length);
+            Assert.Equal(6.602, ReadDouble(result[0], "AudioDurationSec"), 3);
+            Assert.Equal(6.602, ReadDouble(result[0], "SceneDurationSec"), 3);
+            Assert.Equal(7.0, ReadDouble(result[1], "AudioDurationSec"), 3);
+            Assert.Equal(7.0, ReadDouble(result[1], "SceneDurationSec"), 3);
+            Assert.Equal(13.602, result.Sum(item => ReadDouble(item, "SceneDurationSec")), 3);
+            Assert.Equal(13.602, result.Sum(item => ReadDouble(item, "AudioDurationSec")), 3);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+
+        static double ReadDouble(object item, string propertyName)
+            => (double)item.GetType().GetProperty(propertyName)!.GetValue(item)!;
+    }
+
     [Fact]
     public void Phase18VisualDurations_GroupCueLevelTtsTimelineDurationsByScene()
     {

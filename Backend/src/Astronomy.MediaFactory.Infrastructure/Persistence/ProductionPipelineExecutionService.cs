@@ -4481,22 +4481,53 @@ public sealed partial class ProductionPipelineExecutionService(
         return [planPath, validationPath, diagnosticsPath];
     }
 
-    private async Task<IReadOnlyList<SceneDurationPlanItem>> BuildSceneDurationPlanItemsAsync(JsonNode ttsRoot, string format, string metadataPath, int expectedCount, double maximumSceneDurationSec, double transitionPaddingSec, double minimumSceneDurationSec, List<string> missingDurationItems, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<SceneDurationPlanItem>> BuildSceneDurationPlanItemsAsync(JsonNode ttsRoot, string format, string metadataPath, int expectedCount, double maximumSceneDurationSec, double transitionPaddingSec, double minimumSceneDurationSec, List<string> missingDurationItems, CancellationToken cancellationToken)
     {
+        await Task.CompletedTask;
         var ttsItems = ttsRoot[format]?["items"]?.AsArray() ?? [];
         var metadataScenes = File.Exists(metadataPath) ? ReadJsonArray(metadataPath, "scenes") : new JsonArray();
         var metadataBySceneId = metadataScenes.Select(n => new { Node = n, SceneId = NormalizeSceneIdForOrder(GetString(n, "sceneId") ?? string.Empty) }).Where(x => !string.IsNullOrWhiteSpace(x.SceneId)).GroupBy(x => x.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
+        var cueGroups = ttsItems
+            .Where(ttsItem => string.IsNullOrWhiteSpace(GetString(ttsItem, "format")) || string.Equals(GetString(ttsItem, "format"), format, StringComparison.OrdinalIgnoreCase))
+            .Select((ttsItem, index) => new
+            {
+                SceneId = GetString(ttsItem, "sceneId") ?? $"{index + 1:000}",
+                AudioPath = GetString(ttsItem, "audioPath") ?? string.Empty,
+                DurationSec = Math.Max(0, GetDouble(ttsItem, "audioDurationSec", "durationSec") ?? 0),
+                FirstCueIndex = GetInt(ttsItem, "cueIndex") ?? index + 1
+            })
+            .GroupBy(item => NormalizeSceneIdForDurationMatch(item.SceneId), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                NormalizedSceneId = group.Key,
+                SceneId = group.OrderBy(item => item.FirstCueIndex).First().SceneId,
+                AudioPath = group.OrderBy(item => item.FirstCueIndex).First().AudioPath,
+                DurationSec = RoundDuration(group.Sum(item => item.DurationSec)),
+                FirstCueIndex = group.Min(item => item.FirstCueIndex)
+            })
+            .OrderBy(group => group.FirstCueIndex)
+            .ToArray();
+        var cueGroupsBySceneId = cueGroups.ToDictionary(group => group.NormalizedSceneId, StringComparer.OrdinalIgnoreCase);
+
+        var planSceneIds = metadataScenes
+            .Select((scene, index) => GetString(scene, "sceneId") ?? $"{index + 1:000}")
+            .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
+            .Take(expectedCount)
+            .ToList();
+        if (planSceneIds.Count == 0) planSceneIds.AddRange(cueGroups.Select(group => group.SceneId).Take(expectedCount));
+
         var items = new List<SceneDurationPlanItem>();
-        foreach (var ttsItem in ttsItems.Take(expectedCount))
+        foreach (var sceneId in planSceneIds)
         {
-            var sceneId = GetString(ttsItem, "sceneId") ?? $"{items.Count + 1:000}";
-            var audioPath = GetString(ttsItem, "audioPath") ?? string.Empty;
-            var timelineDuration = GetDouble(ttsItem, "durationSec") ?? GetDouble(ttsItem, "audioDurationSec") ?? 0;
-            var audioDuration = File.Exists(audioPath) ? await ProbeAudioDurationSecondsAsync(audioPath, cancellationToken) : timelineDuration;
+            var normalizedSceneId = NormalizeSceneIdForDurationMatch(sceneId);
+            var cueGroup = cueGroupsBySceneId.TryGetValue(normalizedSceneId, out var exactGroup)
+                ? exactGroup
+                : cueGroups.FirstOrDefault(group => string.Equals(ResolveNormalizedSceneIdNumericPrefix(group.NormalizedSceneId), ResolveNormalizedSceneIdNumericPrefix(normalizedSceneId), StringComparison.OrdinalIgnoreCase));
+            var audioDuration = cueGroup?.DurationSec ?? 0;
             if (audioDuration <= 0) missingDurationItems.Add($"{format}:{sceneId}");
             var metadata = metadataBySceneId.TryGetValue(NormalizeSceneIdForOrder(sceneId), out var matched) ? matched : metadataScenes.ElementAtOrDefault(items.Count);
             var sceneDuration = audioDuration > 0 ? audioDuration : minimumSceneDurationSec;
-            items.Add(new SceneDurationPlanItem(format, sceneId, audioPath, RoundDuration(audioDuration), RoundDuration(sceneDuration), RoundDuration(transitionPaddingSec), "cut", ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion"))));
+            items.Add(new SceneDurationPlanItem(format, sceneId, cueGroup?.AudioPath ?? string.Empty, RoundDuration(audioDuration), RoundDuration(sceneDuration), RoundDuration(transitionPaddingSec), "cut", ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion"))));
         }
         return items;
     }
