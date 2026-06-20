@@ -3417,7 +3417,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private sealed record CanonicalTtsTimelineItem(string Format, string SceneId, string AudioPath, string NarrationText, double AudioDurationSec);
+    private sealed record CanonicalTtsTimelineItem(string Format, string SceneId, int CueIndex, string AudioPath, string CueText, double AudioDurationSec);
 
     private static IReadOnlyList<CanonicalTtsTimelineItem> ReadCanonicalTtsTimelineItems(string planRoot, string format)
     {
@@ -3425,17 +3425,21 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(path)) return [];
         var root = JsonNode.Parse(File.ReadAllText(path));
         return (root?[format]?["items"]?.AsArray() ?? [])
+            .Where(item => string.IsNullOrWhiteSpace(GetString(item, "format")) || string.Equals(GetString(item, "format"), format, StringComparison.OrdinalIgnoreCase))
             .Select((item, index) =>
             {
                 var audioPath = GetString(item, "audioPath") ?? string.Empty;
                 if (!string.IsNullOrWhiteSpace(audioPath) && !Path.IsPathRooted(audioPath)) audioPath = Path.Combine(planRoot, audioPath);
+                var cueIndex = GetInt(item, "cueIndex") ?? index + 1;
                 return new CanonicalTtsTimelineItem(
                     format,
                     GetString(item, "sceneId") ?? $"{index + 1:000}",
+                    cueIndex,
                     audioPath,
-                    GetString(item, "narrationText") ?? string.Empty,
-                    GetDouble(item, "durationSec", "audioDurationSec") ?? 0);
+                    GetString(item, "cueText", "narrationText") ?? string.Empty,
+                    GetDouble(item, "audioDurationSec", "durationSec") ?? 0);
             })
+            .OrderBy(item => item.CueIndex)
             .ToArray();
     }
 
@@ -3457,7 +3461,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var item = timelineItems[i];
             var duration = Math.Max(0, item.AudioDurationSec);
-            expectedCues.Add((i + 1, NormalizeNarrationWhitespace(item.NarrationText), item.AudioPath, duration, start, start + duration));
+            expectedCues.Add((i + 1, NormalizeNarrationWhitespace(item.CueText), item.AudioPath, duration, start, start + duration));
             start += duration;
         }
 
@@ -3951,9 +3955,12 @@ public sealed partial class ProductionPipelineExecutionService(
                     {
                         format,
                         sceneId = block.SceneId,
+                        cueIndex = index + 1,
                         audioPath = NormalizePath(sceneAudio[index]),
                         narrationText = block.Text,
+                        cueText = block.Text,
                         durationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
+                        audioDurationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
                         srtStartSec = Math.Round(block.Start.TotalSeconds, 3, MidpointRounding.AwayFromZero),
                         srtEndSec = Math.Round(block.End.TotalSeconds, 3, MidpointRounding.AwayFromZero),
                         srtDurationSec = Math.Round((block.End - block.Start).TotalSeconds, 3, MidpointRounding.AwayFromZero),
@@ -4361,7 +4368,7 @@ public sealed partial class ProductionPipelineExecutionService(
             @long = new { sceneCount = longItems.Count, totalAudioDurationSec = longAudioTotal, totalVideoDurationSec = longVideoTotal, items = longItems }
         }, JsonOptions), cancellationToken);
         if (!File.Exists(planPath)) errors.Add($"scene-duration-plan.json missing: {NormalizePath(planPath)}");
-        RegenerateNarrationSubtitlesFromSceneDurationPlan(planRoot);
+        RegenerateNarrationSubtitlesFromTtsTimeline(planRoot);
 
         var validationPassed = errors.Count == 0;
         var diagnostics = new
@@ -4464,17 +4471,31 @@ public sealed partial class ProductionPipelineExecutionService(
     private static double RoundDuration(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
     private sealed record SceneDurationPlanItem(string Format, string SceneId, string AudioPath, double AudioDurationSec, double SceneDurationSec, double TransitionDurationSec, string RecommendedTransition, string RecommendedMotion);
 
-    private static void RegenerateNarrationSubtitlesFromSceneDurationPlan(string planRoot)
+    private static void RegenerateNarrationSubtitlesFromTtsTimeline(string planRoot)
     {
         var subtitlesRoot = Path.Combine(planRoot, "narration", "subtitles");
-        var shortRoot = Path.Combine(planRoot, "narration", "short");
-        var longRoot = Path.Combine(planRoot, "narration", "long");
-        if (!Directory.Exists(shortRoot) || !Directory.Exists(longRoot)) return;
+        var ttsTimelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        if (!File.Exists(ttsTimelinePath)) return;
         Directory.CreateDirectory(subtitlesRoot);
-        var shortFiles = Directory.EnumerateFiles(shortRoot, "*.txt").OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
-        var longFiles = Directory.EnumerateFiles(longRoot, "*.txt").OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
-        File.WriteAllText(Path.Combine(subtitlesRoot, "short.srt"), BuildNarrationSrtFromCleanFiles(planRoot, "short", shortFiles, []).Srt);
-        File.WriteAllText(Path.Combine(subtitlesRoot, "long.srt"), BuildNarrationSrtFromCleanFiles(planRoot, "long", longFiles, []).Srt);
+        File.WriteAllText(Path.Combine(subtitlesRoot, "short.srt"), BuildNarrationSrtFromTtsTimeline(planRoot, "short"));
+        File.WriteAllText(Path.Combine(subtitlesRoot, "long.srt"), BuildNarrationSrtFromTtsTimeline(planRoot, "long"));
+    }
+
+    private static string BuildNarrationSrtFromTtsTimeline(string planRoot, string format)
+    {
+        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
+        var blocks = new List<Phase15SrtBlock>();
+        var cueStart = TimeSpan.Zero;
+        for (var i = 0; i < timelineItems.Count; i++)
+        {
+            var item = timelineItems[i];
+            var duration = TimeSpan.FromSeconds(Math.Max(0, item.AudioDurationSec));
+            var cueEnd = cueStart + duration;
+            blocks.Add(new Phase15SrtBlock((i + 1).ToString(CultureInfo.InvariantCulture), cueStart, cueEnd, item.CueText));
+            cueStart = cueEnd;
+        }
+
+        return BuildSrt(blocks);
     }
 
 

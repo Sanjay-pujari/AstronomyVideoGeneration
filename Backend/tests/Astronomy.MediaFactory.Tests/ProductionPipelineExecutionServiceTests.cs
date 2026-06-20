@@ -49,6 +49,49 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase16SubtitleRegeneration_UsesCueLevelTtsTimelineDurations()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase16-tts-srt-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts"));
+            var timelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+            File.WriteAllText(timelinePath, JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
+                        new { format = "short", sceneId = "002", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 }
+                    }
+                },
+                @long = new
+                {
+                    items = new[]
+                    {
+                        new { format = "long", sceneId = "001", cueIndex = 1, cueText = "Long first cue.", audioDurationSec = 2.0 }
+                    }
+                }
+            }));
+
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("RegenerateNarrationSubtitlesFromTtsTimeline", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            method!.Invoke(null, [planRoot]);
+
+            var shortSrt = File.ReadAllText(Path.Combine(planRoot, "narration", "subtitles", "short.srt"));
+            Assert.Contains("00:00:00,000 --> 00:00:05,352", shortSrt);
+            Assert.Contains("00:00:05,352 --> 00:00:06,602", shortSrt);
+            Assert.Contains("First cue.", shortSrt);
+            Assert.Contains("Second cue.", shortSrt);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+    [Fact]
     public void Phase14SubtitleSegmentation_SplitsNarrationIntoReadableCues()
     {
         const string narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";
