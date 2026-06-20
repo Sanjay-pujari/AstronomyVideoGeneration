@@ -1929,7 +1929,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 longSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
                 srtSource = "CleanNarrationFiles",
                 srtSourceMode = "SceneNarrationFilesOnly",
-                srtTimingSource = "SceneDurationPlanFromTtsTimeline",
+                srtTimingSource = "DraftSceneDurationPlan",
                 sceneDurationPlanPath = narrationOutput.SceneDurationPlanResolution.SceneDurationPlanPath,
                 sceneDurationPlanFound = narrationOutput.SceneDurationPlanResolution.SceneDurationPlanFound,
                 shortSceneDurationPlanItemCount = narrationOutput.SceneDurationPlanResolution.ShortSceneDurationPlanItemCount,
@@ -2044,7 +2044,7 @@ public sealed partial class ProductionPipelineExecutionService(
             eventProductionIntelligenceUsedForSrt = false,
             videoAssemblyIntelligenceUsedForSrt = false,
             documentaryNarrationComposerUsedForSrt = false,
-            srtTimingSource = "SceneDurationPlanFromTtsTimeline",
+            srtTimingSource = "DraftSceneDurationPlan",
             srtGeneratedOnce = srtGenerationCallCount == 1,
             srtGenerationCallCount,
             srtValidationCallCount,
@@ -2908,11 +2908,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
     {
-        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
-        if (timelineItems.Count == 0)
-            throw new InvalidOperationException($"SRT timing source must be tts/tts-timeline.json for {format}; no TTS timeline items were found.");
-        if (timelineItems.Count < narrationFiles.Count)
-            throw new InvalidOperationException($"TTS timeline has fewer {format} scene items than narration files.");
+        var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
+        if (durationPlanItems.Count == 0)
+            durationPlanItems = BuildFallbackPhase14SceneDurationPlanItems(planRoot, format, items, narrationFiles);
+        if (durationPlanItems.Count < narrationFiles.Count)
+            throw new InvalidOperationException($"Scene duration plan has fewer {format} scene items than narration files.");
 
         var blocks = new List<SubtitleCueBlock>();
         var perScene = new List<object>();
@@ -2921,31 +2921,29 @@ public sealed partial class ProductionPipelineExecutionService(
         var subtitleStart = 0.0;
         for (var i = 0; i < narrationFiles.Count; i++)
         {
-            var timelineItem = timelineItems[i];
-            var audioDuration = Math.Max(0, timelineItem.AudioDurationSec);
+            var durationPlanItem = durationPlanItems[i];
+            var audioDuration = Math.Max(0, durationPlanItem.AudioDurationSec);
             if (audioDuration <= 0)
-                throw new InvalidOperationException($"TTS timeline item has no usable MP3 duration for {format}:{timelineItem.SceneId}: {NormalizePath(timelineItem.AudioPath)}");
-            if (!File.Exists(timelineItem.AudioPath))
-                throw new InvalidOperationException($"TTS audio file missing for canonical subtitle timeline {format}:{timelineItem.SceneId}: {NormalizePath(timelineItem.AudioPath)}");
+                throw new InvalidOperationException($"Scene duration plan item has no usable draft duration for {format}:{durationPlanItem.SceneId}.");
 
             var narrationFile = narrationFiles[i];
             ValidateSubtitleCueNarrationSource(planRoot, format, narrationFile, nameof(BuildNarrationSrtFromCleanFiles));
             var text = File.ReadAllText(narrationFile).Trim();
             var sceneIdOrigin = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var normalizedFileSceneId = NormalizeSceneIdForOrder(sceneIdOrigin);
-            var normalizedTimelineSceneId = NormalizeSceneIdForOrder(timelineItem.SceneId);
-            if (!string.Equals(normalizedFileSceneId, normalizedTimelineSceneId, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"SRT narration file scene id does not match TTS timeline scene id for {format}: file={sceneIdOrigin}, timeline={timelineItem.SceneId}, normalizedFile={normalizedFileSceneId}, normalizedTimeline={normalizedTimelineSceneId}");
+            var normalizedPlanSceneId = NormalizeSceneIdForOrder(durationPlanItem.SceneId);
+            if (!string.Equals(normalizedFileSceneId, normalizedPlanSceneId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"SRT narration file scene id does not match scene duration plan scene id for {format}: file={sceneIdOrigin}, plan={durationPlanItem.SceneId}, normalizedFile={normalizedFileSceneId}, normalizedPlan={normalizedPlanSceneId}");
 
             var cueStart = subtitleStart;
             var cueEnd = subtitleStart + audioDuration;
             var cueText = NormalizeNarrationWhitespace(text);
-            blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText), timelineItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "TtsTimelineNarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromCanonicalTtsTimeline", DateTimeOffset.UtcNow));
+            blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
             cueValidation.Add(new
             {
                 cueIndex = number - 1,
                 cueText,
-                ttsAudioPath = NormalizePath(timelineItem.AudioPath),
+                sceneDurationPlanAudioPath = NormalizePath(durationPlanItem.AudioPath),
                 audioDurationSec = RoundDuration(audioDuration),
                 expectedStartSec = RoundDuration(cueStart),
                 expectedEndSec = RoundDuration(cueEnd),
@@ -2955,17 +2953,17 @@ public sealed partial class ProductionPipelineExecutionService(
             });
             perScene.Add(new
             {
-                sceneId = timelineItem.SceneId,
-                ttsAudioPath = NormalizePath(timelineItem.AudioPath),
+                sceneId = durationPlanItem.SceneId,
+                sceneDurationPlanAudioPath = NormalizePath(durationPlanItem.AudioPath),
                 audioDurationSec = RoundDuration(audioDuration),
                 subtitleStart = RoundDuration(cueStart),
                 subtitleEnd = RoundDuration(cueEnd),
-                subtitleTextSource = "TtsTimelineNarrationFile",
+                subtitleTextSource = "NarrationFile",
                 subtitleTextOrigin = NormalizePath(narrationFile),
                 sceneIdOrigin,
-                normalizedSceneId = normalizedTimelineSceneId,
+                normalizedSceneId = normalizedPlanSceneId,
                 normalizedSceneIdMatching = true,
-                generatorComponent = "ProductionPipelineExecutionService.BuildNarrationSrtFromCanonicalTtsTimeline"
+                generatorComponent = "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan"
             });
             subtitleStart = cueEnd;
         }
@@ -2989,22 +2987,23 @@ public sealed partial class ProductionPipelineExecutionService(
             foreach (var line in block.Lines) srt.AppendLine(line);
             srt.AppendLine();
         }
-        var audioTotal = RoundDuration(timelineItems.Take(narrationFiles.Count).Sum(x => x.AudioDurationSec));
+        var audioTotal = RoundDuration(durationPlanItems.Take(narrationFiles.Count).Sum(x => x.AudioDurationSec));
         var srtTotal = blocks.Count == 0 ? 0 : RoundDuration(blocks[^1].End.TotalSeconds);
         if (Math.Abs(srtTotal - audioTotal) > 0.1)
-            throw new InvalidOperationException($"{format}.srt duration differs from canonical TTS audio timeline by >0.1 sec; srt={srtTotal}, audio={audioTotal}");
+            throw new InvalidOperationException($"{format}.srt duration differs from scene duration plan by >0.1 sec; srt={srtTotal}, audio={audioTotal}");
+        var audioDriven = durationPlanItems.Take(narrationFiles.Count).Any(item => !string.IsNullOrWhiteSpace(item.AudioPath));
         var timingDiagnostics = new
         {
-            srtTimingSource = "CanonicalTtsTimelineActualMp3Durations",
-            ttsDurationsMeasuredFromMp3 = true,
-            audioDrivenDurationCalibration = true,
+            srtTimingSource = audioDriven ? "SceneDurationPlanActualMp3Durations" : "DraftSceneDurationPlan",
+            ttsDurationsMeasuredFromMp3 = audioDriven,
+            audioDrivenDurationCalibration = audioDriven,
             normalizedSceneIdMatching = true,
-            audioDurationSource = "TtsTimelineActualMp3Duration",
-            subtitleTimingRecalculated = true,
+            audioDurationSource = audioDriven ? "ActualMp3" : "DraftNarrationWordCountOrVisualTimeline",
+            subtitleTimingRecalculated = audioDriven,
             audioDurationTotal = RoundDuration(audioTotal),
             srtDurationTotal = srtTotal,
             srtMatchesAudioDuration = Math.Abs(srtTotal - audioTotal) <= 0.1,
-            audioSubtitleSyncPassed = true,
+            audioSubtitleSyncPassed = audioDriven,
             maxCueDriftMs = 0.0,
             cueLevelValidation = cueValidation,
             perSceneTiming = perScene
@@ -3040,7 +3039,7 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleCueSources,
             nonNarrationSubtitleCues.Length,
             nonNarrationSubtitleCues,
-            "CanonicalTtsTimelineNarrationFilesOnly",
+            "SceneNarrationFilesOnly",
             true,
             false,
             false,
@@ -3359,7 +3358,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
         if (timelineItems.Count == 0)
-            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "CanonicalTtsTimelineActualMp3Durations", []);
+            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "Phase16SceneDurationPlanActualMp3Durations", []);
 
         var actualCues = ParseSrtCues(srtPath);
         var expectedCues = new List<(int CueIndex, string CueText, string TtsAudioPath, double AudioDurationSec, double Start, double End)>();
@@ -3407,7 +3406,7 @@ public sealed partial class ProductionPipelineExecutionService(
             averageDrift,
             actualCues.Count,
             NormalizePath(srtPath),
-            "CanonicalTtsTimelineActualMp3Durations",
+            "Phase16SceneDurationPlanActualMp3Durations",
             details);
     }
 
@@ -6096,7 +6095,7 @@ public sealed partial class ProductionPipelineExecutionService(
             finalVideoHasMotion,
             ffmpegCommandPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath,
             enableSubtitles,
-            srtTimingSource = "SceneDurationPlanFromTtsTimeline",
+            srtTimingSource = "Phase16SceneDurationPlanActualMp3Durations",
             ttsDurationsMeasuredFromMp3 = true,
             shortAudioDurationTotal = RoundDuration(shortPlanAudioDuration),
             shortVideoDurationTotal = RoundDuration(shortPlanVideoDuration),
@@ -6231,7 +6230,7 @@ public sealed partial class ProductionPipelineExecutionService(
             missingAudioFiles,
             videoRendered,
             enableSubtitles,
-            srtTimingSource = "SceneDurationPlanFromTtsTimeline",
+            srtTimingSource = "Phase16SceneDurationPlanActualMp3Durations",
             ttsDurationsMeasuredFromMp3 = true,
             shortAudioDurationTotal = RoundDuration(shortPlanAudioDuration),
             shortVideoDurationTotal = RoundDuration(shortPlanVideoDuration),
