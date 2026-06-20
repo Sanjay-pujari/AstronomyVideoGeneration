@@ -133,6 +133,62 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void Phase18VisualAssembly_KeepsSceneStructureWhileExpandingSceneDurations()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase18-scene-structure-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts"));
+            File.WriteAllText(Path.Combine(planRoot, "tts", "tts-timeline.json"), JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001", cueIndex = 1, cueText = "First cue.", audioDurationSec = 5.352 },
+                        new { format = "short", sceneId = "001", cueIndex = 2, cueText = "Second cue.", audioDurationSec = 1.25 },
+                        new { format = "short", sceneId = "002", cueIndex = 3, cueText = "Third cue.", audioDurationSec = 7.0 }
+                    }
+                }
+            }));
+
+            var motionRoot = JsonNode.Parse(JsonSerializer.Serialize(new
+            {
+                motionVersion = "V2",
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { sceneId = "001", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "001.png"), durationSec = 2.0 },
+                        new { sceneId = "002", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "002.png"), durationSec = 3.0 }
+                    }
+                }
+            }))!;
+            var ttsRoot = JsonNode.Parse(File.ReadAllText(Path.Combine(planRoot, "tts", "tts-timeline.json")))!;
+            var missingSceneImages = new List<string>();
+            var missingAudioFiles = new List<string>();
+            var oldPathUsageReasons = new List<string>();
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("ReadVideoAssemblyItems", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var items = ((System.Collections.IEnumerable)method!.Invoke(null, [planRoot, motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons])!)
+                .Cast<object>()
+                .ToArray();
+
+            Assert.Equal(2, items.Length);
+            Assert.Equal(6.602, ReadSceneDuration(items[0]), 3);
+            Assert.Equal(7.0, ReadSceneDuration(items[1]), 3);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+
+        static double ReadSceneDuration(object item)
+            => (double)item.GetType().GetProperty("SceneDurationSec")!.GetValue(item)!;
+    }
+
+    [Fact]
     public void Phase14SubtitleSegmentation_SplitsNarrationIntoReadableCues()
     {
         const string narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";

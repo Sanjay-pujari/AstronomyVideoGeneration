@@ -6086,6 +6086,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var longExpectedVideoDuration = longAudioDuration + (cinematicOutroEnabled ? cinematicOutroDurationSec : 0);
         var shortDurationDeltaAgainstExpected = Math.Abs(shortVideoDuration - shortExpectedVideoDuration);
         var longDurationDeltaAgainstExpected = Math.Abs(longVideoDuration - longExpectedVideoDuration);
+        var shortNarrationVideoDuration = Math.Max(0, shortVideoDuration - (cinematicOutroEnabled ? cinematicOutroDurationSec : 0));
+        var longNarrationVideoDuration = Math.Max(0, longVideoDuration - (cinematicOutroEnabled ? cinematicOutroDurationSec : 0));
+        var shortNarrationVideoAudioDelta = Math.Abs(shortNarrationVideoDuration - shortAudioDuration);
+        var longNarrationVideoAudioDelta = Math.Abs(longNarrationVideoDuration - longAudioDuration);
         var shortDurationValidationPassed = shortDurationDeltaAgainstExpected <= 0.1;
         var longDurationValidationPassed = longDurationDeltaAgainstExpected <= 0.1;
         var perSceneAudioVideoDurationDeltaSec = Math.Max(Math.Abs(shortPlanAudioDuration - shortPlanVideoDuration), Math.Abs(longPlanAudioDuration - longPlanVideoDuration));
@@ -6175,11 +6179,15 @@ public sealed partial class ProductionPipelineExecutionService(
             fadeToBlackEnabled,
             fadeToBlackDurationSec,
             shortNarrationAudioDurationSec = RoundDuration(shortAudioDuration),
+            shortNarrationVideoDurationSec = RoundDuration(shortNarrationVideoDuration),
+            shortNarrationVideoAudioDeltaSec = RoundDuration(shortNarrationVideoAudioDelta),
             shortExpectedVideoDurationSec = RoundDuration(shortExpectedVideoDuration),
             shortActualVideoDurationSec = RoundDuration(shortVideoDuration),
             shortDurationDeltaAgainstExpectedSec = RoundDuration(shortDurationDeltaAgainstExpected),
             shortDurationValidationPassed,
             longNarrationAudioDurationSec = RoundDuration(longAudioDuration),
+            longNarrationVideoDurationSec = RoundDuration(longNarrationVideoDuration),
+            longNarrationVideoAudioDeltaSec = RoundDuration(longNarrationVideoAudioDelta),
             longExpectedVideoDurationSec = RoundDuration(longExpectedVideoDuration),
             longActualVideoDurationSec = RoundDuration(longVideoDuration),
             longDurationDeltaAgainstExpectedSec = RoundDuration(longDurationDeltaAgainstExpected),
@@ -6212,6 +6220,9 @@ public sealed partial class ProductionPipelineExecutionService(
             duckingApplied = duckingSucceeded,
             finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) },
             finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
+            narrationAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
+            narrationVideoDurationSec = new { @short = RoundDuration(shortNarrationVideoDuration), @long = RoundDuration(longNarrationVideoDuration) },
+            narrationVideoAudioDeltaSec = new { @short = RoundDuration(shortNarrationVideoAudioDelta), @long = RoundDuration(longNarrationVideoAudioDelta) },
             finalVideoDurationSec = new { @short = RoundDuration(shortVideoDuration), @long = RoundDuration(longVideoDuration) },
             audioVideoDurationDeltaSec = RoundDuration(audioVideoDurationDeltaSec),
             perSceneAudioVideoDurationDeltaSec = RoundDuration(perSceneAudioVideoDurationDeltaSec),
@@ -6334,6 +6345,11 @@ public sealed partial class ProductionPipelineExecutionService(
             longHasAudioStream,
             shortAudioDurationSec = RoundDuration(shortAudioDuration),
             longAudioDurationSec = RoundDuration(longAudioDuration),
+            shortNarrationVideoDurationSec = RoundDuration(shortNarrationVideoDuration),
+            longNarrationVideoDurationSec = RoundDuration(longNarrationVideoDuration),
+            narrationAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
+            narrationVideoDurationSec = new { @short = RoundDuration(shortNarrationVideoDuration), @long = RoundDuration(longNarrationVideoDuration) },
+            narrationVideoAudioDeltaSec = new { @short = RoundDuration(shortNarrationVideoAudioDelta), @long = RoundDuration(longNarrationVideoAudioDelta) },
             shortVideoDurationSec = RoundDuration(shortVideoDuration),
             longVideoDurationSec = RoundDuration(longVideoDuration),
             finalMixedAudioDurationSec = new { @short = RoundDuration(shortAudioDuration), @long = RoundDuration(longAudioDuration) },
