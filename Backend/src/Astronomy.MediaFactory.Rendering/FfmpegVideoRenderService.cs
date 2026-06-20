@@ -443,8 +443,12 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var finalFilter = BuildFinalOutputFilter(finalPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
         var hasBackgroundMusic = !string.IsNullOrWhiteSpace(_options.BackgroundMusicPath) && File.Exists(_options.BackgroundMusicPath);
         var finalFps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
+        var finalDurationText = combinedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        var finalAudioFilter = hasBackgroundMusic
+            ? BuildFinalAudioFilter(combinedDurationSeconds)
+            : string.Empty;
         var finalArguments = hasBackgroundMusic
-            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -stream_loop -1 -i \"{NormalizePath(_options.BackgroundMusicPath!)}\" -filter_complex \"[0:v]{finalFilter}[vout];[2:a]volume=0.20[music];[1:a][music]amix=inputs=2:duration=longest:normalize=0[aout]\" -map \"[vout]\" -map \"[aout]\" -t {combinedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} {BuildVideoEncodeArguments(finalPreset)} -r {finalFps} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\""
+            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -stream_loop -1 -i \"{NormalizePath(_options.BackgroundMusicPath!)}\" -filter_complex \"[0:v]{finalFilter}[vout];{finalAudioFilter}\" -map \"[vout]\" -map \"[aout]\" -t {finalDurationText} {BuildVideoEncodeArguments(finalPreset)} -r {finalFps} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\""
             : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -vf \"{finalFilter}\" {BuildVideoEncodeArguments(finalPreset)} -r {finalFps} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
@@ -965,6 +969,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         => cropToFill
             ? BuildExactOutputFilter(preset.Width, preset.Height, preset.ScaleFlags)
             : $"scale={preset.Width}:{preset.Height}:flags={preset.ScaleFlags}:force_original_aspect_ratio=decrease,pad={preset.Width}:{preset.Height}:(ow-iw)/2:(oh-ih)/2,setsar=1";
+
+    private static string BuildFinalAudioFilter(double finalDurationSeconds)
+    {
+        var fadeOutStartSeconds = Math.Max(0d, finalDurationSeconds - 1d);
+        var fadeOutStart = fadeOutStartSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+        return $"[2:a]volume=0.20,afade=t=out:st={fadeOutStart}:d=1[music];[1:a][music]amix=inputs=2:duration=longest:normalize=0[aout]";
+    }
 
     private static int GetShortSafeFps()
         => 30;
