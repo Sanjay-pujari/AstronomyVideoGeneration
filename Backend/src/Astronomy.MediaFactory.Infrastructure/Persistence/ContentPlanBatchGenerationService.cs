@@ -463,18 +463,28 @@ public sealed class ContentPlanBatchGenerationService(
             return;
         }
 
+        var siblingEventCode = BuildSiblingEventCode(sourceEvent.EventCode, requestedLanguage);
         var reusableRequestedLanguageEvent = await db.AstronomyEventIntelligences
             .Include(e => e.Objects)
-            .Where(e => e.Language == requestedLanguage
-                && e.RegionId == sourceEvent.RegionId
-                && e.ExternalEventId == sourceEvent.ExternalEventId
-                && e.Objects.Any())
-            .OrderByDescending(e => e.Objects.Count)
+            .Where(e => e.EventCode == siblingEventCode
+                || (e.Language == requestedLanguage
+                    && e.RegionId == sourceEvent.RegionId
+                    && e.ExternalEventId == sourceEvent.ExternalEventId
+                    && e.Objects.Any()))
+            .OrderByDescending(e => e.EventCode == siblingEventCode)
+            .ThenByDescending(e => e.Objects.Count)
             .FirstOrDefaultAsync(cancellationToken);
 
         var siblingEvent = reusableRequestedLanguageEvent ?? CopyEventForLanguage(sourceEvent, requestedLanguage);
         if (reusableRequestedLanguageEvent is null)
+        {
             db.AstronomyEventIntelligences.Add(siblingEvent);
+        }
+        else if (reusableRequestedLanguageEvent.Objects.Count == 0)
+        {
+            foreach (var sourceObject in sourceEvent.Objects)
+                reusableRequestedLanguageEvent.Objects.Add(CopyEventObject(sourceObject));
+        }
 
         targetPlan.AstronomyEventIntelligence = siblingEvent;
         targetPlan.AstronomyEventIntelligenceId = siblingEvent.Id;
