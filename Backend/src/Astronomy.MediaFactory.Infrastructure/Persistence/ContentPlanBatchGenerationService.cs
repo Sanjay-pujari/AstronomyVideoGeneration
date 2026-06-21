@@ -448,6 +448,44 @@ public sealed class ContentPlanBatchGenerationService(
 
     private async Task EnsurePlanIntelligenceObjectsFromSourceAsync(ContentGenerationPlan targetPlan, string requestedLanguage, CancellationToken cancellationToken, ContentGenerationPlan? knownSourcePlan = null)
     {
+        try
+        {
+            await EnsurePlanIntelligenceObjectsFromSourceCoreAsync(targetPlan, requestedLanguage, cancellationToken, knownSourcePlan);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            logger.LogWarning(ex, "Concurrency conflict while linking content plan {PlanId} to {Language} astronomy intelligence; reloading the plan and retrying once.", targetPlan.Id, requestedLanguage);
+            await RetryEnsurePlanIntelligenceObjectsFromSourceAsync(targetPlan.Id, requestedLanguage, knownSourcePlan?.Id, cancellationToken);
+        }
+    }
+
+    private async Task RetryEnsurePlanIntelligenceObjectsFromSourceAsync(Guid targetPlanId, string requestedLanguage, Guid? knownSourcePlanId, CancellationToken cancellationToken)
+    {
+        db.ChangeTracker.Clear();
+
+        var reloadedTargetPlan = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
+            .FirstOrDefaultAsync(p => p.Id == targetPlanId, cancellationToken);
+
+        if (reloadedTargetPlan is null)
+        {
+            logger.LogWarning("Skipping astronomy intelligence linkage because content plan {PlanId} no longer exists after a concurrency conflict.", targetPlanId);
+            return;
+        }
+
+        var reloadedSourcePlan = knownSourcePlanId.HasValue
+            ? await db.ContentGenerationPlans
+                .Include(p => p.AstronomyEventIntelligence)
+                    .ThenInclude(e => e!.Objects)
+                .FirstOrDefaultAsync(p => p.Id == knownSourcePlanId.Value, cancellationToken)
+            : null;
+
+        await EnsurePlanIntelligenceObjectsFromSourceCoreAsync(reloadedTargetPlan, requestedLanguage, cancellationToken, reloadedSourcePlan);
+    }
+
+    private async Task EnsurePlanIntelligenceObjectsFromSourceCoreAsync(ContentGenerationPlan targetPlan, string requestedLanguage, CancellationToken cancellationToken, ContentGenerationPlan? knownSourcePlan = null)
+    {
         var targetEvent = targetPlan.AstronomyEventIntelligence;
         if (targetEvent?.Objects.Count > 0)
         {
@@ -491,6 +529,7 @@ public sealed class ContentPlanBatchGenerationService(
         targetPlan.SourceExternalEventId = targetPlan.SourceExternalEventId ?? sourcePlan?.SourceExternalEventId ?? sourceEvent.ExternalEventId;
         targetPlan.PlannedObjectNamesJson = targetPlan.PlannedObjectNamesJson ?? sourcePlan?.PlannedObjectNamesJson;
         targetPlan.PrimaryCelestialObjectCode = targetPlan.PrimaryCelestialObjectCode ?? sourcePlan?.PrimaryCelestialObjectCode;
+        targetPlan.Touch();
 
         await db.SaveChangesAsync(cancellationToken);
         LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, targetPlan, sourceEvent, siblingEvent);
