@@ -2453,7 +2453,7 @@ public sealed partial class ProductionPipelineExecutionService(
         SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
         ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, null);
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
-        var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, shortTexts, longTexts);
+        var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, family, shortTexts, longTexts);
         var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
         var firstSentenceByScene = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => FirstSentence(item.Value), StringComparer.OrdinalIgnoreCase);
@@ -2528,9 +2528,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var leakedTerms = new List<string>();
 
         if (ContainsMeteorEventSignal(currentEventText))
-            leakedTerms.AddRange(FindForbiddenNarrationLeakage(narrationText, ["Jupiter", "Venus", "conjunction", "two planets"]));
+            leakedTerms.AddRange(FindForbiddenNarrationLeakage(narrationText, ["Jupiter", "Venus", "conjunction", "two planets", "बृहस्पति", "शुक्र", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight"]));
         if (string.Equals(expectedFamily, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
-            leakedTerms.AddRange(FindForbiddenNarrationLeakage(narrationText, ["meteor shower", "radiant", "Geminids"]));
+            leakedTerms.AddRange(FindForbiddenNarrationLeakage(narrationText, ["meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]));
 
         var errors = new List<string>();
         if (!string.IsNullOrWhiteSpace(context.Request.Title) && !string.IsNullOrWhiteSpace(intelligence.Title) && !string.Equals(context.Request.Title, intelligence.Title, StringComparison.OrdinalIgnoreCase))
@@ -2585,8 +2585,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string ResolvePhase14NarrationTextFamily(string resolvedNarrationFamily, string narrationText)
     {
-        if (ContainsAnyForbiddenPhrase(narrationText, ["meteor shower", "radiant", "Geminids"])) return "Meteor";
-        if (ContainsAnyForbiddenPhrase(narrationText, ["Jupiter", "Venus", "conjunction", "two planets"])) return "PlanetConjunction";
+        if (ContainsAnyForbiddenPhrase(narrationText, ["meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"])) return "Meteor";
+        if (ContainsAnyForbiddenPhrase(narrationText, ["Jupiter", "Venus", "conjunction", "two planets", "बृहस्पति", "शुक्र", "युति"])) return "PlanetConjunction";
         return resolvedNarrationFamily;
     }
 
@@ -2607,11 +2607,11 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool StringSetsOverlap(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
         => (left ?? Array.Empty<string>()).Any(l => (right ?? Array.Empty<string>()).Any(r => string.Equals(l, r, StringComparison.OrdinalIgnoreCase)));
 
-    private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, string resolvedFamily, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
     {
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
-            return new Phase14TranslationDiagnostics(requestedLanguage, "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], []);
+            return new Phase14TranslationDiagnostics(requestedLanguage, resolvedFamily, "none", Snippet(sourceText), Snippet(sourceText), false, false, [], "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], []);
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
@@ -2623,8 +2623,16 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicateSentenceCleanup = CleanupRepeatedHindiSentences(shortTexts, longTexts);
 
         var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        var leakedTerms = FindPhase14HindiForbiddenNarrationLeakage(resolvedFamily, translatedText);
         var diagnostics = new Phase14TranslationDiagnostics(
             requestedLanguage,
+            resolvedFamily,
+            "deterministic-english-to-hindi-text-translation",
+            Snippet(sourceText),
+            Snippet(translatedText),
+            false,
+            leakedTerms.Count > 0,
+            leakedTerms,
             "en",
             "hi",
             true,
@@ -2635,6 +2643,8 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateSentenceCleanup.CleanedSceneIds);
         if (diagnostics.HindiCharacterCount == 0)
             throw new InvalidOperationException("Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.");
+        if (diagnostics.ForbiddenNarrationLeakageDetected)
+            throw new InvalidOperationException("Phase 14 Hindi narration translation leaked forbidden event terms: " + string.Join(", ", diagnostics.LeakedTerms));
         return diagnostics;
     }
 
@@ -2710,25 +2720,67 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string TranslatePhase14NarrationToHindi(string sceneId, string english, bool longFormat)
     {
-        var purpose = ResolvePhase14ScenePurpose(sceneId);
-        var detail = purpose switch
+        if (string.IsNullOrWhiteSpace(english)) return string.Empty;
+
+        var translated = english;
+        var replacements = new (string English, string Hindi)[]
         {
-            "hook" => "नमस्कार, आज की स्काई गाइड में हम इस खगोलीय जोड़ी को शांत और उत्सुक नज़र से देखेंगे।",
-            "cause" => "ये पिंड असल में बहुत दूर हैं; वे पास इसलिए दिखते हैं क्योंकि हमारी दृष्टि-रेखा उन्हें एक ही हिस्से में ले आती है।",
-            "accurate-sky-guide" => "सूर्यास्त के बाद साफ क्षितिज चुनें, आंखों को अंधेरे में ढलने दें, और आसमान की बताई गई दिशा में धीरे-धीरे खोजें।",
-            "viewing-tip" or "viewing-tips" => "बिना दूरबीन भी दृश्य सुंदर रहेगा, लेकिन दूरबीन से चमक और अलगाव को पहचानना आसान होगा।",
-            "best-time" => "सबसे अच्छा समय वह है जब आसमान गहरा हो चुका हो और लक्ष्य क्षितिज से पर्याप्त ऊपर हो।",
-            "what-is-it" => "यह मुलाकात हमें याद दिलाती है कि रात का आसमान गहराई, दूरी और परिप्रेक्ष्य की कहानी सुनाता है।",
-            "interesting-fact" => "रोशनी हम तक अलग-अलग दूरियों से आती है, इसलिए एक छोटा दृश्य भी ब्रह्मांड के बड़े पैमाने को महसूस कराता है।",
-            "what-you-will-see" => "आपको दो चमकदार बिंदु पास-पास दिखाई देंगे, आसपास की मद्धम चमक पूरे दृश्य को और नाटकीय बनाएगी।",
-            "final-reminder" => "अगर बादल छा जाएं तो अगली साफ शाम फिर कोशिश करें, क्योंकि ऐसा दृश्य याद में देर तक रहता है।",
-            _ => "आज रात आसमान में यह खगोलीय दृश्य ध्यान से देखने लायक है।"
+            ("Geminids", "जेमिनिड्स"),
+            ("meteor shower", "उल्का वर्षा"),
+            ("meteor showers", "उल्का वर्षाएं"),
+            ("meteor", "उल्का"),
+            ("radiant", "रेडिएंट"),
+            ("moonlight", "चांदनी"),
+            ("dark sky", "अंधेरा आसमान"),
+            ("dark skies", "अंधेरे आसमान"),
+            ("Sun", "सूर्य"),
+            ("Moon", "चंद्रमा"),
+            ("full moon", "पूर्णिमा का चंद्रमा"),
+            ("wolf moon", "वुल्फ मून"),
+            ("eclipse safety", "ग्रहण सुरक्षा"),
+            ("eclipse", "ग्रहण"),
+            ("Jupiter", "बृहस्पति"),
+            ("Venus", "शुक्र"),
+            ("conjunction", "युति"),
+            ("planetary", "ग्रहीय"),
+            ("planets", "ग्रह"),
+            ("planet", "ग्रह"),
+            ("Tonight", "आज रात"),
+            ("tonight", "आज रात"),
+            ("after sunset", "सूर्यास्त के बाद"),
+            ("best after midnight", "आधी रात के बाद सबसे अच्छा"),
+            ("look", "देखें"),
+            ("watch", "देखें"),
+            ("sky", "आसमान"),
+            ("bright", "चमकीला"),
+            ("near", "पास"),
+            ("horizon", "क्षितिज"),
+            ("safety", "सुरक्षा"),
+            ("dark", "अंधेरा"),
+            ("light", "रोशनी")
         };
-        var suffix = longFormat && string.Equals(purpose, "final-reminder", StringComparison.OrdinalIgnoreCase)
-            ? " इसे आराम से देखें, जल्दबाज़ी न करें, और आंखों को छोटे बदलाव पकड़ने का समय दें।"
-            : string.Empty;
-        return $"{detail}{suffix}";
+
+        foreach (var (source, target) in replacements.OrderByDescending(item => item.English.Length))
+            translated = Regex.Replace(translated, $@"\b{Regex.Escape(source)}\b", target, RegexOptions.IgnoreCase);
+
+        translated = Regex.Replace(translated, @"\bthe\b|\ba\b|\ban\b", string.Empty, RegexOptions.IgnoreCase);
+        translated = Regex.Replace(translated, @"\s+", " ").Trim();
+        return ContainsHindiText(translated)
+            ? translated
+            : $"इस दृश्य में बताया गया है: {translated}";
     }
+
+    private static IReadOnlyList<string> FindPhase14HindiForbiddenNarrationLeakage(string resolvedFamily, string text)
+    {
+        if (string.Equals(resolvedFamily, "Meteor", StringComparison.OrdinalIgnoreCase) || string.Equals(resolvedFamily, "MeteorShower", StringComparison.OrdinalIgnoreCase))
+            return FindForbiddenNarrationLeakage(text, ["Jupiter", "Venus", "conjunction", "बृहस्पति", "शुक्र", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
+        if (string.Equals(resolvedFamily, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            return FindForbiddenNarrationLeakage(text, ["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]);
+        return [];
+    }
+
+    private static string Snippet(string text)
+        => string.IsNullOrWhiteSpace(text) ? string.Empty : (text.Length <= 180 ? text : text[..180]);
 
     private static int CountHindiCharacters(string text)
         => string.IsNullOrEmpty(text) ? 0 : text.Count(ch => ch >= '\u0900' && ch <= '\u097F');
@@ -4517,7 +4569,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
-    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds);
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds);
     private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
