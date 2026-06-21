@@ -844,6 +844,35 @@ First cue.
     }
 
     [Fact]
+    public void Phase14EventConsistencyGuard_FailsMeteorNarrationWithPlanetConjunctionLeakage()
+    {
+        var context = CreateContext("MeteorShower", ["ShortVideo", "LongVideo"], "Geminids Meteor Shower");
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase14EventConsistency", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Jupiter and Venus form a conjunction tonight."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "These two planets appear close together, not like a meteor shower."
+        };
+        var firstSentenceByScene = shortTexts
+            .Select(kv => new KeyValuePair<string, string>($"short:{kv.Key}", kv.Value))
+            .Concat(longTexts.Select(kv => new KeyValuePair<string, string>($"long:{kv.Key}", kv.Value)))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
+        var exception = Assert.Throws<TargetInvocationException>(() => method!.Invoke(null, [context, "Meteor", shortTexts, longTexts, firstSentenceByScene]));
+
+        var inner = Assert.IsAssignableFrom<InvalidOperationException>(exception.InnerException);
+        Assert.Contains("Phase 14 event-consistency validation failed before TTS", inner.Message);
+        Assert.Contains("forbidden narration leakage detected", inner.Message);
+        Assert.Contains("Jupiter", inner.Message);
+        Assert.Contains("Venus", inner.Message);
+        Assert.Contains("conjunction", inner.Message);
+        Assert.Contains("two planets", inner.Message);
+    }
+
+    [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
         var context = CreateContext("PlanetPairing", ["ShortVideo", "Thumbnail"]);
@@ -909,7 +938,7 @@ First cue.
         var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase10SceneAssetCoverage", BindingFlags.NonPublic | BindingFlags.Static);
         var exception = Assert.Throws<TargetInvocationException>(() => method!.Invoke(null, [root]));
 
-        var inner = Assert.IsType<InvalidOperationException>(exception.InnerException);
+        var inner = Assert.IsAssignableFrom<InvalidOperationException>(exception.InnerException);
         Assert.Contains("long scene asset validation expected 6 final PNGs but found 5", inner.Message);
         Assert.Contains("scene-003-final.png", inner.Message);
     }
