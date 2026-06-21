@@ -2006,7 +2006,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
             longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
-            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, shortItems, longItems, documentaryNarration, cancellationToken);
+            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, cancellationToken);
             var documentaryNarrationV2DiagnosticsPath = await WritePhase14DocumentaryNarrationV2DiagnosticsAsync(planRoot, documentaryNarration, cancellationToken);
             selectedShortNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "short");
             selectedLongNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "long");
@@ -2061,6 +2061,13 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 phaseNo = 14,
                 phaseName = "Scene Audio Sync V1",
+                requestedLanguage = ResolvePipelineLanguage(context.Request.Language),
+                selectedNarrationLanguage = ResolvePipelineLanguage(context.Request.Language),
+                selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, ResolvePipelineLanguage(context.Request.Language))),
+                selectedSrtPath = new { @short = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), @long = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")) },
+                selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", ResolvePipelineLanguage(context.Request.Language))),
+                selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", ResolvePipelineLanguage(context.Request.Language))),
+                languageScopedArtifactsUsed = true,
                 status = errors.Count == 0 ? "Succeeded" : "Failed",
                 sceneAssetsVersion = "V3.1",
                 narrationVersion = EventStoryComposer.Version,
@@ -2074,9 +2081,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 narrationManifestPath = NormalizePath(narrationOutput.ManifestPath),
                 cleanupApplied = true,
                 cleanedNarrationFiles = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath),
-                subtitleFilesGenerated = File.Exists(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")) && File.Exists(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
-                shortSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")),
-                longSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
+                subtitleFilesGenerated = File.Exists(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")) && File.Exists(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")),
+                shortSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")),
+                longSrtPath = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")),
                 srtSource = "CleanNarrationFiles",
                 srtSourceMode = "SceneNarrationFilesOnly",
                 srtTimingSource = "DraftSceneDurationPlan",
@@ -2093,9 +2100,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 staleSrtDetected = false,
                 nonNarrationSubtitleCueCount = 0,
                 nonNarrationSubtitleCues = Array.Empty<object>(),
-                duplicateSubtitleBlockCount = CountExistingDuplicateSrtBlocks(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")) + CountExistingDuplicateSrtBlocks(Path.Combine(narrationOutput.Root, "subtitles", "long.srt")),
-                duplicateSubtitleBlockIds = ExistingDuplicateSrtBlockIds(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")).Concat(ExistingDuplicateSrtBlockIds(Path.Combine(narrationOutput.Root, "subtitles", "long.srt"))).ToArray(),
-                duplicateSubtitleTexts = ExistingDuplicateSrtTexts(Path.Combine(narrationOutput.Root, "subtitles", "short.srt")).Concat(ExistingDuplicateSrtTexts(Path.Combine(narrationOutput.Root, "subtitles", "long.srt"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                duplicateSubtitleBlockCount = CountExistingDuplicateSrtBlocks(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")) + CountExistingDuplicateSrtBlocks(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")),
+                duplicateSubtitleBlockIds = ExistingDuplicateSrtBlockIds(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")).Concat(ExistingDuplicateSrtBlockIds(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt"))).ToArray(),
+                duplicateSubtitleTexts = ExistingDuplicateSrtTexts(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")).Concat(ExistingDuplicateSrtTexts(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 duplicateSubtitleSourceScenes = Array.Empty<string>(),
                 duplicateSubtitleSourceFiles = Array.Empty<string>(),
                 srtMatchesNarrationFiles = true,
@@ -2123,25 +2130,26 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, cancellationToken);
             throw;
         }
     }
 
 
-    private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, Phase14DocumentaryNarration documentaryNarration, CancellationToken cancellationToken)
+    private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, string language, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, Phase14DocumentaryNarration documentaryNarration, CancellationToken cancellationToken)
     {
         var narrationRoot = Path.Combine(planRoot, "narration");
-        var shortRoot = Path.Combine(narrationRoot, "short");
-        var longRoot = Path.Combine(narrationRoot, "long");
-        var subtitlesRoot = Path.Combine(narrationRoot, "subtitles");
+        var selectedNarrationRoot = Path.Combine(narrationRoot, language);
+        var shortRoot = Path.Combine(selectedNarrationRoot, "short");
+        var longRoot = Path.Combine(selectedNarrationRoot, "long");
+        var subtitlesRoot = Path.Combine(narrationRoot, "subtitles", language);
         Directory.CreateDirectory(shortRoot);
         Directory.CreateDirectory(longRoot);
         Directory.CreateDirectory(subtitlesRoot);
@@ -2182,6 +2190,13 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new
         {
             version = "v1",
+            requestedLanguage = language,
+            selectedNarrationLanguage = language,
+            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, language)),
+            selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", language)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", language)),
+            languageScopedArtifactsUsed = true,
             longNarrationVersion = "V3",
             cleanupApplied = true,
             cleanedNarrationFiles = cleanedNarrationFiles.Select(NormalizePath),
@@ -2436,8 +2451,8 @@ public sealed partial class ProductionPipelineExecutionService(
             diagnostics.ExpansionApplied ? "Story-level narration sections expanded to one scene-specific narration per scene asset." : "Scene count did not exceed story section count.",
             ["ColdOpen", "Hook", "Context", "MainStory", "ViewingGuide", "EmotionalClosing"],
             scenePurposeBySceneId,
-            allTexts.Select(item => NormalizePath(Path.Combine(context.OutputRoot, "narration", item.format, $"{SanitizeFileName(item.Key)}.txt"))).ToArray(),
-            [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", "long.srt"))],
+            allTexts.Select(item => NormalizePath(Path.Combine(context.OutputRoot, "narration", ResolvePipelineLanguage(context.Request.Language), item.format, $"{SanitizeFileName(item.Key)}.txt"))).ToArray(),
+            [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt"))],
             composerTrace);
         var storyArc = BuildPhase14StoryArc();
         return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, "Discovery/BBC-style documentary astronomy narration", storyArc, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics);
@@ -3584,9 +3599,9 @@ public sealed partial class ProductionPipelineExecutionService(
         double FinalDurationSec,
         string DurationSource);
 
-    private static IReadOnlyList<CanonicalTtsTimelineItem> ReadCanonicalTtsTimelineItems(string planRoot, string format)
+    private static IReadOnlyList<CanonicalTtsTimelineItem> ReadCanonicalTtsTimelineItems(string planRoot, string format, string language = "en")
     {
-        var path = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var path = ResolveLanguageScopedTtsTimelinePath(planRoot, language);
         if (!File.Exists(path)) return [];
         var root = JsonNode.Parse(File.ReadAllText(path));
         return ReadCanonicalTtsTimelineItems(root, format, planRoot);
@@ -3640,8 +3655,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private static double SumCueLevelTtsTimelineDurations(string ttsTimelinePath, string format)
         => File.Exists(ttsTimelinePath) ? RoundDuration(ReadCanonicalTtsTimelineItems(JsonNode.Parse(File.ReadAllText(ttsTimelinePath)), format).Sum(item => Math.Max(0, item.AudioDurationSec))) : 0;
 
-    private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format)
-        => ReadCanonicalTtsTimelineItems(planRoot, format)
+    private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format, string language = "en")
+        => ReadCanonicalTtsTimelineItems(planRoot, format, language)
             .Where(item => string.Equals(item.Format, format, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.SceneId))
             .GroupBy(item => NormalizeSceneIdForDurationMatch(item.SceneId), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
@@ -3649,9 +3664,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 group => RoundDuration(group.Sum(item => Math.Max(0, item.AudioDurationSec))),
                 StringComparer.OrdinalIgnoreCase);
 
-    private async Task<IReadOnlyDictionary<string, double>> BuildCueLevelSceneDurationsFromTtsTimelineAsync(string planRoot, string format, CancellationToken cancellationToken)
+    private async Task<IReadOnlyDictionary<string, double>> BuildCueLevelSceneDurationsFromTtsTimelineAsync(string planRoot, string format, string language, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var path = ResolveLanguageScopedTtsTimelinePath(planRoot, language);
         if (!File.Exists(path)) return new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         var root = JsonNode.Parse(await File.ReadAllTextAsync(path, cancellationToken)) ?? new JsonObject();
         var items = await ReadCanonicalTtsTimelineItemsWithActualDurationsAsync(planRoot, root, format, cancellationToken);
@@ -3720,12 +3735,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record CueLevelSubtitleValidationResult(bool Passed, IReadOnlyList<double> DriftMs, double MaxCueDriftMs, double AverageCueDriftMs, int CueCount, string SubtitleSourcePath, string TimingSource, IReadOnlyList<object> CueLevelValidation);
 
-    private static CueLevelSubtitleValidationResult ValidateCueLevelSubtitleSync(string planRoot, string format, string srtPath)
+    private static CueLevelSubtitleValidationResult ValidateCueLevelSubtitleSync(string planRoot, string format, string srtPath, string language = "en")
     {
         if (!File.Exists(srtPath))
             return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "MissingSubtitleFile", []);
 
-        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
+        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format, language);
         if (timelineItems.Count == 0)
             return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "Phase16SceneDurationPlanActualMp3Durations", []);
 
@@ -3999,12 +4014,19 @@ public sealed partial class ProductionPipelineExecutionService(
     }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string language, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
         {
+            requestedLanguage = language,
+            selectedNarrationLanguage = language,
+            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, language)),
+            selectedSrtPath = new { @short = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")), @long = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", language)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", language)),
+            languageScopedArtifactsUsed = true,
             allCheckedInputPaths = checkedPaths.Distinct(StringComparer.OrdinalIgnoreCase),
             selectedShortSceneSource = NormalizePath(shortRoot),
             selectedLongSceneSource = NormalizePath(longRoot),
@@ -4050,7 +4072,7 @@ public sealed partial class ProductionPipelineExecutionService(
             cleanedNarrationFiles = Directory.Exists(Path.Combine(planRoot, "narration"))
                 ? Directory.EnumerateFiles(Path.Combine(planRoot, "narration"), "*.txt", SearchOption.AllDirectories).Select(NormalizePath).ToArray()
                 : Array.Empty<string>(),
-            subtitleFilesGenerated = File.Exists(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) && File.Exists(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
+            subtitleFilesGenerated = File.Exists(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")) && File.Exists(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")),
             srtSourceMode = "SceneNarrationFilesOnly",
             sceneDurationPlanPath = sceneDurationPlanResolution?.SceneDurationPlanPath ?? NormalizePath(Path.Combine(planRoot, "timing", "scene-duration-plan.json")),
             sceneDurationPlanFound = sceneDurationPlanResolution?.SceneDurationPlanFound ?? File.Exists(Path.Combine(planRoot, "timing", "scene-duration-plan.json")),
@@ -4065,14 +4087,14 @@ public sealed partial class ProductionPipelineExecutionService(
             staleSrtDetected = false,
             nonNarrationSubtitleCueCount = 0,
             nonNarrationSubtitleCues = Array.Empty<object>(),
-            shortSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "short.srt")),
-            longSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
-            generatedSubtitleBlockCount = CountExistingSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) + CountExistingSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
-            duplicateSubtitleBlockCount = CountExistingDuplicateSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "short.srt")) + CountExistingDuplicateSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", "long.srt")),
-            duplicateSubtitleBlockIds = ExistingDuplicateSrtBlockIds(Path.Combine(planRoot, "narration", "subtitles", "short.srt")).Concat(ExistingDuplicateSrtBlockIds(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))).ToArray(),
-            duplicateSubtitleTexts = ExistingDuplicateSrtTexts(Path.Combine(planRoot, "narration", "subtitles", "short.srt")).Concat(ExistingDuplicateSrtTexts(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            generatedShortSrtPreview = ExistingSrtPreview(Path.Combine(planRoot, "narration", "subtitles", "short.srt")),
-            generatedLongSrtPreview = ExistingSrtPreview(Path.Combine(planRoot, "narration", "subtitles", "long.srt"))
+            shortSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")),
+            longSrtPath = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")),
+            generatedSubtitleBlockCount = CountExistingSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")) + CountExistingSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")),
+            duplicateSubtitleBlockCount = CountExistingDuplicateSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")) + CountExistingDuplicateSrtBlocks(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")),
+            duplicateSubtitleBlockIds = ExistingDuplicateSrtBlockIds(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")).Concat(ExistingDuplicateSrtBlockIds(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt"))).ToArray(),
+            duplicateSubtitleTexts = ExistingDuplicateSrtTexts(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")).Concat(ExistingDuplicateSrtTexts(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            generatedShortSrtPreview = ExistingSrtPreview(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")),
+            generatedLongSrtPreview = ExistingSrtPreview(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt"))
         }, JsonOptions), ct);
         return path;
     }
@@ -4159,6 +4181,18 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record NarrationFileWriteTraceEntry(string FilePath, string SceneId, string Format, string WriterComponent, string WriteMode, int WriteOrder, string ContentPreview, bool ContainsCentersOn, bool ContainsMoonNamesCulturalMemory, string SourceComponent, string SourceStrategy);
     private sealed record NarrationFileWriteDiagnostics(int NarrationFileWriteCount, IReadOnlyList<string> DuplicateNarrationFileWrites, IReadOnlyList<string> OverwrittenNarrationFiles, IReadOnlyList<string> AppendedNarrationFiles, bool FallbackNarrationTextInjected);
 
+    private static string ResolvePipelineLanguage(string? language)
+        => string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
+
+    private static string ResolveLanguageScopedTtsTimelinePath(string planRoot, string language)
+    {
+        var normalizedLanguage = ResolvePipelineLanguage(language);
+        var scoped = Path.Combine(planRoot, "tts", normalizedLanguage, "tts-timeline.json");
+        if (string.Equals(normalizedLanguage, "en", StringComparison.OrdinalIgnoreCase) && !File.Exists(scoped))
+            return Path.Combine(planRoot, "tts", "tts-timeline.json");
+        return scoped;
+    }
+
 
     private async Task<IReadOnlyList<string>> PhaseGenerateTtsTimelineV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
         => await Phase15RealTtsV2Async(context, cancellationToken);
@@ -4176,13 +4210,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnostics = new List<object>();
         var phase16DurationInputs = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         var errors = new List<string>();
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
 
-        var selectedShortSrt = ResolvePhase15SrtPath(planRoot, "en", "short");
-        var selectedLongSrt = ResolvePhase15SrtPath(planRoot, "en", "long");
+        var selectedShortSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");
+        var selectedLongSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "long");
         if (!File.Exists(selectedShortSrt)) errors.Add($"short.srt missing: {NormalizePath(selectedShortSrt)}");
         if (!File.Exists(selectedLongSrt)) errors.Add($"long.srt missing: {NormalizePath(selectedLongSrt)}");
 
-        foreach (var language in new[] { "en", "hi" })
+        foreach (var language in new[] { requestedLanguage })
         foreach (var format in new[] { "short", "long" })
         {
             var inputSrtPath = ResolvePhase15SrtPath(planRoot, language, format);
@@ -4225,7 +4260,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var roundedSrtDurationSec = Math.Round(srtDurationSec, 3, MidpointRounding.AwayFromZero);
             var roundedDeltaSec = Math.Round(delta, 3, MidpointRounding.AwayFromZero);
 
-            if (string.Equals(language, "en", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(language, requestedLanguage, StringComparison.OrdinalIgnoreCase))
             {
                 phase16DurationInputs[format] = new
                 {
@@ -4270,7 +4305,7 @@ public sealed partial class ProductionPipelineExecutionService(
             });
         }
 
-        var ttsTimelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var ttsTimelinePath = Path.Combine(planRoot, "tts", requestedLanguage, "tts-timeline.json");
         Directory.CreateDirectory(Path.GetDirectoryName(ttsTimelinePath)!);
         await File.WriteAllTextAsync(ttsTimelinePath, JsonSerializer.Serialize(new
         {
@@ -4278,6 +4313,7 @@ public sealed partial class ProductionPipelineExecutionService(
             durationReconciliationOwner = "Phase16",
             audioSrtDurationMismatchIsBlocking = false,
             generatedUtc = DateTimeOffset.UtcNow,
+            language = requestedLanguage,
             @short = phase16DurationInputs.TryGetValue("short", out var shortInput) ? shortInput : new { items = Array.Empty<object>(), audioDurationSec = 0d, srtDurationSec = 0d, audioSrtDurationDeltaSec = 0d },
             @long = phase16DurationInputs.TryGetValue("long", out var longInput) ? longInput : new { items = Array.Empty<object>(), audioDurationSec = 0d, srtDurationSec = 0d, audioSrtDurationDeltaSec = 0d }
         }, JsonOptions), cancellationToken);
@@ -4285,9 +4321,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var validationPassed = errors.Count == 0 && diagnostics.Count > 0;
         var diagnosticsPath = Path.Combine(validationRoot, "phase-15-real-tts-v2-diagnostics.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-15-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
         outputs.Add(diagnosticsPath);
         outputs.Add(validationPath);
         if (!validationPassed) throw new InvalidOperationException("Phase 15 Real TTS V2 failed: " + string.Join(" | ", errors));
@@ -4621,12 +4657,13 @@ public sealed partial class ProductionPipelineExecutionService(
         const double minimumSceneDurationSec = 0.5;
         var planRoot = context.OutputRoot;
         var timingRoot = Path.Combine(planRoot, "timing");
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
         var validationRoot = context.ExecutionContext.ValidationRoot!;
         Directory.CreateDirectory(timingRoot);
         Directory.CreateDirectory(validationRoot);
 
         var syncPath = Path.Combine(planRoot, "sync", "scene-audio-sync.json");
-        var ttsTimelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var ttsTimelinePath = ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage);
         var shortMetadataPath = Path.Combine(planRoot, "scene-assets-v3", "short", "scene-timeline-metadata.json");
         var longMetadataPath = Path.Combine(planRoot, "scene-assets-v3", "long", "scene-timeline-metadata.json");
         var oldPaths = new[]
@@ -4679,8 +4716,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var longAudioTotal = RoundDuration(longItems.Sum(i => i.AudioDurationSec));
         var shortVideoTotal = RoundDuration(shortItems.Sum(i => i.SceneDurationSec));
         var longVideoTotal = RoundDuration(longItems.Sum(i => i.SceneDurationSec));
-        var shortNarrationTrackDuration = await ProbeNarrationTrackDurationAsync(planRoot, "short", cancellationToken);
-        var longNarrationTrackDuration = await ProbeNarrationTrackDurationAsync(planRoot, "long", cancellationToken);
+        var shortNarrationTrackDuration = await ProbeNarrationTrackDurationAsync(planRoot, requestedLanguage, "short", cancellationToken);
+        var longNarrationTrackDuration = await ProbeNarrationTrackDurationAsync(planRoot, requestedLanguage, "long", cancellationToken);
         var shortNarrationDelta = Math.Abs(shortAudioTotal - shortNarrationTrackDuration);
         var longNarrationDelta = Math.Abs(longAudioTotal - longNarrationTrackDuration);
         if (shortNarrationTrackDuration > 0 && shortNarrationDelta > 0.1) errors.Add($"short scene-duration-plan total duration differs from narration-track.mp3 by >0.1 sec; plan={shortAudioTotal}, narration={RoundDuration(shortNarrationTrackDuration)}");
@@ -4707,11 +4744,17 @@ public sealed partial class ProductionPipelineExecutionService(
             @long = new { sceneCount = longItems.Count, totalAudioDurationSec = longAudioTotal, totalVideoDurationSec = longVideoTotal, items = longItems, durationDiagnostics = longDurationDiagnostics }
         }, JsonOptions), cancellationToken);
         if (!File.Exists(planPath)) errors.Add($"scene-duration-plan.json missing: {NormalizePath(planPath)}");
-        RegenerateNarrationSubtitlesFromTtsTimeline(planRoot);
+        RegenerateNarrationSubtitlesFromTtsTimeline(planRoot, requestedLanguage);
 
         var validationPassed = errors.Count == 0;
         var diagnostics = new
         {
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
+            languageScopedArtifactsUsed = true,
             inputPathsChecked = inputPathsChecked.Select(NormalizePath),
             selectedTtsTimelinePath = NormalizePath(ttsTimelinePath),
             selectedSyncPath = NormalizePath(syncPath),
@@ -4753,6 +4796,13 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             phaseNo = 16,
             phaseName = "Duration Calibration V1",
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ttsTimelinePath),
+            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
+            languageScopedArtifactsUsed = true,
             status = validationPassed ? "Succeeded" : "Failed",
             sceneDurationPlanPath = NormalizePath(planPath),
             oldPathUsed,
@@ -4768,9 +4818,9 @@ public sealed partial class ProductionPipelineExecutionService(
         return [planPath, validationPath, diagnosticsPath];
     }
 
-    private async Task<double> ProbeNarrationTrackDurationAsync(string planRoot, string format, CancellationToken cancellationToken)
+    private async Task<double> ProbeNarrationTrackDurationAsync(string planRoot, string language, string format, CancellationToken cancellationToken)
     {
-        var narrationTrackPath = Path.Combine(planRoot, "video-assembly", "en", format, "narration-track.mp3");
+        var narrationTrackPath = Path.Combine(planRoot, "video-assembly", language, format, "narration-track.mp3");
         return File.Exists(narrationTrackPath) ? await ProbeAudioDurationSecondsAsync(narrationTrackPath, cancellationToken) : 0;
     }
 
@@ -4988,19 +5038,19 @@ public sealed partial class ProductionPipelineExecutionService(
     private static double RoundDuration(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
     private sealed record SceneDurationPlanItem(string Format, string SceneId, string AudioPath, double AudioDurationSec, double SceneDurationSec, double TransitionDurationSec, string RecommendedTransition, string RecommendedMotion);
 
-    private static void RegenerateNarrationSubtitlesFromTtsTimeline(string planRoot)
+    private static void RegenerateNarrationSubtitlesFromTtsTimeline(string planRoot, string language)
     {
-        var subtitlesRoot = Path.Combine(planRoot, "narration", "subtitles");
-        var ttsTimelinePath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var subtitlesRoot = Path.Combine(planRoot, "narration", "subtitles", language);
+        var ttsTimelinePath = ResolveLanguageScopedTtsTimelinePath(planRoot, language);
         if (!File.Exists(ttsTimelinePath)) return;
         Directory.CreateDirectory(subtitlesRoot);
-        File.WriteAllText(Path.Combine(subtitlesRoot, "short.srt"), BuildNarrationSrtFromTtsTimeline(planRoot, "short"));
-        File.WriteAllText(Path.Combine(subtitlesRoot, "long.srt"), BuildNarrationSrtFromTtsTimeline(planRoot, "long"));
+        File.WriteAllText(Path.Combine(subtitlesRoot, "short.srt"), BuildNarrationSrtFromTtsTimeline(planRoot, "short", language));
+        File.WriteAllText(Path.Combine(subtitlesRoot, "long.srt"), BuildNarrationSrtFromTtsTimeline(planRoot, "long", language));
     }
 
-    private static string BuildNarrationSrtFromTtsTimeline(string planRoot, string format)
+    private static string BuildNarrationSrtFromTtsTimeline(string planRoot, string format, string language = "en")
     {
-        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format);
+        var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format, language);
         var blocks = new List<Phase15SrtBlock>();
         var cueStart = TimeSpan.Zero;
         for (var i = 0; i < timelineItems.Count; i++)
@@ -5022,6 +5072,7 @@ public sealed partial class ProductionPipelineExecutionService(
             return await PhaseMotionLayerV2PreviewAsync(context, cancellationToken);
 
         var planRoot = context.OutputRoot;
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
         var motionRoot = Path.Combine(planRoot, "motion");
         var validationRoot = context.ExecutionContext.ValidationRoot!;
         Directory.CreateDirectory(motionRoot);
@@ -5089,6 +5140,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var validationPassed = errors.Count == 0;
         var diagnostics = new
         {
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage)),
+            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
+            languageScopedArtifactsUsed = true,
             inputPathsChecked = inputPathsChecked.Select(NormalizePath),
             selectedDurationPlanPath = NormalizePath(durationPlanPath),
             selectedShortSceneRoot = NormalizePath(shortSceneRoot),
@@ -5112,6 +5170,13 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             phaseNo = 17,
             phaseName = "Motion Layer V1",
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage)),
+            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
+            languageScopedArtifactsUsed = true,
             status = validationPassed ? "Succeeded" : "Failed",
             motionPlanPath = NormalizePath(motionPlanPath),
             motionDebugPath = NormalizePath(motionDebugPath),
@@ -5127,6 +5192,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseMotionLayerV2PreviewAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var planRoot = context.OutputRoot;
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
         var motionRoot = Path.Combine(planRoot, "motion");
         var validationRoot = context.ExecutionContext.ValidationRoot!;
         Directory.CreateDirectory(motionRoot);
@@ -5170,6 +5236,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnosticsPath = Path.Combine(validationRoot, "phase-17-motion-v2-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage)),
+            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
+            languageScopedArtifactsUsed = true,
             motionVersion = "V2",
             motionPreviewOnly = true,
             motionV2Strength,
@@ -5185,6 +5258,13 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             phaseNo = 17,
             phaseName = "Motion Layer V2 Preview",
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage)),
+            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
+            languageScopedArtifactsUsed = true,
             status = validationPassed ? "Succeeded" : "Failed",
             motionVersion = "V2",
             motionPreviewOnly = true,
@@ -6463,14 +6543,15 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseVideoAssemblyV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var planRoot = context.OutputRoot;
-        var videoRoot = Path.Combine(planRoot, "video-assembly");
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
+        var videoRoot = Path.Combine(planRoot, "video-assembly", requestedLanguage);
         var validationRoot = context.ExecutionContext.ValidationRoot!;
         Directory.CreateDirectory(videoRoot);
         Directory.CreateDirectory(validationRoot);
 
         var sceneAssetsRoot = Path.Combine(planRoot, "scene-assets-v3");
         var syncPath = Path.Combine(planRoot, "sync", "scene-audio-sync.json");
-        var ttsPath = Path.Combine(planRoot, "tts", "tts-timeline.json");
+        var ttsPath = ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage);
         var durationPlanPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
         var productionMotionPlanPath = Path.Combine(planRoot, "motion", "motion-plan.json");
         var previewMotionPlanPath = Path.Combine(planRoot, "motion", "motion-plan-v2-preview.json");
@@ -6519,8 +6600,8 @@ public sealed partial class ProductionPipelineExecutionService(
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
             var backgroundMusicConfig = ResolvePhase18BackgroundMusicConfig(planRoot);
-            if (shortItems.Count > 0) await RenderVideoAssemblyAsync(planRoot, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
-            if (!previewOnly && longItems.Count > 0) await RenderVideoAssemblyAsync(planRoot, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (shortItems.Count > 0) await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (!previewOnly && longItems.Count > 0) await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
             if (previewOnly && File.Exists(longVideoPath)) File.Delete(longVideoPath);
         }
 
@@ -6542,8 +6623,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var longAudioMuxed = File.Exists(longAudioTrackPath) && longHasAudioStream;
         var enableSubtitles = context.ExecutionContext.EnableSubtitles;
         var subtitleMode = enableSubtitles ? "BurnIn" : "Disabled";
-        var shortSrtPath = Path.Combine(planRoot, "narration", "subtitles", "short.srt");
-        var longSrtPath = Path.Combine(planRoot, "narration", "subtitles", "long.srt");
+        var shortSrtPath = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");
+        var longSrtPath = ResolvePhase15SrtPath(planRoot, requestedLanguage, "long");
         var shortSrtExists = File.Exists(shortSrtPath);
         var longSrtExists = File.Exists(longSrtPath);
         var shortSrtDuration = shortSrtExists ? ReadSrtFinalEndSeconds(shortSrtPath) : 0;
@@ -6583,8 +6664,8 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!previewOnly && File.Exists(longVideoPath)) { Directory.CreateDirectory(Path.GetDirectoryName(legacyLongVideoPath)!); File.Copy(longVideoPath, legacyLongVideoPath, true); }
         var shortPublishedMatchesAssembly = File.Exists(shortVideoPath) && File.Exists(legacyShortVideoPath) && FilesAreByteIdentical(shortVideoPath, legacyShortVideoPath);
         var longPublishedMatchesAssembly = previewOnly || (File.Exists(longVideoPath) && File.Exists(legacyLongVideoPath) && FilesAreByteIdentical(longVideoPath, legacyLongVideoPath));
-        var shortCueValidation = ValidateCueLevelSubtitleSync(planRoot, "short", shortSrtPath);
-        var longCueValidation = ValidateCueLevelSubtitleSync(planRoot, "long", longSrtPath);
+        var shortCueValidation = ValidateCueLevelSubtitleSync(planRoot, "short", shortSrtPath, requestedLanguage);
+        var longCueValidation = ValidateCueLevelSubtitleSync(planRoot, "long", longSrtPath, requestedLanguage);
         var cueLevelSubtitleValidation = !enableSubtitles || (shortCueValidation.Passed && (previewOnly || longCueValidation.Passed));
         var cueLevelSubtitleDriftMs = new { @short = shortCueValidation.DriftMs, @long = longCueValidation.DriftMs };
         var maxCueDriftMs = Math.Max(shortCueValidation.MaxCueDriftMs, previewOnly ? 0 : longCueValidation.MaxCueDriftMs);
@@ -6673,6 +6754,13 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(cinematicDiagnosticsPath, JsonSerializer.Serialize(new
         {
             rendererVersion = phase18RendererVersion,
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ttsPath),
+            selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(videoRoot),
+            languageScopedArtifactsUsed = true,
             shimmerMitigationApplied,
             zoompanFrameDriven,
             zoompanDValue = phase18ZoompanDValue,
@@ -6807,11 +6895,18 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsPath), selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(videoRoot), languageScopedArtifactsUsed = true, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             rendererVersion = phase18RendererVersion,
+            requestedLanguage,
+            selectedNarrationLanguage = requestedLanguage,
+            selectedTtsTimelinePath = NormalizePath(ttsPath),
+            selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
+            selectedVideoAssemblyRoot = NormalizePath(videoRoot),
+            languageScopedArtifactsUsed = true,
             shimmerMitigationApplied,
             zoompanFrameDriven,
             zoompanDValue = phase18ZoompanDValue,
@@ -7152,9 +7247,9 @@ public sealed partial class ProductionPipelineExecutionService(
         }).ToArray();
     }
 
-    private async Task RenderVideoAssemblyAsync(string planRoot, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
+    private async Task RenderVideoAssemblyAsync(string planRoot, string language, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
     {
-        var cueLevelDurationsBySceneId = await BuildCueLevelSceneDurationsFromTtsTimelineAsync(planRoot, format, cancellationToken);
+        var cueLevelDurationsBySceneId = await BuildCueLevelSceneDurationsFromTtsTimelineAsync(planRoot, format, language, cancellationToken);
         var renderItems = OverrideRenderSceneDurationsFromTtsTimeline(cueLevelDurationsBySceneId, items);
         await WriteMotionDebugAsync(planRoot, renderItems, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -7203,7 +7298,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 JsonSerializer.Serialize(new { rendererVersion = "V3", perSceneFilterLogged = true, filters = perSceneFilters }, JsonOptions),
                 cancellationToken);
             var videoOnlyPath = Path.Combine(tempRoot, "video-only.mp4");
-            var narrationItems = ReadCanonicalTtsTimelineItems(planRoot, format);
+            var narrationItems = ReadCanonicalTtsTimelineItems(planRoot, format, language);
             var availableAudioItems = narrationItems.Where(i => !string.IsNullOrWhiteSpace(i.AudioPath) && File.Exists(i.AudioPath)).ToArray();
             var hasNarrationAudio = narrationItems.Count > 0 && availableAudioItems.Length == narrationItems.Count;
             if (hasNarrationAudio)
