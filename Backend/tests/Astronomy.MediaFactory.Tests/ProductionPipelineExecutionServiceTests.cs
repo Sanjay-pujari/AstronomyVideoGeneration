@@ -94,11 +94,98 @@ This happens because orbits line up in our sky.
             Assert.NotNull(resolveMethod);
 
             var blocks = parseMethod!.Invoke(null, [srt]);
-            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, "short", blocks])!).Cast<string>().ToArray();
+            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, "en", "short", blocks])!).Cast<string>().ToArray();
 
             Assert.Equal(new[] { "001-hook", "001-hook", "001-hook", "002-cause" }, sceneIds);
             Assert.Equal(4, sceneIds.Length);
             Assert.Equal(2, sceneIds.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Phase15VisualSceneIdResolution_UsesLocalizedNarrationSceneFiles()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-hi-scene-id-map-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var narrationRoot = Path.Combine(planRoot, "narration", "hi", "short");
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+            Directory.CreateDirectory(narrationRoot);
+            Directory.CreateDirectory(metadataRoot);
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = new[]
+                {
+                    new { sceneId = "001-hook" },
+                    new { sceneId = "002-cause" },
+                    new { sceneId = "003-guide" },
+                    new { sceneId = "004-time" },
+                    new { sceneId = "005-close" }
+                }
+            }));
+
+            File.WriteAllText(Path.Combine(narrationRoot, "001-hook.txt"), "पहला दृश्य शुरू होता है। आसमान धीरे धीरे बदलता है।");
+            File.WriteAllText(Path.Combine(narrationRoot, "002-cause.txt"), "दूसरा दृश्य कारण समझाता है। यह दूरी का भ्रम है।");
+            File.WriteAllText(Path.Combine(narrationRoot, "003-guide.txt"), "तीसरा दृश्य दिशा बताता है। पश्चिम की ओर देखें।");
+            File.WriteAllText(Path.Combine(narrationRoot, "004-time.txt"), "चौथा दृश्य सही समय बताता है। सूर्यास्त के बाद रुकें।");
+            File.WriteAllText(Path.Combine(narrationRoot, "005-close.txt"), "पांचवां दृश्य यादगार अंत देता है। फिर आसमान को याद रखें।");
+
+            var srt = """
+1
+00:00:00,000 --> 00:00:01,000
+पहला दृश्य शुरू होता है।
+
+2
+00:00:01,000 --> 00:00:02,000
+आसमान धीरे धीरे बदलता है।
+
+3
+00:00:02,000 --> 00:00:03,000
+दूसरा दृश्य कारण समझाता है।
+
+4
+00:00:03,000 --> 00:00:04,000
+यह दूरी का भ्रम है।
+
+5
+00:00:04,000 --> 00:00:05,000
+तीसरा दृश्य दिशा बताता है।
+
+6
+00:00:05,000 --> 00:00:06,000
+पश्चिम की ओर देखें।
+
+7
+00:00:06,000 --> 00:00:07,000
+चौथा दृश्य सही समय बताता है।
+
+8
+00:00:07,000 --> 00:00:08,000
+सूर्यास्त के बाद रुकें।
+
+9
+00:00:08,000 --> 00:00:09,000
+पांचवां दृश्य यादगार अंत देता है।
+
+10
+00:00:09,000 --> 00:00:10,000
+फिर आसमान को याद रखें।
+""";
+            var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var resolveMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdsForSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(parseMethod);
+            Assert.NotNull(resolveMethod);
+
+            var blocks = parseMethod!.Invoke(null, [srt]);
+            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, "hi", "short", blocks])!).Cast<string>().ToArray();
+
+            Assert.Equal(10, sceneIds.Length);
+            Assert.Equal(5, sceneIds.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            Assert.Equal(new[] { "001-hook", "001-hook", "002-cause", "002-cause", "003-guide", "003-guide", "004-time", "004-time", "005-close", "005-close" }, sceneIds);
         }
         finally
         {
