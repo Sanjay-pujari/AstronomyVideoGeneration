@@ -892,13 +892,42 @@ First cue.
         Assert.Contains("जेमिनिड्स", translated);
         Assert.Contains("उल्का वर्षा", translated);
         Assert.Contains("रेडिएंट", translated);
-        Assert.Contains("अंधेरा आसमान", translated);
+        Assert.Contains("अंधेरे आसमान", translated);
         Assert.DoesNotContain("बृहस्पति", translated);
         Assert.DoesNotContain("शुक्र", translated);
         Assert.DoesNotContain("युति", translated);
         Assert.False((bool)diagnostics.GetType().GetProperty("HardcodedTemplateUsed")!.GetValue(diagnostics)!);
         Assert.False((bool)diagnostics.GetType().GetProperty("ForbiddenNarrationLeakageDetected")!.GetValue(diagnostics)!);
         Assert.Equal("deterministic-english-to-hindi-text-translation", diagnostics.GetType().GetProperty("TranslationMode")!.GetValue(diagnostics));
+    }
+
+
+    [Fact]
+    public void Phase14HindiTranslation_RejectsHinglishFragmentsAndUsesSentenceTranslation()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Geminids can turn quiet dark sky into sudden streaks of light."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["002-cause"] = "Meteor showers happen when Earth passes through trail of comet debris."
+        };
+
+        var diagnostics = method!.Invoke(null, ["hi", "Meteor", shortTexts, longTexts])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+
+        Assert.Contains("जेमिनिड्स", translated);
+        Assert.Contains("शांत अंधेरे आसमान", translated);
+        Assert.Contains("धूमकेतु", translated);
+        Assert.DoesNotContain("can turn", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("happen when", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("passes through", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.True((bool)diagnostics.GetType().GetProperty("FullSentenceTranslationApplied")!.GetValue(diagnostics)!);
+        Assert.True((double)diagnostics.GetType().GetProperty("HindiCharacterRatio")!.GetValue(diagnostics)! >= 0.85);
+        Assert.False((bool)diagnostics.GetType().GetProperty("EnglishFragmentDetected")!.GetValue(diagnostics)!);
+        Assert.Empty((IReadOnlyList<string>)diagnostics.GetType().GetProperty("DetectedEnglishFragments")!.GetValue(diagnostics)!);
     }
 
     [Fact]
