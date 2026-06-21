@@ -2183,6 +2183,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var staleSrtDetected = File.GetLastWriteTimeUtc(shortSrtPath) > srtWrittenUtc.UtcDateTime.AddSeconds(1) || File.GetLastWriteTimeUtc(longSrtPath) > srtWrittenUtc.UtcDateTime.AddSeconds(1);
         if (!shortSrtValidation.ValidationPassed || !longSrtValidation.ValidationPassed)
             throw new InvalidOperationException("Phase 14 SRT validation failed: " + string.Join(" | ", shortSrtValidation.Errors.Concat(longSrtValidation.Errors)));
+        ValidatePhase14LocalizedNarrationArtifacts(language, shortNarrationFiles.Concat(longNarrationFiles).ToArray(), shortSrtPath, longSrtPath);
 
         var longNarrationV3Text = string.Join(" ", longNarrationV3Items.Select(item => cleanupService.Clean(item.NarrationText).CleanedText));
         var longNarrationV3WordCount = CountSpokenWords(longNarrationV3Text);
@@ -2274,6 +2275,12 @@ public sealed partial class ProductionPipelineExecutionService(
             finalTextBeforeWrite = documentaryNarration.FinalTextBeforeWrite,
             scriptComposerDiagnostics = documentaryNarration.Diagnostics,
             source = "event-story-composer",
+            translation = documentaryNarration.TranslationDiagnostics,
+            sourceLanguage = documentaryNarration.TranslationDiagnostics.SourceLanguage,
+            translatedLanguage = documentaryNarration.TranslationDiagnostics.TranslatedLanguage,
+            translationApplied = documentaryNarration.TranslationDiagnostics.TranslationApplied,
+            hindiCharacterCount = documentaryNarration.TranslationDiagnostics.HindiCharacterCount,
+            englishCharacterCount = documentaryNarration.TranslationDiagnostics.EnglishCharacterCount,
             sceneLevelAdapter = documentaryNarration.AdapterDiagnostics,
             sceneNarrationComposerTrace = documentaryNarration.AdapterDiagnostics.SceneNarrationComposerTrace,
             shortSceneCount = shortItems.Count,
@@ -2288,6 +2295,24 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         return new NarrationOutputLayerResult(narrationRoot, manifestPath, files, narrationFileWriteDiagnostics, narrationFileWriteTrace, sceneDurationPlanResolution);
+    }
+
+
+    private static void ValidatePhase14LocalizedNarrationArtifacts(string language, IReadOnlyList<string> narrationFiles, string shortSrtPath, string longSrtPath)
+    {
+        if (!string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase)) return;
+
+        var invalidNarrationFiles = narrationFiles
+            .Where(path => !ContainsHindiText(File.Exists(path) ? File.ReadAllText(path) : string.Empty))
+            .Select(NormalizePath)
+            .ToArray();
+        if (invalidNarrationFiles.Length > 0)
+            throw new InvalidOperationException("Phase 14 Hindi narration validation failed: narration files must contain Devanagari characters: " + string.Join(", ", invalidNarrationFiles));
+
+        if (!ContainsHindiText(File.Exists(shortSrtPath) ? File.ReadAllText(shortSrtPath) : string.Empty))
+            throw new InvalidOperationException("Phase 14 Hindi SRT validation failed: short.srt must contain Devanagari characters.");
+        if (!ContainsHindiText(File.Exists(longSrtPath) ? File.ReadAllText(longSrtPath) : string.Empty))
+            throw new InvalidOperationException("Phase 14 Hindi SRT validation failed: long.srt must contain Devanagari characters.");
     }
 
     private static string SelectFirstNarrationOutputFile(IReadOnlyList<string> files, string format)
@@ -2413,6 +2438,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var composerTrace = new List<SceneNarrationComposerTraceEntry>();
         SanitizeSceneNarrationComposerOutputs(context, family, shortTexts, composerTrace, "short");
         SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
+        ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, null);
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
+        var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, shortTexts, longTexts);
         var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
         var firstSentenceByScene = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => FirstSentence(item.Value), StringComparer.OrdinalIgnoreCase);
@@ -2429,7 +2457,6 @@ public sealed partial class ProductionPipelineExecutionService(
             WonderScore = ScoreWonderLanguage(combinedCandidateText(shortTexts, longTexts)),
             ScientificAccuracyScore = ScoreScientificAccuracy(family, combinedCandidateText(shortTexts, longTexts))
         };
-        ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, diagnostics);
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
             .ToArray();
@@ -2453,13 +2480,65 @@ public sealed partial class ProductionPipelineExecutionService(
             scenePurposeBySceneId,
             allTexts.Select(item => NormalizePath(Path.Combine(context.OutputRoot, "narration", ResolvePipelineLanguage(context.Request.Language), item.format, $"{SanitizeFileName(item.Key)}.txt"))).ToArray(),
             [NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), NormalizePath(Path.Combine(context.OutputRoot, "narration", "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt"))],
-            composerTrace);
+            composerTrace)
+        {
+            TranslationDiagnostics = translationDiagnostics
+        };
         var storyArc = BuildPhase14StoryArc();
-        return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, "Discovery/BBC-style documentary astronomy narration", storyArc, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics);
+        return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, "Discovery/BBC-style documentary astronomy narration", storyArc, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics, translationDiagnostics);
 
         static string combinedCandidateText(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts)
             => string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
     }
+
+    private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    {
+        var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
+            return new Phase14TranslationDiagnostics(requestedLanguage, "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText));
+
+        if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
+
+        foreach (var key in shortTexts.Keys.ToArray())
+            shortTexts[key] = TranslatePhase14NarrationToHindi(key, shortTexts[key], false);
+        foreach (var key in longTexts.Keys.ToArray())
+            longTexts[key] = TranslatePhase14NarrationToHindi(key, longTexts[key], true);
+
+        var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        var diagnostics = new Phase14TranslationDiagnostics(requestedLanguage, "en", "hi", true, CountHindiCharacters(translatedText), CountEnglishCharacters(translatedText));
+        if (diagnostics.HindiCharacterCount == 0)
+            throw new InvalidOperationException("Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.");
+        return diagnostics;
+    }
+
+    private static string TranslatePhase14NarrationToHindi(string sceneId, string english, bool longFormat)
+    {
+        var purpose = ResolvePhase14ScenePurpose(sceneId);
+        var detail = purpose switch
+        {
+            "hook" => "नमस्कार, आज की स्काई गाइड में हम इस खगोलीय जोड़ी को शांत और उत्सुक नज़र से देखेंगे।",
+            "cause" => "ये पिंड असल में बहुत दूर हैं; वे पास इसलिए दिखते हैं क्योंकि हमारी दृष्टि-रेखा उन्हें एक ही हिस्से में ले आती है।",
+            "accurate-sky-guide" => "सूर्यास्त के बाद साफ क्षितिज चुनें, आंखों को अंधेरे में ढलने दें, और आसमान की बताई गई दिशा में धीरे-धीरे खोजें।",
+            "viewing-tip" or "viewing-tips" => "बिना दूरबीन भी दृश्य सुंदर रहेगा, लेकिन दूरबीन से चमक और अलगाव को पहचानना आसान होगा।",
+            "best-time" => "सबसे अच्छा समय वह है जब आसमान गहरा हो चुका हो और लक्ष्य क्षितिज से पर्याप्त ऊपर हो।",
+            "what-is-it" => "यह मुलाकात हमें याद दिलाती है कि रात का आसमान गहराई, दूरी और परिप्रेक्ष्य की कहानी सुनाता है।",
+            "interesting-fact" => "रोशनी हम तक अलग-अलग दूरियों से आती है, इसलिए एक छोटा दृश्य भी ब्रह्मांड के बड़े पैमाने को महसूस कराता है।",
+            "what-you-will-see" => "आपको दो चमकदार बिंदु पास-पास दिखाई देंगे, आसपास की मद्धम चमक पूरे दृश्य को और नाटकीय बनाएगी।",
+            "final-reminder" => "अगर बादल छा जाएं तो अगली साफ शाम फिर कोशिश करें, क्योंकि ऐसा दृश्य याद में देर तक रहता है।",
+            _ => "आज रात आसमान में यह खगोलीय दृश्य ध्यान से देखने लायक है।"
+        };
+        var suffix = longFormat
+            ? " इसे आराम से देखें, जल्दबाज़ी न करें, और आंखों को छोटे बदलाव पकड़ने का समय दें।"
+            : " इसे देखने के लिए कुछ मिनट निकालें।";
+        return $"{detail}{suffix}";
+    }
+
+    private static int CountHindiCharacters(string text)
+        => string.IsNullOrEmpty(text) ? 0 : text.Count(ch => ch >= '\u0900' && ch <= '\u097F');
+
+    private static int CountEnglishCharacters(string text)
+        => string.IsNullOrEmpty(text) ? 0 : text.Count(ch => (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z'));
 
 
     private static void ApplyPlanetConjunctionNarrationV22(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context)
@@ -2734,7 +2813,7 @@ public sealed partial class ProductionPipelineExecutionService(
         ? "Use certified solar eclipse glasses before and after totality, keep cameras filtered, and supervise children throughout the event."
         : "Bring warm layers, avoid bright phone screens, and give yourself several quiet minutes for the sky to reveal faint detail.";
 
-    private static void ValidatePhase14EventStoryNarration(string family, IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts, EventStoryComposerDiagnostics diagnostics)
+    private static void ValidatePhase14EventStoryNarration(string family, IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts, EventStoryComposerDiagnostics? diagnostics)
     {
         var isPlanetConjunction = string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase);
         var forbiddenOpening = isPlanetConjunction ? new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow", "Open", "Opens", "Start", "Starts" } : new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow" };
@@ -2746,7 +2825,7 @@ public sealed partial class ProductionPipelineExecutionService(
             if (isPlanetConjunction && !Regex.IsMatch(opening, @"^\s*(Hello, fellow stargazers|Greetings, astronomy lovers)\b", RegexOptions.IgnoreCase))
                 throw new InvalidOperationException("Phase 14 PlanetConjunction opening must begin with a documentary-host greeting.");
         }
-        if (!isPlanetConjunction && (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned))
+        if (!isPlanetConjunction && diagnostics is not null && (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned))
             throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");
         ValidateNoNarrationV21BannedPhrases(shortTexts.Values.Concat(longTexts.Values));
         ValidatePhase14EventStoryNarrationFormat("short", shortTexts);
@@ -4056,6 +4135,12 @@ public sealed partial class ProductionPipelineExecutionService(
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
             matchingStrategy = "SceneLevelNarrationComposer",
+            translation = adapterDiagnostics?.TranslationDiagnostics,
+            sourceLanguage = adapterDiagnostics?.TranslationDiagnostics?.SourceLanguage,
+            translatedLanguage = adapterDiagnostics?.TranslationDiagnostics?.TranslatedLanguage,
+            translationApplied = adapterDiagnostics?.TranslationDiagnostics?.TranslationApplied,
+            hindiCharacterCount = adapterDiagnostics?.TranslationDiagnostics?.HindiCharacterCount,
+            englishCharacterCount = adapterDiagnostics?.TranslationDiagnostics?.EnglishCharacterCount,
             sceneLevelAdapter = adapterDiagnostics,
             adapterUsed = adapterDiagnostics?.AdapterUsed ?? false,
             adapterName = adapterDiagnostics?.AdapterName,
@@ -4196,8 +4281,12 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record SubtitleCueSource(string Format, int CueId, string SceneId, string Text, string NormalizedText, string SourceType, string SourceFile, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
-    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics);
-    private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated, IReadOnlyList<SceneNarrationComposerTraceEntry> SceneNarrationComposerTrace);
+    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics, Phase14TranslationDiagnostics TranslationDiagnostics);
+    private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated, IReadOnlyList<SceneNarrationComposerTraceEntry> SceneNarrationComposerTrace)
+    {
+        public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
+    }
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
