@@ -492,21 +492,22 @@ public sealed class ContentPlanBatchGenerationService(
             db.Entry(localTargetPlan).State = EntityState.Detached;
 
         var trackedTargetPlan = await db.ContentGenerationPlans
-            .Include(p => p.AstronomyEventIntelligence)
-                .ThenInclude(e => e!.Objects)
             .FirstOrDefaultAsync(p => p.Id == targetPlanId, cancellationToken);
 
         if (trackedTargetPlan is null)
         {
             LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, null, null, 0, null);
-            logger.LogWarning(
-                "Skipping astronomy intelligence linkage because target content plan {TargetPlanId} was not found before save. targetPlanMissingBeforeSave={TargetPlanMissingBeforeSave}",
-                targetPlanId,
-                true);
-            return;
+            throw new InvalidOperationException($"Cannot link astronomy intelligence objects because target content plan {targetPlanId:D} was not found after reloading it inside {nameof(EnsurePlanIntelligenceObjectsFromSourceCoreAsync)}.");
         }
 
-        var targetEvent = trackedTargetPlan.AstronomyEventIntelligence;
+        AstronomyEventIntelligence? targetEvent = null;
+        if (trackedTargetPlan.AstronomyEventIntelligenceId.HasValue)
+        {
+            targetEvent = await db.AstronomyEventIntelligences
+                .Include(e => e.Objects)
+                .FirstOrDefaultAsync(e => e.Id == trackedTargetPlan.AstronomyEventIntelligenceId.Value, cancellationToken);
+        }
+
         if (targetEvent?.Objects.Count > 0)
         {
             LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, trackedTargetPlan, null, 0, targetEvent);
@@ -523,9 +524,11 @@ public sealed class ContentPlanBatchGenerationService(
             return;
         }
 
+        db.Entry(sourcePlan!).State = EntityState.Unchanged;
+        db.Entry(sourceEvent).State = EntityState.Unchanged;
+
         var siblingEventCode = BuildSiblingEventCode(sourceEvent.EventCode, requestedLanguage);
-        var reusableRequestedLanguageEvent = await db.AstronomyEventIntelligences
-            .Include(e => e.Objects)
+        var siblingEventId = await db.AstronomyEventIntelligences
             .Where(e => e.EventCode == siblingEventCode
                 || (e.Language == requestedLanguage
                     && e.RegionId == sourceEvent.RegionId
@@ -533,34 +536,104 @@ public sealed class ContentPlanBatchGenerationService(
                     && e.Objects.Any()))
             .OrderByDescending(e => e.EventCode == siblingEventCode)
             .ThenByDescending(e => e.Objects.Count)
+            .Select(e => (Guid?)e.Id)
             .FirstOrDefaultAsync(cancellationToken);
 
         var copiedObjectCount = 0;
-        var siblingEvent = reusableRequestedLanguageEvent ?? CopyEventForLanguage(sourceEvent, requestedLanguage);
-        if (reusableRequestedLanguageEvent is null)
+        AstronomyEventIntelligence trackedSiblingEvent;
+        if (siblingEventId.HasValue)
         {
-            copiedObjectCount = siblingEvent.Objects.Count;
-            db.AstronomyEventIntelligences.Add(siblingEvent);
-        }
-        else if (reusableRequestedLanguageEvent.Objects.Count == 0)
-        {
-            foreach (var sourceObject in sourceEvent.Objects)
+            trackedSiblingEvent = await db.AstronomyEventIntelligences
+                .Include(e => e.Objects)
+                .FirstOrDefaultAsync(e => e.Id == siblingEventId.Value, cancellationToken)
+                ?? throw new InvalidOperationException($"Reusable astronomy event intelligence {siblingEventId.Value:D} disappeared before linking target content plan {targetPlanId:D}.");
+
+            db.Entry(trackedSiblingEvent).State = EntityState.Unchanged;
+
+            if (trackedSiblingEvent.Objects.Count == 0)
             {
-                reusableRequestedLanguageEvent.Objects.Add(CopyEventObject(sourceObject));
-                copiedObjectCount++;
+                foreach (var sourceObject in sourceEvent.Objects)
+                {
+                    var newObject = CopyEventObject(sourceObject);
+                    newObject.AstronomyEventIntelligenceId = trackedSiblingEvent.Id;
+                    db.AstronomyEventObjects.Add(newObject);
+                    copiedObjectCount++;
+                }
             }
         }
+        else
+        {
+            trackedSiblingEvent = CopyEventForLanguage(sourceEvent, requestedLanguage);
+            copiedObjectCount = trackedSiblingEvent.Objects.Count;
+            db.AstronomyEventIntelligences.Add(trackedSiblingEvent);
+        }
 
-        trackedTargetPlan.AstronomyEventIntelligence = siblingEvent;
-        trackedTargetPlan.AstronomyEventIntelligenceId = siblingEvent.Id;
+        trackedTargetPlan.AstronomyEventIntelligenceId = trackedSiblingEvent.Id;
         trackedTargetPlan.SourceExternalEventId = trackedTargetPlan.SourceExternalEventId ?? sourcePlan?.SourceExternalEventId ?? sourceEvent.ExternalEventId;
         trackedTargetPlan.PlannedObjectNamesJson = trackedTargetPlan.PlannedObjectNamesJson ?? sourcePlan?.PlannedObjectNamesJson;
         trackedTargetPlan.PrimaryCelestialObjectCode = trackedTargetPlan.PrimaryCelestialObjectCode ?? sourcePlan?.PrimaryCelestialObjectCode;
         trackedTargetPlan.Touch();
 
+        db.Entry(trackedTargetPlan).State = EntityState.Modified;
+        db.Entry(sourceEvent).State = EntityState.Unchanged;
+        db.Entry(sourcePlan!).State = EntityState.Unchanged;
+        if (siblingEventId.HasValue)
+            db.Entry(trackedSiblingEvent).State = EntityState.Unchanged;
+
+        LogEnsurePlanIntelligenceChangeTrackerEntries(targetPlanId);
+        ThrowIfUnexpectedModifiedEntityBeforeSave(trackedTargetPlan);
+
         await db.SaveChangesAsync(cancellationToken);
-        LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, trackedTargetPlan, siblingEvent, copiedObjectCount, siblingEvent);
-        LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, trackedTargetPlan, sourceEvent, siblingEvent);
+        LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, trackedTargetPlan, trackedSiblingEvent, copiedObjectCount, trackedSiblingEvent);
+        LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, trackedTargetPlan, sourceEvent, trackedSiblingEvent);
+    }
+
+    private void LogEnsurePlanIntelligenceChangeTrackerEntries(Guid targetPlanId)
+    {
+        foreach (var entry in db.ChangeTracker.Entries().Where(e => e.State != EntityState.Detached))
+        {
+            logger.LogInformation(
+                "Ensure plan intelligence ChangeTracker entry before SaveChanges: targetPlanId={TargetPlanId}, entityName={EntityName}, state={State}, primaryKey={PrimaryKey}, foreignKeys={ForeignKeys}",
+                targetPlanId,
+                entry.Metadata.ClrType.Name,
+                entry.State,
+                FormatPrimaryKey(entry),
+                FormatForeignKeys(entry));
+        }
+    }
+
+    private void ThrowIfUnexpectedModifiedEntityBeforeSave(ContentGenerationPlan trackedTargetPlan)
+    {
+        var unexpectedModifiedEntries = db.ChangeTracker.Entries()
+            .Where(e => e.State == EntityState.Modified && !ReferenceEquals(e.Entity, trackedTargetPlan))
+            .Select(e => $"{e.Metadata.ClrType.Name}({FormatPrimaryKey(e)})")
+            .ToArray();
+
+        if (unexpectedModifiedEntries.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Refusing to save astronomy intelligence linkage because unexpected Modified entities are tracked before SaveChanges. Only target content plan {trackedTargetPlan.Id:D} may be Modified. UnexpectedModified={string.Join(", ", unexpectedModifiedEntries)}");
+        }
+    }
+
+    private static string FormatPrimaryKey(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry entry)
+    {
+        var key = entry.Metadata.FindPrimaryKey();
+        if (key is null) return "<none>";
+
+        return string.Join(",", key.Properties.Select(p => $"{p.Name}={entry.Property(p.Name).CurrentValue}"));
+    }
+
+    private static string FormatForeignKeys(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry entry)
+    {
+        var foreignKeyProperties = entry.Metadata.GetForeignKeys()
+            .SelectMany(fk => fk.Properties)
+            .Distinct()
+            .ToArray();
+
+        return foreignKeyProperties.Length == 0
+            ? "<none>"
+            : string.Join(",", foreignKeyProperties.Select(p => $"{p.Name}={entry.Property(p.Name).CurrentValue}"));
     }
 
     private void LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(Guid targetPlanId, ContentGenerationPlan? trackedTargetPlan, AstronomyEventIntelligence? siblingEvent, int copiedObjectCount, AstronomyEventIntelligence? resolvedEvent)
