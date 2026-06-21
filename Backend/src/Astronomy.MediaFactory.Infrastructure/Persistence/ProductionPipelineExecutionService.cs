@@ -1988,6 +1988,7 @@ public sealed partial class ProductionPipelineExecutionService(
         };
 
         Phase14DocumentaryNarration? documentaryNarration = null;
+        Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics = null;
 
         try
         {
@@ -1999,6 +2000,11 @@ public sealed partial class ProductionPipelineExecutionService(
             try
             {
                 documentaryNarration = BuildPhase14DocumentaryNarration(context);
+                eventConsistencyDiagnostics = documentaryNarration.EventConsistencyDiagnostics;
+            }
+            catch (Phase14EventConsistencyException)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
             {
@@ -2133,14 +2139,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, eventConsistencyDiagnostics, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
-            await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, cancellationToken);
+            if (ex is Phase14EventConsistencyException consistencyException) eventConsistencyDiagnostics = consistencyException.Diagnostics;
+            await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, eventConsistencyDiagnostics, cancellationToken);
             throw;
         }
     }
@@ -2469,6 +2476,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var combinedText = string.Join(" ", finalText.Select(item => item.text));
         if (ContainsAuthoringInstructionText(combinedText))
             throw new InvalidOperationException("Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
+        var eventConsistencyDiagnostics = ValidatePhase14EventConsistency(context, family, shortTexts, longTexts, firstSentenceByScene);
         var adapterDiagnostics = new Phase14AdapterDiagnostics(
             true,
             "SceneLevelNarrationComposer",
@@ -2491,11 +2499,113 @@ public sealed partial class ProductionPipelineExecutionService(
             TranslationDiagnostics = translationDiagnostics
         };
         var storyArc = BuildPhase14StoryArc();
-        return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, "Discovery/BBC-style documentary astronomy narration", storyArc, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics, translationDiagnostics);
+        return new Phase14DocumentaryNarration(true, true, "SceneLevelNarrationComposer", false, "Discovery/BBC-style documentary astronomy narration", storyArc, shortTexts, longTexts, finalText, diagnostics, adapterDiagnostics, translationDiagnostics, eventConsistencyDiagnostics);
 
         static string combinedCandidateText(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts)
             => string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
     }
+
+    private static Phase14EventConsistencyDiagnostics ValidatePhase14EventConsistency(
+        ProductionPhaseContext context,
+        string resolvedNarrationFamily,
+        IReadOnlyDictionary<string, string> shortTexts,
+        IReadOnlyDictionary<string, string> longTexts,
+        IReadOnlyDictionary<string, string> firstSentenceByScene)
+    {
+        var intelligence = context.ProductionEventIntelligence;
+        var currentEventText = string.Join(' ', new[]
+        {
+            context.Request.EventType,
+            context.Request.Title,
+            context.Request.ShortTitle
+        }.Where(value => !string.IsNullOrWhiteSpace(value))
+            .Concat(context.Request.PrimaryObjects ?? Array.Empty<string>())
+            .Concat(context.Request.SecondaryObjects ?? Array.Empty<string>()));
+        var narrationText = string.Join(' ', shortTexts.Values.Concat(longTexts.Values).Concat(firstSentenceByScene.Values));
+        var expectedFamily = ResolvePhase14EventFamily(context.Request.EventType, context.Request.Title, context.Request.PrimaryObjects, context.Request.SecondaryObjects);
+        var productionFamily = ResolvePhase14EventFamily(intelligence.EventType, intelligence.Title, intelligence.PrimaryObjects, intelligence.SecondaryObjects);
+        var actualFamily = ResolvePhase14NarrationTextFamily(resolvedNarrationFamily, narrationText);
+        var leakedTerms = new List<string>();
+
+        if (ContainsMeteorEventSignal(currentEventText))
+            leakedTerms.AddRange(FindForbiddenNarrationLeakage(narrationText, ["Jupiter", "Venus", "conjunction", "two planets"]));
+        if (string.Equals(expectedFamily, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            leakedTerms.AddRange(FindForbiddenNarrationLeakage(narrationText, ["meteor shower", "radiant", "Geminids"]));
+
+        var errors = new List<string>();
+        if (!string.IsNullOrWhiteSpace(context.Request.Title) && !string.IsNullOrWhiteSpace(intelligence.Title) && !string.Equals(context.Request.Title, intelligence.Title, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"currentEventLock.title '{context.Request.Title}' does not match ProductionEventIntelligence.title '{intelligence.Title}'.");
+        if (!string.Equals(expectedFamily, productionFamily, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"currentEventLock family '{expectedFamily}' does not match ProductionEventIntelligence family '{productionFamily}'.");
+        if (!string.Equals(expectedFamily, resolvedNarrationFamily, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"resolved narration family '{resolvedNarrationFamily}' does not match currentEventLock family '{expectedFamily}'.");
+        if (!string.Equals(expectedFamily, actualFamily, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"narration text family '{actualFamily}' does not match currentEventLock family '{expectedFamily}'.");
+        if (!StringSetsOverlap(context.Request.PrimaryObjects, intelligence.PrimaryObjects) && (context.Request.PrimaryObjects?.Count ?? 0) > 0 && (intelligence.PrimaryObjects?.Count ?? 0) > 0)
+            errors.Add("currentEventLock.primaryObjects do not overlap ProductionEventIntelligence.primaryObjects.");
+        if (!StringSetsOverlap(context.Request.SecondaryObjects, intelligence.SecondaryObjects) && (context.Request.SecondaryObjects?.Count ?? 0) > 0 && (intelligence.SecondaryObjects?.Count ?? 0) > 0)
+            errors.Add("currentEventLock.secondaryObjects do not overlap ProductionEventIntelligence.secondaryObjects.");
+        if (leakedTerms.Count > 0)
+            errors.Add("forbidden narration leakage detected: " + string.Join(", ", leakedTerms.Distinct(StringComparer.OrdinalIgnoreCase)));
+
+        var diagnostics = new Phase14EventConsistencyDiagnostics(
+            CurrentEventLockEventType: context.Request.EventType,
+            CurrentEventLockTitle: context.Request.Title,
+            CurrentEventLockPrimaryObjects: context.Request.PrimaryObjects,
+            CurrentEventLockSecondaryObjects: context.Request.SecondaryObjects,
+            ProductionEventIntelligenceEventType: intelligence.EventType,
+            ProductionEventIntelligenceTitle: intelligence.Title,
+            ProductionEventIntelligencePrimaryObjects: intelligence.PrimaryObjects,
+            ProductionEventIntelligenceSecondaryObjects: intelligence.SecondaryObjects,
+            ResolvedNarrationFamily: resolvedNarrationFamily,
+            NarrationSourcePath: "SceneLevelNarrationComposer",
+            ForbiddenNarrationLeakageDetected: leakedTerms.Count > 0,
+            LeakedTerms: leakedTerms.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            ExpectedFamily: expectedFamily,
+            ActualFamily: actualFamily,
+            FirstSentenceByScene: firstSentenceByScene,
+            ValidationPassed: errors.Count == 0,
+            Errors: errors);
+
+        if (errors.Count > 0)
+            throw new Phase14EventConsistencyException("Phase 14 event-consistency validation failed before TTS: " + string.Join(" | ", errors), diagnostics);
+
+        return diagnostics;
+    }
+
+    private static string ResolvePhase14EventFamily(string? eventType, string? title, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects)
+    {
+        var text = string.Join(' ', new[] { eventType, title }.Where(v => !string.IsNullOrWhiteSpace(v)).Concat(primaryObjects ?? Array.Empty<string>()).Concat(secondaryObjects ?? Array.Empty<string>()));
+        if (ContainsMeteorEventSignal(text)) return "Meteor";
+        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
+        if (text.Contains("moon", StringComparison.OrdinalIgnoreCase) || text.Contains("lunar", StringComparison.OrdinalIgnoreCase)) return "Moon";
+        return "PlanetGrouping";
+    }
+
+    private static string ResolvePhase14NarrationTextFamily(string resolvedNarrationFamily, string narrationText)
+    {
+        if (ContainsAnyForbiddenPhrase(narrationText, ["meteor shower", "radiant", "Geminids"])) return "Meteor";
+        if (ContainsAnyForbiddenPhrase(narrationText, ["Jupiter", "Venus", "conjunction", "two planets"])) return "PlanetConjunction";
+        return resolvedNarrationFamily;
+    }
+
+    private static bool ContainsMeteorEventSignal(string text)
+        => text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("Geminids", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<string> FindForbiddenNarrationLeakage(string text, IReadOnlyList<string> terms)
+        => terms.Where(term => ContainsNarrationTerm(text, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static bool ContainsAnyForbiddenPhrase(string text, IReadOnlyList<string> terms)
+        => terms.Any(term => ContainsNarrationTerm(text, term));
+
+    private static bool ContainsNarrationTerm(string text, string term)
+        => term.Contains(' ')
+            ? text.Contains(term, StringComparison.OrdinalIgnoreCase)
+            : ContainsToken(text, term);
+
+    private static bool StringSetsOverlap(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
+        => (left ?? Array.Empty<string>()).Any(l => (right ?? Array.Empty<string>()).Any(r => string.Equals(l, r, StringComparison.OrdinalIgnoreCase)));
 
     private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
     {
@@ -4200,7 +4310,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string language, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string language, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -4231,6 +4341,16 @@ public sealed partial class ProductionPipelineExecutionService(
             repeatedHindiSentencesRemoved = adapterDiagnostics?.TranslationDiagnostics?.RepeatedHindiSentencesRemoved ?? Array.Empty<string>(),
             cleanedSceneIds = adapterDiagnostics?.TranslationDiagnostics?.CleanedSceneIds ?? Array.Empty<string>(),
             sceneLevelAdapter = adapterDiagnostics,
+            eventConsistency = eventConsistencyDiagnostics,
+            currentEventLockEventType = eventConsistencyDiagnostics?.CurrentEventLockEventType,
+            productionEventIntelligenceEventType = eventConsistencyDiagnostics?.ProductionEventIntelligenceEventType,
+            resolvedNarrationFamily = eventConsistencyDiagnostics?.ResolvedNarrationFamily,
+            narrationSourcePath = eventConsistencyDiagnostics?.NarrationSourcePath,
+            forbiddenNarrationLeakageDetected = eventConsistencyDiagnostics?.ForbiddenNarrationLeakageDetected ?? false,
+            leakedTerms = eventConsistencyDiagnostics?.LeakedTerms ?? Array.Empty<string>(),
+            expectedFamily = eventConsistencyDiagnostics?.ExpectedFamily,
+            actualFamily = eventConsistencyDiagnostics?.ActualFamily,
+            eventConsistencyFirstSentenceByScene = eventConsistencyDiagnostics?.FirstSentenceByScene,
             adapterUsed = adapterDiagnostics?.AdapterUsed ?? false,
             adapterName = adapterDiagnostics?.AdapterName,
             eventType = adapterDiagnostics?.EventType,
@@ -4238,7 +4358,7 @@ public sealed partial class ProductionPipelineExecutionService(
             longSceneCount = adapterDiagnostics?.LongSceneCount,
             storySectionCount = adapterDiagnostics?.StorySectionCount,
             sceneNarrationGeneratedCount = adapterDiagnostics?.SceneNarrationGeneratedCount,
-            firstSentenceByScene = adapterDiagnostics?.FirstSentenceByScene,
+            firstSentenceByScene = adapterDiagnostics?.FirstSentenceByScene ?? eventConsistencyDiagnostics?.FirstSentenceByScene,
             duplicateFirstSentenceDetected = adapterDiagnostics?.DuplicateFirstSentenceDetected,
             duplicateSrtBlockDetected = adapterDiagnostics?.DuplicateSrtBlockDetected,
             expansionApplied = adapterDiagnostics?.ExpansionApplied,
@@ -4370,7 +4490,29 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record SubtitleCueSource(string Format, int CueId, string SceneId, string Text, string NormalizedText, string SourceType, string SourceFile, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
-    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics, Phase14TranslationDiagnostics TranslationDiagnostics);
+    private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics, Phase14TranslationDiagnostics TranslationDiagnostics, Phase14EventConsistencyDiagnostics EventConsistencyDiagnostics);
+    private sealed record Phase14EventConsistencyDiagnostics(
+        string CurrentEventLockEventType,
+        string CurrentEventLockTitle,
+        IReadOnlyList<string> CurrentEventLockPrimaryObjects,
+        IReadOnlyList<string> CurrentEventLockSecondaryObjects,
+        string ProductionEventIntelligenceEventType,
+        string ProductionEventIntelligenceTitle,
+        IReadOnlyList<string> ProductionEventIntelligencePrimaryObjects,
+        IReadOnlyList<string> ProductionEventIntelligenceSecondaryObjects,
+        string ResolvedNarrationFamily,
+        string NarrationSourcePath,
+        bool ForbiddenNarrationLeakageDetected,
+        IReadOnlyList<string> LeakedTerms,
+        string ExpectedFamily,
+        string ActualFamily,
+        IReadOnlyDictionary<string, string> FirstSentenceByScene,
+        bool ValidationPassed,
+        IReadOnlyList<string> Errors);
+    private sealed class Phase14EventConsistencyException(string message, Phase14EventConsistencyDiagnostics diagnostics) : InvalidOperationException(message)
+    {
+        public Phase14EventConsistencyDiagnostics Diagnostics { get; } = diagnostics;
+    }
     private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated, IReadOnlyList<SceneNarrationComposerTraceEntry> SceneNarrationComposerTrace)
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
