@@ -283,7 +283,7 @@ This happens because orbits line up in our sky.
             var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildCueLevelSceneDurationsFromTtsTimeline", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(method);
 
-            var durations = (IReadOnlyDictionary<string, double>)method!.Invoke(null, [planRoot, "short"])!;
+            var durations = (IReadOnlyDictionary<string, double>)method!.Invoke(null, [planRoot, "short", "en"])!;
 
             Assert.Equal(6.602, durations["001-hook"], 3);
             Assert.Equal(7.0, durations["002-cause"], 3);
@@ -333,13 +333,77 @@ This happens because orbits line up in our sky.
             var method = typeof(ProductionPipelineExecutionService).GetMethod("ReadVideoAssemblyItems", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(method);
 
-            var items = ((System.Collections.IEnumerable)method!.Invoke(null, [planRoot, motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons])!)
+            var items = ((System.Collections.IEnumerable)method!.Invoke(null, [planRoot, "en", motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons])!)
                 .Cast<object>()
                 .ToArray();
 
             Assert.Equal(2, items.Length);
             Assert.Equal(6.602, ReadSceneDuration(items[0]), 3);
             Assert.Equal(7.0, ReadSceneDuration(items[1]), 3);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+
+        static double ReadSceneDuration(object item)
+            => (double)item.GetType().GetProperty("SceneDurationSec")!.GetValue(item)!;
+    }
+
+    [Fact]
+    public void Phase18VisualAssembly_UsesRequestedLanguageTtsTimelineForDurationExpansion()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase18-hi-duration-expansion-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts", "en"));
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts", "hi"));
+            File.WriteAllText(Path.Combine(planRoot, "tts", "en", "tts-timeline.json"), JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001-hook", cueIndex = 1, cueText = "English cue.", audioDurationSec = 2.0 }
+                    }
+                }
+            }));
+            File.WriteAllText(Path.Combine(planRoot, "tts", "hi", "tts-timeline.json"), JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001-hook", cueIndex = 1, cueText = "Hindi cue 1.", audioDurationSec = 20.0 },
+                        new { format = "short", sceneId = "001-hook", cueIndex = 2, cueText = "Hindi cue 2.", audioDurationSec = 25.552 }
+                    }
+                }
+            }));
+
+            var motionRoot = JsonNode.Parse(JsonSerializer.Serialize(new
+            {
+                motionVersion = "V2",
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { sceneId = "001-hook", imagePath = Path.Combine(planRoot, "scene-assets-v3", "short", "001.png"), durationSec = 2.0 }
+                    }
+                }
+            }))!;
+            var ttsRoot = JsonNode.Parse(File.ReadAllText(Path.Combine(planRoot, "tts", "hi", "tts-timeline.json")))!;
+            var missingSceneImages = new List<string>();
+            var missingAudioFiles = new List<string>();
+            var oldPathUsageReasons = new List<string>();
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("ReadVideoAssemblyItems", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var items = ((System.Collections.IEnumerable)method!.Invoke(null, [planRoot, "hi", motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons])!)
+                .Cast<object>()
+                .ToArray();
+
+            Assert.Single(items);
+            Assert.Equal(45.552, ReadSceneDuration(items[0]), 3);
         }
         finally
         {

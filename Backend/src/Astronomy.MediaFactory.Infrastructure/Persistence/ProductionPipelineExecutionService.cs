@@ -3841,7 +3841,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static double SumCueLevelTtsTimelineDurations(string ttsTimelinePath, string format)
         => File.Exists(ttsTimelinePath) ? RoundDuration(ReadCanonicalTtsTimelineItems(JsonNode.Parse(File.ReadAllText(ttsTimelinePath)), format).Sum(item => Math.Max(0, item.AudioDurationSec))) : 0;
 
-    private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format, string language = "en")
+    private static IReadOnlyDictionary<string, double> BuildCueLevelSceneDurationsFromTtsTimeline(string planRoot, string format, string language)
         => ReadCanonicalTtsTimelineItems(planRoot, format, language)
             .Where(item => string.Equals(item.Format, format, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(item.SceneId))
             .GroupBy(item => NormalizeSceneIdForDurationMatch(item.SceneId), StringComparer.OrdinalIgnoreCase)
@@ -6782,6 +6782,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var shortSceneCount = 0;
         var longSceneCount = 0;
+        var initialShortCueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, "short", requestedLanguage);
+        var initialLongCueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, "long", requestedLanguage);
+        var initialShortExpandedSceneCount = 0;
+        var initialLongExpandedSceneCount = 0;
+        Phase18RenderDurationExpansionResult? shortRenderResult = null;
+        Phase18RenderDurationExpansionResult? longRenderResult = null;
         var motionPlanFound = File.Exists(motionPlanPath);
         var motionDebugFound = File.Exists(motionDebugPath);
         var defaultMotionGenerated = !motionPlanFound;
@@ -6796,14 +6802,16 @@ public sealed partial class ProductionPipelineExecutionService(
         var motionV2StrengthMismatch = HasMotionV2StrengthMismatch(context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed);
         {
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
-            var shortItems = ReadVideoAssemblyItems(planRoot, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
-            var longItems = ReadVideoAssemblyItems(planRoot, motionRoot, ttsRoot, "long", previewOnly ? int.MaxValue : 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
+            var shortItems = ReadVideoAssemblyItems(planRoot, requestedLanguage, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
+            var longItems = ReadVideoAssemblyItems(planRoot, requestedLanguage, motionRoot, ttsRoot, "long", previewOnly ? int.MaxValue : 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
             await WriteMotionDebugAsync(planRoot, shortItems.Concat(longItems).ToArray(), cancellationToken);
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
+            initialShortExpandedSceneCount = CountSceneDurationExpansionMatches(initialShortCueLevelDurationsBySceneId, shortItems);
+            initialLongExpandedSceneCount = CountSceneDurationExpansionMatches(initialLongCueLevelDurationsBySceneId, longItems);
             var backgroundMusicConfig = ResolvePhase18BackgroundMusicConfig(planRoot);
-            if (shortItems.Count > 0) await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
-            if (!previewOnly && longItems.Count > 0) await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (shortItems.Count > 0) shortRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (!previewOnly && longItems.Count > 0) longRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
             if (previewOnly && File.Exists(longVideoPath)) File.Delete(longVideoPath);
         }
 
@@ -6959,6 +6967,12 @@ public sealed partial class ProductionPipelineExecutionService(
             requestedLanguage,
             selectedNarrationLanguage = requestedLanguage,
             selectedTtsTimelinePath = NormalizePath(ttsPath),
+            initialDurationExpansionLanguage = requestedLanguage,
+            renderTimeDurationExpansionLanguage = requestedLanguage,
+            initialGroupedTtsSceneCount = new { @short = initialShortCueLevelDurationsBySceneId.Count, @long = initialLongCueLevelDurationsBySceneId.Count },
+            renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 },
+            expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount },
+            renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount },
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
             selectedVideoAssemblyRoot = NormalizePath(videoRoot),
@@ -7097,7 +7111,7 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsPath), selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(videoRoot), languageScopedArtifactsUsed = true, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsPath), initialDurationExpansionLanguage = requestedLanguage, renderTimeDurationExpansionLanguage = requestedLanguage, initialGroupedTtsSceneCount = new { @short = initialShortCueLevelDurationsBySceneId.Count, @long = initialLongCueLevelDurationsBySceneId.Count }, renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 }, expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount }, renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount }, selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(videoRoot), languageScopedArtifactsUsed = true, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -7105,6 +7119,12 @@ public sealed partial class ProductionPipelineExecutionService(
             requestedLanguage,
             selectedNarrationLanguage = requestedLanguage,
             selectedTtsTimelinePath = NormalizePath(ttsPath),
+            initialDurationExpansionLanguage = requestedLanguage,
+            renderTimeDurationExpansionLanguage = requestedLanguage,
+            initialGroupedTtsSceneCount = new { @short = initialShortCueLevelDurationsBySceneId.Count, @long = initialLongCueLevelDurationsBySceneId.Count },
+            renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 },
+            expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount },
+            renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount },
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
             selectedVideoAssemblyRoot = NormalizePath(videoRoot),
@@ -7246,11 +7266,11 @@ public sealed partial class ProductionPipelineExecutionService(
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
 
-    private static IReadOnlyList<VideoAssemblyItem> ReadVideoAssemblyItems(string planRoot, JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons)
+    private static IReadOnlyList<VideoAssemblyItem> ReadVideoAssemblyItems(string planRoot, string language, JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons)
     {
         var items = new List<VideoAssemblyItem>();
         var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
-        var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format);
+        var cueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, format, language);
         var durationPlanBySceneId = durationPlanItems
             .Where(i => !string.IsNullOrWhiteSpace(i.SceneId))
             .GroupBy(i => NormalizeSceneIdForOrder(i.SceneId), StringComparer.OrdinalIgnoreCase)
@@ -7436,6 +7456,9 @@ public sealed partial class ProductionPipelineExecutionService(
         Console.Error.WriteLine(diagnosticsJson);
     }
 
+    private static int CountSceneDurationExpansionMatches(IReadOnlyDictionary<string, double> cueLevelDurationsBySceneId, IReadOnlyList<VideoAssemblyItem> items)
+        => items.Count(item => MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, item.SceneId, item.SceneDurationSec).MatchMode is "Exact" or "NumericPrefix");
+
     private static IReadOnlyList<VideoAssemblyItem> OverrideRenderSceneDurationsFromTtsTimeline(IReadOnlyDictionary<string, double> cueLevelDurationsBySceneId, IReadOnlyList<VideoAssemblyItem> items)
     {
         if (cueLevelDurationsBySceneId.Count == 0) return items;
@@ -7449,10 +7472,13 @@ public sealed partial class ProductionPipelineExecutionService(
         }).ToArray();
     }
 
-    private async Task RenderVideoAssemblyAsync(string planRoot, string language, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
+    private sealed record Phase18RenderDurationExpansionResult(int RenderTimeGroupedTtsSceneCount, int ExpandedSceneCount);
+
+    private async Task<Phase18RenderDurationExpansionResult> RenderVideoAssemblyAsync(string planRoot, string language, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
     {
         var cueLevelDurationsBySceneId = await BuildCueLevelSceneDurationsFromTtsTimelineAsync(planRoot, format, language, cancellationToken);
         var renderItems = OverrideRenderSceneDurationsFromTtsTimeline(cueLevelDurationsBySceneId, items);
+        var expandedSceneCount = CountSceneDurationExpansionMatches(cueLevelDurationsBySceneId, renderItems);
         await WriteMotionDebugAsync(planRoot, renderItems, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var tempRoot = Path.Combine(Path.GetTempPath(), "astro-video-assembly-" + Guid.NewGuid().ToString("N"));
@@ -7600,6 +7626,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             try { Directory.Delete(tempRoot, true); } catch { }
         }
+        return new Phase18RenderDurationExpansionResult(cueLevelDurationsBySceneId.Count, expandedSceneCount);
     }
 
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
