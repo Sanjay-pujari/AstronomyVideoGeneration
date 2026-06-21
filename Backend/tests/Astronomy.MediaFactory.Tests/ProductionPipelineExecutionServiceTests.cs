@@ -872,6 +872,61 @@ First cue.
         Assert.Contains("two planets", inner.Message);
     }
 
+
+    [Fact]
+    public void Phase14HindiTranslation_TranslatesMeteorNarrationWithoutConjunctionLeakage()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Tonight the Geminids meteor shower is strongest under a dark sky. Watch near the radiant and avoid moonlight."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["006-radiant-guide"] = "The Geminids radiant helps you orient, but meteors can streak across the whole dark sky."
+        };
+
+        var diagnostics = method!.Invoke(null, ["hi", "Meteor", shortTexts, longTexts])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+
+        Assert.Contains("जेमिनिड्स", translated);
+        Assert.Contains("उल्का वर्षा", translated);
+        Assert.Contains("रेडिएंट", translated);
+        Assert.Contains("अंधेरा आसमान", translated);
+        Assert.DoesNotContain("बृहस्पति", translated);
+        Assert.DoesNotContain("शुक्र", translated);
+        Assert.DoesNotContain("युति", translated);
+        Assert.False((bool)diagnostics.GetType().GetProperty("HardcodedTemplateUsed")!.GetValue(diagnostics)!);
+        Assert.False((bool)diagnostics.GetType().GetProperty("ForbiddenNarrationLeakageDetected")!.GetValue(diagnostics)!);
+        Assert.Equal("deterministic-english-to-hindi-text-translation", diagnostics.GetType().GetProperty("TranslationMode")!.GetValue(diagnostics));
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_TranslatesConjunctionNarrationWithoutMeteorLeakage()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Tonight Jupiter and Venus form a bright conjunction after sunset."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["002-cause"] = "The planets look close in the sky, so watch the western horizon after sunset."
+        };
+
+        var diagnostics = method!.Invoke(null, ["hi", "PlanetConjunction", shortTexts, longTexts])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+
+        Assert.Contains("बृहस्पति", translated);
+        Assert.Contains("शुक्र", translated);
+        Assert.Contains("युति", translated);
+        Assert.DoesNotContain("उल्का", translated);
+        Assert.DoesNotContain("रेडिएंट", translated);
+        Assert.DoesNotContain("जेमिनिड्स", translated);
+        Assert.False((bool)diagnostics.GetType().GetProperty("HardcodedTemplateUsed")!.GetValue(diagnostics)!);
+        Assert.False((bool)diagnostics.GetType().GetProperty("ForbiddenNarrationLeakageDetected")!.GetValue(diagnostics)!);
+    }
+
     [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
