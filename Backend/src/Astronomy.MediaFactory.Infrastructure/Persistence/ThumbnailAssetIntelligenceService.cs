@@ -256,6 +256,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Directory.CreateDirectory(thumbnailRoot);
         DeleteThumbnailV8ForbiddenOutputs(thumbnailRoot);
         var prompts = ThumbnailV8AiNativePromptBuilder.BuildPrompts(request);
+        var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var failures = new List<string>();
@@ -286,6 +287,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), finalPath, overwrite: true);
         var allOutputs = outputPaths.Values.Append(NormalizePath(finalPath)).ToArray();
         ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
+        promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         await WriteThumbnailV8ManifestAsync(request, thumbnailRoot, cancellationToken);
         var promptJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptFileName);
         await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
@@ -312,9 +314,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             cropFromLandscape = false,
             locationRemovedFromPrompt = true,
             mobileOptimizedCopy = true,
-            maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
-            visibleInformationFields = new[] { "Date", "Direction", "Equipment" },
-            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
+            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            visibleInformationFields = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            prohibitedVisibleInformation = new[] { "multi-day time spans", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
             informationAreaPercentMax = 20,
             titleAreaPercentMax = 12,
             portraitObjectsAreaPercentMin = 35,
@@ -330,6 +332,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
             validationPassed = true,
+            forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
+            forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
+            finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
             selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
@@ -351,7 +356,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             generatedUtc = DateTimeOffset.UtcNow
         };
         await File.WriteAllTextAsync(v8DiagnosticsPath, JsonSerializer.Serialize(v8Diagnostics, JsonOptions), cancellationToken);
-        await WriteThumbnailV8Phase12ValidationAsync(thumbnailRoot, allOutputs, cancellationToken);
+        await WriteThumbnailV8Phase12ValidationAsync(thumbnailRoot, allOutputs, promptValidation, cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             thumbnailVersion = "V8",
@@ -367,9 +372,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             cropFromLandscape = false,
             locationRemovedFromPrompt = true,
             mobileOptimizedCopy = true,
-            maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
-            visibleInformationFields = new[] { "Date", "Direction", "Equipment" },
-            prohibitedVisibleInformation = new[] { "visibility windows", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
+            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            visibleInformationFields = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            prohibitedVisibleInformation = new[] { "multi-day time spans", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
             informationAreaPercentMax = 20,
             titleAreaPercentMax = 12,
             portraitObjectsAreaPercentMin = 35,
@@ -385,6 +390,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
             validationPassed = true,
+            forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
+            forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
+            finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
             selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
@@ -454,7 +462,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
     }
 
-    private static async Task WriteThumbnailV8Phase12ValidationAsync(string thumbnailRoot, IReadOnlyList<string> outputFiles, CancellationToken cancellationToken)
+    private static async Task WriteThumbnailV8Phase12ValidationAsync(string thumbnailRoot, IReadOnlyList<string> outputFiles, ThumbnailV8PromptValidationDiagnostics promptValidation, CancellationToken cancellationToken)
     {
         var validationPath = Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
@@ -474,6 +482,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedSquarePrompt = true,
             dedicatedPortraitPrompt = true,
             validationPassed = true,
+            forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
+            forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
+            finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
             selectedTemplate = "AiNativePromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
@@ -481,7 +492,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             backgroundMode = "PerAspectAzureImage2",
             azureImage2Generated = true,
             semanticValidationPassed = true,
-            maximumVisibleInformation = new[] { "Date", "Direction", "Equipment" },
+            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
             informationAreaPercentMax = 20,
             titleAreaPercentMax = 12,
             portraitObjectsAreaPercentMin = 35,
@@ -507,12 +518,33 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await image.SaveAsPngAsync(path, cancellationToken);
         }
     }
+    private static readonly string[] ThumbnailV8ForbiddenPromptTokens =
+    [
+        "ThumbnailV7", "V7", "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "lat/lon", "around Jun",
+        "manual overlay", "crop from landscape", "background-only", "visibility window", "visibility windows",
+        "viewing window", "recommended viewing window", "schedule description", "schedule descriptions"
+    ];
+
+    private sealed record ThumbnailV8PromptValidationDiagnostics(IReadOnlyList<string> ForbiddenTokensDetected, IReadOnlyList<string> ForbiddenTokensRemoved, bool FinalPromptPassedValidation);
+
+    private static ThumbnailV8PromptValidationDiagnostics BuildThumbnailV8PromptValidationDiagnostics(IReadOnlyList<ThumbnailV8Prompt> prompts)
+    {
+        var detected = ThumbnailV8ForbiddenPromptTokens
+            .Where(token => prompts.Any(prompt => prompt.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(token => token, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var removed = new[] { "visibility window", "visibility windows", "viewing window", "recommended viewing window", "schedule descriptions" }
+            .Except(detected, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new ThumbnailV8PromptValidationDiagnostics(detected, removed, detected.Length == 0);
+    }
 
     private static void ValidateThumbnailV8Outputs(IReadOnlyList<ThumbnailV8Prompt> prompts, string thumbnailRoot, bool promptOnly, bool fallbackUsed)
     {
         if (fallbackUsed) throw new InvalidOperationException("Thumbnail V8 validation failed: fallback image was used.");
         if (promptOnly) throw new InvalidOperationException("Thumbnail V8 validation failed: promptOnly cannot be true during real generation.");
-        var forbiddenPromptTokens = new[] { "ThumbnailV7", "V7", "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "lat/lon", "around Jun", "manual overlay", "crop from landscape", "background-only", "visibility window" };
+        var forbiddenPromptTokens = ThumbnailV8ForbiddenPromptTokens;
         foreach (var prompt in prompts)
         {
             var matchedPromptToken = forbiddenPromptTokens.FirstOrDefault(token => prompt.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase));
@@ -2721,6 +2753,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 EventType: ResolveV8Subtitle(current, intelligence),
                 DateText: current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture) ?? "Event date",
                 BestTime: ResolveShortBestTime(current, intelligence),
+                Separation: ResolveShortSeparation(current),
                 Direction: ResolveShortDirection(current, intelligence),
                 Equipment: ResolveV8Equipment(current, intelligence),
                 Tips: [],
@@ -2796,6 +2829,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return match.Success ? match.Value.ToUpperInvariant() : "After Sunset";
         }
 
+        private static string ResolveShortSeparation(CurrentEventLock current)
+        {
+            return current.AngularSeparationDegrees is decimal separation ? $"{separation:0.##}° apart" : string.Empty;
+        }
+
         private static string ResolveShortDirection(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
             var value = FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "West");
@@ -2830,7 +2868,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var prompt = CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Premium astronomy infographic thumbnail for a planet conjunction. NASA + National Geographic quality, cinematic twilight sky, ultra realistic celestial objects, modern glassmorphism UI, professional typography, high contrast, mobile readable, social-media optimized.
 VISUAL SCENE: realistic twilight sky with beautiful sunset glow, natural horizon, atmospheric scattering, cinematic clouds, professional landscape silhouette, dark blue and gold palette. Planet objects on the right side only. Show only these event objects: {{objectText}}. For Jupiter + Venus, show only Jupiter and Venus; do not add Mercury. No extra celestial objects, no Moon unless listed as an event object, no random planets.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields visible in mobile variants: DATE, DIRECTION, EQUIPMENT only. Do not render Best Time, Objects, coordinates, city, country, visibility windows, time-span block, long date range, region, location, technical astronomy data, or scientific description as visible fields. Professional callouts connected to planets only if space allows and never competing with planets. West marker near horizon. Footer tips exactly: LOOK WEST, AFTER SUNSET, NAKED EYE.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields visible in mobile variants: DATE, BEST TIME, DIRECTION, SEPARATION when available, EQUIPMENT only. Do not render Objects, coordinates, city, country, time-span block, long date range, region, location, technical astronomy data, or scientific description as visible fields. Professional callouts connected to planets only if space allows and never competing with planets. West marker near horizon. Footer tips exactly: LOOK WEST, AFTER SUNSET, NAKED EYE.
 CALLOUT STYLE: elegant astronomy callout cards near the planets, for example "JUPITER / The Giant" and "VENUS / The Brightest Planet", with compact glass panels and thin gold leader lines.
 PLANETARY CTR RULE: This is a click-through-rate optimized thumbnail.
 Celestial objects are more important than the information panel.
@@ -2883,17 +2921,17 @@ UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation car
             var eventName = ResolveEclipseEventName(c.Current, c.Intelligence);
             var prompt = CommonOpening(aspect, c, "Professional eclipse observation guide") + $$"""
 FAMILY-SPECIFIC TEMPLATE: professional eclipse observation guide.
-VISUAL SCENE: realistic eclipse scene with accurate Sun/Moon alignment, dramatic sky and visibility context. Show the eclipse bodies only; no random planets or unrelated celestial objects.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Peak Time, Visibility, Equipment, Safety. Include alignment callouts and bottom footer tips; solar eclipse footer must include safe viewing, lunar eclipse footer can include naked-eye viewing.
+VISUAL SCENE: realistic eclipse scene with accurate Sun/Moon alignment and dramatic sky context. Show the eclipse bodies only; no random planets or unrelated celestial objects.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Peak Time, Direction, Equipment, Safety. Include alignment callouts and bottom footer tips; solar eclipse footer must include safe viewing, lunar eclipse footer can include naked-eye viewing.
 TITLE RULE: primary title must be the actual eclipse event name "{{eventName}}". Never generate or render "Sun + Moon" as the title.
-SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOLAR FILTER REQUIRED. Never look at the Sun directly without approved protection." : "Lunar eclipse safety: safe to view with eyes or binoculars; note visibility and timing clearly.")}}
+SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOLAR FILTER REQUIRED. Never look at the Sun directly without approved protection." : "Lunar eclipse safety: safe to view with eyes or binoculars; note direction and peak time clearly.")}}
 """ + CommonData(c, eventName);
-            return Final(aspect, c, prompt, nameof(EclipseObservationGuidePromptBuilder), "Eclipse", "Eclipse guide with realistic alignment, aspect-native timing/safety/visibility card, solar safety when applicable, short footer tips.");
+            return Final(aspect, c, prompt, nameof(EclipseObservationGuidePromptBuilder), "Eclipse", "Eclipse guide with realistic alignment, aspect-native timing/safety card, solar safety when applicable, short footer tips.");
         }
     }
 
     private sealed record ThumbnailV8AspectSpec(string Name, int Width, int Height, string AspectRatio, string LayoutInstruction);
-    private sealed record ThumbnailV8PromptContext(CurrentEventLock Current, ProductionEventIntelligence? Intelligence, string Title, string EventType, string DateText, string BestTime, string Direction, string Equipment, IReadOnlyList<string> Tips, IReadOnlyList<string> Objects);
+    private sealed record ThumbnailV8PromptContext(CurrentEventLock Current, ProductionEventIntelligence? Intelligence, string Title, string EventType, string DateText, string BestTime, string Separation, string Direction, string Equipment, IReadOnlyList<string> Tips, IReadOnlyList<string> Objects);
 
     private static string ResolveEclipseEventName(CurrentEventLock current, ProductionEventIntelligence? intelligence)
     {
@@ -2921,7 +2959,7 @@ OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 TITLE TEXT: "{{c.Title}}"
 SUBTITLE TEXT: "{{c.EventType}}"
-MOBILE INFORMATION LIMIT: maximum visible information is Date, Direction, Equipment. Do not display time-span blocks, long date ranges, city names, region names, country names, coordinates, location names, or scientific descriptions.
+MOBILE INFORMATION LIMIT: maximum visible information is Date, Best Time, Direction, Separation when available, Equipment. Do not display time-span blocks, long date ranges, city names, region names, country names, coordinates, location names, or scientific descriptions.
 PORTRAIT LOCK: when aspect is 9:16, title area maximum 12%, information area maximum 20%, celestial object area minimum 35%, and objects remain the primary visual focus in a unique Shorts/Reels composition.
 TEXT STYLE RULE: Render natural title case words only. Do not render underscores, snake case, database field names, technical identifiers, or all-caps event codes.
 """;
@@ -2929,8 +2967,10 @@ TEXT STYLE RULE: Render natural title case words only. Do not render underscores
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
 DATA TO RENDER IN THE IMAGE:
 - Date: {{c.DateText}}
+- Best Time: {{c.BestTime}}
 - Direction: {{c.Direction}}
 - Equipment: {{c.Equipment}}
+- Separation: {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}
 - Objects to render visually, not as observation-card fields: {{objectText}}
 - Footer tips: use the three short tips specified in the family template above.
 QUALITY RULES: sharp readable typography, no watermark, no branding, no location text, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette. Information area must be 20% of canvas or less.
@@ -2945,7 +2985,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
     private static string SanitizeThumbnailV8PromptText(string value)
     {
         var sanitized = value ?? string.Empty;
-        foreach (var forbidden in new[] { "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "regionId", "lat/lon", "around Jun" })
+        foreach (var forbidden in new[] { "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "regionId", "lat/lon", "around Jun", "visibility window", "visibility windows", "viewing window", "recommended viewing window", "schedule descriptions" })
             sanitized = sanitized.Replace(forbidden, string.Empty, StringComparison.OrdinalIgnoreCase);
         sanitized = sanitized.Replace('_', ' ');
         sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+over\s*(?=[;,.\n])", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
