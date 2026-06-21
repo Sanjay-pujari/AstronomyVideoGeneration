@@ -486,18 +486,40 @@ public sealed class ContentPlanBatchGenerationService(
 
     private async Task EnsurePlanIntelligenceObjectsFromSourceCoreAsync(ContentGenerationPlan targetPlan, string requestedLanguage, CancellationToken cancellationToken, ContentGenerationPlan? knownSourcePlan = null)
     {
-        var targetEvent = targetPlan.AstronomyEventIntelligence;
-        if (targetEvent?.Objects.Count > 0)
+        var targetPlanId = targetPlan.Id;
+
+        foreach (var localTargetPlan in db.ContentGenerationPlans.Local.Where(p => p.Id == targetPlanId).ToArray())
+            db.Entry(localTargetPlan).State = EntityState.Detached;
+
+        var trackedTargetPlan = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
+            .FirstOrDefaultAsync(p => p.Id == targetPlanId, cancellationToken);
+
+        if (trackedTargetPlan is null)
         {
-            LogSiblingPlanDatabaseLinkageDiagnostics(knownSourcePlan ?? targetPlan, targetPlan, knownSourcePlan?.AstronomyEventIntelligence, targetEvent);
+            LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, null, null, 0, null);
+            logger.LogWarning(
+                "Skipping astronomy intelligence linkage because target content plan {TargetPlanId} was not found before save. targetPlanMissingBeforeSave={TargetPlanMissingBeforeSave}",
+                targetPlanId,
+                true);
             return;
         }
 
-        var sourcePlan = knownSourcePlan ?? await FindSourcePlanIgnoringLanguageAsync(targetPlan, requestedLanguage, cancellationToken);
+        var targetEvent = trackedTargetPlan.AstronomyEventIntelligence;
+        if (targetEvent?.Objects.Count > 0)
+        {
+            LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, trackedTargetPlan, null, 0, targetEvent);
+            LogSiblingPlanDatabaseLinkageDiagnostics(knownSourcePlan ?? trackedTargetPlan, trackedTargetPlan, knownSourcePlan?.AstronomyEventIntelligence, targetEvent);
+            return;
+        }
+
+        var sourcePlan = knownSourcePlan ?? await FindSourcePlanIgnoringLanguageAsync(trackedTargetPlan, requestedLanguage, cancellationToken);
         var sourceEvent = sourcePlan?.AstronomyEventIntelligence;
         if (sourceEvent is null || sourceEvent.Objects.Count == 0)
         {
-            LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan ?? targetPlan, targetPlan, sourceEvent, targetEvent);
+            LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, trackedTargetPlan, null, 0, targetEvent);
+            LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan ?? trackedTargetPlan, trackedTargetPlan, sourceEvent, targetEvent);
             return;
         }
 
@@ -513,26 +535,51 @@ public sealed class ContentPlanBatchGenerationService(
             .ThenByDescending(e => e.Objects.Count)
             .FirstOrDefaultAsync(cancellationToken);
 
+        var copiedObjectCount = 0;
         var siblingEvent = reusableRequestedLanguageEvent ?? CopyEventForLanguage(sourceEvent, requestedLanguage);
         if (reusableRequestedLanguageEvent is null)
         {
+            copiedObjectCount = siblingEvent.Objects.Count;
             db.AstronomyEventIntelligences.Add(siblingEvent);
         }
         else if (reusableRequestedLanguageEvent.Objects.Count == 0)
         {
             foreach (var sourceObject in sourceEvent.Objects)
+            {
                 reusableRequestedLanguageEvent.Objects.Add(CopyEventObject(sourceObject));
+                copiedObjectCount++;
+            }
         }
 
-        targetPlan.AstronomyEventIntelligence = siblingEvent;
-        targetPlan.AstronomyEventIntelligenceId = siblingEvent.Id;
-        targetPlan.SourceExternalEventId = targetPlan.SourceExternalEventId ?? sourcePlan?.SourceExternalEventId ?? sourceEvent.ExternalEventId;
-        targetPlan.PlannedObjectNamesJson = targetPlan.PlannedObjectNamesJson ?? sourcePlan?.PlannedObjectNamesJson;
-        targetPlan.PrimaryCelestialObjectCode = targetPlan.PrimaryCelestialObjectCode ?? sourcePlan?.PrimaryCelestialObjectCode;
-        targetPlan.Touch();
+        trackedTargetPlan.AstronomyEventIntelligence = siblingEvent;
+        trackedTargetPlan.AstronomyEventIntelligenceId = siblingEvent.Id;
+        trackedTargetPlan.SourceExternalEventId = trackedTargetPlan.SourceExternalEventId ?? sourcePlan?.SourceExternalEventId ?? sourceEvent.ExternalEventId;
+        trackedTargetPlan.PlannedObjectNamesJson = trackedTargetPlan.PlannedObjectNamesJson ?? sourcePlan?.PlannedObjectNamesJson;
+        trackedTargetPlan.PrimaryCelestialObjectCode = trackedTargetPlan.PrimaryCelestialObjectCode ?? sourcePlan?.PrimaryCelestialObjectCode;
+        trackedTargetPlan.Touch();
 
         await db.SaveChangesAsync(cancellationToken);
-        LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, targetPlan, sourceEvent, siblingEvent);
+        LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(targetPlanId, trackedTargetPlan, siblingEvent, copiedObjectCount, siblingEvent);
+        LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, trackedTargetPlan, sourceEvent, siblingEvent);
+    }
+
+    private void LogEnsurePlanIntelligenceObjectsFromSourceDiagnostics(Guid targetPlanId, ContentGenerationPlan? trackedTargetPlan, AstronomyEventIntelligence? siblingEvent, int copiedObjectCount, AstronomyEventIntelligence? resolvedEvent)
+    {
+        var trackedTargetPlanState = trackedTargetPlan is null
+            ? null
+            : db.Entry(trackedTargetPlan).State.ToString();
+        var primaryObjectsResolvedAfterSave = ResolveDiagnosticObjects(resolvedEvent, primary: true);
+        var secondaryObjectsResolvedAfterSave = ResolveDiagnosticObjects(resolvedEvent, primary: false);
+
+        logger.LogInformation(
+            "Ensure plan intelligence objects from source diagnostics: targetPlanId={TargetPlanId}, trackedTargetPlanFound={TrackedTargetPlanFound}, trackedTargetPlanState={TrackedTargetPlanState}, siblingEventId={SiblingEventId}, copiedObjectCount={CopiedObjectCount}, primaryObjectsResolvedAfterSave={PrimaryObjectsResolvedAfterSave}, secondaryObjectsResolvedAfterSave={SecondaryObjectsResolvedAfterSave}",
+            targetPlanId,
+            trackedTargetPlan is not null,
+            trackedTargetPlanState,
+            siblingEvent?.Id,
+            copiedObjectCount,
+            string.Join(",", primaryObjectsResolvedAfterSave),
+            string.Join(",", secondaryObjectsResolvedAfterSave));
     }
 
     private async Task<ContentGenerationPlan?> FindSourcePlanIgnoringLanguageAsync(ContentGenerationPlan targetPlan, string requestedLanguage, CancellationToken cancellationToken)
