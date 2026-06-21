@@ -330,6 +330,7 @@ public sealed class ContentPlanBatchGenerationService(
 
         return await db.ContentGenerationPlans
             .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
             .Where(p => p.RegionId == regionId && p.Language == language)
             .Where(p => p.ScheduledUtc.HasValue && p.ScheduledUtc.Value >= yearStart && p.ScheduledUtc.Value < yearEnd)
             .ToArrayAsync(cancellationToken);
@@ -342,6 +343,7 @@ public sealed class ContentPlanBatchGenerationService(
         var requestedLanguage = NormalizeLanguage(request.Language);
         var sourcePlan = await db.ContentGenerationPlans
             .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
             .FirstOrDefaultAsync(p => p.Id == request.PlanId.Value, cancellationToken);
 
         if (sourcePlan is null) return LanguageMismatchPlanResolution.None(request.Language);
@@ -374,6 +376,7 @@ public sealed class ContentPlanBatchGenerationService(
 
         return await db.ContentGenerationPlans
             .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
             .Where(p => p.RegionId == requestedRegionId && p.Language == requestedLanguage)
             .Where(p => (p.SourceExternalEventId != null && externalIds.Contains(p.SourceExternalEventId))
                 || (p.AstronomyEventIntelligence != null && externalIds.Contains(p.AstronomyEventIntelligence.ExternalEventId)))
@@ -388,6 +391,7 @@ public sealed class ContentPlanBatchGenerationService(
         var siblingEvent = sourceEvent is null
             ? null
             : await db.AstronomyEventIntelligences
+                .Include(e => e.Objects)
                 .FirstOrDefaultAsync(e => e.ExternalEventId == sourceEvent.ExternalEventId
                     && e.RegionId == sourceEvent.RegionId
                     && e.Language == requestedLanguage, cancellationToken);
@@ -466,7 +470,22 @@ public sealed class ContentPlanBatchGenerationService(
             ContentOpportunityScore = sourceEvent.ContentOpportunityScore,
             RawDataJson = sourceEvent.RawDataJson,
             RulesAppliedJson = sourceEvent.RulesAppliedJson,
-            MetadataJson = sourceEvent.MetadataJson
+            MetadataJson = sourceEvent.MetadataJson,
+            Objects = sourceEvent.Objects
+                .Select(CopyEventObject)
+                .ToArray()
+        };
+
+    private static AstronomyEventObject CopyEventObject(AstronomyEventObject sourceObject)
+        => new()
+        {
+            ObjectName = sourceObject.ObjectName,
+            ObjectType = sourceObject.ObjectType,
+            ObjectRole = sourceObject.ObjectRole,
+            CatalogId = sourceObject.CatalogId,
+            Magnitude = sourceObject.Magnitude,
+            VisibilityScore = sourceObject.VisibilityScore,
+            MetadataJson = sourceObject.MetadataJson
         };
 
     private static string BuildSiblingEventCode(string sourceEventCode, string requestedLanguage)
