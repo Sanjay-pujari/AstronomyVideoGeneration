@@ -4427,7 +4427,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 continue;
 
             var blocks = ParseSrtBlocks(await File.ReadAllTextAsync(inputSrtPath, cancellationToken));
-            var visualSceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, format, blocks);
+            var visualSceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, language, format, blocks);
             var sceneRoot = Path.Combine(planRoot, "tts", language, format);
             Directory.CreateDirectory(sceneRoot);
             var sceneAudio = new List<string>();
@@ -4589,12 +4589,17 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string BuildSrt(IReadOnlyList<Phase15SrtBlock> blocks)
         => string.Join("\n\n", blocks.Select((b, i) => $"{i + 1}\n{FormatSrtTimestamp(b.Start)} --> {FormatSrtTimestamp(b.End)}\n{b.Text}")) + "\n";
 
-    private static IReadOnlyList<string> ResolvePhase15VisualSceneIdsForSrtBlocks(string planRoot, string format, IReadOnlyList<Phase15SrtBlock> blocks)
+    private static IReadOnlyList<string> ResolvePhase15VisualSceneIdsForSrtBlocks(string planRoot, string language, string format, IReadOnlyList<Phase15SrtBlock> blocks)
     {
         if (blocks.Count == 0) return [];
 
-        var narrationRoot = Path.Combine(planRoot, "narration", format);
+        var narrationRoot = ResolvePhase15NarrationRoot(planRoot, language, format);
         var narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, narrationRoot);
+        if (narrationFiles.Count == 0 && !string.Equals(language, "en", StringComparison.OrdinalIgnoreCase))
+        {
+            var fallbackNarrationRoot = ResolvePhase15NarrationRoot(planRoot, "en", format);
+            narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, fallbackNarrationRoot);
+        }
         if (narrationFiles.Count == 0) return blocks.Select(block => block.SceneId).ToArray();
 
         var sceneIds = new List<string>();
@@ -4610,6 +4615,14 @@ public sealed partial class ProductionPipelineExecutionService(
         return sceneIds.Count == blocks.Count
             ? sceneIds
             : blocks.Select(block => block.SceneId).ToArray();
+    }
+
+    private static string ResolvePhase15NarrationRoot(string planRoot, string language, string format)
+    {
+        var normalizedLanguage = ResolvePipelineLanguage(language);
+        var localizedRoot = Path.Combine(planRoot, "narration", normalizedLanguage, format);
+        if (Directory.Exists(localizedRoot)) return localizedRoot;
+        return Path.Combine(planRoot, "narration", format);
     }
 
     private static IReadOnlyList<string> ResolveOrderedPhase15NarrationFiles(string planRoot, string format, string narrationRoot)
