@@ -4427,7 +4427,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 continue;
 
             var blocks = ParseSrtBlocks(await File.ReadAllTextAsync(inputSrtPath, cancellationToken));
-            var visualSceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, language, format, blocks);
+            var sceneIdResolution = ResolvePhase15VisualSceneIdLineage(planRoot, language, format, blocks);
+            var visualSceneIdsByCue = sceneIdResolution.AssignedSceneIds;
+            foreach (var validationError in ValidatePhase15SceneIdLineage(
+                         FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType, "generic-astronomy-event"),
+                         language,
+                         format,
+                         sceneIdResolution))
+                errors.Add(validationError);
             var sceneRoot = Path.Combine(planRoot, "tts", language, format);
             Directory.CreateDirectory(sceneRoot);
             var sceneAudio = new List<string>();
@@ -4472,6 +4479,8 @@ public sealed partial class ProductionPipelineExecutionService(
                         sceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
                         cueIndex = index + 1,
                         cueId = block.SceneId,
+                        cueSourceFile = index < sceneIdResolution.Diagnostics.Count ? NormalizePath(sceneIdResolution.Diagnostics[index].CueSourceFile) : string.Empty,
+                        sceneIdSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].SceneIdSource : string.Empty,
                         audioPath = NormalizePath(sceneAudio[index]),
                         narrationText = block.Text,
                         cueText = block.Text,
@@ -4503,6 +4512,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 audioDurationSec = roundedAudioDurationSec,
                 srtDurationSec = roundedSrtDurationSec,
                 audioSrtDurationDeltaSec = roundedDeltaSec,
+                sceneIdLineage = BuildPhase15SceneIdLineageDiagnostics(
+                    FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType, "generic-astronomy-event"),
+                    language,
+                    format,
+                    sceneIdResolution),
                 validationPassed = errors.Count == 0
             });
         }
@@ -4590,32 +4604,140 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.Join("\n\n", blocks.Select((b, i) => $"{i + 1}\n{FormatSrtTimestamp(b.Start)} --> {FormatSrtTimestamp(b.End)}\n{b.Text}")) + "\n";
 
     private static IReadOnlyList<string> ResolvePhase15VisualSceneIdsForSrtBlocks(string planRoot, string language, string format, IReadOnlyList<Phase15SrtBlock> blocks)
+        => ResolvePhase15VisualSceneIdLineage(planRoot, language, format, blocks).AssignedSceneIds;
+
+    private static Phase15SceneIdLineageResolution ResolvePhase15VisualSceneIdLineage(string planRoot, string language, string format, IReadOnlyList<Phase15SrtBlock> blocks)
     {
-        if (blocks.Count == 0) return [];
+        var expectedVisualSceneIds = ResolvePhase15ExpectedVisualSceneIds(planRoot, format);
+        if (blocks.Count == 0)
+            return new Phase15SceneIdLineageResolution([], expectedVisualSceneIds, []);
 
         var narrationRoot = ResolvePhase15NarrationRoot(planRoot, language, format);
         var narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, narrationRoot);
+        var narrationLanguage = language;
         if (narrationFiles.Count == 0 && !string.Equals(language, "en", StringComparison.OrdinalIgnoreCase))
         {
             var fallbackNarrationRoot = ResolvePhase15NarrationRoot(planRoot, "en", format);
             narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, fallbackNarrationRoot);
+            narrationLanguage = "en";
         }
-        if (narrationFiles.Count == 0) return blocks.Select(block => block.SceneId).ToArray();
+        if (narrationFiles.Count == 0)
+            return BuildPhase15FallbackSceneIdLineage(blocks, expectedVisualSceneIds, "srt-cue-metadata", "narration-files-missing");
 
         var sceneIds = new List<string>();
+        var sourceFiles = new List<string>();
+        var sceneIdSources = new List<string>();
         foreach (var narrationFile in narrationFiles)
         {
             if (!File.Exists(narrationFile)) continue;
             var sceneId = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var narrationText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
             var cueCount = SplitSubtitleChunks(narrationText).Count;
-            for (var i = 0; i < cueCount; i++) sceneIds.Add(sceneId);
+            for (var i = 0; i < cueCount; i++)
+            {
+                sceneIds.Add(sceneId);
+                sourceFiles.Add(narrationFile);
+                sceneIdSources.Add($"narration-file-path:{narrationLanguage}");
+            }
         }
 
-        return sceneIds.Count == blocks.Count
-            ? sceneIds
-            : blocks.Select(block => block.SceneId).ToArray();
+        if (sceneIds.Count != blocks.Count)
+            return BuildPhase15FallbackSceneIdLineage(blocks, expectedVisualSceneIds, "srt-cue-metadata", $"narration-cue-count-mismatch:{sceneIds.Count}!={blocks.Count}");
+
+        var diagnostics = blocks.Select((block, index) => new Phase15SceneIdLineageCueDiagnostic(
+            index + 1,
+            sourceFiles[index],
+            sceneIds[index],
+            sceneIdSources[index],
+            IsNumericSceneId(sceneIds[index]))).ToArray();
+        return new Phase15SceneIdLineageResolution(sceneIds, expectedVisualSceneIds, diagnostics);
     }
+
+    private static Phase15SceneIdLineageResolution BuildPhase15FallbackSceneIdLineage(IReadOnlyList<Phase15SrtBlock> blocks, IReadOnlyList<string> expectedVisualSceneIds, string source, string reason)
+    {
+        var sceneIds = blocks.Select(block => block.SceneId).ToArray();
+        var diagnostics = blocks.Select((block, index) => new Phase15SceneIdLineageCueDiagnostic(
+            index + 1,
+            string.Empty,
+            block.SceneId,
+            $"{source}:{reason}",
+            IsNumericSceneId(block.SceneId))).ToArray();
+        return new Phase15SceneIdLineageResolution(sceneIds, expectedVisualSceneIds, diagnostics);
+    }
+
+    private static IReadOnlyList<string> ValidatePhase15SceneIdLineage(string eventFamily, string language, string format, Phase15SceneIdLineageResolution resolution)
+    {
+        var errors = new List<string>();
+        var expected = resolution.ExpectedVisualSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var actual = resolution.AssignedSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var expectedSet = new HashSet<string>(expected, StringComparer.OrdinalIgnoreCase);
+        var numericRejected = resolution.Diagnostics
+            .Where(d => d.NumericSceneIdRejected && !expectedSet.Contains(d.AssignedSceneId))
+            .ToArray();
+        foreach (var diagnostic in numericRejected)
+            errors.Add($"Phase 15 sceneId lineage rejected numeric cue sceneId. eventFamily={eventFamily}; language={language}; format={format}; cueIndex={diagnostic.CueIndex}; cueSourceFile={diagnostic.CueSourceFile}; assignedSceneId={diagnostic.AssignedSceneId}; sceneIdSource={diagnostic.SceneIdSource}; numericSceneIdRejected=true");
+
+        if (expected.Length > 0)
+        {
+            var missing = expected.Where(sceneId => !actual.Contains(sceneId, StringComparer.OrdinalIgnoreCase)).ToArray();
+            var extra = actual.Where(sceneId => !expected.Contains(sceneId, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (missing.Length > 0 || extra.Length > 0 || actual.Length != expected.Length)
+                errors.Add($"Phase 15 sceneId lineage mismatch. eventFamily={eventFamily}; language={language}; format={format}; distinctTimelineSceneIds=[{string.Join(",", actual)}]; expectedVisualSceneIds=[{string.Join(",", expected)}]; missingVisualSceneIds=[{string.Join(",", missing)}]; extraTimelineSceneIds=[{string.Join(",", extra)}]");
+
+            foreach (var diagnostic in resolution.Diagnostics.Where(d => !expectedSet.Contains(d.AssignedSceneId)))
+                errors.Add($"Phase 15 cue does not map to exactly one visual scene. eventFamily={eventFamily}; language={language}; format={format}; cueIndex={diagnostic.CueIndex}; cueSourceFile={diagnostic.CueSourceFile}; assignedSceneId={diagnostic.AssignedSceneId}; sceneIdSource={diagnostic.SceneIdSource}");
+        }
+
+        return errors;
+    }
+
+    private static object BuildPhase15SceneIdLineageDiagnostics(string eventFamily, string language, string format, Phase15SceneIdLineageResolution resolution)
+    {
+        var expected = resolution.ExpectedVisualSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var actual = resolution.AssignedSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var expectedSet = new HashSet<string>(expected, StringComparer.OrdinalIgnoreCase);
+        var missing = expected.Where(sceneId => !actual.Contains(sceneId, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var extra = actual.Where(sceneId => !expected.Contains(sceneId, StringComparer.OrdinalIgnoreCase)).ToArray();
+        return new
+        {
+            eventFamily,
+            language,
+            format,
+            distinctTimelineSceneIds = actual,
+            expectedVisualSceneIds = expected,
+            missingVisualSceneIds = missing,
+            extraTimelineSceneIds = extra,
+            cues = resolution.Diagnostics.Select(d => new
+            {
+                eventFamily,
+                language,
+                format,
+                cueIndex = d.CueIndex,
+                cueSourceFile = NormalizePath(d.CueSourceFile),
+                assignedSceneId = d.AssignedSceneId,
+                sceneIdSource = d.SceneIdSource,
+                numericSceneIdRejected = d.NumericSceneIdRejected && !expectedSet.Contains(d.AssignedSceneId),
+                distinctTimelineSceneIds = actual,
+                expectedVisualSceneIds = expected,
+                missingVisualSceneIds = missing,
+                extraTimelineSceneIds = extra
+            }).ToArray()
+        };
+    }
+
+    private static IReadOnlyList<string> ResolvePhase15ExpectedVisualSceneIds(string planRoot, string format)
+    {
+        var metadataPath = Path.Combine(planRoot, "scene-assets-v3", format, "scene-timeline-metadata.json");
+        if (!File.Exists(metadataPath)) return [];
+        return ReadJsonArray(metadataPath, "scenes")
+            .Select((scene, index) => GetString(scene, "sceneId") ?? $"{index + 1:000}")
+            .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsNumericSceneId(string? sceneId)
+        => !string.IsNullOrWhiteSpace(sceneId) && Regex.IsMatch(sceneId.Trim(), @"^\d+$");
 
     private static string ResolvePhase15NarrationRoot(string planRoot, string language, string format)
     {
@@ -4656,6 +4778,8 @@ public sealed partial class ProductionPipelineExecutionService(
         => text.Any(ch => ch >= '\u0900' && ch <= '\u097F');
 
     private sealed record Phase15SrtBlock(string SceneId, TimeSpan Start, TimeSpan End, string Text);
+    private sealed record Phase15SceneIdLineageResolution(IReadOnlyList<string> AssignedSceneIds, IReadOnlyList<string> ExpectedVisualSceneIds, IReadOnlyList<Phase15SceneIdLineageCueDiagnostic> Diagnostics);
+    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueSourceFile, string AssignedSceneId, string SceneIdSource, bool NumericSceneIdRejected);
 
     private static async Task ValidateTtsNarrationFilesCleanBeforeProviderAsync(JsonNode syncRoot, string format, string narrationDirectory, int expectedCount, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, List<string> ttsNarrationCleanupErrors, CancellationToken cancellationToken)
     {
