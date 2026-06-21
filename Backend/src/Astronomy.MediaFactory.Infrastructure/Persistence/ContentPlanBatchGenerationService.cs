@@ -350,11 +350,17 @@ public sealed class ContentPlanBatchGenerationService(
 
         var sourceLanguage = NormalizeLanguage(sourcePlan.Language);
         if (string.Equals(sourceLanguage, requestedLanguage, StringComparison.OrdinalIgnoreCase))
+        {
+            await EnsurePlanIntelligenceObjectsFromSourceAsync(sourcePlan, requestedLanguage, cancellationToken);
             return new LanguageMismatchPlanResolution(sourcePlan.Language, requestedLanguage, false, false, false, sourcePlan.Id);
+        }
 
         var sibling = await FindSiblingPlanAsync(sourcePlan, request.RegionId, requestedLanguage, cancellationToken);
         if (sibling is not null)
+        {
+            await EnsurePlanIntelligenceObjectsFromSourceAsync(sibling, requestedLanguage, cancellationToken, sourcePlan);
             return new LanguageMismatchPlanResolution(sourcePlan.Language, requestedLanguage, true, true, false, sibling.Id);
+        }
 
         sibling = await CreateSiblingPlanAsync(sourcePlan, requestedLanguage, cancellationToken);
         return new LanguageMismatchPlanResolution(sourcePlan.Language, requestedLanguage, true, false, true, sibling.Id);
@@ -436,8 +442,108 @@ public sealed class ContentPlanBatchGenerationService(
 
         db.ContentGenerationPlans.Add(siblingPlan);
         await db.SaveChangesAsync(cancellationToken);
+        LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, siblingPlan, sourceEvent, siblingEvent);
         return siblingPlan;
     }
+
+    private async Task EnsurePlanIntelligenceObjectsFromSourceAsync(ContentGenerationPlan targetPlan, string requestedLanguage, CancellationToken cancellationToken, ContentGenerationPlan? knownSourcePlan = null)
+    {
+        var targetEvent = targetPlan.AstronomyEventIntelligence;
+        if (targetEvent?.Objects.Count > 0)
+        {
+            LogSiblingPlanDatabaseLinkageDiagnostics(knownSourcePlan ?? targetPlan, targetPlan, knownSourcePlan?.AstronomyEventIntelligence, targetEvent);
+            return;
+        }
+
+        var sourcePlan = knownSourcePlan ?? await FindSourcePlanIgnoringLanguageAsync(targetPlan, requestedLanguage, cancellationToken);
+        var sourceEvent = sourcePlan?.AstronomyEventIntelligence;
+        if (sourceEvent is null || sourceEvent.Objects.Count == 0)
+        {
+            LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan ?? targetPlan, targetPlan, sourceEvent, targetEvent);
+            return;
+        }
+
+        var reusableRequestedLanguageEvent = await db.AstronomyEventIntelligences
+            .Include(e => e.Objects)
+            .Where(e => e.Language == requestedLanguage
+                && e.RegionId == sourceEvent.RegionId
+                && e.ExternalEventId == sourceEvent.ExternalEventId
+                && e.Objects.Any())
+            .OrderByDescending(e => e.Objects.Count)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var siblingEvent = reusableRequestedLanguageEvent ?? CopyEventForLanguage(sourceEvent, requestedLanguage);
+        if (reusableRequestedLanguageEvent is null)
+            db.AstronomyEventIntelligences.Add(siblingEvent);
+
+        targetPlan.AstronomyEventIntelligence = siblingEvent;
+        targetPlan.AstronomyEventIntelligenceId = siblingEvent.Id;
+        targetPlan.SourceExternalEventId = targetPlan.SourceExternalEventId ?? sourcePlan?.SourceExternalEventId ?? sourceEvent.ExternalEventId;
+        targetPlan.PlannedObjectNamesJson = targetPlan.PlannedObjectNamesJson ?? sourcePlan?.PlannedObjectNamesJson;
+        targetPlan.PrimaryCelestialObjectCode = targetPlan.PrimaryCelestialObjectCode ?? sourcePlan?.PrimaryCelestialObjectCode;
+
+        await db.SaveChangesAsync(cancellationToken);
+        LogSiblingPlanDatabaseLinkageDiagnostics(sourcePlan, targetPlan, sourceEvent, siblingEvent);
+    }
+
+    private async Task<ContentGenerationPlan?> FindSourcePlanIgnoringLanguageAsync(ContentGenerationPlan targetPlan, string requestedLanguage, CancellationToken cancellationToken)
+    {
+        var externalIds = new[]
+            {
+                targetPlan.AstronomyEventIntelligence?.ExternalEventId,
+                targetPlan.SourceExternalEventId
+            }
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (externalIds.Length == 0) return null;
+
+        return await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
+            .Where(p => p.Id != targetPlan.Id)
+            .Where(p => p.Language != requestedLanguage)
+            .Where(p => (p.SourceExternalEventId != null && externalIds.Contains(p.SourceExternalEventId))
+                || (p.AstronomyEventIntelligence != null && externalIds.Contains(p.AstronomyEventIntelligence.ExternalEventId)))
+            .Where(p => p.AstronomyEventIntelligence != null && p.AstronomyEventIntelligence.Objects.Any())
+            .OrderByDescending(p => p.PriorityScore ?? 0m)
+            .ThenBy(p => p.Priority)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private void LogSiblingPlanDatabaseLinkageDiagnostics(ContentGenerationPlan? sourcePlan, ContentGenerationPlan siblingPlan, AstronomyEventIntelligence? sourceEvent, AstronomyEventIntelligence? siblingEvent)
+    {
+        var primaryObjectsResolved = ResolveDiagnosticObjects(siblingEvent, primary: true);
+        var secondaryObjectsResolved = ResolveDiagnosticObjects(siblingEvent, primary: false);
+
+        logger.LogInformation(
+            "Sibling plan database linkage diagnostics: sourcePlanId={SourcePlanId}, siblingPlanId={SiblingPlanId}, sourceIntelligenceId={SourceIntelligenceId}, siblingIntelligenceId={SiblingIntelligenceId}, sourceObjectCount={SourceObjectCount}, siblingObjectCount={SiblingObjectCount}, primaryObjectsResolved={PrimaryObjectsResolved}, secondaryObjectsResolved={SecondaryObjectsResolved}, plannedObjectNamesJson={PlannedObjectNamesJson}, primaryCelestialObjectCode={PrimaryCelestialObjectCode}",
+            sourcePlan?.Id,
+            siblingPlan.Id,
+            sourceEvent?.Id,
+            siblingEvent?.Id,
+            sourceEvent?.Objects.Count ?? 0,
+            siblingEvent?.Objects.Count ?? 0,
+            string.Join(",", primaryObjectsResolved),
+            string.Join(",", secondaryObjectsResolved),
+            siblingPlan.PlannedObjectNamesJson,
+            siblingPlan.PrimaryCelestialObjectCode);
+    }
+
+    private static string[] ResolveDiagnosticObjects(AstronomyEventIntelligence? intelligence, bool primary)
+        => intelligence?.Objects
+            .Where(o => primary ? IsDiagnosticPrimaryObject(o) : !IsDiagnosticPrimaryObject(o))
+            .Select(o => o.ObjectName)
+            .Where(o => !string.IsNullOrWhiteSpace(o))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? [];
+
+    private static bool IsDiagnosticPrimaryObject(AstronomyEventObject obj)
+        => string.Equals(obj.ObjectRole, "Primary", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(obj.ObjectRole, "Radiant", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(obj.ObjectType, "Radiant", StringComparison.OrdinalIgnoreCase);
 
     private static AstronomyEventIntelligence CopyEventForLanguage(AstronomyEventIntelligence sourceEvent, string requestedLanguage)
         => new()

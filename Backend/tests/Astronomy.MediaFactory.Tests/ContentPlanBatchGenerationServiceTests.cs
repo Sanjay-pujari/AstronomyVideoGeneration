@@ -223,6 +223,125 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
+    public async Task GenerateFromPlansAsync_ExistingRequestedLanguageSiblingWithMissingObjects_LinksObjectsFromSourcePlan()
+    {
+        await using var db = CreateDb();
+        var sourceIntelligence = new AstronomyEventIntelligence
+        {
+            EventCode = "JUPITER-VENUS-CONJUNCTION-2026",
+            ExternalEventId = "jupiter-venus-conjunction-2026",
+            Year = 2026,
+            Language = "en",
+            VerificationStatus = "Verified",
+            AutoGenerateAllowed = true,
+            ContentStrategy = "AutoGenerate",
+            EventType = "PLANET_CONJUNCTION",
+            Title = "Jupiter and Venus conjunction over Udaipur",
+            Summary = "Jupiter and Venus conjunction",
+            StartUtc = new DateTimeOffset(2026, 8, 11, 0, 0, 0, TimeSpan.Zero),
+            PeakUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero),
+            EndUtc = new DateTimeOffset(2026, 8, 13, 0, 0, 0, TimeSpan.Zero),
+            RegionId = "IN-RJ-UDAIPUR",
+            RarityScore = 9,
+            VisibilityScore = 9,
+            AudienceInterestScore = 9,
+            ContentOpportunityScore = 9,
+            Objects =
+            [
+                new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", ObjectRole = "Primary", CatalogId = "JUPITER" },
+                new AstronomyEventObject { ObjectName = "Venus", ObjectType = "Planet", ObjectRole = "Secondary", CatalogId = "VENUS" }
+            ]
+        };
+        var siblingIntelligence = new AstronomyEventIntelligence
+        {
+            EventCode = "JUPITER-VENUS-CONJUNCTION-2026-hi",
+            ExternalEventId = sourceIntelligence.ExternalEventId,
+            Year = 2026,
+            Language = "hi",
+            VerificationStatus = "Verified",
+            AutoGenerateAllowed = true,
+            ContentStrategy = "AutoGenerate",
+            EventType = "PLANET_CONJUNCTION",
+            Title = sourceIntelligence.Title,
+            StartUtc = sourceIntelligence.StartUtc,
+            PeakUtc = sourceIntelligence.PeakUtc,
+            EndUtc = sourceIntelligence.EndUtc,
+            RegionId = sourceIntelligence.RegionId,
+            RarityScore = 9,
+            VisibilityScore = 9,
+            AudienceInterestScore = 9,
+            ContentOpportunityScore = 9
+        };
+        db.AstronomyEventIntelligences.AddRange(sourceIntelligence, siblingIntelligence);
+
+        var sourcePlan = new ContentGenerationPlan
+        {
+            Title = sourceIntelligence.Title,
+            ContentCategoryCode = "RareEventAlert",
+            RegionId = "IN-RJ-UDAIPUR",
+            Language = "en",
+            ScheduledUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero),
+            Status = "Planned",
+            PlanStatus = "Planned",
+            Priority = 1,
+            PriorityScore = 9,
+            AstronomyEventIntelligenceId = sourceIntelligence.Id,
+            AstronomyEventIntelligence = sourceIntelligence,
+            SourceExternalEventId = sourceIntelligence.ExternalEventId,
+            RequestedOutputTypesJson = "[\"Short\",\"Long\"]",
+            PlannedObjectNamesJson = "[\"Jupiter\",\"Venus\"]",
+            PrimaryCelestialObjectCode = "JUPITER"
+        };
+        var siblingPlan = new ContentGenerationPlan
+        {
+            Title = sourceIntelligence.Title,
+            ContentCategoryCode = "RareEventAlert",
+            RegionId = "IN-RJ-UDAIPUR",
+            Language = "hi",
+            ScheduledUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero),
+            Status = "Planned",
+            PlanStatus = "Planned",
+            Priority = 1,
+            PriorityScore = 9,
+            AstronomyEventIntelligenceId = siblingIntelligence.Id,
+            AstronomyEventIntelligence = siblingIntelligence,
+            SourceExternalEventId = sourceIntelligence.ExternalEventId,
+            RequestedOutputTypesJson = "[\"Short\",\"Long\"]"
+        };
+        db.ContentGenerationPlans.AddRange(sourcePlan, siblingPlan);
+        await db.SaveChangesAsync();
+
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "hi",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: true,
+            UseProductionPipeline: true,
+            PlanId: siblingPlan.Id), CancellationToken.None);
+
+        var reloadedSibling = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
+            .SingleAsync(p => p.Id == siblingPlan.Id);
+        var request = new ContentPlanProductionRequestMapper().Map(reloadedSibling, reloadedSibling.AstronomyEventIntelligence!);
+
+        Assert.True(response.Success);
+        Assert.Equal(siblingPlan.Id, response.SelectedPlanId);
+        Assert.Equal(["Jupiter"], request.PrimaryObjects);
+        Assert.Equal(["Venus"], request.SecondaryObjects);
+        Assert.Equal(2, reloadedSibling.AstronomyEventIntelligence!.Objects.Count);
+        Assert.Equal("JUPITER", reloadedSibling.PrimaryCelestialObjectCode);
+        Assert.Equal("[\"Jupiter\",\"Venus\"]", reloadedSibling.PlannedObjectNamesJson);
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
     public async Task GenerateFromPlansAsync_ExactManualValidationTitle_DoesNotBypassAutoGenerateAllowed()
     {
         await using var db = CreateDb();
