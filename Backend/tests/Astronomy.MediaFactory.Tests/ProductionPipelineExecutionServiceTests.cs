@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -186,6 +187,99 @@ This happens because orbits line up in our sky.
             Assert.Equal(10, sceneIds.Length);
             Assert.Equal(5, sceneIds.Distinct(StringComparer.OrdinalIgnoreCase).Count());
             Assert.Equal(new[] { "001-hook", "001-hook", "002-cause", "002-cause", "003-guide", "003-guide", "004-time", "004-time", "005-close", "005-close" }, sceneIds);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("SolarEclipse", "en", "long", "004-eclipse-geometry")]
+    [InlineData("MoonEvent", "hi", "short", "001-hook")]
+    [InlineData("MeteorShower", "en", "long", "006-radiant-guide")]
+    [InlineData("PlanetGrouping", "en", "short", "003-guide")]
+    [InlineData("GenericAstronomyEvent", "en", "short", "002-cause")]
+    public void Phase15VisualSceneIdResolution_UsesNarrationFileLineageForEventFamilies(string eventFamily, string language, string format, string sceneId)
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-event-family-scene-id-map-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var narrationRoot = Path.Combine(planRoot, "narration", language, format);
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", format);
+            Directory.CreateDirectory(narrationRoot);
+            Directory.CreateDirectory(metadataRoot);
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = new[] { new { sceneId } }
+            }));
+            File.WriteAllText(Path.Combine(narrationRoot, $"{sceneId}.txt"), "First cue for the visual scene. Second cue for the same visual scene.");
+
+            var srt = """
+1
+00:00:00,000 --> 00:00:01,000
+First cue for the visual scene.
+
+2
+00:00:01,000 --> 00:00:02,000
+Second cue for the same visual scene.
+""";
+            var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var resolveMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdsForSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var lineageMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            var validateMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase15SceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(parseMethod);
+            Assert.NotNull(resolveMethod);
+            Assert.NotNull(lineageMethod);
+            Assert.NotNull(validateMethod);
+
+            var blocks = parseMethod!.Invoke(null, [srt]);
+            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, language, format, blocks])!).Cast<string>().ToArray();
+            var lineage = lineageMethod!.Invoke(null, [planRoot, language, format, blocks]);
+            var errors = ((System.Collections.IEnumerable)validateMethod!.Invoke(null, [eventFamily, language, format, lineage])!).Cast<string>().ToArray();
+
+            Assert.Equal(new[] { sceneId, sceneId }, sceneIds);
+            Assert.Empty(errors);
+            Assert.DoesNotContain(sceneIds, id => Regex.IsMatch(id, @"^\d+$"));
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Phase15SceneIdLineageValidation_RejectsNumericCueSceneIdsThatDoNotMatchVisualScenes()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-numeric-scene-id-reject-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+            Directory.CreateDirectory(metadataRoot);
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = new[] { new { sceneId = "001-hook" } }
+            }));
+
+            var srt = """
+1
+00:00:00,000 --> 00:00:01,000
+First cue.
+""";
+            var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var lineageMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            var validateMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase15SceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(parseMethod);
+            Assert.NotNull(lineageMethod);
+            Assert.NotNull(validateMethod);
+
+            var blocks = parseMethod!.Invoke(null, [srt]);
+            var lineage = lineageMethod!.Invoke(null, [planRoot, "en", "short", blocks]);
+            var errors = ((System.Collections.IEnumerable)validateMethod!.Invoke(null, ["SolarEclipse", "en", "short", lineage])!).Cast<string>().ToArray();
+
+            Assert.Contains(errors, error => error.Contains("numeric cue sceneId", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(errors, error => error.Contains("missingVisualSceneIds=[001-hook]", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(errors, error => error.Contains("extraTimelineSceneIds=[1]", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
