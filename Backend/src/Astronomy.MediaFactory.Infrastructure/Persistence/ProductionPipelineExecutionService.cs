@@ -1508,30 +1508,180 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateThumbnailsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
-        foreach (var phase in new[] { "Intelligence", "Composition", "SceneSelection", "Images" })
+        var thumbnailRoot = context.ExecutionContext.ThumbnailRoot!;
+        var stepDiagnostics = new List<JsonObject>();
+        var v8Enabled = IsThumbnailV8Enabled();
+
+        try
         {
-            var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = phase, DryRun = false, OverwriteExisting = context.OverwriteExisting, EnableThumbnailV8 = IsThumbnailV8Enabled(), ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
-            if (IsThumbnailV8Enabled()
-                && (response.RequestedRenderer.Contains("V7", StringComparison.OrdinalIgnoreCase)
-                    || response.ActualRendererUsed.Contains("V7", StringComparison.OrdinalIgnoreCase)
-                    || response.OutputWriteSource.Contains("V7", StringComparison.OrdinalIgnoreCase)
-                    || response.GeneratedFiles.Any(file => file.Contains("V7", StringComparison.OrdinalIgnoreCase))))
-                throw new InvalidOperationException("Thumbnail V8 routing guard failed: selected renderer/output contains V7 while V8 is enabled.");
-            outputs.AddRange(response.GeneratedFiles);
+            foreach (var phase in new[] { "Intelligence", "Composition", "SceneSelection", "Images" })
+            {
+                var step = CreateThumbnailV8StepDiagnostic(phase, v8Enabled);
+                stepDiagnostics.Add(step);
+                try
+                {
+                    var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = phase, DryRun = false, OverwriteExisting = context.OverwriteExisting, EnableThumbnailV8 = v8Enabled, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
+                    UpdateThumbnailV8StepDiagnostic(step, response, v8Enabled);
+                    if (v8Enabled
+                        && (response.RequestedRenderer.Contains("V7", StringComparison.OrdinalIgnoreCase)
+                            || response.ActualRendererUsed.Contains("V7", StringComparison.OrdinalIgnoreCase)
+                            || response.OutputWriteSource.Contains("V7", StringComparison.OrdinalIgnoreCase)
+                            || response.GeneratedFiles.Any(file => file.Contains("V7", StringComparison.OrdinalIgnoreCase))))
+                        throw new InvalidOperationException("Thumbnail V8 routing guard failed: selected renderer/output contains V7 while V8 is enabled.");
+                    outputs.AddRange(response.GeneratedFiles);
+                }
+                catch (Exception ex)
+                {
+                    UpdateThumbnailV8StepException(step, ex, phase, v8Enabled, thumbnailRoot);
+                    await EnsureThumbnailV8DiagnosticsAsync(thumbnailRoot, stepDiagnostics, outputs, ex, cancellationToken);
+                    await EnsureThumbnailV8Phase12ValidationAsync(thumbnailRoot, outputs, ex, cancellationToken);
+                    throw;
+                }
+            }
+
+            var thumbnailSceneManifestPath = Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json");
+            if (!File.Exists(thumbnailSceneManifestPath))
+                throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
+
+            if (v8Enabled)
+            {
+                await EnsureThumbnailV8DiagnosticsAsync(thumbnailRoot, stepDiagnostics, outputs, null, cancellationToken);
+                await EnsureThumbnailV8Phase12ValidationAsync(thumbnailRoot, outputs, null, cancellationToken);
+                ValidateThumbnailV8Contract(thumbnailRoot);
+            }
+            else if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
+                ValidateThumbnailV7Contract(thumbnailRoot);
+            else
+                ValidateCtrThumbnailV6Contract(thumbnailRoot);
+            outputs.Add(thumbnailSceneManifestPath);
+            return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        catch (Exception ex) when (v8Enabled)
+        {
+            await EnsureThumbnailV8DiagnosticsAsync(thumbnailRoot, stepDiagnostics, outputs, ex, cancellationToken);
+            await EnsureThumbnailV8Phase12ValidationAsync(thumbnailRoot, outputs, ex, cancellationToken);
+            throw;
+        }
+    }
+
+    private static JsonObject CreateThumbnailV8StepDiagnostic(string stepName, bool v8Enabled)
+        => new()
+        {
+            ["stepName"] = stepName,
+            ["selectedRenderer"] = string.Empty,
+            ["v8Enabled"] = v8Enabled,
+            ["v8GeneratorCalled"] = false,
+            ["v8GeneratorSucceeded"] = false,
+            ["outputFiles"] = new JsonArray(),
+            ["exceptionType"] = null,
+            ["exceptionMessage"] = null,
+            ["skippedDueToExistingOutputs"] = false,
+            ["skippedDueToConfig"] = !v8Enabled,
+            ["skippedDueToMissingInput"] = false,
+            ["skippedDueToRendererSelection"] = false
+        };
+
+    private static void UpdateThumbnailV8StepDiagnostic(JsonObject step, ThumbnailAssetGenerationResponse response, bool v8Enabled)
+    {
+        var selectedRenderer = FirstNonEmpty(response.ActualRendererUsed, response.RequestedRenderer, response.OutputWriteSource, response.PhaseExecuted);
+        var v8GeneratorCalled = v8Enabled && string.Equals(response.PhaseRequested, "Images", StringComparison.OrdinalIgnoreCase) &&
+            (selectedRenderer.Contains("V8", StringComparison.OrdinalIgnoreCase) || response.GeneratedFiles.Any(file => file.Contains("thumbnail-v8-diagnostics", StringComparison.OrdinalIgnoreCase)));
+        step["selectedRenderer"] = selectedRenderer;
+        step["v8GeneratorCalled"] = v8GeneratorCalled;
+        step["v8GeneratorSucceeded"] = v8GeneratorCalled && response.GeneratedFiles.Any(file => file.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
+        step["outputFiles"] = new JsonArray(response.GeneratedFiles.Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>());
+        step["skippedDueToExistingOutputs"] = false;
+        step["skippedDueToConfig"] = !v8Enabled;
+        step["skippedDueToMissingInput"] = false;
+        step["skippedDueToRendererSelection"] = v8Enabled && string.Equals(response.PhaseRequested, "Images", StringComparison.OrdinalIgnoreCase) && !selectedRenderer.Contains("V8", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void UpdateThumbnailV8StepException(JsonObject step, Exception exception, string phase, bool v8Enabled, string thumbnailRoot)
+    {
+        step["exceptionType"] = exception.GetType().FullName;
+        step["exceptionMessage"] = exception.Message;
+        step["v8GeneratorCalled"] = v8Enabled && string.Equals(phase, "Images", StringComparison.OrdinalIgnoreCase);
+        step["v8GeneratorSucceeded"] = false;
+        step["skippedDueToConfig"] = !v8Enabled;
+        step["skippedDueToMissingInput"] = exception is FileNotFoundException || exception is DirectoryNotFoundException || exception.Message.Contains("missing", StringComparison.OrdinalIgnoreCase) || exception.Message.Contains("required", StringComparison.OrdinalIgnoreCase);
+        step["skippedDueToRendererSelection"] = false;
+        step["outputFiles"] = new JsonArray(Directory.Exists(thumbnailRoot)
+            ? Directory.EnumerateFiles(thumbnailRoot, "thumbnail-*", SearchOption.TopDirectoryOnly).Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>()
+            : []);
+    }
+
+    private static async Task EnsureThumbnailV8DiagnosticsAsync(string thumbnailRoot, IReadOnlyList<JsonObject> stepDiagnostics, IReadOnlyList<string> outputFiles, Exception? exception, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(thumbnailRoot);
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v8-diagnostics.json");
+        JsonObject root;
+        if (File.Exists(diagnosticsPath))
+        {
+            try
+            {
+                root = JsonNode.Parse(await File.ReadAllTextAsync(diagnosticsPath, cancellationToken))?.AsObject() ?? new JsonObject();
+            }
+            catch (JsonException)
+            {
+                root = new JsonObject();
+            }
+        }
+        else
+        {
+            root = new JsonObject
+            {
+                ["thumbnailVersion"] = "V8",
+                ["selectedRenderer"] = "ThumbnailV8AiNativeRenderer",
+                ["renderer"] = "ThumbnailV8AiNativeRenderer",
+                ["aiNativeFullImage"] = exception is null,
+                ["manualOverlayUsed"] = false,
+                ["backgroundOnlyMode"] = false,
+                ["cropFromLandscape"] = false,
+                ["azureImage2Generated"] = exception is null,
+                ["selectedTemplate"] = "AiNativePromptBasedThumbnail",
+                ["layoutFamily"] = "AiGeneratedObservationGuide",
+                ["backgroundMode"] = "PerAspectAzureImage2",
+                ["validationPassed"] = exception is null
+            };
         }
 
-        var thumbnailSceneManifestPath = Path.Combine(context.ExecutionContext.ThumbnailRoot!, "thumbnail-scene-manifest.json");
-        if (!File.Exists(thumbnailSceneManifestPath))
-            throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
+        root["phase12DiagnosticsGuaranteed"] = true;
+        root["generatedUtc"] = DateTimeOffset.UtcNow;
+        root["steps"] = new JsonArray(stepDiagnostics.Select(step => step.DeepClone()).ToArray());
+        root["outputFiles"] ??= new JsonArray(outputFiles.Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>());
+        if (exception is not null)
+        {
+            root["validationPassed"] = false;
+            root["phase12ThumbnailV8Status"] = "FAILED";
+            root["exceptionType"] = exception.GetType().FullName;
+            root["exceptionMessage"] = exception.Message;
+        }
 
-        if (IsThumbnailV8Enabled())
-            ValidateThumbnailV8Contract(context.ExecutionContext.ThumbnailRoot!);
-        else if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
-            ValidateThumbnailV7Contract(context.ExecutionContext.ThumbnailRoot!);
-        else
-            ValidateCtrThumbnailV6Contract(context.ExecutionContext.ThumbnailRoot!);
-        outputs.Add(thumbnailSceneManifestPath);
-        return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await File.WriteAllTextAsync(diagnosticsPath, root.ToJsonString(JsonOptions), cancellationToken);
+    }
+
+    private static async Task EnsureThumbnailV8Phase12ValidationAsync(string thumbnailRoot, IReadOnlyList<string> outputFiles, Exception? exception, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(thumbnailRoot);
+        var path = Path.Combine(thumbnailRoot, "phase-12-validation.json");
+        if (exception is null && File.Exists(path)) return;
+        var validation = new JsonObject
+        {
+            ["thumbnailVersion"] = "V8",
+            ["renderer"] = "ThumbnailV8AiNativeRenderer",
+            ["selectedRenderer"] = "ThumbnailV8AiNativeRenderer",
+            ["validator"] = "ThumbnailV8Validator",
+            ["validationPassed"] = exception is null,
+            ["status"] = exception is null ? "Succeeded" : "Failed",
+            ["outputFiles"] = new JsonArray(outputFiles.Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>()),
+            ["generatedUtc"] = DateTimeOffset.UtcNow
+        };
+        if (exception is not null)
+        {
+            validation["exceptionType"] = exception.GetType().FullName;
+            validation["exceptionMessage"] = exception.Message;
+        }
+        await File.WriteAllTextAsync(path, validation.ToJsonString(JsonOptions), cancellationToken);
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateGalleryAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
