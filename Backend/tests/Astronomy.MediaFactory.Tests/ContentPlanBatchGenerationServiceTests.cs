@@ -137,6 +137,92 @@ public sealed class ContentPlanBatchGenerationServiceTests
     }
 
     [Fact]
+    public async Task GenerateFromPlansAsync_PlanIdLanguageMismatch_CopiesEventObjectsToSiblingPlan()
+    {
+        await using var db = CreateDb();
+        var sourcePlanId = Guid.NewGuid();
+        var intelligence = new AstronomyEventIntelligence
+        {
+            EventCode = "JUPITER-VENUS-CONJUNCTION-2026",
+            ExternalEventId = "jupiter-venus-conjunction-2026",
+            Year = 2026,
+            Language = "en",
+            VerificationStatus = "Verified",
+            AutoGenerateAllowed = true,
+            ContentStrategy = "AutoGenerate",
+            EventType = "PLANET_CONJUNCTION",
+            Title = "Jupiter and Venus conjunction over Udaipur",
+            Summary = "Jupiter and Venus conjunction",
+            StartUtc = new DateTimeOffset(2026, 8, 11, 0, 0, 0, TimeSpan.Zero),
+            PeakUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero),
+            EndUtc = new DateTimeOffset(2026, 8, 13, 0, 0, 0, TimeSpan.Zero),
+            RegionId = "IN-RJ-UDAIPUR",
+            RarityScore = 9,
+            VisibilityScore = 9,
+            AudienceInterestScore = 9,
+            ContentOpportunityScore = 9,
+            MetadataJson = "{\"eventLock\":{\"source\":\"verified\"}}",
+            Objects =
+            [
+                new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", ObjectRole = "Primary", CatalogId = "JUPITER", Magnitude = -2.1m, VisibilityScore = 9m, MetadataJson = "{\"source\":\"primaryObjects\"}" },
+                new AstronomyEventObject { ObjectName = "Venus", ObjectType = "Planet", ObjectRole = "Primary", CatalogId = "VENUS", Magnitude = -4.1m, VisibilityScore = 9m, MetadataJson = "{\"source\":\"primaryObjects\"}" },
+                new AstronomyEventObject { ObjectName = "Moon", ObjectType = "Moon", ObjectRole = "Secondary", CatalogId = "MOON", VisibilityScore = 7m, MetadataJson = "{\"source\":\"secondaryObjects\"}" }
+            ]
+        };
+        db.AstronomyEventIntelligences.Add(intelligence);
+
+        var plan = new ContentGenerationPlan
+        {
+            Title = "Jupiter and Venus conjunction over Udaipur",
+            ContentCategoryCode = "RareEventAlert",
+            RegionId = "IN-RJ-UDAIPUR",
+            Language = "en",
+            ScheduledUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero),
+            Status = "Planned",
+            PlanStatus = "Planned",
+            Priority = 1,
+            PriorityScore = 9,
+            AstronomyEventIntelligenceId = intelligence.Id,
+            AstronomyEventIntelligence = intelligence,
+            SourceExternalEventId = "jupiter-venus-conjunction-2026",
+            RequestedOutputTypesJson = "[\"Short\",\"Long\"]"
+        };
+        plan.AssignId(sourcePlanId);
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        var legacy = new ThrowingLegacyPipeline();
+        var production = new CapturingProductionExecutionService();
+        var service = CreateService(db, legacy, production);
+
+        var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "hi",
+            MaxPlans: 1,
+            OnlyHighPriority: true,
+            DryRun: true,
+            UseProductionPipeline: true,
+            PlanId: sourcePlanId), CancellationToken.None);
+
+        var sibling = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
+            .SingleAsync(p => p.Language == "hi");
+        var request = new ContentPlanProductionRequestMapper().Map(sibling, sibling.AstronomyEventIntelligence!);
+
+        Assert.True(response.Success);
+        Assert.True(response.SiblingPlanCreated);
+        Assert.Equal("PLANET_CONJUNCTION", sibling.AstronomyEventIntelligence?.EventType);
+        Assert.Equal("{\"eventLock\":{\"source\":\"verified\"}}", sibling.AstronomyEventIntelligence?.MetadataJson);
+        Assert.Contains("Jupiter", request.PrimaryObjects);
+        Assert.Contains("Venus", request.PrimaryObjects);
+        Assert.Contains("Moon", request.SecondaryObjects);
+        Assert.All(sibling.AstronomyEventIntelligence!.Objects, obj => Assert.False(string.IsNullOrWhiteSpace(obj.MetadataJson)));
+        Assert.False(legacy.WasCalled);
+    }
+
+    [Fact]
     public async Task GenerateFromPlansAsync_ExactManualValidationTitle_DoesNotBypassAutoGenerateAllowed()
     {
         await using var db = CreateDb();
