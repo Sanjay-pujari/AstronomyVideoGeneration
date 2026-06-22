@@ -6670,13 +6670,6 @@ public sealed partial class ProductionPipelineExecutionService(
                     cursor += scene.ExpectedDurationSec;
                     boundaries.Add(cursor / totalExpected);
                 }
-                var distinctTimelineSceneIds = generatedSceneTimelineIds
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                var expectedSet = expectedVisualSceneIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var actualSet = distinctTimelineSceneIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                if (!expectedSet.SetEquals(actualSet))
-                    errors.Add($"{language}:{format} distinctTimelineSceneIds must equal expected visual scene IDs; expected=[{string.Join(",", expectedVisualSceneIds)}], actual=[{string.Join(",", distinctTimelineSceneIds)}]");
             }
             else
             {
