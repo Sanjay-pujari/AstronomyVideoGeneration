@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -2008,6 +2009,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
             {
+                TracePhase14Exception("Phase14.SceneLevelNarrationComposer.wrap", ex);
                 throw new InvalidOperationException("SceneLevelNarrationComposer failed", ex);
             }
             shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
@@ -2468,6 +2470,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static Phase14DocumentaryNarration BuildPhase14DocumentaryNarration(ProductionPhaseContext context)
     {
+        TracePhase14Checkpoint("Phase14.BuildPhase14DocumentaryNarration.enter");
         var family = ResolvePhase14NarrationFamily(context);
         var script = EventStoryComposer.Compose(family, context.ProductionEventIntelligence, context.ExecutionContext);
         var expansionContext = new LongSceneNarrationExpansionContext(
@@ -2491,6 +2494,7 @@ public sealed partial class ProductionPipelineExecutionService(
         SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
         ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, null);
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
+        TracePhase14Checkpoint("Phase14.BuildPhase14DocumentaryNarration.before.ApplyPhase14NarrationTranslationIfNeeded");
         var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, family, shortTexts, longTexts, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext?.EventType), context.ProductionEventIntelligence.PrimaryObjects.Count > 0 ? context.ProductionEventIntelligence.PrimaryObjects : context.Request.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects.Count > 0 ? context.ProductionEventIntelligence.SecondaryObjects : context.Request.SecondaryObjects);
         var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
@@ -2513,7 +2517,11 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
         var combinedText = string.Join(" ", finalText.Select(item => item.text));
         if (ContainsAuthoringInstructionText(combinedText))
+        {
+            TracePhase14Throw("Phase14.BuildPhase14DocumentaryNarration.throw.AuthoringInstructionText", "Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
             throw new InvalidOperationException("Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
+        }
+        TracePhase14Checkpoint("Phase14.BuildPhase14DocumentaryNarration.before.ValidatePhase14EventConsistency");
         var eventConsistencyDiagnostics = ValidatePhase14EventConsistency(context, family, shortTexts, longTexts, firstSentenceByScene);
         var adapterDiagnostics = new Phase14AdapterDiagnostics(
             true,
@@ -2647,6 +2655,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, string resolvedFamily, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
     {
+        TracePhase14Checkpoint("Phase14.ApplyPhase14NarrationTranslationIfNeeded.enter");
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
             return new Phase14TranslationDiagnostics(
@@ -2701,26 +2710,36 @@ public sealed partial class ProductionPipelineExecutionService(
                 false);
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
+        {
+            TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.UnsupportedLanguage", $"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
             throw new InvalidOperationException($"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
+        }
 
         var translator = new DeterministicPhase14FullSceneHindiTranslator();
         if (!translator.IsConfigured)
+        {
+            TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.TranslatorNotConfigured", "Hindi full-scene translator is not configured.");
             throw new InvalidOperationException("Hindi full-scene translator is not configured.");
+        }
         foreach (var key in shortTexts.Keys.ToArray())
         {
             var duplicateCountBefore = CountDuplicateHindiSceneTexts(shortTexts, longTexts);
+            TracePhase14Checkpoint($"Phase14.ApplyPhase14NarrationTranslationIfNeeded.before.Translate.short.{key}");
             shortTexts[key] = translator.TranslateAsync(shortTexts[key], "en", "hi", resolvedFamily, key, ResolvePhase14ScenePurpose(key), primaryObjects, secondaryObjects).GetAwaiter().GetResult();
             TracePhase14HindiLoop("TranslatePhase14NarrationToHindi.short", key, null, 1, shortTexts[key], duplicateCountBefore, CountDuplicateHindiSceneTexts(shortTexts, longTexts));
         }
         foreach (var key in longTexts.Keys.ToArray())
         {
             var duplicateCountBefore = CountDuplicateHindiSceneTexts(shortTexts, longTexts);
+            TracePhase14Checkpoint($"Phase14.ApplyPhase14NarrationTranslationIfNeeded.before.Translate.long.{key}");
             longTexts[key] = translator.TranslateAsync(longTexts[key], "en", "hi", resolvedFamily, key, ResolvePhase14ScenePurpose(key), primaryObjects, secondaryObjects).GetAwaiter().GetResult();
             TracePhase14HindiLoop("TranslatePhase14NarrationToHindi.long", key, null, 1, longTexts[key], duplicateCountBefore, CountDuplicateHindiSceneTexts(shortTexts, longTexts));
         }
+        TracePhase14Checkpoint("Phase14.ApplyPhase14NarrationTranslationIfNeeded.before.CleanupHindiDuplicateScenes");
         var duplicateSentenceCleanup = CleanupHindiDuplicateScenes(shortTexts, longTexts, resolvedFamily, eventType, primaryObjects, secondaryObjects);
 
         var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        TracePhase14Checkpoint("Phase14.ApplyPhase14NarrationTranslationIfNeeded.before.FindPhase14HindiForbiddenNarrationLeakage");
         var leakedTerms = FindPhase14HindiForbiddenNarrationLeakage(resolvedFamily, translatedText);
         var diagnostics = new Phase14TranslationDiagnostics(
             requestedLanguage,
@@ -2773,11 +2792,20 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateSentenceCleanup.DuplicateCleanupRewriteTarget,
             duplicateSentenceCleanup.FamilySpecificRewriteUsed);
         if (diagnostics.HindiCharacterCount == 0)
+        {
+            TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.NoDevanagari", "Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.");
             throw new InvalidOperationException("Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.");
+        }
         if (diagnostics.HindiCharacterRatio < 0.85 || diagnostics.EnglishFragmentDetected)
+        {
+            TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.QualityFailed", $"Phase 14 Hindi narration translation quality failed before TTS: hindiCharacterRatio={diagnostics.HindiCharacterRatio:0.###}; englishFragmentDetected={diagnostics.EnglishFragmentDetected}; detectedEnglishFragments={string.Join(", ", diagnostics.DetectedEnglishFragments)}");
             throw new InvalidOperationException($"Phase 14 Hindi narration translation quality failed before TTS: hindiCharacterRatio={diagnostics.HindiCharacterRatio:0.###}; englishFragmentDetected={diagnostics.EnglishFragmentDetected}; detectedEnglishFragments={string.Join(", ", diagnostics.DetectedEnglishFragments)}");
+        }
         if (diagnostics.ForbiddenNarrationLeakageDetected)
+        {
+            TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.ForbiddenLeakage", "Phase 14 Hindi narration translation leaked forbidden event terms: " + string.Join(", ", diagnostics.LeakedTerms));
             throw new InvalidOperationException("Phase 14 Hindi narration translation leaked forbidden event terms: " + string.Join(", ", diagnostics.LeakedTerms));
+        }
         return diagnostics;
     }
 
@@ -2878,6 +2906,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string BuildSourceAwareUniqueHindiSceneText(string format, string sceneId, string duplicateText, string resolvedFamily, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, int uniquenessAttempt = 1)
     {
+        TracePhase14Checkpoint($"Phase14.BuildSourceAwareUniqueHindiSceneText.enter.format={format}.sceneId={sceneId}.attempt={uniquenessAttempt}");
         var purpose = ResolvePhase14ScenePurpose(sceneId);
         var isLong = string.Equals(format, "long", StringComparison.OrdinalIgnoreCase);
         var family = NormalizePhase14DuplicateCleanupFamily(resolvedFamily, eventType, primaryObjects, secondaryObjects, duplicateText);
@@ -3091,6 +3120,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> FindPhase14HindiForbiddenNarrationLeakage(string resolvedFamily, string text)
     {
+        TracePhase14Checkpoint($"Phase14.FindPhase14HindiForbiddenNarrationLeakage.enter.family={resolvedFamily}");
         var forbiddenTerms = new List<string>
         {
             "दृश्य १",
@@ -4143,6 +4173,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> BuildHindiCueContextPhrases(string sceneId, string scenePurpose, string eventType, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem)
     {
+        TracePhase14Checkpoint($"Phase14.BuildHindiCueContextPhrases.enter.sceneId={sceneId}.purpose={scenePurpose}.eventType={eventType}");
         var phrases = new List<string>();
         var family = NormalizePhase14DuplicateCleanupFamily(eventType, eventType, [], [], string.Join(' ', new[] { syncItem?.NarrationText, syncItem?.NarrationBeat, syncItem?.VisualIntent, durationItem?.SceneId }.Where(value => !string.IsNullOrWhiteSpace(value))));
         if (string.Equals(scenePurpose, "accurate-sky-guide", StringComparison.OrdinalIgnoreCase))
@@ -4741,6 +4772,61 @@ public sealed partial class ProductionPipelineExecutionService(
         => new FileInfo(firstPath).Length == new FileInfo(secondPath).Length && File.ReadAllBytes(firstPath).SequenceEqual(File.ReadAllBytes(secondPath));
 
     private const int Phase14HindiMaxRewriteAttempts = 10;
+    private static string? Phase14LastTraceName;
+
+    private static void TracePhase14Checkpoint(string traceName, [CallerFilePath] string file = "", [CallerMemberName] string method = "", [CallerLineNumber] int lineNumber = 0)
+    {
+        Console.Error.WriteLine(JsonSerializer.Serialize(new
+        {
+            trace = "Phase14Checkpoint",
+            traceName,
+            file = NormalizePath(file),
+            method,
+            lineNumber
+        }, JsonOptions));
+        Phase14LastTraceName = traceName;
+    }
+
+    private static void TracePhase14Throw(string traceName, string message, [CallerFilePath] string file = "", [CallerMemberName] string method = "", [CallerLineNumber] int lineNumber = 0)
+    {
+        var trace = new
+        {
+            trace = "Phase14Throw",
+            traceName,
+            exceptionType = typeof(InvalidOperationException).FullName,
+            exceptionMessage = message,
+            innerExceptionType = (string?)null,
+            innerExceptionMessage = (string?)null,
+            file = NormalizePath(file),
+            method,
+            lineNumber,
+            stackTrace = Environment.StackTrace,
+            lastExecutedLogEntryBeforeFailure = traceName
+        };
+        Console.Error.WriteLine(JsonSerializer.Serialize(trace, JsonOptions));
+        Phase14LastTraceName = traceName;
+    }
+
+    private static void TracePhase14Exception(string traceName, Exception exception, [CallerFilePath] string file = "", [CallerMemberName] string method = "", [CallerLineNumber] int lineNumber = 0)
+    {
+        var lastExecutedLogEntryBeforeFailure = Phase14LastTraceName;
+        var trace = new
+        {
+            trace = "Phase14Exception",
+            traceName,
+            exceptionType = exception.GetType().FullName,
+            exceptionMessage = exception.Message,
+            innerExceptionType = exception.InnerException?.GetType().FullName,
+            innerExceptionMessage = exception.InnerException?.Message,
+            file = NormalizePath(file),
+            method,
+            lineNumber,
+            stackTrace = exception.ToString(),
+            lastExecutedLogEntryBeforeFailure
+        };
+        Console.Error.WriteLine(JsonSerializer.Serialize(trace, JsonOptions));
+        Phase14LastTraceName = traceName;
+    }
 
     private static void TracePhase14HindiLoop(string loopName, string? sceneId, string? cueId, int iterationCount, string? currentText, int duplicateCountBefore, int duplicateCountAfter)
     {
@@ -4755,6 +4841,7 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateCountBefore,
             duplicateCountAfter
         }, JsonOptions));
+        Phase14LastTraceName = $"Phase14HindiLoop.{loopName}";
     }
 
     private static int CountDuplicateHindiSceneTexts(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
