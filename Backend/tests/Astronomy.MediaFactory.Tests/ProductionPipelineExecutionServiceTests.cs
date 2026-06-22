@@ -986,6 +986,31 @@ First cue.
     }
 
     [Fact]
+    public void Phase14HindiTranslation_TranslatesMeteorFinalReminderWithoutSceneIdCoverage()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["005-final-reminder"] = "Final reminder: keep watching the dark sky tonight for meteors."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var diagnostics = method!.Invoke(null, ["hi", "Meteor", shortTexts, longTexts])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+
+        Assert.Contains("उल्का", translated);
+        Assert.Contains("अंधेरी जगह", translated);
+        Assert.DoesNotContain("Final reminder", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("keep watching", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("बृहस्पति", translated);
+        Assert.DoesNotContain("शुक्र", translated);
+        Assert.True((bool)diagnostics.GetType().GetProperty("TranslationSucceeded")!.GetValue(diagnostics)!);
+        Assert.Equal("BuiltInNaturalHindiSentenceTranslator", diagnostics.GetType().GetProperty("TranslationProvider")!.GetValue(diagnostics));
+        Assert.Equal("Final reminder: keep watching the dark sky tonight for meteors.", diagnostics.GetType().GetProperty("SourceEnglishSentence")!.GetValue(diagnostics));
+        Assert.Equal(translated, diagnostics.GetType().GetProperty("TranslatedHindiSentence")!.GetValue(diagnostics));
+    }
+
+    [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
         var context = CreateContext("PlanetPairing", ["ShortVideo", "Thumbnail"]);
