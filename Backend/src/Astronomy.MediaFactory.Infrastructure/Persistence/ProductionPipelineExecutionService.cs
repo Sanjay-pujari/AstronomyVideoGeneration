@@ -2685,6 +2685,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool StringSetsOverlap(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
         => (left ?? Array.Empty<string>()).Any(l => (right ?? Array.Empty<string>()).Any(r => string.Equals(l, r, StringComparison.OrdinalIgnoreCase)));
 
+    private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, string resolvedFamily, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+        => ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, resolvedFamily, shortTexts, longTexts, resolvedFamily, Array.Empty<string>(), Array.Empty<string>());
+
     private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, string resolvedFamily, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
     {
         TracePhase14Checkpoint("Phase14.ApplyPhase14NarrationTranslationIfNeeded.enter");
@@ -2796,6 +2799,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Phase14ExceptionDiagnosticsState.DuplicateCleanupFamily = duplicateSentenceCleanup.DuplicateCleanupFamily;
         Phase14ExceptionDiagnosticsState.DuplicateCleanupInputTerms = duplicateSentenceCleanup.OriginalDuplicateText.Values.ToArray();
         Phase14ExceptionDiagnosticsState.DuplicateCleanupOutputTerms = duplicateSentenceCleanup.RewrittenUniqueText.Values.ToArray();
+        ReplaceMoonEnglishAstronomyTerms(shortTexts, longTexts);
         var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         TracePhase14Checkpoint("phase14.forbiddenLeakageCheck.started");
         TracePhase14Checkpoint("Phase14.ApplyPhase14NarrationTranslationIfNeeded.before.FindPhase14HindiForbiddenNarrationLeakage");
@@ -2803,6 +2807,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var genericNarrationTermsDetected = FindPhase14HindiGenericNarrationTerms(translatedText);
         var crossFamilyLeakageTermsDetected = FindPhase14HindiCrossFamilyLeakageTerms(resolvedFamily, translatedText);
         var leakedTerms = crossFamilyLeakageTermsDetected;
+        var englishTermsRemaining = IsMoonFamily(duplicateSentenceCleanup.DuplicateCleanupFamily) ? FindMoonEnglishAstronomyTerms(translatedText) : Array.Empty<string>();
+        var genericFallbackPhraseDetected = genericNarrationTermsDetected.Count > 0 || translatedText.Contains("इस दृश्य को", StringComparison.OrdinalIgnoreCase);
         Phase14ExceptionDiagnosticsState.ForbiddenTermsDetected = forbiddenTermsDetected.ToArray();
         Phase14ExceptionDiagnosticsState.GenericNarrationTermsDetected = genericNarrationTermsDetected.ToArray();
         Phase14ExceptionDiagnosticsState.CrossFamilyLeakageTermsDetected = crossFamilyLeakageTermsDetected.ToArray();
@@ -2869,7 +2875,12 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateSentenceCleanup.FamilySpecificRewriteUsed,
             forbiddenTermsDetected,
             genericNarrationTermsDetected,
-            crossFamilyLeakageTermsDetected);
+            crossFamilyLeakageTermsDetected,
+            IsMoonFamily(duplicateSentenceCleanup.DuplicateCleanupFamily) && (duplicateSentenceCleanup.FamilySpecificRewriteUsed || translatedText.Contains("पूर्णिमा", StringComparison.OrdinalIgnoreCase) || translatedText.Contains("चंद्र उदय", StringComparison.OrdinalIgnoreCase)),
+            IsMoonFamily(duplicateSentenceCleanup.DuplicateCleanupFamily) ? shortTexts.Values.Concat(longTexts.Values).Count(text => text.Contains("पूर्णिमा", StringComparison.OrdinalIgnoreCase) || text.Contains("चंद्र", StringComparison.OrdinalIgnoreCase)) : 0,
+            englishTermsRemaining,
+            genericFallbackPhraseDetected,
+            IsMoonFamily(duplicateSentenceCleanup.DuplicateCleanupFamily));
         if (diagnostics.HindiCharacterCount == 0)
         {
             const string throwReason = "Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.";
@@ -2895,6 +2906,28 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         return diagnostics;
     }
+
+    private static void ReplaceMoonEnglishAstronomyTerms(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    {
+        foreach (var map in new[] { shortTexts, longTexts })
+        {
+            foreach (var key in map.Keys.ToArray())
+            {
+                var value = map[key];
+                value = Regex.Replace(value, @"\bmoonrise\b", "चंद्र उदय", RegexOptions.IgnoreCase);
+                value = Regex.Replace(value, @"\bmoonset\b", "चंद्र अस्त", RegexOptions.IgnoreCase);
+                value = Regex.Replace(value, @"\billumination\b", "चंद्र प्रकाश", RegexOptions.IgnoreCase);
+                value = Regex.Replace(value, @"\bfull moon\b", "पूर्णिमा", RegexOptions.IgnoreCase);
+                map[key] = NormalizeNarrationWhitespace(value);
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> FindMoonEnglishAstronomyTerms(string text)
+        => FindForbiddenNarrationLeakage(text, ["illumination", "moonrise", "moonset", "full moon"]);
+
+    private static bool IsMoonFamily(string family)
+        => string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeHindiSentenceForDuplicateCleanup(string sentence)
         => Regex.Replace(sentence ?? string.Empty, @"\s+", " ").Trim().Trim('।', '.', '!', '?', ',', ';', ':');
@@ -3129,11 +3162,16 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
             return purpose switch
             {
-                "hook" => "चंद्रमा की रोशनी और उसका चरण आज की रात के आसमान का मूड तय करते हैं।",
-                "cause" => "दिखती हुई चमक सूर्य के प्रकाश और चंद्रमा की स्थिति से बदलती है, इसलिए illumination हर रात अलग लगता है।",
-                "best-time" => "moonrise और moonset के समय क्षितिज के पास चंद्रमा बड़ा और रंगों में नरम दिख सकता है।",
-                "closing" => "चंद्रमा को कुछ मिनट लगातार देखने से उसकी रोशनी, किनारा और सतह की बनावट बेहतर समझ आती है।",
-                _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+                "hook" => isLong ? "पूर्णिमा का चंद्र प्रकाश सर्दियों के आकाश में शांत चमक फैलाता है और रात्रि का दृश्य तुरंत पहचान में आ जाता है।" : "पूर्णिमा की चंद्र चमक आज रात क्षितिज और आकाश को खास बनाती है।",
+                "what-is-it" => "वुल्फ मून पूर्णिमा का सांस्कृतिक नाम है, जिसमें चंद्रमा की पूरी चमक लोक परंपराओं और मौसम की यादों से जुड़ती है।",
+                "cause" => "पूर्णिमा तब बनती है जब पृथ्वी से देखने पर चंद्रमा सूर्य के विपरीत दिशा में होता है और उसका प्रकाशित भाग लगभग पूरा दिखता है।",
+                "interesting-fact" => "वुल्फ मून जैसे नाम वैज्ञानिक चरण को लोक परंपराओं, ऋतुओं और सांस्कृतिक नामकरण की कहानी से जोड़ते हैं।",
+                "best-time" => "चंद्र उदय के आसपास खुला क्षितिज चुनें, क्योंकि उसी समय पूर्णिमा की चमक नरम रंगों के साथ सबसे सुंदर दिख सकती है।",
+                "accurate-sky-guide" => "पूर्वी क्षितिज की ओर खुली जगह से शुरुआत करें और चंद्रमा के ऊपर उठते ही उसकी दिशा, ऊंचाई और चमक को पहचानें।",
+                "what-you-will-see" => "क्षितिज के पास चंद्रमा सुनहरा या बड़ा महसूस हो सकता है, फिर ऊंचाई बढ़ने पर उसकी सफेद चमक और सतह की छाया स्पष्ट होती है।",
+                "viewing-tips" => "नंगी आंखों से पहले पूरा रात्रि दृश्य देखें, फिर दूरबीन से चंद्रमा के किनारे, गड्ढों और उजली सतह को शांत ढंग से देखें।",
+                "final-reminder" => "कुछ मिनट रुककर पूर्णिमा की रोशनी को महसूस करें; यही सरल आकाशीय अवलोकन रात को यादगार बना देता है।",
+                _ => BuildMoonHindiDuplicateCleanupText(purpose, isLong)
             };
 
         if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
@@ -3157,16 +3195,38 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string BuildFamilySpecificHindiDuplicateSuffix(string family, bool timingSuffix)
-        => string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
-            ? (timingSuffix ? " इसी कारण अवलोकन में क्षितिज, चमक और समय—तीनों पर ध्यान रखें।" : " यह बात दर्शक को केवल सुंदरता नहीं, बल्कि ग्रहों की वास्तविक व्यवस्था भी समझाती है।")
-            : (timingSuffix ? " इसी कारण अवलोकन में समय, दिशा और आसमान की स्थिति पर ध्यान रखें।" : " यह विवरण दृश्य को दोहराव से बचाकर उसी परिवार की जानकारी को स्पष्ट रखता है।");
+    {
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            return timingSuffix ? " इसी कारण अवलोकन में क्षितिज, चमक और समय—तीनों पर ध्यान रखें।" : " यह बात दर्शक को केवल सुंदरता नहीं, बल्कि ग्रहों की वास्तविक व्यवस्था भी समझाती है।";
+        if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
+            return timingSuffix ? " चंद्र उदय, क्षितिज और चंद्र प्रकाश को साथ देखकर अनुभव बेहतर होता है।" : " पूर्णिमा की लोक परंपरा और चमक इस वर्णन को अलग अर्थ देती है।";
+        return timingSuffix ? " इसी कारण अवलोकन में समय, दिशा और आसमान की स्थिति पर ध्यान रखें।" : " यह विवरण उसी आकाशीय परिवार की जानकारी को स्पष्ट रखता है।";
+    }
+
+    private static string BuildMoonHindiDuplicateCleanupText(string purpose, bool isLong)
+        => purpose switch
+        {
+            "what-is-it" => "वुल्फ मून पूर्णिमा का पारंपरिक नाम है, जो सर्दियों के आकाश और लोक स्मृतियों से जुड़ा है।",
+            "cause" => "चंद्रमा की कलाएँ सूर्य, पृथ्वी और चंद्रमा की बदलती स्थिति से बनती हैं; पूर्णिमा में प्रकाशित भाग लगभग पूरा दिखता है।",
+            "interesting-fact" => "सांस्कृतिक नामकरण चंद्रमा को केवल खगोलीय पिंड नहीं, बल्कि ऋतु और लोक परंपराओं की निशानी भी बनाता है।",
+            "best-time" => "चंद्र उदय के समय खुला क्षितिज पूर्णिमा की नरम चमक और रंग देखने का अच्छा अवसर देता है।",
+            "accurate-sky-guide" => "पूर्व दिशा का क्षितिज साफ रखें और चंद्रमा के ऊपर उठते ही उसकी ऊंचाई और चमक का पीछा करें।",
+            "what-you-will-see" => "पूर्णिमा की चमक पहले सुनहरी लग सकती है, फिर ऊंचाई बढ़ने पर उजला चंद्र प्रकाश पूरे रात्रि दृश्य को भर देता है।",
+            "viewing-tips" => "मोबाइल की तेज रोशनी कम रखें, आंखों को ढलने दें और दूरबीन हो तो चंद्र किनारे को धीरे-धीरे देखें।",
+            "final-reminder" => "पूर्णिमा की शांत चमक के साथ कुछ पल रुकना ही इस आकाशीय अवलोकन को यादगार बना देता है।",
+            _ => isLong ? "चंद्रमा की कलाएँ, क्षितिज और चंद्र प्रकाश मिलकर पूर्णिमा का स्वाभाविक रात्रि दृश्य बनाते हैं।" : "पूर्णिमा की चंद्र चमक रात्रि आकाश को सहज पहचान देती है।"
+        };
 
     private static string BuildNaturalHindiFallbackFromDuplicateText(string duplicateText, string family = "PlanetConjunction")
     {
         if (!string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
-            return string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase)
-                ? "अंधेरे आसमान में उल्का वर्षा की चमकदार धारियां अनियमित अंतरालों पर दिखती हैं, इसलिए धैर्य से व्यापक आसमान देखते रहें।"
-                : "इस दृश्य में समय, दिशा और दृश्यता को अलग शब्दों में समझाना दोहराव हटाते हुए घटना की जानकारी साफ रखता है।";
+        {
+            if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase))
+                return "अंधेरे आसमान में उल्का वर्षा की चमकदार धारियां अनियमित अंतरालों पर दिखती हैं, इसलिए धैर्य से व्यापक आसमान देखते रहें।";
+            if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
+                return BuildMoonHindiDuplicateCleanupText("what-you-will-see", false);
+            return "आकाशीय अवलोकन में समय, दिशा और दृश्यता को प्राकृतिक भाषा में समझाने से जानकारी साफ रहती है।";
+        }
 
         var lower = (duplicateText ?? string.Empty).ToLowerInvariant();
         if (lower.Contains("binocular") || lower.Contains("telescope") || lower.Contains("दूरबीन"))
@@ -3247,9 +3307,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 else
                     result = $"{subject} की यह युति एक दृश्यात्मक मिलन है, जिसमें चमक, दूरी और क्षितिज की स्थिति मिलकर शाम के आसमान को समझने योग्य बनाते हैं।";
             }
-            else if (lower.Contains("moon") || string.Equals(eventType, "Moon", StringComparison.OrdinalIgnoreCase))
+            else if (lower.Contains("moon") || lower.Contains("lunar") || string.Equals(eventType, "Moon", StringComparison.OrdinalIgnoreCase))
             {
-                result = "चंद्रमा की रोशनी, ऊंचाई और आसपास के आसमान का रंग मिलकर रात को शांत और स्पष्ट संदर्भ देते हैं।";
+                result = BuildMoonHindiSceneTranslation(text, scene, scenePurpose);
             }
             else if (lower.Contains("eclipse") || string.Equals(eventType, "Eclipse", StringComparison.OrdinalIgnoreCase))
             {
@@ -3263,6 +3323,29 @@ public sealed partial class ProductionPipelineExecutionService(
             return Task.FromResult(result);
         }
     }
+
+        private static string BuildMoonHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
+        {
+            var lower = sourceText.ToLowerInvariant();
+            var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+            if (lower.Contains("wolf") || purpose == "what-is-it")
+                return "वुल्फ मून पूर्णिमा का पारंपरिक नाम है, जो सर्दियों के आकाश, चंद्र प्रकाश और लोक परंपराओं की याद दिलाता है।";
+            if (lower.Contains("opposite") || lower.Contains("phase") || lower.Contains("illuminated") || purpose == "cause")
+                return "पूर्णिमा तब दिखाई देती है जब पृथ्वी से चंद्रमा का प्रकाशित भाग लगभग पूरा दिखता है; चंद्रमा की कलाएँ इसी बदलती ज्यामिति से बनती हैं।";
+            if (lower.Contains("name") || lower.Contains("tradition") || lower.Contains("culture") || purpose == "interesting-fact")
+                return "वुल्फ मून जैसे नाम सांस्कृतिक नामकरण की परंपरा हैं, जिनमें ऋतु, लोक स्मृतियाँ और आकाशीय अवलोकन साथ आते हैं।";
+            if (lower.Contains("moonrise") || lower.Contains("best") || purpose == "best-time")
+                return "चंद्र उदय के आसपास खुला क्षितिज चुनें, क्योंकि पूर्णिमा की चमक कम ऊंचाई पर नरम रंगों के साथ सबसे सुंदर लग सकती है।";
+            if (lower.Contains("horizon") || lower.Contains("east") || purpose == "accurate-sky-guide")
+                return "पूर्वी क्षितिज की ओर खुली जगह से देखें और चंद्रमा के ऊपर उठते ही उसकी दिशा, ऊंचाई और चमक को पहचानें।";
+            if (lower.Contains("brightness") || lower.Contains("color") || lower.Contains("see") || purpose == "what-you-will-see")
+                return "क्षितिज के पास चंद्रमा सुनहरा और बड़ा महसूस हो सकता है, फिर ऊपर उठने पर उसका सफेद चंद्र प्रकाश रात्रि का दृश्य भर देता है।";
+            if (lower.Contains("tip") || lower.Contains("binocular") || purpose == "viewing-tips")
+                return "नंगी आंखों से पहले पूरा आकाश देखें, फिर दूरबीन हो तो चंद्र किनारे, गड्ढों और चमकदार सतह को शांत ढंग से देखें।";
+            if (lower.Contains("reminder") || scene.Contains("final") || purpose == "final-reminder")
+                return "पूर्णिमा की शांत चमक के साथ कुछ पल रुकें; सरल आकाशीय अवलोकन भी रात को यादगार बना सकता है।";
+            return "पूर्णिमा की चंद्र चमक, खुला क्षितिज और सर्दियों का आकाश मिलकर आज रात का रात्रि दृश्य खास बनाते हैं।";
+        }
 
     private static double CalculateHindiCharacterRatio(string text)
     {
@@ -4371,7 +4454,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             "Meteor" => new[] { "रेडिएंट साफ देखें।", "उल्का लकीरें गिनें।", "अंधेरा आसमान चुनें।", "चरम समय देखें।" },
             "PlanetConjunction" => new[] { "ग्रहों की दूरी देखें।", "क्षितिज साफ रखें।", "शाम की युति देखें।", "चमकते ग्रह पहचानें।" },
-            "Moon" => new[] { "चंद्र चमक देखें।", "चांद की दिशा देखें।", "क्षितिज खुला रखें।", "चांदनी नोट करें।" },
+            "Moon" => new[] { "चंद्र उदय देखें।", "पूर्णिमा चमकती है।", "पूर्वी क्षितिज रखें।", "चंद्र प्रकाश देखें।" },
             "Eclipse" => new[] { "सुरक्षा पहले रखें।", "ग्रहण समय देखें।", "सुरक्षित फिल्टर लगाएं।", "आंखें सुरक्षित रखें।" },
             "PlanetGrouping" => new[] { "ग्रह समूह देखें।", "दृश्यता समय देखें।", "साफ क्षितिज चुनें।", "चमक क्रम पहचानें।" },
             _ => new[] { "आसमान ध्यान से देखें।", "साफ दिशा चुनें।", "देखने का समय रखें।", "दृश्य याद रखें।" }
@@ -4379,7 +4462,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return candidates
             .Append(purposeCue)
-            .Append(string.IsNullOrWhiteSpace(compactSceneId) ? string.Empty : $"दृश्य {compactSceneId} देखें।")
+            .Append(string.IsNullOrWhiteSpace(compactSceneId) ? string.Empty : $"क्रम {compactSceneId} याद रखें।")
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(Phase14HindiCueMaxRewriteAttempts)
@@ -4407,10 +4490,10 @@ public sealed partial class ProductionPipelineExecutionService(
             _ => "आकाश संदर्भ में"
         });
         if (!string.IsNullOrWhiteSpace(syncItem?.VisualIntent))
-            phrases.Add("इस दृश्य में");
+            phrases.Add("आकाशीय संदर्भ में");
         if (!string.IsNullOrWhiteSpace(durationItem?.RecommendedMotion))
-            phrases.Add("इसी दृश्य में");
-        phrases.Add($"दृश्य {Regex.Replace(sceneId, @"[^0-9A-Za-z]+", "")}");
+            phrases.Add("उसी अवलोकन क्रम में");
+        phrases.Add($"क्रम {Regex.Replace(sceneId, @"[^0-9A-Za-z]+", "")}");
         return phrases.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
@@ -5757,7 +5840,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
-    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed, IReadOnlyList<string> ForbiddenTermsDetected, IReadOnlyList<string> GenericNarrationTermsDetected, IReadOnlyList<string> CrossFamilyLeakageTermsDetected);
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed, IReadOnlyList<string> ForbiddenTermsDetected, IReadOnlyList<string> GenericNarrationTermsDetected, IReadOnlyList<string> CrossFamilyLeakageTermsDetected, bool MoonSpecificRewriteApplied = false, int MoonSpecificRewriteCount = 0, IReadOnlyList<string>? EnglishTermsRemaining = null, bool GenericFallbackPhraseDetected = false, bool DuplicateCleanupMoonMode = false);
     private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneIds, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
