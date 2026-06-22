@@ -2116,6 +2116,12 @@ public sealed partial class ProductionPipelineExecutionService(
                 duplicateSrtGroups = Array.Empty<string>(),
                 repeatedHindiSentencesDetected = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesDetected,
                 repeatedHindiSentencesRemoved = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesRemoved,
+                duplicateHindiSentencesDetected = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesDetected,
+                duplicateHindiSentencesRemoved = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesRemoved,
+                duplicateAcrossScenesDetected = documentaryNarration.TranslationDiagnostics.DuplicateAcrossScenesDetected,
+                sourceSceneId = documentaryNarration.TranslationDiagnostics.SourceSceneId,
+                duplicateSceneIds = documentaryNarration.TranslationDiagnostics.DuplicateSceneIds,
+                finalUniqueSceneText = documentaryNarration.TranslationDiagnostics.FinalUniqueSceneText,
                 cleanedSceneIds = documentaryNarration.TranslationDiagnostics.CleanedSceneIds,
                 srtValidationPassed = true,
                 shortSceneCount = 5,
@@ -2293,6 +2299,12 @@ public sealed partial class ProductionPipelineExecutionService(
             englishCharacterCount = documentaryNarration.TranslationDiagnostics.EnglishCharacterCount,
             repeatedHindiSentencesDetected = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesDetected,
             repeatedHindiSentencesRemoved = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesRemoved,
+            duplicateHindiSentencesDetected = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesDetected,
+            duplicateHindiSentencesRemoved = documentaryNarration.TranslationDiagnostics.RepeatedHindiSentencesRemoved,
+            duplicateAcrossScenesDetected = documentaryNarration.TranslationDiagnostics.DuplicateAcrossScenesDetected,
+            sourceSceneId = documentaryNarration.TranslationDiagnostics.SourceSceneId,
+            duplicateSceneIds = documentaryNarration.TranslationDiagnostics.DuplicateSceneIds,
+            finalUniqueSceneText = documentaryNarration.TranslationDiagnostics.FinalUniqueSceneText,
             cleanedSceneIds = documentaryNarration.TranslationDiagnostics.CleanedSceneIds,
             sceneLevelAdapter = documentaryNarration.AdapterDiagnostics,
             sceneNarrationComposerTrace = documentaryNarration.AdapterDiagnostics.SceneNarrationComposerTrace,
@@ -2611,16 +2623,18 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
-            return new Phase14TranslationDiagnostics(requestedLanguage, resolvedFamily, "none", Snippet(sourceText), Snippet(sourceText), false, false, [], "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], [], false, 0, false, [], Snippet(sourceText), Snippet(sourceText));
+            return new Phase14TranslationDiagnostics(requestedLanguage, resolvedFamily, "none", Snippet(sourceText), Snippet(sourceText), false, false, [], "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], [], [], [], [], false, 0, false, [], Snippet(sourceText), Snippet(sourceText));
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
 
+        var sourceShortTexts = shortTexts.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        var sourceLongTexts = longTexts.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
         foreach (var key in shortTexts.Keys.ToArray())
             shortTexts[key] = TranslatePhase14NarrationToHindi(key, shortTexts[key], false);
         foreach (var key in longTexts.Keys.ToArray())
             longTexts[key] = TranslatePhase14NarrationToHindi(key, longTexts[key], true);
-        var duplicateSentenceCleanup = CleanupRepeatedHindiSentences(shortTexts, longTexts);
+        var duplicateSentenceCleanup = CleanupRepeatedHindiSentences(shortTexts, longTexts, sourceShortTexts, sourceLongTexts);
 
         var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         var leakedTerms = FindPhase14HindiForbiddenNarrationLeakage(resolvedFamily, translatedText);
@@ -2640,6 +2654,10 @@ public sealed partial class ProductionPipelineExecutionService(
             CountEnglishCharacters(translatedText),
             duplicateSentenceCleanup.RepeatedHindiSentencesDetected,
             duplicateSentenceCleanup.RepeatedHindiSentencesRemoved,
+            duplicateSentenceCleanup.DuplicateAcrossScenesDetected,
+            duplicateSentenceCleanup.SourceSceneIds,
+            duplicateSentenceCleanup.DuplicateSceneIds,
+            duplicateSentenceCleanup.FinalUniqueSceneText,
             duplicateSentenceCleanup.CleanedSceneIds,
             true,
             CalculateHindiCharacterRatio(translatedText),
@@ -2656,64 +2674,84 @@ public sealed partial class ProductionPipelineExecutionService(
         return diagnostics;
     }
 
-    private static Phase14HindiDuplicateSentenceCleanupResult CleanupRepeatedHindiSentences(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    private static Phase14HindiDuplicateSentenceCleanupResult CleanupRepeatedHindiSentences(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts, IReadOnlyDictionary<string, string> sourceShortTexts, IReadOnlyDictionary<string, string> sourceLongTexts)
     {
-        var shortResult = CleanupRepeatedHindiSentencesForFormat("short", shortTexts);
-        var longResult = CleanupRepeatedHindiSentencesForFormat("long", longTexts);
+        var shortResult = CleanupRepeatedHindiSentencesForFormat("short", shortTexts, sourceShortTexts, false);
+        var longResult = CleanupRepeatedHindiSentencesForFormat("long", longTexts, sourceLongTexts, true);
         return new Phase14HindiDuplicateSentenceCleanupResult(
             shortResult.RepeatedHindiSentencesDetected.Concat(longResult.RepeatedHindiSentencesDetected).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             shortResult.RepeatedHindiSentencesRemoved.Concat(longResult.RepeatedHindiSentencesRemoved).ToArray(),
+            shortResult.DuplicateAcrossScenesDetected.Concat(longResult.DuplicateAcrossScenesDetected).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            shortResult.SourceSceneIds.Concat(longResult.SourceSceneIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            shortResult.DuplicateSceneIds.Concat(longResult.DuplicateSceneIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            shortResult.FinalUniqueSceneText.Concat(longResult.FinalUniqueSceneText).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase),
             shortResult.CleanedSceneIds.Concat(longResult.CleanedSceneIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    private static Phase14HindiDuplicateSentenceCleanupResult CleanupRepeatedHindiSentencesForFormat(string format, IDictionary<string, string> texts)
+    private static Phase14HindiDuplicateSentenceCleanupResult CleanupRepeatedHindiSentencesForFormat(string format, IDictionary<string, string> texts, IReadOnlyDictionary<string, string> sourceTexts, bool longFormat)
     {
-        var detected = texts
-            .SelectMany(kv => SplitNarrationSentences(kv.Value)
-                .Select(sentence => NormalizeHindiSentenceForDuplicateCleanup(sentence))
-                .Where(sentence => !string.IsNullOrWhiteSpace(sentence) && IsGenericHindiSentence(sentence)))
-            .GroupBy(sentence => sentence, StringComparer.OrdinalIgnoreCase)
-            .Where(group => group.Count() > 1)
-            .Select(group => group.Key)
-            .ToArray();
-        if (detected.Length == 0)
-            return new Phase14HindiDuplicateSentenceCleanupResult([], [], []);
-
-        var duplicateSet = detected.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var retained = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var removed = new List<string>();
         var cleanedSceneIds = new List<string>();
+        var duplicateAcrossScenesDetected = new List<string>();
+        var sourceSceneIds = new List<string>();
+        var duplicateSceneIds = new List<string>();
+        var finalUniqueSceneText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var sceneId in texts.Keys.ToArray())
         {
-            var changed = false;
+            var seenInScene = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var kept = new List<string>();
             foreach (var sentence in SplitNarrationSentences(texts[sceneId]))
             {
                 var normalized = NormalizeHindiSentenceForDuplicateCleanup(sentence);
-                if (duplicateSet.Contains(normalized))
+                if (!string.IsNullOrWhiteSpace(normalized) && !seenInScene.Add(normalized))
                 {
-                    if (retained.Add(normalized))
-                    {
-                        kept.Add(sentence.Trim());
-                    }
-                    else
-                    {
-                        removed.Add($"{format}:{sceneId}: {sentence.Trim()}");
-                        changed = true;
-                    }
+                    removed.Add($"{format}:{sceneId}: {sentence.Trim()}");
                     continue;
                 }
                 kept.Add(sentence.Trim());
             }
-
-            if (changed)
+            var cleaned = string.Join(" ", kept.Where(sentence => !string.IsNullOrWhiteSpace(sentence))).Trim();
+            if (!string.Equals(cleaned, texts[sceneId], StringComparison.Ordinal))
             {
-                texts[sceneId] = string.Join(" ", kept.Where(sentence => !string.IsNullOrWhiteSpace(sentence))).Trim();
+                texts[sceneId] = cleaned;
                 cleanedSceneIds.Add($"{format}:{sceneId}");
             }
         }
 
-        return new Phase14HindiDuplicateSentenceCleanupResult(detected, removed, cleanedSceneIds);
+        var sentenceOwners = new Dictionary<string, (string SceneId, string SourceEnglish)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sceneId in texts.Keys.ToArray())
+        {
+            foreach (var sentence in SplitNarrationSentences(texts[sceneId]))
+            {
+                var normalized = NormalizeHindiSentenceForDuplicateCleanup(sentence);
+                if (string.IsNullOrWhiteSpace(normalized) || !IsGenericHindiSentence(normalized)) continue;
+                var sourceEnglish = sourceTexts.TryGetValue(sceneId, out var source) ? NormalizeEnglishSourceForDuplicateCleanup(source) : string.Empty;
+                if (!sentenceOwners.TryGetValue(normalized, out var owner))
+                {
+                    sentenceOwners[normalized] = (sceneId, sourceEnglish);
+                    continue;
+                }
+                if (string.Equals(owner.SourceEnglish, sourceEnglish, StringComparison.OrdinalIgnoreCase)) continue;
+
+                duplicateAcrossScenesDetected.Add(normalized);
+                sourceSceneIds.Add($"{format}:{owner.SceneId}");
+                duplicateSceneIds.Add($"{format}:{sceneId}");
+                var replacement = BuildHindiSourceAnchoredRewrite(sceneId, sourceTexts.TryGetValue(sceneId, out var original) ? original : texts[sceneId]);
+                texts[sceneId] = replacement;
+                finalUniqueSceneText[$"{format}:{sceneId}"] = replacement;
+                cleanedSceneIds.Add($"{format}:{sceneId}");
+            }
+        }
+
+        return new Phase14HindiDuplicateSentenceCleanupResult(
+            removed.Select(item => item[(item.IndexOf(':', item.IndexOf(':') + 1) + 2)..]).Select(NormalizeHindiSentenceForDuplicateCleanup).Where(s => !string.IsNullOrWhiteSpace(s)).Concat(duplicateAcrossScenesDetected).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            removed.ToArray(),
+            duplicateAcrossScenesDetected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            sourceSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            duplicateSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            finalUniqueSceneText,
+            cleanedSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     private static string NormalizeHindiSentenceForDuplicateCleanup(string sentence)
@@ -2723,7 +2761,8 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         if (!ContainsHindiText(sentence)) return false;
         return Regex.IsMatch(sentence, "(इसे|इस दृश्य|दृश्य).*?(देख|आराम|जल्दबाज़ी|मिनट|समय|ध्यान)", RegexOptions.IgnoreCase)
-            || Regex.IsMatch(sentence, "(कुछ मिनट निकालें|जल्दबाज़ी न करें|आराम से देखें|छोटे बदलाव पकड़ने)", RegexOptions.IgnoreCase);
+            || Regex.IsMatch(sentence, "(कुछ मिनट निकालें|जल्दबाज़ी न करें|आराम से देखें|छोटे बदलाव पकड़ने)", RegexOptions.IgnoreCase)
+            || Regex.IsMatch(sentence, "(सूर्यास्त के बाद पश्चिमी आसमान|चमकीले ग्रहों को पास-पास|अच्छा अवसर मिलेगा|आज रात आसमान में)", RegexOptions.IgnoreCase);
     }
 
     private static string TranslatePhase14NarrationToHindi(string sceneId, string english, bool longFormat)
@@ -2732,7 +2771,41 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var sentences = SplitNarrationSentences(english);
         var translatedSentences = sentences.Select(sentence => TranslatePhase14SentenceToNaturalHindi(sentence, sceneId, longFormat)).Where(sentence => !string.IsNullOrWhiteSpace(sentence)).ToArray();
-        return string.Join(" ", translatedSentences).Trim();
+        return RemoveDuplicateHindiSentencesWithinScene(translatedSentences);
+    }
+
+    private static string BuildHindiSourceAnchoredRewrite(string sceneId, string english)
+    {
+        var anchor = BuildHindiSceneAnchor(sceneId, english);
+        return RemoveDuplicateHindiSentencesWithinScene([anchor]);
+    }
+
+    private static string RemoveDuplicateHindiSentencesWithinScene(IEnumerable<string> sentences)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var kept = new List<string>();
+        foreach (var sentence in sentences.SelectMany(SplitNarrationSentences))
+        {
+            var normalized = NormalizeHindiSentenceForDuplicateCleanup(sentence);
+            if (string.IsNullOrWhiteSpace(normalized) || !seen.Add(normalized)) continue;
+            kept.Add(sentence.Trim());
+        }
+        return string.Join(" ", kept).Trim();
+    }
+
+    private static string NormalizeEnglishSourceForDuplicateCleanup(string text)
+        => Regex.Replace(text ?? string.Empty, @"\s+", " ").Trim().ToLowerInvariant();
+
+    private static string BuildHindiSceneAnchor(string sceneId, string english)
+    {
+        var text = NormalizeEnglishSourceForDuplicateCleanup(english);
+        var sceneHint = (sceneId ?? string.Empty).Aggregate(0, (sum, ch) => sum + ch) % 5;
+        if (text.Contains("western") || text.Contains("west")) return sceneHint == 0 ? "सूर्यास्त के तुरंत बाद पश्चिमी क्षितिज पर कम ऊंचाई वाली चमक को पहचानें।" : "पश्चिम दिशा में खुला क्षितिज चुनकर ग्रहों की पहली चमक को अलग से नोट करें।";
+        if (text.Contains("separation") || text.Contains("close")) return sceneHint == 1 ? "ग्रहों के बीच की छोटी दूरी को मुख्य संकेत मानें और उनके बदलते कोण को देखें।" : "पास दिखती रोशनियों की दूरी और क्रम को पहचानना इस दृश्य का खास हिस्सा है।";
+        if (text.Contains("jupiter") && text.Contains("venus")) return sceneHint == 2 ? "बृहस्पति की स्थिर चमक और शुक्र की तेज रोशनी को अलग-अलग पहचानें।" : "दोनों ग्रहों की चमक में अंतर देखकर युति का आकार समझना आसान होगा।";
+        if (text.Contains("binocular") || text.Contains("telescope")) return sceneHint == 3 ? "दूरबीन लगाने से पहले नंगी आंखों से ग्रहों की स्थिति तय कर लें।" : "उपकरण का उपयोग तभी करें जब क्षितिज साफ हो और ग्रह स्थिर दिखाई दें।";
+        if (text.Contains("weather") || text.Contains("horizon")) return sceneHint == 4 ? "पतले बादल और धुंध क्षितिज के पास चमक घटा सकते हैं, इसलिए साफ पट्टी खोजें।" : "स्थानीय मौसम और इमारतों से मुक्त क्षितिज देखने की योजना में शामिल रखें।";
+        return "स्रोत वर्णन के खास संकेतों को मिलाकर इस आकाशीय दृश्य को क्रम से समझें।";
     }
 
     private static string TranslatePhase14SentenceToNaturalHindi(string sentence, string sceneId, bool longFormat)
@@ -4413,6 +4486,12 @@ public sealed partial class ProductionPipelineExecutionService(
             englishCharacterCount = adapterDiagnostics?.TranslationDiagnostics?.EnglishCharacterCount,
             repeatedHindiSentencesDetected = adapterDiagnostics?.TranslationDiagnostics?.RepeatedHindiSentencesDetected ?? Array.Empty<string>(),
             repeatedHindiSentencesRemoved = adapterDiagnostics?.TranslationDiagnostics?.RepeatedHindiSentencesRemoved ?? Array.Empty<string>(),
+            duplicateHindiSentencesDetected = adapterDiagnostics?.TranslationDiagnostics?.RepeatedHindiSentencesDetected ?? Array.Empty<string>(),
+            duplicateHindiSentencesRemoved = adapterDiagnostics?.TranslationDiagnostics?.RepeatedHindiSentencesRemoved ?? Array.Empty<string>(),
+            duplicateAcrossScenesDetected = adapterDiagnostics?.TranslationDiagnostics?.DuplicateAcrossScenesDetected ?? Array.Empty<string>(),
+            sourceSceneId = adapterDiagnostics?.TranslationDiagnostics?.SourceSceneId ?? Array.Empty<string>(),
+            duplicateSceneIds = adapterDiagnostics?.TranslationDiagnostics?.DuplicateSceneIds ?? Array.Empty<string>(),
+            finalUniqueSceneText = adapterDiagnostics?.TranslationDiagnostics?.FinalUniqueSceneText ?? new Dictionary<string, string>(),
             cleanedSceneIds = adapterDiagnostics?.TranslationDiagnostics?.CleanedSceneIds ?? Array.Empty<string>(),
             sceneLevelAdapter = adapterDiagnostics,
             eventConsistency = eventConsistencyDiagnostics,
@@ -4591,8 +4670,8 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
-    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet);
-    private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds);
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet);
+    private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneIds, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);

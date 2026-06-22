@@ -956,6 +956,31 @@ First cue.
         Assert.False((bool)diagnostics.GetType().GetProperty("ForbiddenNarrationLeakageDetected")!.GetValue(diagnostics)!);
     }
 
+
+    [Fact]
+    public void Phase14HindiTranslation_RewritesGenericDuplicateConjunctionScenesFromSourceText()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-western-view"] = "Planets align in the western sky after sunset for an easy naked-eye view.",
+            ["002-close-spacing"] = "Planets appear close together tonight, with the small separation making the conjunction easy to notice.",
+            ["003-gear"] = "Bring binoculars only after you find Jupiter and Venus with your eyes first. Bring a steady view and avoid buildings on the horizon."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var diagnostics = method!.Invoke(null, ["hi", "PlanetConjunction", shortTexts, longTexts])!;
+        var translated = shortTexts.Values.ToArray();
+        var duplicateAcrossScenes = (IReadOnlyList<string>)diagnostics.GetType().GetProperty("DuplicateAcrossScenesDetected")!.GetValue(diagnostics)!;
+        var finalUniqueSceneText = (IReadOnlyDictionary<string, string>)diagnostics.GetType().GetProperty("FinalUniqueSceneText")!.GetValue(diagnostics)!;
+
+        Assert.All(translated, text => Assert.Contains("।", text));
+        Assert.Equal(translated.Length, translated.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.DoesNotContain("सूर्यास्त के बाद पश्चिमी आसमान में चमकीले ग्रहों को पास-पास देखने का अच्छा अवसर मिलेगा।", translated.Skip(1));
+        Assert.NotEmpty(duplicateAcrossScenes);
+        Assert.Contains("short:002-close-spacing", finalUniqueSceneText.Keys);
+    }
+
     [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
