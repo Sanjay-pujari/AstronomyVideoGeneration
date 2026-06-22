@@ -2192,6 +2192,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var srtGenerationCallCount = 1;
         var srtValidationCallCount = 1;
         var sceneDurationPlanResolution = EnsurePhase14SceneDurationPlan(planRoot, shortNarrationFiles, longNarrationFiles, shortItems, longNarrationV3Items);
+        var shortCueRewrite = ApplyHindiCueDuplicateRewriteBeforeSrtGeneration(language, planRoot, "short", shortNarrationFiles, shortItems);
+        var longCueRewrite = ApplyHindiCueDuplicateRewriteBeforeSrtGeneration(language, planRoot, "long", longNarrationFiles, longNarrationV3Items);
         var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "short", shortNarrationFiles, shortItems);
         var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "long", longNarrationFiles, longNarrationV3Items);
         ValidateSceneNarrationFileOnlyCueSources(shortSrtTiming.Diagnostics, longSrtTiming.Diagnostics);
@@ -2248,6 +2250,16 @@ public sealed partial class ProductionPipelineExecutionService(
             sceneDurationPlanGeneratedFallback = sceneDurationPlanResolution.SceneDurationPlanGeneratedFallback,
             sceneDurationPlanGenerationSource = sceneDurationPlanResolution.SceneDurationPlanGenerationSource,
             missingDurationSceneIds = sceneDurationPlanResolution.MissingDurationSceneIds,
+            cueRewriteAppliedBeforeFileWrite = shortCueRewrite.RewriteApplied || longCueRewrite.RewriteApplied,
+            cueRewriteAppliedAfterFileWrite = false,
+            narrationFileUpdatedAfterCueRewrite = shortCueRewrite.NarrationFileUpdatedAfterCueRewrite || longCueRewrite.NarrationFileUpdatedAfterCueRewrite,
+            rewrittenCueIds = shortCueRewrite.RewrittenCueIds.Concat(longCueRewrite.RewrittenCueIds).ToArray(),
+            rewrittenSceneIds = shortCueRewrite.RewrittenSceneIds.Concat(longCueRewrite.RewrittenSceneIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            narrationTextBeforeRewrite = shortCueRewrite.NarrationTextBeforeRewrite.Concat(longCueRewrite.NarrationTextBeforeRewrite).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase),
+            narrationTextAfterRewrite = shortCueRewrite.NarrationTextAfterRewrite.Concat(longCueRewrite.NarrationTextAfterRewrite).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase),
+            reconstructedSrtText = new { @short = ReconstructSrtNarrationText(shortSrtPath), @long = ReconstructSrtNarrationText(longSrtPath) },
+            narrationSrtTextMatch = shortSrtValidation.MatchesNarrationFiles && longSrtValidation.MatchesNarrationFiles,
+            cueLevelDuplicateRewrite = new { @short = shortCueRewrite, @long = longCueRewrite },
             srtTiming = new { @short = shortSrtTiming.Diagnostics.Timing, @long = longSrtTiming.Diagnostics.Timing },
             subtitleGeneration = new { @short = shortSrtTiming.Diagnostics, @long = longSrtTiming.Diagnostics },
             subtitleCueSources = shortSrtTiming.Diagnostics.SubtitleCueSources.Concat(longSrtTiming.Diagnostics.SubtitleCueSources).ToArray(),
@@ -2315,7 +2327,7 @@ public sealed partial class ProductionPipelineExecutionService(
             cleanedSceneIds = documentaryNarration.TranslationDiagnostics.CleanedSceneIds,
             duplicateHindiScenesDetected = documentaryNarration.TranslationDiagnostics.DuplicateAcrossScenesDetected,
             duplicateHindiScenesRewritten = documentaryNarration.TranslationDiagnostics.RewrittenSceneIds,
-            rewrittenSceneIds = documentaryNarration.TranslationDiagnostics.RewrittenSceneIds,
+            sceneLevelRewrittenSceneIds = documentaryNarration.TranslationDiagnostics.RewrittenSceneIds,
             originalDuplicateText = documentaryNarration.TranslationDiagnostics.OriginalDuplicateText,
             rewrittenUniqueText = documentaryNarration.TranslationDiagnostics.RewrittenUniqueText,
             writtenNarrationFileText = documentaryNarration.TranslationDiagnostics.WrittenNarrationFileText,
@@ -3583,6 +3595,81 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToDictionary(group => group.Key, group => group.First().Node, StringComparer.OrdinalIgnoreCase);
     }
 
+    private static HindiCueDuplicateRewriteResult ApplyHindiCueDuplicateRewriteBeforeSrtGeneration(string requestedLanguage, string planRoot, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
+    {
+        if (!string.Equals(ResolvePipelineLanguage(requestedLanguage), "hi", StringComparison.OrdinalIgnoreCase))
+            return HindiCueDuplicateRewriteResult.Empty(format);
+
+        var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
+        if (durationPlanItems.Count == 0)
+            durationPlanItems = BuildFallbackPhase14SceneDurationPlanItems(planRoot, format, items, narrationFiles);
+
+        var cueRecords = new List<HindiCueDuplicateRewriteCandidate>();
+        for (var i = 0; i < narrationFiles.Count; i++)
+        {
+            var narrationFile = narrationFiles[i];
+            var sceneId = i < durationPlanItems.Count ? durationPlanItems[i].SceneId : SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
+            var sceneText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
+            var chunks = SplitSubtitleChunks(sceneText);
+            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+                cueRecords.Add(new HindiCueDuplicateRewriteCandidate(narrationFile, sceneId, chunkIndex + 1, chunks[chunkIndex], NormalizeNarrationForDuplicateCheck(chunks[chunkIndex])));
+        }
+
+        var duplicateGroups = cueRecords
+            .Where(cue => !string.IsNullOrWhiteSpace(cue.NormalizedCueText))
+            .GroupBy(cue => cue.NormalizedCueText, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .ToArray();
+        if (duplicateGroups.Length == 0)
+            return HindiCueDuplicateRewriteResult.Empty(format);
+
+        var occupied = cueRecords.Select(cue => cue.NormalizedCueText).Where(normalized => !string.IsNullOrWhiteSpace(normalized)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var syncBySceneId = items.ToDictionary(item => item.SceneId, item => item, StringComparer.OrdinalIgnoreCase);
+        var durationBySceneId = durationPlanItems.ToDictionary(item => item.SceneId, item => item, StringComparer.OrdinalIgnoreCase);
+        var before = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var after = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rewrittenCueIds = new List<string>();
+        var rewrittenSceneIds = new List<string>();
+        var diagnostics = new List<object>();
+
+        foreach (var group in duplicateGroups)
+        {
+            foreach (var duplicate in group.Skip(1))
+            {
+                var normalizedPath = NormalizePath(duplicate.NarrationFile);
+                var fileText = NormalizeNarrationWhitespace(File.ReadAllText(duplicate.NarrationFile).Trim());
+                before.TryAdd(normalizedPath, fileText);
+                occupied.Remove(duplicate.NormalizedCueText);
+                syncBySceneId.TryGetValue(duplicate.SceneId, out var syncItem);
+                durationBySceneId.TryGetValue(duplicate.SceneId, out var durationItem);
+                var rewrittenCueText = BuildHindiUniqueSubtitleCueText(duplicate.CueText, duplicate.SceneId, syncItem, durationItem, occupied);
+                var normalizedRewrite = NormalizeNarrationForDuplicateCheck(rewrittenCueText);
+                if (string.IsNullOrWhiteSpace(normalizedRewrite) || occupied.Contains(normalizedRewrite))
+                    throw new InvalidOperationException($"Phase 14 Hindi cue duplicate rewrite failed before SRT generation. format={format}; sceneId={duplicate.SceneId}; cue={duplicate.CueIndex}");
+
+                var rewrittenSceneText = ReplaceFirst(fileText, duplicate.CueText, rewrittenCueText);
+                if (string.Equals(rewrittenSceneText, fileText, StringComparison.Ordinal))
+                    throw new InvalidOperationException($"Phase 14 Hindi cue duplicate rewrite failed to update narration file text. format={format}; sceneId={duplicate.SceneId}; cue={duplicate.CueIndex}; file={normalizedPath}");
+
+                File.WriteAllText(duplicate.NarrationFile, rewrittenSceneText);
+                after[normalizedPath] = rewrittenSceneText;
+                occupied.Add(normalizedRewrite);
+                var cueId = $"{format}:{duplicate.SceneId}:cue-{duplicate.CueIndex}";
+                rewrittenCueIds.Add(cueId);
+                rewrittenSceneIds.Add(duplicate.SceneId);
+                diagnostics.Add(new { cueId, sceneId = duplicate.SceneId, sourceFile = normalizedPath, originalCueText = duplicate.CueText, rewrittenCueText, cueRewriteAppliedBeforeFileWrite = true, cueRewriteAppliedAfterFileWrite = false, narrationFileUpdatedAfterCueRewrite = true });
+            }
+        }
+
+        return new HindiCueDuplicateRewriteResult(format, rewrittenCueIds.Count > 0, false, rewrittenCueIds.Count > 0, rewrittenCueIds.ToArray(), rewrittenSceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), before, after, diagnostics);
+    }
+
+    private static string ReplaceFirst(string text, string oldValue, string newValue)
+    {
+        var index = text.IndexOf(oldValue, StringComparison.Ordinal);
+        return index < 0 ? text : text[..index] + newValue + text[(index + oldValue.Length)..];
+    }
+
     private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string requestedLanguage, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
     {
         var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
@@ -3683,7 +3770,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicateBlockGroupsBeforeRewrite = FindDuplicateSubtitleCueBlocks(blocks);
         var duplicateSubtitleBlockIdsBeforeRewrite = BuildDuplicateSubtitleBlockIds(format, duplicateBlockGroupsBeforeRewrite);
         var duplicateSubtitleTextsBeforeRewrite = duplicateBlockGroupsBeforeRewrite.Select(group => group.First().Text).ToArray();
-        var cueRewriteDiagnostics = RewriteHindiDuplicateSubtitleCueBlocks(requestedLanguage, format, blocks, durationPlanItems, items, duplicateBlockGroupsBeforeRewrite);
+        var cueRewriteDiagnostics = Array.Empty<object>();
         var duplicateBlockGroups = FindDuplicateSubtitleCueBlocks(blocks);
         var duplicateSubtitleBlockIds = BuildDuplicateSubtitleBlockIds(format, duplicateBlockGroups);
         var duplicateSubtitleTexts = duplicateBlockGroups.Select(group => group.First().Text).ToArray();
@@ -3718,7 +3805,7 @@ public sealed partial class ProductionPipelineExecutionService(
             cueLevelValidation = cueValidation,
             perSceneTiming = perScene,
             duplicateCueBlocksDetected = duplicateSubtitleBlockIdsBeforeRewrite.Length,
-            duplicateCueBlocksRewritten = cueRewriteDiagnostics.Count,
+            duplicateCueBlocksRewritten = cueRewriteDiagnostics.Length,
             duplicateCueBlockIdsBefore = duplicateSubtitleBlockIdsBeforeRewrite,
             duplicateCueBlockIdsAfter = duplicateSubtitleBlockIds,
             cueDuplicateRewriteDiagnostics = cueRewriteDiagnostics,
@@ -4214,6 +4301,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> ExtractSrtTexts(string srtPath)
         => ExtractSrtBlocks(srtPath).Select(block => block.Text).ToArray();
+
+    private static string ReconstructSrtNarrationText(string srtPath)
+        => File.Exists(srtPath) ? NormalizeNarrationWhitespace(string.Join(" ", ExtractSrtTexts(srtPath))) : string.Empty;
 
     private static int CountExistingSrtBlocks(string srtPath)
         => File.Exists(srtPath) ? ExtractSrtBlocks(srtPath).Count : 0;
@@ -4871,6 +4961,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record SubtitleCueSource(string Format, int CueId, string SceneId, string Text, string NormalizedText, string SourceType, string SourceFile, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record SubtitleCueDuplicateCandidate(int Number, string SceneId, string Text, string NormalizedText);
+    private sealed record HindiCueDuplicateRewriteCandidate(string NarrationFile, string SceneId, int CueIndex, string CueText, string NormalizedCueText);
+    private sealed record HindiCueDuplicateRewriteResult(string Format, bool RewriteApplied, bool CueRewriteAppliedAfterFileWrite, bool NarrationFileUpdatedAfterCueRewrite, IReadOnlyList<string> RewrittenCueIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> NarrationTextBeforeRewrite, IReadOnlyDictionary<string, string> NarrationTextAfterRewrite, IReadOnlyList<object> Diagnostics)
+    {
+        public static HindiCueDuplicateRewriteResult Empty(string format) => new(format, false, false, false, [], [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), []);
+    }
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics, Phase14TranslationDiagnostics TranslationDiagnostics, Phase14EventConsistencyDiagnostics EventConsistencyDiagnostics);
