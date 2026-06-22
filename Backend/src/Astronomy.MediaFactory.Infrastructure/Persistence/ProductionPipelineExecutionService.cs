@@ -3680,15 +3680,12 @@ public sealed partial class ProductionPipelineExecutionService(
             });
             subtitleStart = sceneEnd;
         }
-        var duplicateBlockGroups = blocks
-            .Select(block => new { block.Number, block.SceneId, Text = string.Join(" ", block.Lines), NormalizedText = NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)) })
-            .Where(block => !string.IsNullOrWhiteSpace(block.NormalizedText))
-            .GroupBy(block => block.NormalizedText, StringComparer.OrdinalIgnoreCase)
-            .Where(group => group.Count() > 1)
-            .ToArray();
-        var duplicateSubtitleBlockIds = duplicateBlockGroups
-            .SelectMany(group => group.Select(block => $"{format}:{block.SceneId}:cue-{block.Number}"))
-            .ToArray();
+        var duplicateBlockGroupsBeforeRewrite = FindDuplicateSubtitleCueBlocks(blocks);
+        var duplicateSubtitleBlockIdsBeforeRewrite = BuildDuplicateSubtitleBlockIds(format, duplicateBlockGroupsBeforeRewrite);
+        var duplicateSubtitleTextsBeforeRewrite = duplicateBlockGroupsBeforeRewrite.Select(group => group.First().Text).ToArray();
+        var cueRewriteDiagnostics = RewriteHindiDuplicateSubtitleCueBlocks(requestedLanguage, format, blocks, durationPlanItems, items, duplicateBlockGroupsBeforeRewrite);
+        var duplicateBlockGroups = FindDuplicateSubtitleCueBlocks(blocks);
+        var duplicateSubtitleBlockIds = BuildDuplicateSubtitleBlockIds(format, duplicateBlockGroups);
         var duplicateSubtitleTexts = duplicateBlockGroups.Select(group => group.First().Text).ToArray();
         if (duplicateSubtitleBlockIds.Length > 0)
             throw new InvalidOperationException("Phase 14 SRT validation failed: duplicateSubtitleBlockCount must be 0.");
@@ -3719,7 +3716,14 @@ public sealed partial class ProductionPipelineExecutionService(
             audioSubtitleSyncPassed = audioDriven,
             maxCueDriftMs = 0.0,
             cueLevelValidation = cueValidation,
-            perSceneTiming = perScene
+            perSceneTiming = perScene,
+            duplicateCueBlocksDetected = duplicateSubtitleBlockIdsBeforeRewrite.Length,
+            duplicateCueBlocksRewritten = cueRewriteDiagnostics.Count,
+            duplicateCueBlockIdsBefore = duplicateSubtitleBlockIdsBeforeRewrite,
+            duplicateCueBlockIdsAfter = duplicateSubtitleBlockIds,
+            cueDuplicateRewriteDiagnostics = cueRewriteDiagnostics,
+            duplicateSubtitleBlockCountBefore = duplicateSubtitleBlockIdsBeforeRewrite.Length,
+            duplicateSubtitleBlockCountAfter = duplicateSubtitleBlockIds.Length
         };
         var subtitleBlocks = blocks.Select(block => new
         {
@@ -3801,6 +3805,141 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"SRT validation failed: subtitle cue source must originate from narration/short/*.txt, narration/long/*.txt, narration/{{language}}/short/*.txt, or narration/{{language}}/long/*.txt. requestedLanguage={normalizedLanguage}; format={format}; sourceFile={NormalizePath(narrationFile)}; acceptedSourcePattern={acceptedSourcePattern}; languageScopedSourceAccepted={languageScopedSourceAccepted}; generatorComponent={generatorComponent}");
 
         return new SubtitleCueNarrationSourceValidation(normalizedLanguage, NormalizePath(narrationFile), acceptedSourcePattern, languageScopedSourceAccepted);
+    }
+
+    private static IGrouping<string, SubtitleCueDuplicateCandidate>[] FindDuplicateSubtitleCueBlocks(IReadOnlyList<SubtitleCueBlock> blocks)
+        => blocks
+            .Select(block => new SubtitleCueDuplicateCandidate(block.Number, block.SceneId, string.Join(" ", block.Lines), NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines))))
+            .Where(block => !string.IsNullOrWhiteSpace(block.NormalizedText))
+            .GroupBy(block => block.NormalizedText, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .ToArray();
+
+    private static string[] BuildDuplicateSubtitleBlockIds(string format, IEnumerable<IGrouping<string, SubtitleCueDuplicateCandidate>> duplicateBlockGroups)
+        => duplicateBlockGroups
+            .SelectMany(group => group.Select(block => $"{format}:{block.SceneId}:cue-{block.Number}"))
+            .ToArray();
+
+    private static IReadOnlyList<object> RewriteHindiDuplicateSubtitleCueBlocks(
+        string requestedLanguage,
+        string format,
+        List<SubtitleCueBlock> blocks,
+        IReadOnlyList<SceneDurationPlanItem> durationPlanItems,
+        IReadOnlyList<SceneAudioSyncItem> items,
+        IReadOnlyList<IGrouping<string, SubtitleCueDuplicateCandidate>> duplicateBlockGroups)
+    {
+        if (!string.Equals(ResolvePipelineLanguage(requestedLanguage), "hi", StringComparison.OrdinalIgnoreCase) || duplicateBlockGroups.Count == 0)
+            return [];
+
+        var diagnostics = new List<object>();
+        var occupied = blocks
+            .Select(block => NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)))
+            .Where(normalized => !string.IsNullOrWhiteSpace(normalized))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var syncBySceneId = items.ToDictionary(item => item.SceneId, item => item, StringComparer.OrdinalIgnoreCase);
+        var durationBySceneId = durationPlanItems.ToDictionary(item => item.SceneId, item => item, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in duplicateBlockGroups)
+        {
+            foreach (var duplicate in group.Skip(1))
+            {
+                var index = blocks.FindIndex(block => block.Number == duplicate.Number);
+                if (index < 0) continue;
+
+                var block = blocks[index];
+                var originalCueText = string.Join(" ", block.Lines);
+                occupied.Remove(NormalizeNarrationForDuplicateCheck(originalCueText));
+                syncBySceneId.TryGetValue(block.SceneId, out var syncItem);
+                durationBySceneId.TryGetValue(block.SceneId, out var durationItem);
+                var rewrittenCueText = BuildHindiUniqueSubtitleCueText(originalCueText, block.SceneId, syncItem, durationItem, occupied);
+                var normalizedRewrite = NormalizeNarrationForDuplicateCheck(rewrittenCueText);
+                if (string.IsNullOrWhiteSpace(normalizedRewrite) || occupied.Contains(normalizedRewrite))
+                    throw new InvalidOperationException($"Phase 14 SRT validation failed: Hindi duplicate subtitle cue could not be rewritten uniquely. format={format}; sceneId={block.SceneId}; cue={block.Number}");
+
+                occupied.Add(normalizedRewrite);
+                blocks[index] = block with
+                {
+                    Lines = WrapSubtitleChunk(rewrittenCueText),
+                    SourceText = rewrittenCueText,
+                    ChunkHash = SubtitleChunkHash(rewrittenCueText)
+                };
+                diagnostics.Add(new
+                {
+                    originalCueText,
+                    rewrittenCueText,
+                    cueRewriteSceneId = block.SceneId,
+                    cueRewriteFormat = format,
+                    cueId = $"{format}:{block.SceneId}:cue-{block.Number}",
+                    scenePurpose = ResolvePhase14ScenePurpose(block.SceneId),
+                    eventType = ResolveEventTypeFromCueRewriteContext(syncItem, durationItem)
+                });
+            }
+        }
+
+        return diagnostics;
+    }
+
+    private static string BuildHindiUniqueSubtitleCueText(string originalCueText, string sceneId, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem, HashSet<string> occupied)
+    {
+        var scenePurpose = ResolvePhase14ScenePurpose(sceneId);
+        var eventType = ResolveEventTypeFromCueRewriteContext(syncItem, durationItem);
+        var contextPhrases = BuildHindiCueContextPhrases(sceneId, scenePurpose, eventType, syncItem, durationItem);
+        foreach (var phrase in contextPhrases)
+        {
+            var candidate = AppendHindiCueContext(originalCueText, phrase);
+            var normalized = NormalizeNarrationForDuplicateCheck(candidate);
+            if (!string.IsNullOrWhiteSpace(normalized) && !occupied.Contains(normalized) && CanWrapSubtitleChunk(candidate))
+                return candidate;
+        }
+
+        var compactSceneId = Regex.Replace(sceneId, @"[^0-9A-Za-z]+", "");
+        foreach (var suffix in new[] { $" दृश्य {compactSceneId}", $" {compactSceneId}" }.Where(value => !string.IsNullOrWhiteSpace(value.Trim())))
+        {
+            var candidate = AppendHindiCueContext(originalCueText, suffix.Trim());
+            var normalized = NormalizeNarrationForDuplicateCheck(candidate);
+            if (!string.IsNullOrWhiteSpace(normalized) && !occupied.Contains(normalized) && CanWrapSubtitleChunk(candidate))
+                return candidate;
+        }
+
+        throw new InvalidOperationException($"Phase 14 SRT validation failed: Hindi duplicate subtitle cue rewrite exceeded SRT wrapping limits. sceneId={sceneId}; text={originalCueText}");
+    }
+
+    private static IReadOnlyList<string> BuildHindiCueContextPhrases(string sceneId, string scenePurpose, string eventType, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem)
+    {
+        var phrases = new List<string>();
+        if (string.Equals(scenePurpose, "accurate-sky-guide", StringComparison.OrdinalIgnoreCase))
+            phrases.Add("देखने की दिशा में");
+        if (string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
+            phrases.Add("दूरी के नज़रिए से");
+        if (string.Equals(scenePurpose, "final-reminder", StringComparison.OrdinalIgnoreCase) || sceneId.Contains("outro", StringComparison.OrdinalIgnoreCase) || sceneId.Contains("closing", StringComparison.OrdinalIgnoreCase))
+            phrases.Add("समापन में");
+        if (!string.IsNullOrWhiteSpace(eventType))
+            phrases.Add($"{eventType} संदर्भ में");
+        if (!string.IsNullOrWhiteSpace(syncItem?.VisualIntent))
+            phrases.Add("इस दृश्य में");
+        if (!string.IsNullOrWhiteSpace(durationItem?.RecommendedMotion))
+            phrases.Add("इसी दृश्य में");
+        phrases.Add($"दृश्य {Regex.Replace(sceneId, @"[^0-9A-Za-z]+", "")}");
+        return phrases.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string AppendHindiCueContext(string originalCueText, string contextPhrase)
+    {
+        var trimmed = originalCueText.Trim();
+        var phrase = contextPhrase.Trim();
+        if (trimmed.EndsWith("।", StringComparison.Ordinal) || trimmed.EndsWith(".", StringComparison.Ordinal) || trimmed.EndsWith("!", StringComparison.Ordinal) || trimmed.EndsWith("?", StringComparison.Ordinal))
+            return $"{trimmed[..^1].Trim()}, {phrase}{trimmed[^1]}";
+        return $"{trimmed}, {phrase}";
+    }
+
+    private static string ResolveEventTypeFromCueRewriteContext(SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem)
+    {
+        var combined = string.Join(' ', new[] { syncItem?.NarrationText, syncItem?.NarrationBeat, syncItem?.VisualIntent, durationItem?.SceneId }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        if (Regex.IsMatch(combined, @"\b(conjunction|jupiter|venus|planet)\b", RegexOptions.IgnoreCase)) return "PlanetConjunction";
+        if (Regex.IsMatch(combined, @"\b(meteor|geminid|radiant)\b", RegexOptions.IgnoreCase)) return "Meteor";
+        if (Regex.IsMatch(combined, @"\b(eclipse)\b", RegexOptions.IgnoreCase)) return "Eclipse";
+        if (Regex.IsMatch(combined, @"\b(moon|lunar)\b", RegexOptions.IgnoreCase)) return "Moon";
+        return string.Empty;
     }
 
     private static IReadOnlyList<string> SplitDuplicateSubtitleChunks(IReadOnlyList<string> chunks, HashSet<string> seenSubtitleChunks)
@@ -4731,6 +4870,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record SubtitleCueNarrationSourceValidation(string RequestedLanguage, string SourceFile, string AcceptedSourcePattern, bool LanguageScopedSourceAccepted);
 
     private sealed record SubtitleCueSource(string Format, int CueId, string SceneId, string Text, string NormalizedText, string SourceType, string SourceFile, string GeneratorComponent, DateTimeOffset CreatedUtc);
+    private sealed record SubtitleCueDuplicateCandidate(int Number, string SceneId, string Text, string NormalizedText);
     private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc);
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics, Phase14TranslationDiagnostics TranslationDiagnostics, Phase14EventConsistencyDiagnostics EventConsistencyDiagnostics);
