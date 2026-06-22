@@ -5622,7 +5622,10 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public static HindiCueDuplicateRewriteResult Empty(string format) => new(format, false, false, false, [], [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), []);
     }
-    private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc);
+    private sealed record SubtitleCueBlock(int Number, TimeSpan Start, TimeSpan End, IReadOnlyList<string> Lines, string SceneId, string SourceText, string SourceNarrationText, string ChunkHash, string SubtitleTextSource, string SubtitleTextOrigin, string SceneIdOrigin, string GeneratorComponent, DateTimeOffset CreatedUtc)
+    {
+        public string Text => string.Join(" ", Lines).Trim();
+    }
     private sealed record NarrationBeatCandidate(string SceneId, int BeatNo, string Text, string VisualIntent, string RenderMode, string Section, string ScenePurpose);
     private sealed record Phase14DocumentaryNarration(bool ComposerCalled, bool OutputUsed, string TextSource, bool FallbackUsed, string NarrationStyle, object StoryArc, IReadOnlyDictionary<string, string> ShortItems, IReadOnlyDictionary<string, string> LongItems, object FinalTextBeforeWrite, EventStoryComposerDiagnostics Diagnostics, Phase14AdapterDiagnostics AdapterDiagnostics, Phase14TranslationDiagnostics TranslationDiagnostics, Phase14EventConsistencyDiagnostics EventConsistencyDiagnostics);
     private sealed record Phase14EventConsistencyDiagnostics(
