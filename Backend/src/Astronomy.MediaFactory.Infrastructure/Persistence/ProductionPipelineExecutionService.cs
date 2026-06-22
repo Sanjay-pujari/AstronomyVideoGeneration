@@ -2797,7 +2797,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 var uniquenessAttempt = 2;
                 while (owners.ContainsKey(uniqueNormalized))
                 {
-                    uniqueText = $"{BuildSourceAwareUniqueHindiSceneText(item.Format, item.SceneId, item.Text)} यह अलग दृश्य {ToHindiDigits(uniquenessAttempt)} है।";
+                    uniqueText = BuildSourceAwareUniqueHindiSceneText(item.Format, item.SceneId, item.Text, uniquenessAttempt);
                     uniqueNormalized = NormalizeHindiSentenceForDuplicateCleanup(uniqueText);
                     uniquenessAttempt++;
                 }
@@ -2845,26 +2845,50 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IEnumerable<(string Format, string SceneId, string Text)> EnumerateHindiSceneTexts(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
         => shortTexts.Select(kv => ("short", kv.Key, kv.Value)).Concat(longTexts.Select(kv => ("long", kv.Key, kv.Value)));
 
-    private static string BuildSourceAwareUniqueHindiSceneText(string format, string sceneId, string duplicateText)
+    private static string BuildSourceAwareUniqueHindiSceneText(string format, string sceneId, string duplicateText, int uniquenessAttempt = 1)
     {
         var purpose = ResolvePhase14ScenePurpose(sceneId);
-        var sceneNumber = Regex.Match(sceneId ?? string.Empty, @"\d+").Value;
-        var hindiSceneNumber = string.IsNullOrWhiteSpace(sceneNumber) ? string.Empty : ToHindiDigits(int.Parse(sceneNumber, CultureInfo.InvariantCulture));
-        var sceneLabel = string.IsNullOrWhiteSpace(hindiSceneNumber) ? "इस दृश्य" : $"दृश्य {hindiSceneNumber}";
-        var formatLabel = string.Equals(format, "short", StringComparison.OrdinalIgnoreCase) ? "छोटे संस्करण" : "लंबे संस्करण";
+        var isLong = string.Equals(format, "long", StringComparison.OrdinalIgnoreCase);
 
-        var focus = purpose switch
+        var baseText = purpose switch
         {
-            "hook" => "शुरुआत में चमकदार जोड़ी को तुरंत पहचानने का संकेत देता है",
-            "cause" => "दृष्टि-रेखा के कारण ग्रह पास दिखने की वजह समझाता है",
-            "accurate-sky-guide" => "पश्चिमी क्षितिज और देखने की दिशा पर साफ मार्गदर्शन देता है",
-            "best-time" => "सूर्यास्त के बाद सही समय पर देखने की सलाह देता है",
-            "gear" => "पहले खुली आँखों से खोजने और फिर दूरबीन लेने की बात करता है",
-            "closing" => "अंत में इस दुर्लभ आकाशीय मुलाकात की याद छोड़ता है",
-            _ => "अपना अलग आकाशीय संदर्भ और देखने का संकेत देता है"
+            "hook" => "सूर्यास्त की नीली रोशनी में बृहस्पति और शुक्र को साथ देखना शुरुआत से ही आसमान को खास बना देता है।",
+            "cause" => "पास दिखने के बावजूद बृहस्पति और शुक्र अंतरिक्ष में बहुत दूर हैं; यह नज़दीकी पृथ्वी से दिखने वाले कोण और दृष्टि-रेखा का असर है।",
+            "accurate-sky-guide" => "साफ पश्चिमी क्षितिज सबसे जरूरी है, क्योंकि कम ऊंचाई पर चमकते ग्रह पेड़ों, इमारतों या धुंध के पीछे जल्दी छिप सकते हैं।",
+            "best-time" => "सूर्यास्त के बाद आसमान गहरा होते ही देखना शुरू करें, ताकि दोनों ग्रह क्षितिज के पास उतरने से पहले आसानी से मिल जाएं।",
+            "gear" => "पहले नंगी आंखों से दोनों रोशन बिंदुओं की जगह तय करें, फिर दूरबीन से उनकी दूरी और चमक को स्थिर फ्रेम में देखें।",
+            "closing" => "कुछ ही शामों में यह जोड़ी फिर अलग हो जाएगी, इसलिए साफ मौसम मिलते ही इस शांत ग्रह-मिलन को याद में संजो लें।",
+            _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText)
         };
 
-        return $"{sceneLabel} {formatLabel} में बृहस्पति और शुक्र की युति पर केंद्रित है और {focus}।";
+        if (isLong)
+            baseText = purpose switch
+            {
+                "hook" => "शाम की हल्की रोशनी में दो सबसे चमकीले ग्रह एक साथ उभरते हैं, और यही नज़ारा दूरी, गति और दृष्टिकोण की पूरी कहानी खोलता है।",
+                "cause" => "यह मिलन वास्तविक टक्कर नहीं है; पृथ्वी से देखने पर दोनों ग्रह लगभग एक ही दिशा में आ जाते हैं, जबकि उनके बीच करोड़ों किलोमीटर की दूरी बनी रहती है।",
+                "accurate-sky-guide" => "अवलोकन के लिए पश्चिम की ओर खुली जगह चुनें और क्षितिज को पहले से पहचान लें, क्योंकि कम ऊंचाई वाली युति कुछ मिनटों में ही ओझल हो सकती है।",
+                "best-time" => "सबसे अच्छा पल शाम ढलने के तुरंत बाद आता है, जब आकाश पर्याप्त अंधेरा हो चुका होता है लेकिन ग्रह अभी क्षितिज से बहुत नीचे नहीं गए होते।",
+                "gear" => "दूरबीन मदद कर सकती है, पर शुरुआत नंगी आंखों से करें; इससे चमक, दिशा और दोनों ग्रहों की आपसी दूरी का सही अंदाज़ मिलता है।",
+                "closing" => "बृहस्पति और शुक्र का यह साथ क्षणिक है, लेकिन साफ आसमान में इसे देखना सौर मंडल की धीमी, सुंदर चाल को महसूस कराने वाला अनुभव बन सकता है।",
+                _ => baseText
+            };
+
+        if (uniquenessAttempt <= 1) return baseText;
+        return uniquenessAttempt % 2 == 0
+            ? baseText + " इसी कारण अवलोकन में क्षितिज, चमक और समय—तीनों पर ध्यान रखें।"
+            : baseText + " यह बात दर्शक को केवल सुंदरता नहीं, बल्कि ग्रहों की वास्तविक व्यवस्था भी समझाती है।";
+    }
+
+    private static string BuildNaturalHindiFallbackFromDuplicateText(string duplicateText)
+    {
+        var lower = (duplicateText ?? string.Empty).ToLowerInvariant();
+        if (lower.Contains("binocular") || lower.Contains("telescope") || lower.Contains("दूरबीन"))
+            return "दूरबीन लगाने से पहले खुले आसमान में लक्ष्य को स्थिर पहचानें, ताकि छोटा सा कंपन भी ग्रहों की जोड़ी को फ्रेम से बाहर न कर दे।";
+        if (lower.Contains("horizon") || lower.Contains("क्षितिज") || lower.Contains("west") || lower.Contains("पश्चिम"))
+            return "खुला पश्चिमी क्षितिज इस अवलोकन की कुंजी है, क्योंकि हल्की धुंध या इमारतें चमकीले ग्रहों को जल्दी छिपा सकती हैं।";
+        if (lower.Contains("close") || lower.Contains("separation") || lower.Contains("पास") || lower.Contains("दूरी"))
+            return "दो चमकीले बिंदुओं के बीच की छोटी कोणीय दूरी ही युति को पहचानने योग्य बनाती है, भले ही अंतरिक्ष में वे बहुत दूर हों।";
+        return "चमक, दिशा और समय को साथ पढ़ने पर यह ग्रह-युति सिर्फ सुंदर नज़ारा नहीं रहती, बल्कि सौर मंडल की गति का सहज संकेत बन जाती है।";
     }
 
     private static string ToHindiDigits(int value)
@@ -2918,7 +2942,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 else if (lower.Contains("strongest") || lower.Contains("peak"))
                     result = $"आज रात {subject} अपने बेहतर दौर में है, इसलिए साफ मौसम और कम रोशनी वाली जगह पर अधिक चमकीली झलकें दिख सकती हैं।";
                 else
-                    result = $"{subject} के इस दृश्य में धैर्य जरूरी है, क्योंकि अचानक आती रोशन लकीरें कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार कर जाती हैं।";
+                    result = $"{subject} देखने के लिए धैर्य जरूरी है, क्योंकि अचानक आती रोशन लकीरें कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार कर जाती हैं।";
             }
             else if (isConjunction)
             {
@@ -2938,15 +2962,15 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             else if (lower.Contains("moon") || string.Equals(eventType, "Moon", StringComparison.OrdinalIgnoreCase))
             {
-                result = "चंद्रमा के इस दृश्य में उसकी रोशनी, ऊंचाई और आसपास के आसमान का रंग मिलकर रात को शांत और स्पष्ट संदर्भ देते हैं।";
+                result = "चंद्रमा की रोशनी, ऊंचाई और आसपास के आसमान का रंग मिलकर रात को शांत और स्पष्ट संदर्भ देते हैं।";
             }
             else if (lower.Contains("eclipse") || string.Equals(eventType, "Eclipse", StringComparison.OrdinalIgnoreCase))
             {
-                result = "ग्रहण के इस दृश्य में सूर्य, चंद्रमा और पृथ्वी की सीध को सुरक्षित तरीके से समझें और केवल स्वीकृत सुरक्षा साधनों से अवलोकन करें।";
+                result = "ग्रहण के दौरान सूर्य, चंद्रमा और पृथ्वी की सीध को सुरक्षित तरीके से समझें और केवल स्वीकृत सुरक्षा साधनों से अवलोकन करें।";
             }
             else
             {
-                result = "इस खास दृश्य में स्रोत वर्णन के अलग संकेतों को जोड़कर आकाशीय घटना का क्रम, स्थान और देखने का तरीका स्पष्ट किया गया है।";
+                result = "स्रोत वर्णन के अलग संकेतों को जोड़कर आकाशीय घटना का क्रम, स्थान और देखने का तरीका स्पष्ट किया गया है।";
             }
 
             return Task.FromResult(result);
@@ -2969,11 +2993,22 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> FindPhase14HindiForbiddenNarrationLeakage(string resolvedFamily, string text)
     {
+        var forbiddenTerms = new List<string>
+        {
+            "दृश्य १",
+            "दृश्य २",
+            "दृश्य ३",
+            "लंबे संस्करण में",
+            "इस दृश्य में",
+            "अपना अलग आकाशीय संदर्भ"
+        };
+
         if (string.Equals(resolvedFamily, "Meteor", StringComparison.OrdinalIgnoreCase) || string.Equals(resolvedFamily, "MeteorShower", StringComparison.OrdinalIgnoreCase))
-            return FindForbiddenNarrationLeakage(text, ["Jupiter", "Venus", "conjunction", "बृहस्पति", "शुक्र", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
-        if (string.Equals(resolvedFamily, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
-            return FindForbiddenNarrationLeakage(text, ["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]);
-        return [];
+            forbiddenTerms.AddRange(["Jupiter", "Venus", "conjunction", "बृहस्पति", "शुक्र", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
+        else if (string.Equals(resolvedFamily, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            forbiddenTerms.AddRange(["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]);
+
+        return FindForbiddenNarrationLeakage(text, forbiddenTerms);
     }
 
     private static string Snippet(string text)

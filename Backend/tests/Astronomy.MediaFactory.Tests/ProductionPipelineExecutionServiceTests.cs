@@ -963,7 +963,7 @@ First cue.
         var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["001-western-view"] = "Planets align in the western sky after sunset for an easy naked-eye view.",
+            ["001-close-spacing"] = "Planets appear close together tonight, with the small separation making the conjunction easy to notice.",
             ["002-close-spacing"] = "Planets appear close together tonight, with the small separation making the conjunction easy to notice.",
             ["003-gear"] = "Bring binoculars only after you find Jupiter and Venus with your eyes first. Bring a steady view and avoid buildings on the horizon."
         };
@@ -980,6 +980,15 @@ First cue.
         Assert.All(translated, text => Assert.Contains("।", text));
         Assert.Equal(translated.Length, translated.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.DoesNotContain("सूर्यास्त के बाद पश्चिमी आसमान में चमकीले ग्रहों को पास-पास देखने का अच्छा अवसर मिलेगा।", translated.Skip(1));
+        Assert.All(translated, text =>
+        {
+            Assert.DoesNotContain("दृश्य १", text);
+            Assert.DoesNotContain("दृश्य २", text);
+            Assert.DoesNotContain("दृश्य ३", text);
+            Assert.DoesNotContain("लंबे संस्करण में", text);
+            Assert.DoesNotContain("इस दृश्य में", text);
+            Assert.DoesNotContain("अपना अलग आकाशीय संदर्भ", text);
+        });
         Assert.NotEmpty(duplicateAcrossScenes);
         Assert.Contains("short:002-close-spacing", finalUniqueSceneText.Keys);
         Assert.Contains("short:002-close-spacing", rewrittenSceneIds);
