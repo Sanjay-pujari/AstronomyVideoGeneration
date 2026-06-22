@@ -5025,6 +5025,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var maxDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Max());
         var averageDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Average());
+        if (actualCues.Count != expectedCues.Count)
+        {
+            var sceneValidation = ValidateSceneBasedSubtitleSync(planRoot, format, srtPath, language, timelineItems, actualCues);
+            if (sceneValidation.Passed) return sceneValidation;
+        }
+
         return new CueLevelSubtitleValidationResult(
             actualCues.Count == expectedCues.Count && maxDrift <= 100.0,
             drift,
@@ -5033,6 +5039,67 @@ public sealed partial class ProductionPipelineExecutionService(
             actualCues.Count,
             NormalizePath(srtPath),
             "Phase16SceneDurationPlanActualMp3Durations",
+            details);
+    }
+
+    private static CueLevelSubtitleValidationResult ValidateSceneBasedSubtitleSync(
+        string planRoot,
+        string format,
+        string srtPath,
+        string language,
+        IReadOnlyList<CanonicalTtsTimelineItem> timelineItems,
+        IReadOnlyList<(double Start, double End, string Text)> actualCues)
+    {
+        var sourceBlocks = ParseSrtBlocks(File.ReadAllText(srtPath));
+        var sceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, language, format, sourceBlocks);
+        var expectedByScene = timelineItems
+            .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
+            .GroupBy(item => NormalizeSceneIdForDurationMatch(item.SceneId), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => RoundDuration(group.Sum(item => Math.Max(0, item.AudioDurationSec))), StringComparer.OrdinalIgnoreCase);
+
+        var drift = new List<double>();
+        var details = new List<object>();
+        var cursor = 0.0;
+        foreach (var scene in expectedByScene)
+        {
+            var cueIndexes = sceneIdsByCue
+                .Select((sceneId, cueIndex) => new { sceneId, cueIndex })
+                .Where(x => string.Equals(NormalizeSceneIdForDurationMatch(x.sceneId), scene.Key, StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.cueIndex)
+                .Where(index => index >= 0 && index < actualCues.Count)
+                .ToArray();
+            var srtStart = cueIndexes.Length == 0 ? cursor : actualCues[cueIndexes.First()].Start;
+            var srtEnd = cueIndexes.Length == 0 ? cursor : actualCues[cueIndexes.Last()].End;
+            var expectedStart = cursor;
+            var expectedEnd = cursor + scene.Value;
+            var sceneDriftMs = Math.Max(Math.Abs(srtStart - expectedStart), Math.Abs(srtEnd - expectedEnd)) * 1000.0;
+            drift.Add(RoundDuration(sceneDriftMs));
+            details.Add(new
+            {
+                sceneId = scene.Key,
+                sceneAudioDuration = RoundDuration(scene.Value),
+                sceneSubtitleDuration = RoundDuration(Math.Max(0, srtEnd - srtStart)),
+                subtitleCueCount = cueIndexes.Length,
+                subtitleDurationDelta = RoundDuration(Math.Abs((srtEnd - srtStart) - scene.Value)),
+                expectedStartSec = RoundDuration(expectedStart),
+                expectedEndSec = RoundDuration(expectedEnd),
+                srtStartSec = RoundDuration(srtStart),
+                srtEndSec = RoundDuration(srtEnd),
+                driftMs = RoundDuration(sceneDriftMs)
+            });
+            cursor = expectedEnd;
+        }
+
+        var maxDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Max());
+        var averageDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Average());
+        return new CueLevelSubtitleValidationResult(
+            expectedByScene.Count > 0 && maxDrift <= 100.0,
+            drift,
+            maxDrift,
+            averageDrift,
+            actualCues.Count,
+            NormalizePath(srtPath),
+            "Phase18SceneBasedTtsActualMp3Durations",
             details);
     }
 
@@ -8341,6 +8408,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var subtitleMode = enableSubtitles ? "BurnIn" : "Disabled";
         var shortSrtPath = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");
         var longSrtPath = ResolvePhase15SrtPath(planRoot, requestedLanguage, "long");
+        if (!previewOnly)
+        {
+            await RecalculatePhase18SceneBasedSubtitleTimingAsync(planRoot, requestedLanguage, "short", shortSrtPath, shortRenderResult?.RenderItems ?? [], cancellationToken);
+            await RecalculatePhase18SceneBasedSubtitleTimingAsync(planRoot, requestedLanguage, "long", longSrtPath, longRenderResult?.RenderItems ?? [], cancellationToken);
+        }
         var shortSrtExists = File.Exists(shortSrtPath);
         var longSrtExists = File.Exists(longSrtPath);
         var shortSrtDuration = shortSrtExists ? ReadSrtFinalEndSeconds(shortSrtPath) : 0;
@@ -8978,7 +9050,7 @@ public sealed partial class ProductionPipelineExecutionService(
         }).ToArray();
     }
 
-    private sealed record Phase18RenderDurationExpansionResult(int RenderTimeGroupedTtsSceneCount, int ExpandedSceneCount);
+    private sealed record Phase18RenderDurationExpansionResult(int RenderTimeGroupedTtsSceneCount, int ExpandedSceneCount, IReadOnlyList<VideoAssemblyItem> RenderItems);
 
     private async Task<Phase18RenderDurationExpansionResult> RenderVideoAssemblyAsync(string planRoot, string language, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
     {
@@ -9132,7 +9204,90 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             try { Directory.Delete(tempRoot, true); } catch { }
         }
-        return new Phase18RenderDurationExpansionResult(cueLevelDurationsBySceneId.Count, expandedSceneCount);
+        return new Phase18RenderDurationExpansionResult(cueLevelDurationsBySceneId.Count, expandedSceneCount, renderItems);
+    }
+
+    private async Task RecalculatePhase18SceneBasedSubtitleTimingAsync(
+        string planRoot,
+        string language,
+        string format,
+        string srtPath,
+        IReadOnlyList<VideoAssemblyItem> renderItems,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(srtPath) || renderItems.Count == 0) return;
+
+        var sourceBlocks = ParseSrtBlocks(await File.ReadAllTextAsync(srtPath, cancellationToken));
+        if (sourceBlocks.Count == 0) return;
+
+        var sceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, language, format, sourceBlocks);
+        var sceneDurations = await BuildCueLevelSceneDurationsFromTtsTimelineAsync(planRoot, format, language, cancellationToken);
+        var retimedBlocks = new List<Phase15SrtBlock>();
+        var diagnostics = new List<object>();
+        var timelineStart = TimeSpan.Zero;
+
+        for (var sceneIndex = 0; sceneIndex < renderItems.Count; sceneIndex++)
+        {
+            var renderItem = renderItems[sceneIndex];
+            var sceneCueIndexes = sceneIdsByCue
+                .Select((sceneId, cueIndex) => new { sceneId, cueIndex })
+                .Where(x => string.Equals(NormalizeSceneIdForDurationMatch(x.sceneId), NormalizeSceneIdForDurationMatch(renderItem.SceneId), StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.cueIndex)
+                .ToArray();
+
+            if (sceneCueIndexes.Length == 0 && sceneIndex < sourceBlocks.Count)
+                sceneCueIndexes = [sceneIndex];
+
+            var durationMatch = MatchCueLevelSceneDuration(sceneDurations, renderItem.SceneId, renderItem.SceneDurationSec);
+            var sceneAudioDuration = durationMatch.MatchMode is "Exact" or "NumericPrefix"
+                ? durationMatch.ExpandedSceneDurationSec
+                : renderItem.SceneDurationSec;
+            var sceneEnd = timelineStart + TimeSpan.FromSeconds(sceneAudioDuration);
+            var sceneCues = sceneCueIndexes
+                .Where(index => index >= 0 && index < sourceBlocks.Count)
+                .Select(index => sourceBlocks[index])
+                .ToArray();
+
+            if (sceneCues.Length > 0)
+            {
+                var weights = sceneCues
+                    .Select(cue => Math.Max(1, CountSpokenWords(cue.Text)))
+                    .ToArray();
+                var totalWeight = weights.Sum();
+                var cueStart = timelineStart;
+                for (var i = 0; i < sceneCues.Length; i++)
+                {
+                    var cueEnd = i == sceneCues.Length - 1
+                        ? sceneEnd
+                        : cueStart + TimeSpan.FromSeconds(sceneAudioDuration * weights[i] / totalWeight);
+                    retimedBlocks.Add(sceneCues[i] with { Start = cueStart, End = cueEnd });
+                    cueStart = cueEnd;
+                }
+            }
+
+            diagnostics.Add(new
+            {
+                sceneId = renderItem.SceneId,
+                sceneAudioDuration = RoundDuration(sceneAudioDuration),
+                sceneSubtitleDuration = RoundDuration(sceneCues.Length == 0 ? 0 : (sceneEnd - timelineStart).TotalSeconds),
+                subtitleCueCount = sceneCues.Length,
+                subtitleDurationDelta = RoundDuration(sceneCues.Length == 0 ? sceneAudioDuration : 0)
+            });
+            timelineStart = sceneEnd;
+        }
+
+        await File.WriteAllTextAsync(srtPath, BuildSrt(retimedBlocks), cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(Path.GetDirectoryName(srtPath)!, $"{format}-phase18-subtitle-timing-diagnostics.json"),
+            JsonSerializer.Serialize(new
+            {
+                format,
+                language,
+                subtitleTimingRule = "SceneBasedTtsActualMp3Duration",
+                finalSrtEnd = RoundDuration(retimedBlocks.Count == 0 ? 0 : retimedBlocks[^1].End.TotalSeconds),
+                sceneDiagnostics = diagnostics
+            }, JsonOptions),
+            cancellationToken);
     }
 
     private static string ResolvePhase18FinalMixedAudioPath(string outputPath)
