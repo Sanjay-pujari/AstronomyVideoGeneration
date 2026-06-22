@@ -954,6 +954,16 @@ First cue.
 
         Assert.Equal(3, diagnostics.GetType().GetProperty("TranslatedSceneCount")!.GetValue(diagnostics));
         Assert.Equal(["short:001-hook", "short:002-cause", "long:003-accurate-sky-guide"], (IReadOnlyList<string>)diagnostics.GetType().GetProperty("TranslatedSceneIds")!.GetValue(diagnostics)!);
+        var sceneDiagnostics = ((System.Collections.IEnumerable)diagnostics.GetType().GetProperty("SceneDiagnostics")!.GetValue(diagnostics)!).Cast<object>().ToArray();
+        Assert.Equal(3, sceneDiagnostics.Length);
+        Assert.All(sceneDiagnostics, scene =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace((string)scene.GetType().GetProperty("SceneId")!.GetValue(scene)!));
+            Assert.False(string.IsNullOrWhiteSpace((string)scene.GetType().GetProperty("SourceEnglishSceneText")!.GetValue(scene)!));
+            Assert.False(string.IsNullOrWhiteSpace((string)scene.GetType().GetProperty("TranslatedHindiSceneText")!.GetValue(scene)!));
+        });
+        Assert.True(sceneDiagnostics.Any(scene => (bool)scene.GetType().GetProperty("DuplicateSceneDetected")!.GetValue(scene)!));
+        Assert.True(sceneDiagnostics.Any(scene => (bool)scene.GetType().GetProperty("DuplicateSceneRemoved")!.GetValue(scene)!));
         Assert.True((int)diagnostics.GetType().GetProperty("DuplicateSceneTextsRemoved")!.GetValue(diagnostics)! > 0);
         Assert.True((int)diagnostics.GetType().GetProperty("DuplicateSubtitleBlocksRemoved")!.GetValue(diagnostics)! > 0);
         Assert.DoesNotContain("can turn", string.Join(" ", translated), StringComparison.OrdinalIgnoreCase);
