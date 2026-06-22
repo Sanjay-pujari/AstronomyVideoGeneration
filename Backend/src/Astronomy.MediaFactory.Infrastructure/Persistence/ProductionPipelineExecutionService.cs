@@ -3716,13 +3716,12 @@ public sealed partial class ProductionPipelineExecutionService(
             subtitleStart = sceneEnd;
         }
         var duplicateBlockGroups = blocks
-            .Select(block => new { block.Number, block.SceneId, Text = string.Join(" ", block.Lines), NormalizedText = NormalizeNarrationForDuplicateCheck(string.Join(" ", block.Lines)) })
-            .Where(block => !string.IsNullOrWhiteSpace(block.NormalizedText))
-            .GroupBy(block => block.NormalizedText, StringComparer.OrdinalIgnoreCase)
+            .Select(block => new { BlockId = $"{format}:{block.SceneId}:cue-{block.Number}", block.SceneId, Text = string.Join(" ", block.Lines) })
+            .GroupBy(block => block.BlockId, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .ToArray();
         var duplicateSubtitleBlockIds = duplicateBlockGroups
-            .SelectMany(group => group.Select(block => $"{format}:{block.SceneId}:cue-{block.Number}"))
+            .SelectMany(group => group.Select(block => block.BlockId))
             .ToArray();
         var duplicateSubtitleTexts = duplicateBlockGroups.Select(group => group.First().Text).ToArray();
         if (duplicateSubtitleBlockIds.Length > 0)
@@ -4032,14 +4031,17 @@ public sealed partial class ProductionPipelineExecutionService(
         if (srtTexts.Any(text => text.Contains("centers on", StringComparison.OrdinalIgnoreCase))
             && !sourceTexts.Any(text => text.Contains("centers on", StringComparison.OrdinalIgnoreCase)))
             errors.Add($"{Path.GetFileName(srtPath)} contains fallback phrase centers on outside narration files");
-        var duplicateBlockGroups = srtBlocks
+        var duplicateTextGroups = srtBlocks
             .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
             .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
             .ToArray();
-        var duplicateGroups = duplicateBlockGroups.Select(g => g.First().Text).ToArray();
+        var duplicateGroups = duplicateTextGroups.Select(g => g.First().Text).ToArray();
+        var duplicateBlockGroups = srtBlocks
+            .GroupBy(block => block.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .ToArray();
         var duplicateSubtitleBlockIds = duplicateBlockGroups.SelectMany(g => g.Select(block => block.Id)).ToArray();
-        var duplicateSources = sourceTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
-        if (duplicateGroups.Length > 0 && !duplicateSources) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle text while narration files are unique");
+        if (duplicateSubtitleBlockIds.Length > 0) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle block ids");
         var duplicateSourceScenes = subtitleCueSources.Where(cue => duplicateGroups.Any(text => string.Equals(NormalizeNarrationForDuplicateCheck(text), cue.NormalizedText, StringComparison.OrdinalIgnoreCase))).Select(cue => cue.SceneId).ToArray();
         var duplicateSourceFiles = subtitleCueSources.Where(cue => duplicateGroups.Any(text => string.Equals(NormalizeNarrationForDuplicateCheck(text), cue.NormalizedText, StringComparison.OrdinalIgnoreCase))).Select(cue => cue.SourceFile).ToArray();
         var nonNarrationSubtitleCues = subtitleCueSources.Where(cue => !string.Equals(cue.SourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -4096,11 +4098,15 @@ public sealed partial class ProductionPipelineExecutionService(
         => Regex.Split(File.ReadAllText(srtPath), @"\r?\n\r?\n")
             .Select((block, index) =>
             {
-                var lines = block.Split('\n')
+                var rawLines = block.Split('\n')
                     .Select(line => line.Trim())
-                    .Where(line => !string.IsNullOrWhiteSpace(line) && !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
                     .ToArray();
-                return (Id: $"{Path.GetFileName(srtPath)}:block-{index + 1}", Text: string.Join(" ", lines).Trim(), Lines: (IReadOnlyList<string>)lines);
+                var cueNumber = rawLines.FirstOrDefault(line => Regex.IsMatch(line, @"^\d+$")) ?? $"block-{index + 1}";
+                var lines = rawLines
+                    .Where(line => !Regex.IsMatch(line, @"^\d+$") && !line.Contains("-->", StringComparison.Ordinal))
+                    .ToArray();
+                return (Id: $"{Path.GetFileName(srtPath)}:cue-{cueNumber}", Text: string.Join(" ", lines).Trim(), Lines: (IReadOnlyList<string>)lines);
             })
             .Where(block => !string.IsNullOrWhiteSpace(block.Text))
             .ToArray();
@@ -4120,8 +4126,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<string> ExistingDuplicateSrtBlockIds(string srtPath)
         => File.Exists(srtPath)
             ? ExtractSrtBlocks(srtPath)
-                .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
-                .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+                .GroupBy(block => block.Id, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
                 .SelectMany(g => g.Select(block => block.Id))
                 .ToArray()
             : [];
@@ -4129,8 +4135,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<string> ExistingDuplicateSrtTexts(string srtPath)
         => File.Exists(srtPath)
             ? ExtractSrtBlocks(srtPath)
-                .GroupBy(block => NormalizeNarrationForDuplicateCheck(block.Text), StringComparer.OrdinalIgnoreCase)
-                .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+                .GroupBy(block => block.Id, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
                 .Select(g => g.First().Text)
                 .ToArray()
             : [];
