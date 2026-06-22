@@ -5718,17 +5718,80 @@ public sealed partial class ProductionPipelineExecutionService(
             Directory.CreateDirectory(sceneRoot);
             var sceneAudio = new List<string>();
             var sceneAudioDiagnostics = new List<TtsAudioContentDiagnostics>();
-            foreach (var block in blocks)
+            var sceneTimelineItems = new List<object>();
+            var generatedSceneTimelineIds = new List<string>();
+            var hindiSceneLevelTts = string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase);
+
+            if (hindiSceneLevelTts)
             {
-                var cuePosition = sceneAudio.Count;
-                var visualSceneId = cuePosition < visualSceneIdsByCue.Count ? visualSceneIdsByCue[cuePosition] : block.SceneId;
-                var audioPath = Path.Combine(sceneRoot, $"{SanitizeFileName(block.SceneId)}.mp3");
-                var validation = await GenerateAndValidateTtsAudioAsync(context, format, visualSceneId, block.Text, audioPath, cancellationToken);
-                sceneAudio.Add(audioPath);
-                sceneAudioDiagnostics.Add(validation);
-                outputs.Add(audioPath);
-                if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
-                if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
+                var expectedVisualSceneIds = sceneIdResolution.ExpectedVisualSceneIds.Count > 0
+                    ? sceneIdResolution.ExpectedVisualSceneIds
+                    : ResolvePhase15ExpectedVisualSceneIds(planRoot, format);
+                var narrationRoot = ResolvePhase15NarrationRoot(planRoot, language, format);
+                var cueCountsBySceneId = sceneIdResolution.AssignedSceneIds
+                    .GroupBy(sceneId => sceneId, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+                foreach (var visualSceneId in expectedVisualSceneIds)
+                {
+                    var narrationPath = Path.Combine(narrationRoot, $"{SanitizeFileName(visualSceneId)}.txt");
+                    if (!File.Exists(narrationPath))
+                    {
+                        errors.Add($"{language}:{format}:{visualSceneId} narration file missing: {NormalizePath(narrationPath)}");
+                        continue;
+                    }
+
+                    var narrationText = await File.ReadAllTextAsync(narrationPath, cancellationToken);
+                    var audioPath = Path.Combine(sceneRoot, $"{SanitizeFileName(visualSceneId)}.mp3");
+                    var validation = await GenerateAndValidateTtsAudioAsync(context, format, visualSceneId, narrationText, audioPath, cancellationToken);
+                    sceneAudio.Add(audioPath);
+                    sceneAudioDiagnostics.Add(validation);
+                    outputs.Add(audioPath);
+                    if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{visualSceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
+                    if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{visualSceneId} missing MP3: {NormalizePath(audioPath)}");
+
+                    var cueCount = cueCountsBySceneId.TryGetValue(visualSceneId, out var count) ? count : 0;
+                    generatedSceneTimelineIds.Add(visualSceneId);
+                    sceneTimelineItems.Add(new
+                    {
+                        format,
+                        sceneId = visualSceneId,
+                        parentSceneId = visualSceneId,
+                        visualSceneId,
+                        cueIndex = sceneTimelineItems.Count + 1,
+                        audioPath = NormalizePath(audioPath),
+                        narrationSourcePath = NormalizePath(narrationPath),
+                        narrationText,
+                        cueText = narrationText,
+                        durationSec = validation.DurationSec,
+                        audioDurationSec = validation.DurationSec,
+                        subtitleCueCount = cueCount,
+                        subtitleSourcePath = NormalizePath(inputSrtPath),
+                        ttsProviderCalled = true,
+                        ttsProviderSucceeded = File.Exists(audioPath)
+                    });
+                }
+                var distinctTimelineSceneIds = generatedSceneTimelineIds
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var expectedSet = expectedVisualSceneIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var actualSet = distinctTimelineSceneIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!expectedSet.SetEquals(actualSet))
+                    errors.Add($"{language}:{format} distinctTimelineSceneIds must equal expected visual scene IDs; expected=[{string.Join(",", expectedVisualSceneIds)}], actual=[{string.Join(",", distinctTimelineSceneIds)}]");
+            }
+            else
+            {
+                foreach (var block in blocks)
+                {
+                    var cuePosition = sceneAudio.Count;
+                    var visualSceneId = cuePosition < visualSceneIdsByCue.Count ? visualSceneIdsByCue[cuePosition] : block.SceneId;
+                    var audioPath = Path.Combine(sceneRoot, $"{SanitizeFileName(block.SceneId)}.mp3");
+                    var validation = await GenerateAndValidateTtsAudioAsync(context, format, visualSceneId, block.Text, audioPath, cancellationToken);
+                    sceneAudio.Add(audioPath);
+                    sceneAudioDiagnostics.Add(validation);
+                    outputs.Add(audioPath);
+                    if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
+                    if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
+                }
             }
 
             var narrationTrackPath = Path.Combine(planRoot, "video-assembly", language, format, "narration-track.mp3");
@@ -5738,7 +5801,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var audioDurationSec = (await ProbeAudioContentMetricsAsync(narrationTrackPath, cancellationToken)).DurationSec;
             var srtDurationSec = blocks.Count == 0 ? 0 : blocks.Max(b => b.End.TotalSeconds);
             var delta = Math.Abs(audioDurationSec - srtDurationSec);
-            if (blocks.Count != sceneAudio.Count || sceneAudio.Any(p => !File.Exists(p))) errors.Add($"{language}:{format} every SRT block must have audio.");
+            if (!hindiSceneLevelTts && (blocks.Count != sceneAudio.Count || sceneAudio.Any(p => !File.Exists(p)))) errors.Add($"{language}:{format} every SRT block must have audio.");
+            if (hindiSceneLevelTts && sceneAudio.Any(p => !File.Exists(p))) errors.Add($"{language}:{format} every visual scene must have audio.");
             if (audioDurationSec <= 0) errors.Add($"{language}:{format} narration audio is silent or unreadable.");
             var srtText = string.Join("\n", blocks.Select(b => b.Text));
             if (language == "hi" && !ContainsHindiText(srtText)) errors.Add("Hindi SRT must contain Hindi text.");
@@ -5750,30 +5814,35 @@ public sealed partial class ProductionPipelineExecutionService(
 
             if (string.Equals(language, requestedLanguage, StringComparison.OrdinalIgnoreCase))
             {
+                var cueTimelineItems = blocks.Select((block, index) => new
+                {
+                    format,
+                    sceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
+                    parentSceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
+                    visualSceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
+                    cueIndex = index + 1,
+                    cueId = block.SceneId,
+                    cueSourceFile = index < sceneIdResolution.Diagnostics.Count ? NormalizePath(sceneIdResolution.Diagnostics[index].CueSourceFile) : string.Empty,
+                    sceneIdSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].CueSceneMappingSource : string.Empty,
+                    cueSceneMappingSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].CueSceneMappingSource : string.Empty,
+                    audioPath = index < sceneAudio.Count ? NormalizePath(sceneAudio[index]) : string.Empty,
+                    narrationText = block.Text,
+                    cueText = block.Text,
+                    durationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
+                    audioDurationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
+                    srtStartSec = Math.Round(block.Start.TotalSeconds, 3, MidpointRounding.AwayFromZero),
+                    srtEndSec = Math.Round(block.End.TotalSeconds, 3, MidpointRounding.AwayFromZero),
+                    srtDurationSec = Math.Round((block.End - block.Start).TotalSeconds, 3, MidpointRounding.AwayFromZero),
+                    ttsProviderCalled = true,
+                    ttsProviderSucceeded = index < sceneAudio.Count && File.Exists(sceneAudio[index])
+                }).ToArray();
                 phase16DurationInputs[format] = new
                 {
-                    items = blocks.Select((block, index) => new
-                    {
-                        format,
-                        sceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
-                        parentSceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
-                        visualSceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
-                        cueIndex = index + 1,
-                        cueId = block.SceneId,
-                        cueSourceFile = index < sceneIdResolution.Diagnostics.Count ? NormalizePath(sceneIdResolution.Diagnostics[index].CueSourceFile) : string.Empty,
-                        sceneIdSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].CueSceneMappingSource : string.Empty,
-                        cueSceneMappingSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].CueSceneMappingSource : string.Empty,
-                        audioPath = NormalizePath(sceneAudio[index]),
-                        narrationText = block.Text,
-                        cueText = block.Text,
-                        durationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
-                        audioDurationSec = index < sceneAudioDiagnostics.Count ? sceneAudioDiagnostics[index].DurationSec : 0,
-                        srtStartSec = Math.Round(block.Start.TotalSeconds, 3, MidpointRounding.AwayFromZero),
-                        srtEndSec = Math.Round(block.End.TotalSeconds, 3, MidpointRounding.AwayFromZero),
-                        srtDurationSec = Math.Round((block.End - block.Start).TotalSeconds, 3, MidpointRounding.AwayFromZero),
-                        ttsProviderCalled = true,
-                        ttsProviderSucceeded = File.Exists(sceneAudio[index])
-                    }).ToArray(),
+                    items = hindiSceneLevelTts ? sceneTimelineItems.ToArray() : cueTimelineItems.Cast<object>().ToArray(),
+                    subtitleItems = hindiSceneLevelTts ? cueTimelineItems : null,
+                    subtitleSourcePath = hindiSceneLevelTts ? NormalizePath(inputSrtPath) : null,
+                    distinctTimelineSceneIds = hindiSceneLevelTts ? generatedSceneTimelineIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : null,
+                    expectedVisualSceneIds = hindiSceneLevelTts ? sceneIdResolution.ExpectedVisualSceneIds.ToArray() : null,
                     audioDurationSec = roundedAudioDurationSec,
                     srtDurationSec = roundedSrtDurationSec,
                     audioSrtDurationDeltaSec = roundedDeltaSec
@@ -6601,6 +6670,13 @@ public sealed partial class ProductionPipelineExecutionService(
                     cursor += scene.ExpectedDurationSec;
                     boundaries.Add(cursor / totalExpected);
                 }
+                var distinctTimelineSceneIds = generatedSceneTimelineIds
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var expectedSet = expectedVisualSceneIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var actualSet = distinctTimelineSceneIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!expectedSet.SetEquals(actualSet))
+                    errors.Add($"{language}:{format} distinctTimelineSceneIds must equal expected visual scene IDs; expected=[{string.Join(",", expectedVisualSceneIds)}], actual=[{string.Join(",", distinctTimelineSceneIds)}]");
             }
             else
             {
@@ -6678,6 +6754,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void RegenerateNarrationSubtitlesFromTtsTimeline(string planRoot, string language)
     {
+        if (!string.Equals(ResolvePipelineLanguage(language), "en", StringComparison.OrdinalIgnoreCase)) return;
         var subtitlesRoot = Path.Combine(planRoot, "narration", "subtitles", language);
         var ttsTimelinePath = ResolveLanguageScopedTtsTimelinePath(planRoot, language);
         if (!File.Exists(ttsTimelinePath)) return;
