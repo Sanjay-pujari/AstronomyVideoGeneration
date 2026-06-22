@@ -973,12 +973,19 @@ First cue.
         var translated = shortTexts.Values.ToArray();
         var duplicateAcrossScenes = (IReadOnlyList<string>)diagnostics.GetType().GetProperty("DuplicateAcrossScenesDetected")!.GetValue(diagnostics)!;
         var finalUniqueSceneText = (IReadOnlyDictionary<string, string>)diagnostics.GetType().GetProperty("FinalUniqueSceneText")!.GetValue(diagnostics)!;
+        var rewrittenSceneIds = (IReadOnlyList<string>)diagnostics.GetType().GetProperty("RewrittenSceneIds")!.GetValue(diagnostics)!;
+        var rewrittenUniqueText = (IReadOnlyDictionary<string, string>)diagnostics.GetType().GetProperty("RewrittenUniqueText")!.GetValue(diagnostics)!;
+        var duplicateAcrossScenesRemaining = (bool)diagnostics.GetType().GetProperty("DuplicateAcrossScenesRemaining")!.GetValue(diagnostics)!;
 
         Assert.All(translated, text => Assert.Contains("।", text));
         Assert.Equal(translated.Length, translated.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.DoesNotContain("सूर्यास्त के बाद पश्चिमी आसमान में चमकीले ग्रहों को पास-पास देखने का अच्छा अवसर मिलेगा।", translated.Skip(1));
         Assert.NotEmpty(duplicateAcrossScenes);
         Assert.Contains("short:002-close-spacing", finalUniqueSceneText.Keys);
+        Assert.Contains("short:002-close-spacing", rewrittenSceneIds);
+        Assert.Equal(shortTexts["002-close-spacing"], finalUniqueSceneText["short:002-close-spacing"]);
+        Assert.Equal(shortTexts["002-close-spacing"], rewrittenUniqueText["short:002-close-spacing"]);
+        Assert.False(duplicateAcrossScenesRemaining);
     }
 
     [Fact]
