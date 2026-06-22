@@ -5756,10 +5756,13 @@ public sealed partial class ProductionPipelineExecutionService(
                     {
                         format,
                         sceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
+                        parentSceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
+                        visualSceneId = index < visualSceneIdsByCue.Count ? visualSceneIdsByCue[index] : block.SceneId,
                         cueIndex = index + 1,
                         cueId = block.SceneId,
                         cueSourceFile = index < sceneIdResolution.Diagnostics.Count ? NormalizePath(sceneIdResolution.Diagnostics[index].CueSourceFile) : string.Empty,
-                        sceneIdSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].SceneIdSource : string.Empty,
+                        sceneIdSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].CueSceneMappingSource : string.Empty,
+                        cueSceneMappingSource = index < sceneIdResolution.Diagnostics.Count ? sceneIdResolution.Diagnostics[index].CueSceneMappingSource : string.Empty,
                         audioPath = NormalizePath(sceneAudio[index]),
                         narrationText = block.Text,
                         cueText = block.Text,
@@ -5911,12 +5914,17 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!File.Exists(narrationFile)) continue;
             var sceneId = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var narrationText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
-            var cueCount = SplitSubtitleChunks(narrationText).Count;
+            var cueCount = string.Equals(narrationLanguage, "hi", StringComparison.OrdinalIgnoreCase)
+                ? SplitProgressiveWordGroups(narrationText).Groups.Count
+                : SplitSubtitleChunks(narrationText).Count;
+            var cueSceneMappingSource = string.Equals(narrationLanguage, "hi", StringComparison.OrdinalIgnoreCase)
+                ? $"parentSceneId:progressive-word-group-narration-file-path:{narrationLanguage}"
+                : $"narration-file-path:{narrationLanguage}";
             for (var i = 0; i < cueCount; i++)
             {
                 sceneIds.Add(sceneId);
                 sourceFiles.Add(narrationFile);
-                sceneIdSources.Add($"narration-file-path:{narrationLanguage}");
+                sceneIdSources.Add(cueSceneMappingSource);
             }
         }
 
@@ -5925,7 +5933,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var diagnostics = blocks.Select((block, index) => new Phase15SceneIdLineageCueDiagnostic(
             index + 1,
+            block.SceneId,
             sourceFiles[index],
+            sceneIds[index],
             sceneIds[index],
             sceneIdSources[index],
             IsNumericSceneId(sceneIds[index]))).ToArray();
@@ -5937,7 +5947,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var sceneIds = blocks.Select(block => block.SceneId).ToArray();
         var diagnostics = blocks.Select((block, index) => new Phase15SceneIdLineageCueDiagnostic(
             index + 1,
+            block.SceneId,
             string.Empty,
+            block.SceneId,
             block.SceneId,
             $"{source}:{reason}",
             IsNumericSceneId(block.SceneId))).ToArray();
@@ -5954,7 +5966,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .Where(d => d.NumericSceneIdRejected && !expectedSet.Contains(d.AssignedSceneId))
             .ToArray();
         foreach (var diagnostic in numericRejected)
-            errors.Add($"Phase 15 sceneId lineage rejected numeric cue sceneId. eventFamily={eventFamily}; language={language}; format={format}; cueIndex={diagnostic.CueIndex}; cueSourceFile={diagnostic.CueSourceFile}; assignedSceneId={diagnostic.AssignedSceneId}; sceneIdSource={diagnostic.SceneIdSource}; numericSceneIdRejected=true");
+            errors.Add($"Phase 15 sceneId lineage rejected numeric cue sceneId. eventFamily={eventFamily}; language={language}; format={format}; cueIndex={diagnostic.CueIndex}; cueId={diagnostic.CueId}; parentSceneId={diagnostic.ParentSceneId}; visualSceneId={diagnostic.VisualSceneId}; cueSourceFile={diagnostic.CueSourceFile}; assignedSceneId={diagnostic.AssignedSceneId}; cueSceneMappingSource={diagnostic.CueSceneMappingSource}; numericSceneIdRejected=true");
 
         if (expected.Length > 0)
         {
@@ -5964,7 +5976,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 errors.Add($"Phase 15 sceneId lineage mismatch. eventFamily={eventFamily}; language={language}; format={format}; distinctTimelineSceneIds=[{string.Join(",", actual)}]; expectedVisualSceneIds=[{string.Join(",", expected)}]; missingVisualSceneIds=[{string.Join(",", missing)}]; extraTimelineSceneIds=[{string.Join(",", extra)}]");
 
             foreach (var diagnostic in resolution.Diagnostics.Where(d => !expectedSet.Contains(d.AssignedSceneId)))
-                errors.Add($"Phase 15 cue does not map to exactly one visual scene. eventFamily={eventFamily}; language={language}; format={format}; cueIndex={diagnostic.CueIndex}; cueSourceFile={diagnostic.CueSourceFile}; assignedSceneId={diagnostic.AssignedSceneId}; sceneIdSource={diagnostic.SceneIdSource}");
+                errors.Add($"Phase 15 cue does not map to exactly one visual scene. eventFamily={eventFamily}; language={language}; format={format}; cueIndex={diagnostic.CueIndex}; cueId={diagnostic.CueId}; parentSceneId={diagnostic.ParentSceneId}; visualSceneId={diagnostic.VisualSceneId}; cueSourceFile={diagnostic.CueSourceFile}; assignedSceneId={diagnostic.AssignedSceneId}; cueSceneMappingSource={diagnostic.CueSceneMappingSource}");
         }
 
         return errors;
@@ -5992,9 +6004,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 language,
                 format,
                 cueIndex = d.CueIndex,
+                cueId = d.CueId,
+                parentSceneId = d.ParentSceneId,
+                visualSceneId = d.VisualSceneId,
                 cueSourceFile = NormalizePath(d.CueSourceFile),
                 assignedSceneId = d.AssignedSceneId,
-                sceneIdSource = d.SceneIdSource,
+                sceneIdSource = d.CueSceneMappingSource,
+                cueSceneMappingSource = d.CueSceneMappingSource,
                 numericSceneIdRejected = d.NumericSceneIdRejected && !expectedSet.Contains(d.AssignedSceneId),
                 distinctTimelineSceneIds = actual,
                 expectedVisualSceneIds = expected,
@@ -6058,7 +6074,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record Phase15SrtBlock(string SceneId, TimeSpan Start, TimeSpan End, string Text);
     private sealed record Phase15SceneIdLineageResolution(IReadOnlyList<string> AssignedSceneIds, IReadOnlyList<string> ExpectedVisualSceneIds, IReadOnlyList<Phase15SceneIdLineageCueDiagnostic> Diagnostics);
-    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueSourceFile, string AssignedSceneId, string SceneIdSource, bool NumericSceneIdRejected);
+    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueId, string CueSourceFile, string ParentSceneId, string VisualSceneId, string CueSceneMappingSource, bool NumericSceneIdRejected)
+    {
+        public string AssignedSceneId => ParentSceneId;
+        public string SceneIdSource => CueSceneMappingSource;
+    }
 
     private static async Task ValidateTtsNarrationFilesCleanBeforeProviderAsync(JsonNode syncRoot, string format, string narrationDirectory, int expectedCount, List<string> selectedNarrationFiles, List<string> missingNarrationFiles, List<string> emptyNarrationFiles, List<string> ttsNarrationCleanupErrors, CancellationToken cancellationToken)
     {
