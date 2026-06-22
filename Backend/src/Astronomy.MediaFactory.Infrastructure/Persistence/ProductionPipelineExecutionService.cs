@@ -2491,7 +2491,7 @@ public sealed partial class ProductionPipelineExecutionService(
         SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
         ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, null);
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
-        var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, family, shortTexts, longTexts);
+        var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, family, shortTexts, longTexts, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext?.EventType), context.ProductionEventIntelligence.PrimaryObjects.Count > 0 ? context.ProductionEventIntelligence.PrimaryObjects : context.Request.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects.Count > 0 ? context.ProductionEventIntelligence.SecondaryObjects : context.Request.SecondaryObjects);
         var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
         var firstSentenceByScene = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => FirstSentence(item.Value), StringComparer.OrdinalIgnoreCase);
@@ -2645,7 +2645,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool StringSetsOverlap(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
         => (left ?? Array.Empty<string>()).Any(l => (right ?? Array.Empty<string>()).Any(r => string.Equals(l, r, StringComparison.OrdinalIgnoreCase)));
 
-    private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, string resolvedFamily, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    private static Phase14TranslationDiagnostics ApplyPhase14NarrationTranslationIfNeeded(string requestedLanguage, string resolvedFamily, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
     {
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
@@ -2694,6 +2694,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 false,
                 0,
                 false,
+                false,
+                NormalizePhase14DuplicateCleanupFamily(resolvedFamily, eventType, primaryObjects, secondaryObjects, sourceText),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 false);
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
@@ -2705,16 +2709,16 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var key in shortTexts.Keys.ToArray())
         {
             var duplicateCountBefore = CountDuplicateHindiSceneTexts(shortTexts, longTexts);
-            shortTexts[key] = translator.TranslateAsync(shortTexts[key], "en", "hi", resolvedFamily, key, ResolvePhase14ScenePurpose(key), [], []).GetAwaiter().GetResult();
+            shortTexts[key] = translator.TranslateAsync(shortTexts[key], "en", "hi", resolvedFamily, key, ResolvePhase14ScenePurpose(key), primaryObjects, secondaryObjects).GetAwaiter().GetResult();
             TracePhase14HindiLoop("TranslatePhase14NarrationToHindi.short", key, null, 1, shortTexts[key], duplicateCountBefore, CountDuplicateHindiSceneTexts(shortTexts, longTexts));
         }
         foreach (var key in longTexts.Keys.ToArray())
         {
             var duplicateCountBefore = CountDuplicateHindiSceneTexts(shortTexts, longTexts);
-            longTexts[key] = translator.TranslateAsync(longTexts[key], "en", "hi", resolvedFamily, key, ResolvePhase14ScenePurpose(key), [], []).GetAwaiter().GetResult();
+            longTexts[key] = translator.TranslateAsync(longTexts[key], "en", "hi", resolvedFamily, key, ResolvePhase14ScenePurpose(key), primaryObjects, secondaryObjects).GetAwaiter().GetResult();
             TracePhase14HindiLoop("TranslatePhase14NarrationToHindi.long", key, null, 1, longTexts[key], duplicateCountBefore, CountDuplicateHindiSceneTexts(shortTexts, longTexts));
         }
-        var duplicateSentenceCleanup = CleanupHindiDuplicateScenes(shortTexts, longTexts);
+        var duplicateSentenceCleanup = CleanupHindiDuplicateScenes(shortTexts, longTexts, resolvedFamily, eventType, primaryObjects, secondaryObjects);
 
         var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         var leakedTerms = FindPhase14HindiForbiddenNarrationLeakage(resolvedFamily, translatedText);
@@ -2763,7 +2767,11 @@ public sealed partial class ProductionPipelineExecutionService(
             false,
             0,
             false,
-            false);
+            false,
+            duplicateSentenceCleanup.DuplicateCleanupFamily,
+            duplicateSentenceCleanup.DuplicateCleanupRewriteSource,
+            duplicateSentenceCleanup.DuplicateCleanupRewriteTarget,
+            duplicateSentenceCleanup.FamilySpecificRewriteUsed);
         if (diagnostics.HindiCharacterCount == 0)
             throw new InvalidOperationException("Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.");
         if (diagnostics.HindiCharacterRatio < 0.85 || diagnostics.EnglishFragmentDetected)
@@ -2776,7 +2784,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string NormalizeHindiSentenceForDuplicateCleanup(string sentence)
         => Regex.Replace(sentence ?? string.Empty, @"\s+", " ").Trim().Trim('।', '.', '!', '?', ',', ';', ':');
 
-    private static Phase14HindiDuplicateSentenceCleanupResult CleanupHindiDuplicateScenes(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    private static Phase14HindiDuplicateSentenceCleanupResult CleanupHindiDuplicateScenes(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts, string resolvedFamily, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
     {
         var duplicateSceneIds = new List<string>();
         var duplicateTexts = new List<string>();
@@ -2785,7 +2793,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var rewrittenSceneIds = new List<string>();
         var originalDuplicateText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var rewrittenUniqueText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var duplicateCleanupRewriteSource = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var duplicateCleanupRewriteTarget = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var owners = new Dictionary<string, (string Format, string SceneId, string Text)>(StringComparer.OrdinalIgnoreCase);
+        var duplicateCleanupFamily = NormalizePhase14DuplicateCleanupFamily(resolvedFamily, eventType, primaryObjects, secondaryObjects, string.Empty);
 
         foreach (var item in EnumerateHindiSceneTexts(shortTexts, longTexts))
         {
@@ -2800,7 +2811,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 duplicateSceneIds.Add(sceneKey);
                 sourceSceneIds.Add(ownerKey);
 
-                var uniqueText = BuildSourceAwareUniqueHindiSceneText(item.Format, item.SceneId, item.Text);
+                var uniqueText = BuildSourceAwareUniqueHindiSceneText(item.Format, item.SceneId, item.Text, resolvedFamily, eventType, primaryObjects, secondaryObjects);
                 var uniqueNormalized = NormalizeHindiSentenceForDuplicateCleanup(uniqueText);
                 var uniquenessAttempt = 1;
                 var duplicateCountBefore = CountDuplicateHindiSceneTexts(shortTexts, longTexts);
@@ -2811,7 +2822,7 @@ public sealed partial class ProductionPipelineExecutionService(
                         throw new InvalidOperationException($"Phase 14 Hindi scene duplicate cleanup exceeded {Phase14HindiMaxRewriteAttempts} rewrite attempts. loop=Detect/CleanupHindiDuplicateScenes; format={item.Format}; sceneId={item.SceneId}; textHash={SubtitleChunkHash(uniqueText)}; duplicateCountBefore={duplicateCountBefore}; duplicateCountAfter=1");
 
                     uniquenessAttempt++;
-                    uniqueText = BuildSourceAwareUniqueHindiSceneText(item.Format, item.SceneId, item.Text, uniquenessAttempt);
+                    uniqueText = BuildSourceAwareUniqueHindiSceneText(item.Format, item.SceneId, item.Text, resolvedFamily, eventType, primaryObjects, secondaryObjects, uniquenessAttempt);
                     uniqueNormalized = NormalizeHindiSentenceForDuplicateCleanup(uniqueText);
                     TracePhase14HindiLoop("Detect/CleanupHindiDuplicateScenes", item.SceneId, null, uniquenessAttempt, uniqueText, duplicateCountBefore, owners.ContainsKey(uniqueNormalized) ? 1 : 0);
                 }
@@ -2825,6 +2836,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 rewrittenSceneIds.Add(sceneKey);
                 originalDuplicateText[sceneKey] = item.Text;
                 rewrittenUniqueText[sceneKey] = uniqueText;
+                duplicateCleanupRewriteSource[sceneKey] = ownerKey;
+                duplicateCleanupRewriteTarget[sceneKey] = uniqueText;
                 owners[uniqueNormalized] = (item.Format, item.SceneId, uniqueText);
             }
             else
@@ -2853,48 +2866,119 @@ public sealed partial class ProductionPipelineExecutionService(
             originalDuplicateText,
             rewrittenUniqueText,
             finalUniqueSceneText,
-            duplicateAcrossScenesRemaining);
+            duplicateAcrossScenesRemaining,
+            duplicateCleanupFamily,
+            duplicateCleanupRewriteSource,
+            duplicateCleanupRewriteTarget,
+            rewrittenSceneIds.Count > 0);
     }
 
     private static IEnumerable<(string Format, string SceneId, string Text)> EnumerateHindiSceneTexts(IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
         => shortTexts.Select(kv => ("short", kv.Key, kv.Value)).Concat(longTexts.Select(kv => ("long", kv.Key, kv.Value)));
 
-    private static string BuildSourceAwareUniqueHindiSceneText(string format, string sceneId, string duplicateText, int uniquenessAttempt = 1)
+    private static string BuildSourceAwareUniqueHindiSceneText(string format, string sceneId, string duplicateText, string resolvedFamily, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, int uniquenessAttempt = 1)
     {
         var purpose = ResolvePhase14ScenePurpose(sceneId);
         var isLong = string.Equals(format, "long", StringComparison.OrdinalIgnoreCase);
+        var family = NormalizePhase14DuplicateCleanupFamily(resolvedFamily, eventType, primaryObjects, secondaryObjects, duplicateText);
 
-        var baseText = purpose switch
-        {
-            "hook" => "सूर्यास्त की नीली रोशनी में बृहस्पति और शुक्र को साथ देखना शुरुआत से ही आसमान को खास बना देता है।",
-            "cause" => "पास दिखने के बावजूद बृहस्पति और शुक्र अंतरिक्ष में बहुत दूर हैं; यह नज़दीकी पृथ्वी से दिखने वाले कोण और दृष्टि-रेखा का असर है।",
-            "accurate-sky-guide" => "साफ पश्चिमी क्षितिज सबसे जरूरी है, क्योंकि कम ऊंचाई पर चमकते ग्रह पेड़ों, इमारतों या धुंध के पीछे जल्दी छिप सकते हैं।",
-            "best-time" => "सूर्यास्त के बाद आसमान गहरा होते ही देखना शुरू करें, ताकि दोनों ग्रह क्षितिज के पास उतरने से पहले आसानी से मिल जाएं।",
-            "gear" => "पहले नंगी आंखों से दोनों रोशन बिंदुओं की जगह तय करें, फिर दूरबीन से उनकी दूरी और चमक को स्थिर फ्रेम में देखें।",
-            "closing" => "कुछ ही शामों में यह जोड़ी फिर अलग हो जाएगी, इसलिए साफ मौसम मिलते ही इस शांत ग्रह-मिलन को याद में संजो लें।",
-            _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText)
-        };
+        var baseText = BuildFamilySpecificHindiDuplicateRewrite(family, purpose, isLong, duplicateText);
 
         if (isLong)
-            baseText = purpose switch
-            {
-                "hook" => "शाम की हल्की रोशनी में दो सबसे चमकीले ग्रह एक साथ उभरते हैं, और यही नज़ारा दूरी, गति और दृष्टिकोण की पूरी कहानी खोलता है।",
-                "cause" => "यह मिलन वास्तविक टक्कर नहीं है; पृथ्वी से देखने पर दोनों ग्रह लगभग एक ही दिशा में आ जाते हैं, जबकि उनके बीच करोड़ों किलोमीटर की दूरी बनी रहती है।",
-                "accurate-sky-guide" => "अवलोकन के लिए पश्चिम की ओर खुली जगह चुनें और क्षितिज को पहले से पहचान लें, क्योंकि कम ऊंचाई वाली युति कुछ मिनटों में ही ओझल हो सकती है।",
-                "best-time" => "सबसे अच्छा पल शाम ढलने के तुरंत बाद आता है, जब आकाश पर्याप्त अंधेरा हो चुका होता है लेकिन ग्रह अभी क्षितिज से बहुत नीचे नहीं गए होते।",
-                "gear" => "दूरबीन मदद कर सकती है, पर शुरुआत नंगी आंखों से करें; इससे चमक, दिशा और दोनों ग्रहों की आपसी दूरी का सही अंदाज़ मिलता है।",
-                "closing" => "बृहस्पति और शुक्र का यह साथ क्षणिक है, लेकिन साफ आसमान में इसे देखना सौर मंडल की धीमी, सुंदर चाल को महसूस कराने वाला अनुभव बन सकता है।",
-                _ => baseText
-            };
+            baseText = BuildFamilySpecificHindiDuplicateRewrite(family, purpose, true, duplicateText);
 
         if (uniquenessAttempt <= 1) return baseText;
         return uniquenessAttempt % 2 == 0
-            ? baseText + " इसी कारण अवलोकन में क्षितिज, चमक और समय—तीनों पर ध्यान रखें।"
-            : baseText + " यह बात दर्शक को केवल सुंदरता नहीं, बल्कि ग्रहों की वास्तविक व्यवस्था भी समझाती है।";
+            ? baseText + BuildFamilySpecificHindiDuplicateSuffix(family, true)
+            : baseText + BuildFamilySpecificHindiDuplicateSuffix(family, false);
     }
 
-    private static string BuildNaturalHindiFallbackFromDuplicateText(string duplicateText)
+    private static string NormalizePhase14DuplicateCleanupFamily(string resolvedFamily, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, string duplicateText)
     {
+        var family = FirstNonEmpty(resolvedFamily, ResolvePhase14EventFamily(eventType, string.Empty, primaryObjects, secondaryObjects));
+        if (string.Equals(family, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return "Meteor";
+        if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase)) return "Meteor";
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase)) return "Moon";
+        if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
+        if (string.Equals(family, "PlanetGrouping", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+        return ResolvePhase14EventFamily(eventType, duplicateText, primaryObjects, secondaryObjects);
+    }
+
+    private static string BuildFamilySpecificHindiDuplicateRewrite(string family, string purpose, bool isLong, string duplicateText)
+    {
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            return (purpose, isLong) switch
+            {
+                ("hook", false) => "सूर्यास्त की नीली रोशनी में बृहस्पति और शुक्र को साथ देखना शुरुआत से ही आसमान को खास बना देता है।",
+                ("cause", false) => "पास दिखने के बावजूद बृहस्पति और शुक्र अंतरिक्ष में बहुत दूर हैं; यह नज़दीकी पृथ्वी से दिखने वाले कोण और दृष्टि-रेखा का असर है।",
+                ("accurate-sky-guide", false) => "साफ पश्चिमी क्षितिज सबसे जरूरी है, क्योंकि कम ऊंचाई पर चमकते ग्रह पेड़ों, इमारतों या धुंध के पीछे जल्दी छिप सकते हैं।",
+                ("best-time", false) => "सूर्यास्त के बाद आसमान गहरा होते ही देखना शुरू करें, ताकि दोनों ग्रह क्षितिज के पास उतरने से पहले आसानी से मिल जाएं।",
+                ("gear", false) => "पहले नंगी आंखों से दोनों रोशन बिंदुओं की जगह तय करें, फिर दूरबीन से उनकी दूरी और चमक को स्थिर फ्रेम में देखें।",
+                ("closing", false) => "कुछ ही शामों में यह जोड़ी फिर अलग हो जाएगी, इसलिए साफ मौसम मिलते ही इस शांत ग्रह-मिलन को याद में संजो लें।",
+                ("hook", true) => "शाम की हल्की रोशनी में दो सबसे चमकीले ग्रह एक साथ उभरते हैं, और यही नज़ारा दूरी, गति और दृष्टिकोण की पूरी कहानी खोलता है।",
+                ("cause", true) => "यह मिलन वास्तविक टक्कर नहीं है; पृथ्वी से देखने पर दोनों ग्रह लगभग एक ही दिशा में आ जाते हैं, जबकि उनके बीच करोड़ों किलोमीटर की दूरी बनी रहती है।",
+                ("accurate-sky-guide", true) => "अवलोकन के लिए पश्चिम की ओर खुली जगह चुनें और क्षितिज को पहले से पहचान लें, क्योंकि कम ऊंचाई वाली युति कुछ मिनटों में ही ओझल हो सकती है।",
+                ("best-time", true) => "सबसे अच्छा पल शाम ढलने के तुरंत बाद आता है, जब आकाश पर्याप्त अंधेरा हो चुका होता है लेकिन ग्रह अभी क्षितिज से बहुत नीचे नहीं गए होते।",
+                ("gear", true) => "दूरबीन मदद कर सकती है, पर शुरुआत नंगी आंखों से करें; इससे चमक, दिशा और दोनों ग्रहों की आपसी दूरी का सही अंदाज़ मिलता है।",
+                ("closing", true) => "बृहस्पति और शुक्र का यह साथ क्षणिक है, लेकिन साफ आसमान में इसे देखना सौर मंडल की धीमी, सुंदर चाल को महसूस कराने वाला अनुभव बन सकता है।",
+                _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+            };
+
+        if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase))
+            return purpose switch
+            {
+                "hook" => isLong ? "जेमिनिड्स उल्का वर्षा अंधेरे आसमान में अचानक चमकती धारियों से रात की शुरुआत को जीवंत बना देती है।" : "जेमिनिड्स उल्का वर्षा अंधेरे आसमान में चमकती धारियों से ध्यान खींचती है।",
+                "cause" => isLong ? "रेडिएंट से बाहर फैलती उल्का गतिविधि पृथ्वी के धूलकणों वाली धारा से गुजरने पर दिखाई देती है, इसलिए हर चमक क्षण भर की होती है।" : "रेडिएंट से फैलती उल्का गतिविधि धूलकणों के वातावरण में जलने से दिखती है।",
+                "accurate-sky-guide" => "सबसे भरोसेमंद अनुभव के लिए शहर की रोशनी से दूर खुली जगह और साफ, अंधेरा आसमान चुनें।",
+                "best-time" => "रात गहराने पर आंखों को अंधेरे की आदत दें, फिर पूरे आसमान में बिखरती चमकदार धारियों को देखें।",
+                "gear" => "दूरबीन की जरूरत नहीं है; आराम से लेटकर चौड़े आसमान को देखने से अधिक उल्काएं पकड़ में आती हैं।",
+                "closing" => "धैर्य रखें, क्योंकि उल्का वर्षा में शांत अंतरालों के बाद अचानक कई चमकदार धारियां दिख सकती हैं।",
+                _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+            };
+
+        if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
+            return purpose switch
+            {
+                "hook" => "चंद्रमा की रोशनी और उसका चरण आज की रात के आसमान का मूड तय करते हैं।",
+                "cause" => "दिखती हुई चमक सूर्य के प्रकाश और चंद्रमा की स्थिति से बदलती है, इसलिए illumination हर रात अलग लगता है।",
+                "best-time" => "moonrise और moonset के समय क्षितिज के पास चंद्रमा बड़ा और रंगों में नरम दिख सकता है।",
+                "closing" => "चंद्रमा को कुछ मिनट लगातार देखने से उसकी रोशनी, किनारा और सतह की बनावट बेहतर समझ आती है।",
+                _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+            };
+
+        if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
+            return purpose switch
+            {
+                "hook" => "सूर्य, चंद्रमा और छाया की सीध मिलते ही ग्रहण का दुर्लभ दृश्य बनता है।",
+                "cause" => "ग्रहण तब दिखता है जब चंद्रमा या पृथ्वी की छाया प्रकाश के रास्ते को बदल देती है।",
+                "gear" => "सूर्य ग्रहण देखते समय eclipse safety सबसे जरूरी है; प्रमाणित सौर फिल्टर के बिना सीधे सूर्य को न देखें।",
+                "closing" => "ग्रहण की हर अवस्था धीरे-धीरे बदलती है, इसलिए सुरक्षित तरीके से समय लेकर अवलोकन करें।",
+                _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+            };
+
+        return purpose switch
+        {
+            "hook" => "कई ग्रहों की sky arrangement शाम के आसमान को पहचानने लायक नक्शा देती है।",
+            "accurate-sky-guide" => "visibility guide के लिए खुले क्षितिज, साफ मौसम और रोशनी से दूर जगह को प्राथमिकता दें।",
+            "best-time" => "अलग-अलग ऊंचाई पर दिखते multiple planets को समय के साथ मिलाकर देखना सबसे उपयोगी रहता है।",
+            "closing" => "यह व्यवस्था रात के आसमान में दिशा, चमक और दूरी को साथ समझने का आसान मौका देती है।",
+            _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+        };
+    }
+
+    private static string BuildFamilySpecificHindiDuplicateSuffix(string family, bool timingSuffix)
+        => string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            ? (timingSuffix ? " इसी कारण अवलोकन में क्षितिज, चमक और समय—तीनों पर ध्यान रखें।" : " यह बात दर्शक को केवल सुंदरता नहीं, बल्कि ग्रहों की वास्तविक व्यवस्था भी समझाती है।")
+            : (timingSuffix ? " इसी कारण अवलोकन में समय, दिशा और आसमान की स्थिति पर ध्यान रखें।" : " यह विवरण दृश्य को दोहराव से बचाकर उसी परिवार की जानकारी को स्पष्ट रखता है।");
+
+    private static string BuildNaturalHindiFallbackFromDuplicateText(string duplicateText, string family = "PlanetConjunction")
+    {
+        if (!string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            return string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase)
+                ? "अंधेरे आसमान में उल्का वर्षा की चमकदार धारियां अनियमित अंतरालों पर दिखती हैं, इसलिए धैर्य से व्यापक आसमान देखते रहें।"
+                : "इस दृश्य में समय, दिशा और दृश्यता को अलग शब्दों में समझाना दोहराव हटाते हुए घटना की जानकारी साफ रखता है।";
+
         var lower = (duplicateText ?? string.Empty).ToLowerInvariant();
         if (lower.Contains("binocular") || lower.Contains("telescope") || lower.Contains("दूरबीन"))
             return "दूरबीन लगाने से पहले खुले आसमान में लक्ष्य को स्थिर पहचानें, ताकि छोटा सा कंपन भी ग्रहों की जोड़ी को फ्रेम से बाहर न कर दे।";
@@ -4060,14 +4144,22 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<string> BuildHindiCueContextPhrases(string sceneId, string scenePurpose, string eventType, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem)
     {
         var phrases = new List<string>();
+        var family = NormalizePhase14DuplicateCleanupFamily(eventType, eventType, [], [], string.Join(' ', new[] { syncItem?.NarrationText, syncItem?.NarrationBeat, syncItem?.VisualIntent, durationItem?.SceneId }.Where(value => !string.IsNullOrWhiteSpace(value))));
         if (string.Equals(scenePurpose, "accurate-sky-guide", StringComparison.OrdinalIgnoreCase))
             phrases.Add("देखने की दिशा में");
         if (string.Equals(scenePurpose, "cause", StringComparison.OrdinalIgnoreCase))
             phrases.Add("दूरी के नज़रिए से");
         if (string.Equals(scenePurpose, "final-reminder", StringComparison.OrdinalIgnoreCase) || sceneId.Contains("outro", StringComparison.OrdinalIgnoreCase) || sceneId.Contains("closing", StringComparison.OrdinalIgnoreCase))
             phrases.Add("समापन में");
-        if (!string.IsNullOrWhiteSpace(eventType))
-            phrases.Add($"{eventType} संदर्भ में");
+        phrases.Add(family switch
+        {
+            "PlanetConjunction" => "युति संदर्भ में",
+            "Meteor" => "उल्का वर्षा संदर्भ में",
+            "Moon" => "चंद्रमा संदर्भ में",
+            "Eclipse" => "ग्रहण सुरक्षा संदर्भ में",
+            "PlanetGrouping" => "दृश्यता गाइड संदर्भ में",
+            _ => "आकाश संदर्भ में"
+        });
         if (!string.IsNullOrWhiteSpace(syncItem?.VisualIntent))
             phrases.Add("इस दृश्य में");
         if (!string.IsNullOrWhiteSpace(durationItem?.RecommendedMotion))
@@ -5092,8 +5184,8 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
-    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag);
-    private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneIds, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining);
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed);
+    private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneIds, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
