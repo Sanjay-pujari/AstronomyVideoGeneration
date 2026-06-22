@@ -1989,6 +1989,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         Phase14DocumentaryNarration? documentaryNarration = null;
         Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics = null;
+        Phase14ComposerFailureDiagnostics? composerFailureDiagnostics = null;
 
         try
         {
@@ -2008,6 +2009,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
             {
+                composerFailureDiagnostics = BuildPhase14ComposerFailureDiagnostics(ex);
                 throw new InvalidOperationException("SceneLevelNarrationComposer failed", ex);
             }
             shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
@@ -2139,15 +2141,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 longUniqueNarrationTextCount = CountUniqueNarrationText(longItems)
             }, JsonOptions), cancellationToken);
 
-            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, eventConsistencyDiagnostics, cancellationToken);
+            var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, eventConsistencyDiagnostics, composerFailureDiagnostics, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
             return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
             exceptions.Add($"{ex.GetType().Name}: {ex.Message}");
+            composerFailureDiagnostics ??= ex.Message.Contains("SceneLevelNarrationComposer failed", StringComparison.OrdinalIgnoreCase)
+                ? BuildPhase14ComposerFailureDiagnostics(ex.InnerException ?? ex)
+                : null;
             if (ex is Phase14EventConsistencyException consistencyException) eventConsistencyDiagnostics = consistencyException.Diagnostics;
-            await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, eventConsistencyDiagnostics, cancellationToken);
+            await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, eventConsistencyDiagnostics, composerFailureDiagnostics, cancellationToken);
             throw;
         }
     }
@@ -4409,7 +4414,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
     private static int? GetInt(JsonNode? node, string name) => node?[name]?.GetValue<int>();
 
-    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string language, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics, CancellationToken ct)
+    private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string language, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics, Phase14ComposerFailureDiagnostics? composerFailureDiagnostics, CancellationToken ct)
     {
         var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -4450,6 +4455,16 @@ public sealed partial class ProductionPipelineExecutionService(
             expectedFamily = eventConsistencyDiagnostics?.ExpectedFamily,
             actualFamily = eventConsistencyDiagnostics?.ActualFamily,
             eventConsistencyFirstSentenceByScene = eventConsistencyDiagnostics?.FirstSentenceByScene,
+            sceneLevelNarrationComposerFailure = composerFailureDiagnostics,
+            sceneLevelNarrationComposerFailureMethod = composerFailureDiagnostics?.FailureMethod,
+            sceneLevelNarrationComposerExceptionType = composerFailureDiagnostics?.ExceptionType,
+            sceneLevelNarrationComposerExceptionMessage = composerFailureDiagnostics?.ExceptionMessage,
+            sceneLevelNarrationComposerInnerException = composerFailureDiagnostics?.InnerException,
+            sceneLevelNarrationComposerStackTrace = composerFailureDiagnostics?.StackTrace,
+            sceneLevelNarrationComposerFallbackPathAfterFailure = composerFailureDiagnostics?.FallbackNarrationPathAfterFailure ?? "none",
+            sceneLevelNarrationComposerFailureExplanation = composerFailureDiagnostics is null
+                ? null
+                : "SceneLevelNarrationComposer diagnostics are absent because BuildPhase14DocumentaryNarration failed before Phase14AdapterDiagnostics and Phase14TranslationDiagnostics were created.",
             adapterUsed = adapterDiagnostics?.AdapterUsed ?? false,
             adapterName = adapterDiagnostics?.AdapterName,
             eventType = adapterDiagnostics?.EventType,
@@ -4577,6 +4592,32 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool ContainsAnyNarrationPhrase(string? value, IEnumerable<string> phrases)
         => !string.IsNullOrWhiteSpace(value) && phrases.Any(phrase => value.Contains(phrase, StringComparison.OrdinalIgnoreCase));
 
+    private static Phase14ComposerFailureDiagnostics BuildPhase14ComposerFailureDiagnostics(Exception exception)
+        => new(
+            "SceneLevelNarrationComposer",
+            exception.TargetSite is null
+                ? "unknown"
+                : $"{exception.TargetSite.DeclaringType?.FullName}.{exception.TargetSite.Name}",
+            exception.GetType().FullName ?? exception.GetType().Name,
+            exception.Message,
+            exception.InnerException is null
+                ? null
+                : new
+                {
+                    exceptionType = exception.InnerException.GetType().FullName ?? exception.InnerException.GetType().Name,
+                    exceptionMessage = exception.InnerException.Message,
+                    failureMethod = exception.InnerException.TargetSite is null
+                        ? "unknown"
+                        : $"{exception.InnerException.TargetSite.DeclaringType?.FullName}.{exception.InnerException.TargetSite.Name}",
+                    stackTrace = exception.InnerException.StackTrace
+                },
+            exception.StackTrace,
+            "none; Phase 14 rethrows SceneLevelNarrationComposer failure after writing diagnostics, so no fallback narration source is executed.",
+            false,
+            false,
+            "adapterUsed=false because Phase14AdapterDiagnostics is only created at the end of BuildPhase14DocumentaryNarration after scene narration, validation, translation, and event consistency all complete.",
+            "translationApplied=null because Phase14TranslationDiagnostics is only attached to Phase14AdapterDiagnostics after BuildPhase14DocumentaryNarration reaches ApplyPhase14NarrationTranslationIfNeeded; the composer failed before diagnostics were available.");
+
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace, Phase14SceneDurationPlanResolution SceneDurationPlanResolution);
@@ -4612,6 +4653,18 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14EventConsistencyDiagnostics Diagnostics { get; } = diagnostics;
     }
+    private sealed record Phase14ComposerFailureDiagnostics(
+        string Composer,
+        string FailureMethod,
+        string ExceptionType,
+        string ExceptionMessage,
+        object? InnerException,
+        string? StackTrace,
+        string FallbackNarrationPathAfterFailure,
+        bool AdapterDiagnosticsCreated,
+        bool TranslationDiagnosticsCreated,
+        string AdapterUsedExplanation,
+        string TranslationAppliedExplanation);
     private sealed record Phase14AdapterDiagnostics(bool AdapterUsed, string AdapterName, string EventType, int ShortSceneCount, int LongSceneCount, int StorySectionCount, int SceneNarrationGeneratedCount, IReadOnlyDictionary<string, string> FirstSentenceByScene, bool DuplicateFirstSentenceDetected, bool DuplicateSrtBlockDetected, bool ExpansionApplied, string ExpansionReason, IReadOnlyList<string> SourceStorySectionsUsed, IReadOnlyDictionary<string, string> ScenePurposeBySceneId, IReadOnlyList<string> OutputNarrationFiles, IReadOnlyList<string> SrtFilesGenerated, IReadOnlyList<SceneNarrationComposerTraceEntry> SceneNarrationComposerTrace)
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
