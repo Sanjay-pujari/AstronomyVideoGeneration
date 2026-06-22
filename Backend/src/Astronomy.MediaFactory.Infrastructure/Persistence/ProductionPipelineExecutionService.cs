@@ -2694,6 +2694,11 @@ public sealed partial class ProductionPipelineExecutionService(
         Phase14ExceptionDiagnosticsState.ShortSceneIds = shortTexts.Keys.ToArray();
         Phase14ExceptionDiagnosticsState.LongSceneIds = longTexts.Keys.ToArray();
         Phase14ExceptionDiagnosticsState.DuplicateCleanupFamily = NormalizePhase14DuplicateCleanupFamily(resolvedFamily, eventType, primaryObjects, secondaryObjects, string.Empty);
+        Phase14ExceptionDiagnosticsState.ForbiddenTermsDetected = [];
+        Phase14ExceptionDiagnosticsState.GenericNarrationTermsDetected = [];
+        Phase14ExceptionDiagnosticsState.CrossFamilyLeakageTermsDetected = [];
+        Phase14ExceptionDiagnosticsState.ForbiddenTermSourceSceneIds = [];
+        Phase14ExceptionDiagnosticsState.ForbiddenTermTextSnippets = [];
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
             return new Phase14TranslationDiagnostics(
@@ -2745,7 +2750,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 NormalizePhase14DuplicateCleanupFamily(resolvedFamily, eventType, primaryObjects, secondaryObjects, sourceText),
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                false);
+                false,
+                [],
+                [],
+                []);
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
         {
@@ -2791,8 +2799,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var translatedText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         TracePhase14Checkpoint("phase14.forbiddenLeakageCheck.started");
         TracePhase14Checkpoint("Phase14.ApplyPhase14NarrationTranslationIfNeeded.before.FindPhase14HindiForbiddenNarrationLeakage");
-        var leakedTerms = FindPhase14HindiForbiddenNarrationLeakage(resolvedFamily, translatedText);
-        Phase14ExceptionDiagnosticsState.ForbiddenTermsDetected = leakedTerms.ToArray();
+        var forbiddenTermsDetected = FindPhase14HindiForbiddenNarrationLeakage(resolvedFamily, translatedText);
+        var genericNarrationTermsDetected = FindPhase14HindiGenericNarrationTerms(translatedText);
+        var crossFamilyLeakageTermsDetected = FindPhase14HindiCrossFamilyLeakageTerms(resolvedFamily, translatedText);
+        var leakedTerms = crossFamilyLeakageTermsDetected;
+        Phase14ExceptionDiagnosticsState.ForbiddenTermsDetected = forbiddenTermsDetected.ToArray();
+        Phase14ExceptionDiagnosticsState.GenericNarrationTermsDetected = genericNarrationTermsDetected.ToArray();
+        Phase14ExceptionDiagnosticsState.CrossFamilyLeakageTermsDetected = crossFamilyLeakageTermsDetected.ToArray();
         Phase14ExceptionDiagnosticsState.ForbiddenTermSourceSceneIds = EnumerateHindiSceneTexts(shortTexts, longTexts)
             .Where(item => leakedTerms.Any(term => ContainsNarrationTerm(item.Text, term)))
             .Select(item => $"{item.Format}:{item.SceneId}")
@@ -2853,7 +2866,10 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateSentenceCleanup.DuplicateCleanupFamily,
             duplicateSentenceCleanup.DuplicateCleanupRewriteSource,
             duplicateSentenceCleanup.DuplicateCleanupRewriteTarget,
-            duplicateSentenceCleanup.FamilySpecificRewriteUsed);
+            duplicateSentenceCleanup.FamilySpecificRewriteUsed,
+            forbiddenTermsDetected,
+            genericNarrationTermsDetected,
+            crossFamilyLeakageTermsDetected);
         if (diagnostics.HindiCharacterCount == 0)
         {
             const string throwReason = "Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.";
@@ -3265,22 +3281,38 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<string> FindPhase14HindiForbiddenNarrationLeakage(string resolvedFamily, string text)
     {
         TracePhase14Checkpoint($"Phase14.FindPhase14HindiForbiddenNarrationLeakage.enter.family={resolvedFamily}");
-        var forbiddenTerms = new List<string>
-        {
+        return FindPhase14HindiGenericNarrationTerms(text)
+            .Concat(FindPhase14HindiCrossFamilyLeakageTerms(resolvedFamily, text))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> FindPhase14HindiGenericNarrationTerms(string text)
+        => FindForbiddenNarrationLeakage(text,
+        [
             "दृश्य १",
             "दृश्य २",
             "दृश्य ३",
             "लंबे संस्करण में",
             "इस दृश्य में",
+            "इस क्षण",
+            "इस रात",
+            "इस अवलोकन में",
             "अपना अलग आकाशीय संदर्भ"
-        };
+        ]);
+
+    private static IReadOnlyList<string> FindPhase14HindiCrossFamilyLeakageTerms(string resolvedFamily, string text)
+    {
+        var crossFamilyTerms = new List<string>();
 
         if (string.Equals(resolvedFamily, "Meteor", StringComparison.OrdinalIgnoreCase) || string.Equals(resolvedFamily, "MeteorShower", StringComparison.OrdinalIgnoreCase))
-            forbiddenTerms.AddRange(["Jupiter", "Venus", "conjunction", "बृहस्पति", "शुक्र", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
+            crossFamilyTerms.AddRange(["Jupiter", "Venus", "conjunction", "बृहस्पति", "शुक्र", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
         else if (string.Equals(resolvedFamily, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
-            forbiddenTerms.AddRange(["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]);
+            crossFamilyTerms.AddRange(["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]);
+        else if (string.Equals(resolvedFamily, "Moon", StringComparison.OrdinalIgnoreCase))
+            crossFamilyTerms.AddRange(["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स", "Jupiter", "Venus", "Mars", "conjunction", "pairing", "alignment", "separation", "planet conjunction", "planet pairing", "Jupiter + Venus", "debris stream", "Phaethon", "बृहस्पति", "शुक्र", "मंगल", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
 
-        return FindForbiddenNarrationLeakage(text, forbiddenTerms);
+        return FindForbiddenNarrationLeakage(text, crossFamilyTerms);
     }
 
     private static string Snippet(string text)
@@ -5148,6 +5180,8 @@ public sealed partial class ProductionPipelineExecutionService(
         public static IReadOnlyList<string> DuplicateCleanupInputTerms { get; set; } = [];
         public static IReadOnlyList<string> DuplicateCleanupOutputTerms { get; set; } = [];
         public static IReadOnlyList<string> ForbiddenTermsDetected { get; set; } = [];
+        public static IReadOnlyList<string> GenericNarrationTermsDetected { get; set; } = [];
+        public static IReadOnlyList<string> CrossFamilyLeakageTermsDetected { get; set; } = [];
         public static IReadOnlyList<string> ForbiddenTermSourceSceneIds { get; set; } = [];
         public static IReadOnlyList<string> ForbiddenTermTextSnippets { get; set; } = [];
         public static string? ThrowMethodName { get; set; }
@@ -5219,6 +5253,8 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateCleanupInputTerms = Phase14ExceptionDiagnosticsState.DuplicateCleanupInputTerms,
             duplicateCleanupOutputTerms = Phase14ExceptionDiagnosticsState.DuplicateCleanupOutputTerms,
             forbiddenTermsDetected = Phase14ExceptionDiagnosticsState.ForbiddenTermsDetected,
+            genericNarrationTermsDetected = Phase14ExceptionDiagnosticsState.GenericNarrationTermsDetected,
+            crossFamilyLeakageTermsDetected = Phase14ExceptionDiagnosticsState.CrossFamilyLeakageTermsDetected,
             forbiddenTermSourceSceneIds = Phase14ExceptionDiagnosticsState.ForbiddenTermSourceSceneIds,
             forbiddenTermTextSnippets = Phase14ExceptionDiagnosticsState.ForbiddenTermTextSnippets,
             throwMethodName = Phase14ExceptionDiagnosticsState.ThrowMethodName,
@@ -5721,7 +5757,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
-    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed);
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed, IReadOnlyList<string> ForbiddenTermsDetected, IReadOnlyList<string> GenericNarrationTermsDetected, IReadOnlyList<string> CrossFamilyLeakageTermsDetected);
     private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneIds, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
