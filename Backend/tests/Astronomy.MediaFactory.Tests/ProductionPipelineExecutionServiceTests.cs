@@ -1097,6 +1097,56 @@ First cue.
         Assert.False(duplicateAcrossScenesRemaining);
     }
 
+
+    [Fact]
+    public void Phase14HindiTranslation_UsesMoonSpecificNarrationAndCleanupForNamedFullMoon()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "The Wolf Moon full moon rises with bright illumination over the winter horizon.",
+            ["002-what-is-it"] = "The Wolf Moon is a named full moon from seasonal tradition.",
+            ["003-cause"] = "A full moon happens when the Moon appears fully illuminated from Earth.",
+            ["004-viewing-tip"] = "Watch moonrise from an open eastern horizon.",
+            ["005-final-reminder"] = "Watch moonset later and remember the quiet full moon glow."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["002-what-is-it"] = "The Wolf Moon is a named full moon from seasonal tradition.",
+            ["003-cause"] = "A full moon happens when the Moon appears fully illuminated from Earth.",
+            ["004-interesting-fact"] = "Moon names carry culture and tradition.",
+            ["005-best-time"] = "Moonrise is the best time to watch the full moon near the horizon.",
+            ["006-accurate-sky-guide"] = "Use the eastern horizon for moonrise.",
+            ["007-what-you-will-see"] = "You will see full moon brightness, color, and illumination.",
+            ["008-viewing-tips"] = "Use binoculars after you find the Moon with your eyes.",
+            ["009-final-reminder"] = "Remember the quiet full moon glow."
+        };
+
+        var diagnostics = method!.Invoke(null, ["hi", "Moon", shortTexts, longTexts, "NamedFullMoon", new[] { "Moon" }, Array.Empty<string>()])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        var duplicateAcrossScenesRemaining = (bool)diagnostics.GetType().GetProperty("DuplicateAcrossScenesRemaining")!.GetValue(diagnostics)!;
+        var englishTermsRemaining = (IReadOnlyList<string>)diagnostics.GetType().GetProperty("EnglishTermsRemaining")!.GetValue(diagnostics)!;
+
+        Assert.Contains("पूर्णिमा", translated);
+        Assert.Contains("वुल्फ मून", translated);
+        Assert.Contains("चंद्र उदय", translated);
+        Assert.Contains("चंद्र प्रकाश", translated);
+        Assert.DoesNotContain("illumination", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("moonrise", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("moonset", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("full moon", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("इस दृश्य में", translated);
+        Assert.DoesNotContain("इस दृश्य को", translated);
+        Assert.DoesNotContain("समय, दिशा और दृश्यता को अलग शब्दों", translated);
+        Assert.Equal(shortTexts.Values.Concat(longTexts.Values).Count(), shortTexts.Values.Concat(longTexts.Values).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.False(duplicateAcrossScenesRemaining);
+        Assert.True((bool)diagnostics.GetType().GetProperty("MoonSpecificRewriteApplied")!.GetValue(diagnostics)!);
+        Assert.True((int)diagnostics.GetType().GetProperty("MoonSpecificRewriteCount")!.GetValue(diagnostics)! > 0);
+        Assert.Empty(englishTermsRemaining);
+        Assert.False((bool)diagnostics.GetType().GetProperty("GenericFallbackPhraseDetected")!.GetValue(diagnostics)!);
+        Assert.True((bool)diagnostics.GetType().GetProperty("DuplicateCleanupMoonMode")!.GetValue(diagnostics)!);
+    }
+
     [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
