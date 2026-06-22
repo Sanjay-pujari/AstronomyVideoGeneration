@@ -2875,7 +2875,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return translated;
     }
 
-    private static string ResolveTranslatedSceneText(string qualifiedSceneId, IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts)
+    private static string ResolveTranslatedSceneText(string qualifiedSceneId, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
     {
         var parts = qualifiedSceneId.Split(':', 2);
         if (parts.Length == 2 && string.Equals(parts[0], "short", StringComparison.OrdinalIgnoreCase) && shortTexts.TryGetValue(parts[1], out var shortText)) return shortText;
