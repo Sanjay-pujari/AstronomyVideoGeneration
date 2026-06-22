@@ -873,6 +873,27 @@ First cue.
     }
 
 
+
+    [Fact]
+    public void Phase14HindiCueDuplicateRewrite_UsesShortMeteorAlternateWithinWrapLimit()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildHindiUniqueSubtitleCueText", BindingFlags.NonPublic | BindingFlags.Static);
+        var originalCueText = "आज रात उल्का वर्षा देखने के लिए अंधेरे आसमान में रेडिएंट के पास ध्यान रखें।";
+        var occupied = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "आज रात उल्का वर्षा देखने के लिए अंधेरे आसमान में रेडिएंट के पास ध्यान रखें"
+        };
+
+        var rewritten = (string)method!.Invoke(null, [originalCueText, "007-what-you-will-see", null, null, occupied, "test", "long", 7, 2])!;
+
+        Assert.NotEqual(originalCueText, rewritten);
+        Assert.True(rewritten.Length < originalCueText.Length);
+        Assert.Contains("रेडिएंट", rewritten);
+
+        var canWrap = typeof(ProductionPipelineExecutionService).GetMethod("CanWrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.True((bool)canWrap!.Invoke(null, [rewritten])!);
+    }
+
     [Fact]
     public void Phase14HindiTranslation_TranslatesMeteorNarrationWithoutConjunctionLeakage()
     {
