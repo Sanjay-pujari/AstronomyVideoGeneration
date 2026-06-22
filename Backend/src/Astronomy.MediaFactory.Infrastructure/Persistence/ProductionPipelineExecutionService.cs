@@ -2623,7 +2623,33 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
-            return new Phase14TranslationDiagnostics(requestedLanguage, resolvedFamily, "none", Snippet(sourceText), Snippet(sourceText), false, false, [], "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], [], [], [], [], false, 0, false, [], Snippet(sourceText), Snippet(sourceText));
+            return new Phase14TranslationDiagnostics(
+                requestedLanguage,
+                resolvedFamily,
+                "none",
+                Snippet(sourceText),
+                Snippet(sourceText),
+                false,
+                false,
+                [],
+                "en",
+                "en",
+                false,
+                CountHindiCharacters(sourceText),
+                CountEnglishCharacters(sourceText),
+                [],
+                [],
+                [],
+                [],
+                [],
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                [],
+                false,
+                0,
+                false,
+                [],
+                Snippet(sourceText),
+                Snippet(sourceText));
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
