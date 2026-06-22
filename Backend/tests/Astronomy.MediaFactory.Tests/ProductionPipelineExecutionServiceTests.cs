@@ -287,6 +287,85 @@ First cue.
         }
     }
 
+
+    [Fact]
+    public void Phase15VisualSceneIdResolution_MapsHindiProgressiveWordGroupCuesToParentVisualScenes()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-hi-progressive-lineage-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var narrationRoot = Path.Combine(planRoot, "narration", "hi", "short");
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+            Directory.CreateDirectory(narrationRoot);
+            Directory.CreateDirectory(metadataRoot);
+            var visualSceneIds = new[] { "001-hook", "002-cause" };
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = visualSceneIds.Select(sceneId => new { sceneId }).ToArray()
+            }));
+            File.WriteAllText(Path.Combine(narrationRoot, "001-hook.txt"), "आज रात आसमान में उल्का वर्षा बेहद चमकीली दिखेगी सब लोग देखेंगे");
+            File.WriteAllText(Path.Combine(narrationRoot, "002-cause.txt"), "धरती जब धूल की धारा से गुजरती है तब उल्काएं चमकती हैं खूब");
+
+            var srt = """
+1
+00:00:00,000 --> 00:00:01,000
+आज रात आसमान में
+
+2
+00:00:01,000 --> 00:00:02,000
+उल्का वर्षा बेहद
+
+3
+00:00:02,000 --> 00:00:03,000
+चमकीली दिखेगी
+
+4
+00:00:03,000 --> 00:00:04,000
+धरती जब धूल की
+
+5
+00:00:04,000 --> 00:00:05,000
+धारा से गुजरती है
+
+6
+00:00:05,000 --> 00:00:06,000
+तब उल्काएं चमकती हैं
+""";
+            var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var resolveMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdsForSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var lineageMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            var validateMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase15SceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            var diagnosticsMethod = typeof(ProductionPipelineExecutionService).GetMethod("BuildPhase15SceneIdLineageDiagnostics", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(parseMethod);
+            Assert.NotNull(resolveMethod);
+            Assert.NotNull(lineageMethod);
+            Assert.NotNull(validateMethod);
+            Assert.NotNull(diagnosticsMethod);
+
+            var blocks = parseMethod!.Invoke(null, [srt]);
+            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, "hi", "short", blocks])!).Cast<string>().ToArray();
+            var lineage = lineageMethod!.Invoke(null, [planRoot, "hi", "short", blocks]);
+            var errors = ((System.Collections.IEnumerable)validateMethod!.Invoke(null, ["MeteorShower", "hi", "short", lineage])!).Cast<string>().ToArray();
+            var diagnosticsJson = JsonSerializer.Serialize(diagnosticsMethod!.Invoke(null, ["MeteorShower", "hi", "short", lineage]));
+            var diagnostics = JsonNode.Parse(diagnosticsJson)!;
+            var distinctTimelineSceneIds = diagnostics["distinctTimelineSceneIds"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+
+            Assert.Equal(new[] { "001-hook", "001-hook", "001-hook", "002-cause", "002-cause", "002-cause" }, sceneIds);
+            Assert.Equal(visualSceneIds, distinctTimelineSceneIds);
+            Assert.Empty(errors);
+            Assert.DoesNotContain(sceneIds, id => Regex.IsMatch(id, @"^\d+$"));
+            var cues = diagnostics["cues"]!.AsArray();
+            Assert.Equal("1", cues[0]!["cueId"]!.GetValue<string>());
+            Assert.Equal("001-hook", cues[0]!["parentSceneId"]!.GetValue<string>());
+            Assert.Equal("001-hook", cues[0]!["visualSceneId"]!.GetValue<string>());
+            Assert.Contains("progressive-word-group", cues[0]!["cueSceneMappingSource"]!.GetValue<string>());
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
     [Fact]
     public void Phase16SubtitleRegeneration_UsesCueLevelTtsTimelineDurations()
     {
