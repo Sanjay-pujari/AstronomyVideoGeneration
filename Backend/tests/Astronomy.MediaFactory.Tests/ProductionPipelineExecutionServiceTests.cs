@@ -931,6 +931,36 @@ First cue.
     }
 
     [Fact]
+    public void Phase14HindiTranslation_PreservesSceneBoundariesAndRemovesDuplicateBlocks()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Geminids can turn quiet dark sky into sudden streaks of light.",
+            ["002-cause"] = "Geminids can turn quiet dark sky into sudden streaks of light."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["003-accurate-sky-guide"] = "Meteor showers happen when Earth passes through trail of comet debris. Meteor showers happen when Earth passes through trail of comet debris."
+        };
+
+        var diagnostics = method!.Invoke(null, ["hi", "Meteor", shortTexts, longTexts])!;
+        var translated = shortTexts.Values.Concat(longTexts.Values).ToArray();
+        var normalizedSubtitleBlocks = translated
+            .SelectMany(text => text.Split('।', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(text => text.Trim())
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToArray();
+
+        Assert.Equal(3, diagnostics.GetType().GetProperty("TranslatedSceneCount")!.GetValue(diagnostics));
+        Assert.Equal(["short:001-hook", "short:002-cause", "long:003-accurate-sky-guide"], (IReadOnlyList<string>)diagnostics.GetType().GetProperty("TranslatedSceneIds")!.GetValue(diagnostics)!);
+        Assert.True((int)diagnostics.GetType().GetProperty("DuplicateSceneTextsRemoved")!.GetValue(diagnostics)! > 0);
+        Assert.True((int)diagnostics.GetType().GetProperty("DuplicateSubtitleBlocksRemoved")!.GetValue(diagnostics)! > 0);
+        Assert.DoesNotContain("can turn", string.Join(" ", translated), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(normalizedSubtitleBlocks.Length, normalizedSubtitleBlocks.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    [Fact]
     public void Phase14HindiTranslation_TranslatesConjunctionNarrationWithoutMeteorLeakage()
     {
         var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
