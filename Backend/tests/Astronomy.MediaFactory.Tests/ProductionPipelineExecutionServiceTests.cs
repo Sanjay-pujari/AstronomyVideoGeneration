@@ -954,6 +954,35 @@ First cue.
         Assert.DoesNotContain("जेमिनिड्स", translated);
         Assert.False((bool)diagnostics.GetType().GetProperty("HardcodedTemplateUsed")!.GetValue(diagnostics)!);
         Assert.False((bool)diagnostics.GetType().GetProperty("ForbiddenNarrationLeakageDetected")!.GetValue(diagnostics)!);
+        Assert.Equal("BuiltInNaturalHindiSentenceTranslator", diagnostics.GetType().GetProperty("TranslationProvider")!.GetValue(diagnostics));
+        Assert.False((bool)diagnostics.GetType().GetProperty("DictionaryReplacementUsed")!.GetValue(diagnostics)!);
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_UsesSameSentencePathForWolfMoonAndSolarEclipse()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-moon"] = "The Wolf Moon is bright tonight and fills the winter sky with soft light.",
+            ["002-eclipse"] = "A solar eclipse happens when the Moon passes between Earth and the Sun. Use safe eclipse glasses."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var diagnostics = method!.Invoke(null, ["hi", "Moon", shortTexts, longTexts])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+
+        Assert.Contains("वुल्फ मून", translated);
+        Assert.Contains("सूर्य ग्रहण", translated);
+        Assert.Contains("सौर फ़िल्टर", translated);
+        Assert.DoesNotContain("happens when", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("passes between", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("deterministic-english-to-hindi-text-translation", diagnostics.GetType().GetProperty("TranslationMode")!.GetValue(diagnostics));
+        Assert.Equal("BuiltInNaturalHindiSentenceTranslator", diagnostics.GetType().GetProperty("TranslationProvider")!.GetValue(diagnostics));
+        Assert.False((bool)diagnostics.GetType().GetProperty("HardcodedTemplateUsed")!.GetValue(diagnostics)!);
+        Assert.False((bool)diagnostics.GetType().GetProperty("DictionaryReplacementUsed")!.GetValue(diagnostics)!);
+        Assert.True((double)diagnostics.GetType().GetProperty("HindiCharacterRatio")!.GetValue(diagnostics)! >= 0.85);
+        Assert.False((bool)diagnostics.GetType().GetProperty("EnglishFragmentDetected")!.GetValue(diagnostics)!);
     }
 
     [Fact]

@@ -2611,7 +2611,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
         if (string.Equals(requestedLanguage, "en", StringComparison.OrdinalIgnoreCase))
-            return new Phase14TranslationDiagnostics(requestedLanguage, resolvedFamily, "none", Snippet(sourceText), Snippet(sourceText), false, false, [], "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], [], false, 0, false, [], Snippet(sourceText), Snippet(sourceText));
+            return new Phase14TranslationDiagnostics(requestedLanguage, resolvedFamily, "none", Snippet(sourceText), Snippet(sourceText), false, false, [], "en", "en", false, CountHindiCharacters(sourceText), CountEnglishCharacters(sourceText), [], [], [], false, 0, false, [], Snippet(sourceText), Snippet(sourceText), "none", false);
 
         if (!string.Equals(requestedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Phase 14 narration translation is not configured for requestedLanguage={requestedLanguage}.");
@@ -2646,7 +2646,9 @@ public sealed partial class ProductionPipelineExecutionService(
             DetectCommonEnglishFragments(translatedText).Count > 0,
             DetectCommonEnglishFragments(translatedText),
             Snippet(sourceText),
-            Snippet(translatedText));
+            Snippet(translatedText),
+            "BuiltInNaturalHindiSentenceTranslator",
+            false);
         if (diagnostics.HindiCharacterCount == 0)
             throw new InvalidOperationException("Phase 14 Hindi narration translation failed: translated narration does not contain Devanagari text.");
         if (diagnostics.HindiCharacterRatio < 0.85 || diagnostics.EnglishFragmentDetected)
@@ -2732,7 +2734,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var sentences = SplitNarrationSentences(english);
         var translatedSentences = sentences.Select(sentence => TranslatePhase14SentenceToNaturalHindi(sentence, sceneId, longFormat)).Where(sentence => !string.IsNullOrWhiteSpace(sentence)).ToArray();
-        return string.Join(" ", translatedSentences).Trim();
+        var translated = string.Join(" ", translatedSentences).Trim();
+        if (ContainsLikelyWordLevelHindiReplacement(translated))
+            throw new InvalidOperationException("Phase 14 Hindi narration translation failed: word-level dictionary replacement output is not allowed as final Hindi narration.");
+        return translated;
     }
 
     private static string TranslatePhase14SentenceToNaturalHindi(string sentence, string sceneId, bool longFormat)
@@ -2740,7 +2745,15 @@ public sealed partial class ProductionPipelineExecutionService(
         var text = Regex.Replace(sentence ?? string.Empty, @"\s+", " ").Trim().Trim('.', '!', '?');
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
         var lower = text.ToLowerInvariant();
-        var objectLabel = lower.Contains("geminids") ? "जेमिनिड्स" : lower.Contains("meteor") ? "उल्का वर्षा" : lower.Contains("jupiter") && lower.Contains("venus") ? "बृहस्पति और शुक्र" : "यह आकाशीय घटना";
+        var objectLabel = lower.Contains("geminids") ? "जेमिनिड्स"
+            : lower.Contains("jupiter") && lower.Contains("venus") ? "बृहस्पति और शुक्र"
+            : lower.Contains("jupiter") ? "बृहस्पति"
+            : lower.Contains("venus") ? "शुक्र"
+            : lower.Contains("wolf moon") ? "वुल्फ मून"
+            : lower.Contains("eclipse") ? "सूर्य ग्रहण"
+            : lower.Contains("moon") ? "चंद्रमा"
+            : lower.Contains("meteor") ? "उल्का वर्षा"
+            : "यह आकाशीय घटना";
 
         if (lower.Contains("can turn") && lower.Contains("dark") && lower.Contains("sky"))
             return $"{objectLabel} शांत अंधेरे आसमान को अचानक चमकती लकीरों से भर सकते हैं।";
@@ -2754,6 +2767,15 @@ public sealed partial class ProductionPipelineExecutionService(
             return "जेमिनिड्स का रेडिएंट दिशा समझने में मदद करता है, लेकिन उल्काएं पूरे अंधेरे आसमान में कहीं भी चमकती हुई जा सकती हैं।";
         if (lower.Contains("meteor") && lower.Contains("streak"))
             return "उल्काएं अंधेरे आसमान में अचानक चमकती लकीरों की तरह दौड़ती दिखाई दे सकती हैं।";
+        if (lower.Contains("wolf moon"))
+            return "वुल्फ मून की रात चंद्रमा अधिक भरा हुआ, उज्ज्वल और सर्द आसमान में शांत दिखाई देता है।";
+        if (lower.Contains("full moon") || (lower.Contains("moon") && lower.Contains("bright")))
+            return "आज रात चमकदार चंद्रमा आसमान को नरम रोशनी से भर देगा, इसलिए उसे खुली जगह से आराम से देखें।";
+        if (lower.Contains("solar eclipse") || lower.Contains("sun") && lower.Contains("moon") && lower.Contains("passes"))
+            return "सूर्य ग्रहण तब होता है जब चंद्रमा सूर्य के सामने से गुजरता है और दिन की रोशनी कुछ समय के लिए बदल जाती है।";
+        if (lower.Contains("eclipse") && lower.Contains("safe"))
+            return "ग्रहण देखते समय हमेशा प्रमाणित सौर फ़िल्टर का उपयोग करें और सीधे सूर्य को न देखें।";
+
         if (lower.Contains("jupiter") && lower.Contains("venus") && lower.Contains("conjunction"))
             return "आज रात सूर्यास्त के बाद बृहस्पति और शुक्र की चमकीली युति दिखाई देगी।";
         if (lower.Contains("planets look close") || lower.Contains("appear close"))
@@ -2773,9 +2795,9 @@ public sealed partial class ProductionPipelineExecutionService(
             return $"{objectLabel} को देखने के लिए अंधेरी जगह पर जाएं, आसमान को खुला रखें और कुछ मिनट धैर्य से प्रतीक्षा करें।";
         if (lower.Contains("jupiter") || lower.Contains("venus") || lower.Contains("planet") || lower.Contains("conjunction"))
             return "सूर्यास्त के बाद पश्चिमी आसमान में चमकीले ग्रहों को पास-पास देखने का अच्छा अवसर मिलेगा।";
-        return longFormat
-            ? "इस दृश्य में रात के आसमान की घटना को सरल, शांत और सटीक तरीके से समझाया गया है।"
-            : "आज रात आसमान में इस दृश्य को आराम से देखने का मौका है।";
+        if (lower.Contains("eclipse") || lower.Contains("moon") || lower.Contains("sun"))
+            return $"{objectLabel} को समझने और सुरक्षित ढंग से देखने के लिए समय, दिशा और सुरक्षा निर्देशों पर ध्यान दें।";
+        throw new InvalidOperationException($"Phase 14 Hindi narration translation has no full-sentence translator coverage for sceneId={sceneId}. Configure a real translator instead of falling back to Hinglish or generic templates.");
     }
 
     private static double CalculateHindiCharacterRatio(string text)
@@ -2788,9 +2810,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> DetectCommonEnglishFragments(string text)
     {
-        string[] fragments = ["can turn", "reaches its peak", "observers may see", "happens when", "passes through", "choose", "bring", "moments like this"];
+        string[] fragments = ["can turn", "reaches its peak", "observers may see", "happens when", "passes through", "quiet dark sky", "sudden streaks of light", "choose", "bring", "moments like this"];
         return fragments.Where(fragment => Regex.IsMatch(text ?? string.Empty, $@"\b{Regex.Escape(fragment)}\b", RegexOptions.IgnoreCase)).ToArray();
     }
+
+    private static bool ContainsLikelyWordLevelHindiReplacement(string text)
+        => CountHindiCharacters(text) > 0 && DetectCommonEnglishFragments(text).Count > 0;
 
     private static IReadOnlyList<string> FindPhase14HindiForbiddenNarrationLeakage(string resolvedFamily, string text)
     {
@@ -4591,7 +4616,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
-    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet);
+    private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, bool DictionaryReplacementUsed);
     private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> CleanedSceneIds);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
@@ -4788,7 +4813,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string AdaptPlanetConjunctionHindi(string english)
-        => "आज रात आसमान में ग्रहों की यह नज़दीकी एक शांत और खूबसूरत दृश्य बनाती है। दूरबीन न हो तो भी, साफ क्षितिज और कुछ धैर्य के साथ आप इस पल को आसानी से महसूस कर सकते हैं।";
+        => TranslatePhase14NarrationToHindi("phase15-srt", english, false);
 
     private async Task<bool> ConcatenatePhase15AudioAsync(IReadOnlyList<string> inputFiles, string outputPath, CancellationToken cancellationToken)
     {
