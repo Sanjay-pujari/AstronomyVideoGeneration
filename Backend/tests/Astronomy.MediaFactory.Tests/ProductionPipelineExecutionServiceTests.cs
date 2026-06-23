@@ -289,6 +289,87 @@ First cue.
 
 
     [Fact]
+    public void Phase15SceneIdLineageResolution_MapsNumericSrtCuesBySceneDurationRanges()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-duration-range-lineage-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var metadataRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
+            var timingRoot = Path.Combine(planRoot, "timing");
+            Directory.CreateDirectory(metadataRoot);
+            Directory.CreateDirectory(timingRoot);
+            var visualSceneIds = new[] { "001-hook", "002-cause" };
+            File.WriteAllText(Path.Combine(metadataRoot, "scene-timeline-metadata.json"), JsonSerializer.Serialize(new
+            {
+                scenes = visualSceneIds.Select(sceneId => new { sceneId }).ToArray()
+            }));
+            File.WriteAllText(Path.Combine(timingRoot, "scene-duration-plan.json"), JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { sceneId = "001-hook", audioDurationSec = 2.0, sceneDurationSec = 2.0 },
+                        new { sceneId = "002-cause", audioDurationSec = 3.0, sceneDurationSec = 3.0 }
+                    }
+                }
+            }));
+
+            var srt = """
+1
+00:00:00,000 --> 00:00:01,000
+First cue.
+
+2
+00:00:01,000 --> 00:00:02,000
+Second cue.
+
+3
+00:00:02,000 --> 00:00:03,500
+Third cue.
+
+4
+00:00:03,500 --> 00:00:05,000
+Fourth cue.
+""";
+            var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var resolveMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdsForSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+            var lineageMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            var validateMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase15SceneIdLineage", BindingFlags.NonPublic | BindingFlags.Static);
+            var diagnosticsMethod = typeof(ProductionPipelineExecutionService).GetMethod("BuildPhase15SceneIdLineageDiagnostics", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(parseMethod);
+            Assert.NotNull(resolveMethod);
+            Assert.NotNull(lineageMethod);
+            Assert.NotNull(validateMethod);
+            Assert.NotNull(diagnosticsMethod);
+
+            var blocks = parseMethod!.Invoke(null, [srt]);
+            var sceneIds = ((System.Collections.IEnumerable)resolveMethod!.Invoke(null, [planRoot, "en", "short", blocks])!).Cast<string>().ToArray();
+            var lineage = lineageMethod!.Invoke(null, [planRoot, "en", "short", blocks]);
+            var errors = ((System.Collections.IEnumerable)validateMethod!.Invoke(null, ["MeteorShower", "en", "short", lineage])!).Cast<string>().ToArray();
+            var diagnosticsJson = JsonSerializer.Serialize(diagnosticsMethod!.Invoke(null, ["MeteorShower", "en", "short", lineage]));
+            var diagnostics = JsonNode.Parse(diagnosticsJson)!;
+            var cues = diagnostics["cues"]!.AsArray();
+
+            Assert.Equal(new[] { "001-hook", "001-hook", "002-cause", "002-cause" }, sceneIds);
+            Assert.Empty(errors);
+            Assert.Equal(visualSceneIds, diagnostics["distinctTimelineSceneIds"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray());
+            Assert.Equal("1", cues[0]!["cueId"]!.GetValue<string>());
+            Assert.Equal("001-hook", cues[0]!["parentSceneId"]!.GetValue<string>());
+            Assert.Equal("001-hook", cues[0]!["visualSceneId"]!.GetValue<string>());
+            Assert.Equal("001-hook", cues[0]!["resolvedParentSceneId"]!.GetValue<string>());
+            Assert.Equal("scene-duration-range", cues[0]!["mappingSource"]!.GetValue<string>());
+            Assert.True(cues[0]!["numericCueIdIgnoredForSceneLineage"]!.GetValue<bool>());
+            Assert.False(cues[0]!["numericSceneIdRejected"]!.GetValue<bool>());
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+
+    [Fact]
     public void Phase15VisualSceneIdResolution_MapsHindiProgressiveWordGroupCuesToParentVisualScenes()
     {
         var planRoot = Path.Combine(Path.GetTempPath(), "phase15-hi-progressive-lineage-" + Guid.NewGuid().ToString("N"));
