@@ -1180,6 +1180,44 @@ Second display cue.
     }
 
 
+
+    [Fact]
+    public void Phase14HindiTranslation_PreservesPlanetConjunctionScenePurposeDistinctly()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Tonight Jupiter and Venus form a bright conjunction that makes you wonder why two planets can look so close.",
+            ["002-cause"] = "Jupiter and Venus only appear close because perspective and orbital positions place them along a similar line of sight from Earth.",
+            ["003-accurate-sky-guide"] = "Look toward the western horizon after sunset to find Jupiter and Venus.",
+            ["004-viewing-tip"] = "Use your eyes first, then binoculars, and avoid trees or buildings near the horizon.",
+            ["005-final-reminder"] = "Remember this conjunction is brief, so use the next clear evening as your takeaway."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var diagnostics = method!.Invoke(null, ["hi", "PlanetConjunction", shortTexts, longTexts])!;
+        var translated = shortTexts.Values.ToArray();
+        var scenePurposeDiagnostics = (IReadOnlyList<object>)diagnostics.GetType().GetProperty("ScenePurposeTranslationDiagnostics")!.GetValue(diagnostics)!;
+
+        Assert.Equal(translated.Length, translated.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains("जिज्ञासा", translated[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("दृष्टि-रेखा", translated[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("कक्षीय", translated[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("पश्चिमी क्षितिज", translated[2], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("दूरबीन", translated[3], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("याद", translated[4], StringComparison.OrdinalIgnoreCase);
+        Assert.False((bool)diagnostics.GetType().GetProperty("DuplicateAcrossScenesRemaining")!.GetValue(diagnostics)!);
+        Assert.Equal(0, (int)diagnostics.GetType().GetProperty("DuplicateSubtitleBlockCount")!.GetValue(diagnostics)!);
+        Assert.Equal(shortTexts.Count, scenePurposeDiagnostics.Count);
+        Assert.All(scenePurposeDiagnostics, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("scenePurpose")!.GetValue(item)!));
+            Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("sourceEnglishText")!.GetValue(item)!));
+            Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("translatedHindiText")!.GetValue(item)!));
+            Assert.True((double)item.GetType().GetProperty("semanticSimilarityScore")!.GetValue(item)! > 0);
+        });
+    }
+
     [Fact]
     public void Phase14HindiTranslation_RewritesGenericDuplicateConjunctionScenesFromSourceText()
     {
