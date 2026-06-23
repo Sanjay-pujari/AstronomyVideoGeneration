@@ -1148,6 +1148,53 @@ First cue.
     }
 
     [Fact]
+    public void Phase14HindiTranslation_UsesEclipseSpecificNarrationWithoutMoonLeakage()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "A total solar eclipse begins as the Moon's shadow reaches the Sun.",
+            ["002-cause"] = "A solar eclipse happens when the Moon passes between Earth and the Sun, briefly blocking part or all of the Sun's disk.",
+            ["003-accurate-sky-guide"] = "Stand in the eclipse path and use certified solar filters for safe viewing.",
+            ["004-viewing-tip"] = "Use certified eclipse glasses before and after totality.",
+            ["005-final-reminder"] = "Remember eye safety during every partial phase."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "A total solar eclipse begins as the Moon's shadow reaches the Sun.",
+            ["002-what-is-it"] = "A solar eclipse shows the Sun being covered by the Moon's shadow.",
+            ["003-cause"] = "A solar eclipse happens when the Moon passes between Earth and the Sun, briefly blocking part or all of the Sun's disk.",
+            ["004-interesting-fact"] = "During totality, the Sun's corona can appear around the dark disk.",
+            ["005-best-time"] = "Prepare before the partial phase begins.",
+            ["006-accurate-sky-guide"] = "Stand in the eclipse path and use certified solar filters for safe viewing.",
+            ["007-what-you-will-see"] = "You will see the Sun being covered until the moment of totality.",
+            ["008-viewing-tips"] = "Use certified eclipse glasses before and after totality.",
+            ["009-final-reminder"] = "Remember eye safety during every partial phase."
+        };
+
+        var diagnostics = method!.Invoke(null, ["hi", "Eclipse", shortTexts, longTexts, "Total Solar Eclipse", new[] { "Sun", "Moon" }, Array.Empty<string>()])!;
+        var translated = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        var duplicateAcrossScenesRemaining = (bool)diagnostics.GetType().GetProperty("DuplicateAcrossScenesRemaining")!.GetValue(diagnostics)!;
+
+        Assert.Contains("सूर्य ग्रहण", translated);
+        Assert.Contains("पूर्ण सूर्य ग्रहण", translated);
+        Assert.Contains("चंद्रमा की छाया", translated);
+        Assert.Contains("सूर्य का ढकना", translated);
+        Assert.Contains("प्रमाणित सोलर फिल्टर", translated);
+        Assert.Contains("आँखों की सुरक्षा", translated);
+        Assert.DoesNotContain("पूर्णिमा", translated);
+        Assert.DoesNotContain("वुल्फ मून", translated);
+        Assert.DoesNotContain("चंद्र चमक", translated);
+        Assert.DoesNotContain("सर्दियों का आकाश", translated);
+        Assert.DoesNotContain("चंद्रमा की कलाएँ", translated);
+        Assert.DoesNotContain("आकाशीय अवलोकन में समय, दिशा और दृश्यता", translated);
+        Assert.Equal(shortTexts.Values.Concat(longTexts.Values).Count(), shortTexts.Values.Concat(longTexts.Values).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.False(duplicateAcrossScenesRemaining);
+        Assert.False((bool)diagnostics.GetType().GetProperty("ForbiddenNarrationLeakageDetected")!.GetValue(diagnostics)!);
+        Assert.False((bool)diagnostics.GetType().GetProperty("GenericFallbackPhraseDetected")!.GetValue(diagnostics)!);
+    }
+
+    [Fact]
     public void RequestedOutputCompletion_ReportsSkippedForUnrequestedLongVideo()
     {
         var context = CreateContext("PlanetPairing", ["ShortVideo", "Thumbnail"]);
