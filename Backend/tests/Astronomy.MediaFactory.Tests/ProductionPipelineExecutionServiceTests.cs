@@ -1218,6 +1218,66 @@ Second display cue.
         });
     }
 
+
+    [Theory]
+    [InlineData("Meteor")]
+    [InlineData("Moon")]
+    [InlineData("Eclipse")]
+    public void Phase14HindiTranslation_PreservesScenePurposeDistinctlyAcrossFamilies(string family)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = BuildScenePurposePreservationSourceScenes(family);
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var diagnostics = method!.Invoke(null, ["hi", family, shortTexts, longTexts])!;
+        var translated = shortTexts.Values.ToArray();
+        var scenePurposeDiagnostics = (IReadOnlyList<object>)diagnostics.GetType().GetProperty("ScenePurposeTranslationDiagnostics")!.GetValue(diagnostics)!;
+
+        Assert.Equal(translated.Length, translated.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(translated, text => text.Contains("जिज्ञासा", StringComparison.OrdinalIgnoreCase) || text.Contains("शुरुआत", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(translated, text => text.Contains("कारण", StringComparison.OrdinalIgnoreCase) || text.Contains("प्रक्रिया", StringComparison.OrdinalIgnoreCase) || text.Contains("वजह", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(translated, text => text.Contains("कहाँ", StringComparison.OrdinalIgnoreCase) || text.Contains("दिशा", StringComparison.OrdinalIgnoreCase) || text.Contains("क्षितिज", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(translated, text => text.Contains("अवलोकन", StringComparison.OrdinalIgnoreCase) || text.Contains("सलाह", StringComparison.OrdinalIgnoreCase) || text.Contains("दूरबीन", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(translated, text => text.Contains("याद", StringComparison.OrdinalIgnoreCase) || text.Contains("अंतिम", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, (int)diagnostics.GetType().GetProperty("DuplicateSubtitleBlockCount")!.GetValue(diagnostics)!);
+        Assert.Equal(shortTexts.Count, scenePurposeDiagnostics.Count);
+        Assert.All(scenePurposeDiagnostics, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("scenePurpose")!.GetValue(item)!));
+            Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("semanticFingerprint")!.GetValue(item)!));
+            Assert.True((double)item.GetType().GetProperty("similarityScoreToOtherScenes")!.GetValue(item)! >= 0);
+        });
+    }
+
+    private static Dictionary<string, string> BuildScenePurposePreservationSourceScenes(string family)
+        => family switch
+        {
+            "Meteor" => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["001-hook"] = "Tonight the Geminids meteor shower can make a dark sky feel surprising.",
+                ["002-cause"] = "Meteor showers happen when Earth passes through comet debris.",
+                ["003-accurate-sky-guide"] = "Look toward the radiant but keep the whole dark sky in view.",
+                ["004-viewing-tip"] = "Use your eyes, avoid bright lights, and give the sky patient attention.",
+                ["005-final-reminder"] = "Remember that patience under a dark sky is the takeaway."
+            },
+            "Moon" => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["001-hook"] = "Tonight the full moon makes the winter sky worth a first look.",
+                ["002-cause"] = "The full moon appears when the illuminated lunar side faces Earth.",
+                ["003-accurate-sky-guide"] = "Look near the eastern horizon around moonrise.",
+                ["004-viewing-tip"] = "Use your eyes first, then binoculars to study the lunar edge.",
+                ["005-final-reminder"] = "Remember the quiet moonlight is the main takeaway."
+            },
+            _ => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["001-hook"] = "A solar eclipse makes you wonder how the Sun can change so quickly.",
+                ["002-cause"] = "An eclipse happens when the Moon blocks the Sun along the shadow path.",
+                ["003-accurate-sky-guide"] = "Use the eclipse path and Sun direction to choose a safe open view.",
+                ["004-viewing-tip"] = "Use certified eclipse glasses and never remove eye protection during partial phases.",
+                ["005-final-reminder"] = "Remember that safe viewing is the final takeaway."
+            }
+        };
+
     [Fact]
     public void Phase14HindiTranslation_RewritesGenericDuplicateConjunctionScenesFromSourceText()
     {
