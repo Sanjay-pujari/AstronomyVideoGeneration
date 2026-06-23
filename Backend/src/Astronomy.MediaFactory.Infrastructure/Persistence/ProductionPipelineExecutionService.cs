@@ -6358,6 +6358,10 @@ public sealed partial class ProductionPipelineExecutionService(
         if (blocks.Count == 0)
             return new Phase15SceneIdLineageResolution([], expectedVisualSceneIds, []);
 
+        var rangeResolution = TryResolvePhase15SceneIdLineageFromSceneDurationRanges(planRoot, format, blocks, expectedVisualSceneIds);
+        if (rangeResolution is not null)
+            return rangeResolution;
+
         var narrationRoot = ResolvePhase15NarrationRoot(planRoot, language, format);
         var narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, narrationRoot);
         var narrationLanguage = language;
@@ -6404,6 +6408,113 @@ public sealed partial class ProductionPipelineExecutionService(
             sceneIdSources[index],
             IsNumericSceneId(sceneIds[index]))).ToArray();
         return new Phase15SceneIdLineageResolution(sceneIds, expectedVisualSceneIds, diagnostics);
+    }
+
+
+    private static Phase15SceneIdLineageResolution? TryResolvePhase15SceneIdLineageFromSceneDurationRanges(string planRoot, string format, IReadOnlyList<Phase15SrtBlock> blocks, IReadOnlyList<string> expectedVisualSceneIds)
+    {
+        var expectedSet = new HashSet<string>(expectedVisualSceneIds, StringComparer.OrdinalIgnoreCase);
+        var ranges = BuildPhase15SceneDurationRangesFromPlan(planRoot, format, expectedSet);
+        var mappingSource = "scene-duration-range";
+        if (ranges.Count == 0)
+        {
+            ranges = BuildPhase15SceneDurationRangesFromTtsTimeline(planRoot, format, expectedSet);
+            mappingSource = "tts-timeline-range";
+        }
+        if (ranges.Count == 0)
+            return null;
+
+        var assignedSceneIds = new List<string>();
+        var diagnostics = new List<Phase15SceneIdLineageCueDiagnostic>();
+        const double epsilon = 0.001;
+        foreach (var block in blocks)
+        {
+            var cueStartSec = block.Start.TotalSeconds;
+            var cueEndSec = block.End.TotalSeconds;
+            var cueMidpointSec = cueStartSec + Math.Max(0, cueEndSec - cueStartSec) / 2d;
+            var range = ranges.FirstOrDefault(candidate =>
+                cueStartSec >= candidate.StartSec - epsilon
+                && cueEndSec <= candidate.EndSec + epsilon);
+            if (range is null)
+            {
+                range = ranges.FirstOrDefault(candidate =>
+                    cueMidpointSec >= candidate.StartSec - epsilon
+                    && cueMidpointSec <= candidate.EndSec + epsilon);
+            }
+            if (range is null)
+                return null;
+
+            assignedSceneIds.Add(range.SceneId);
+            diagnostics.Add(new Phase15SceneIdLineageCueDiagnostic(
+                diagnostics.Count + 1,
+                block.SceneId,
+                string.Empty,
+                range.SceneId,
+                range.SceneId,
+                mappingSource,
+                false,
+                Math.Round(cueStartSec, 3, MidpointRounding.AwayFromZero),
+                Math.Round(cueEndSec, 3, MidpointRounding.AwayFromZero),
+                range.SceneId,
+                true));
+        }
+
+        return new Phase15SceneIdLineageResolution(assignedSceneIds, expectedVisualSceneIds, diagnostics);
+    }
+
+
+    private static IReadOnlyList<Phase15SceneDurationRange> BuildPhase15SceneDurationRangesFromPlan(string planRoot, string format, HashSet<string> expectedSet)
+    {
+        var planItems = ReadSceneDurationPlanItems(planRoot, format)
+            .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
+            .ToArray();
+        var ranges = new List<Phase15SceneDurationRange>();
+        var cursor = 0d;
+        foreach (var item in planItems)
+        {
+            var duration = item.AudioDurationSec > 0 ? item.AudioDurationSec : item.SceneDurationSec;
+            if (duration <= 0) continue;
+            var sceneId = item.SceneId;
+            if (expectedSet.Count > 0 && !expectedSet.Contains(sceneId))
+            {
+                cursor += duration;
+                continue;
+            }
+            var start = cursor;
+            var end = cursor + duration;
+            ranges.Add(new Phase15SceneDurationRange(sceneId, start, end));
+            cursor = end;
+        }
+        return ranges;
+    }
+
+    private static IReadOnlyList<Phase15SceneDurationRange> BuildPhase15SceneDurationRangesFromTtsTimeline(string planRoot, string format, HashSet<string> expectedSet)
+    {
+        var ranges = new List<Phase15SceneDurationRange>();
+        foreach (var language in new[] { "en", "hi" })
+        {
+            var timelinePath = ResolveLanguageScopedTtsTimelinePath(planRoot, language);
+            if (!File.Exists(timelinePath)) continue;
+            var root = JsonNode.Parse(File.ReadAllText(timelinePath));
+            var cursor = 0d;
+            foreach (var item in root?[format]?["items"]?.AsArray() ?? [])
+            {
+                var sceneId = GetString(item, "visualSceneId") ?? GetString(item, "parentSceneId") ?? GetString(item, "sceneId") ?? string.Empty;
+                var duration = GetDouble(item, "audioDurationSec") ?? GetDouble(item, "durationSec") ?? 0;
+                if (duration <= 0) continue;
+                if (string.IsNullOrWhiteSpace(sceneId) || (expectedSet.Count > 0 && !expectedSet.Contains(sceneId)))
+                {
+                    cursor += duration;
+                    continue;
+                }
+                var start = cursor;
+                var end = cursor + duration;
+                ranges.Add(new Phase15SceneDurationRange(sceneId, start, end));
+                cursor = end;
+            }
+            if (ranges.Count > 0) break;
+        }
+        return ranges;
     }
 
     private static Phase15SceneIdLineageResolution BuildPhase15FallbackSceneIdLineage(IReadOnlyList<Phase15SrtBlock> blocks, IReadOnlyList<string> expectedVisualSceneIds, string source, string reason)
@@ -6469,8 +6580,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 format,
                 cueIndex = d.CueIndex,
                 cueId = d.CueId,
+                cueStartSec = d.CueStartSec,
+                cueEndSec = d.CueEndSec,
                 parentSceneId = d.ParentSceneId,
                 visualSceneId = d.VisualSceneId,
+                resolvedParentSceneId = string.IsNullOrWhiteSpace(d.ResolvedParentSceneId) ? d.ParentSceneId : d.ResolvedParentSceneId,
+                mappingSource = d.CueSceneMappingSource,
+                numericCueIdIgnoredForSceneLineage = d.NumericCueIdIgnoredForSceneLineage,
                 cueSourceFile = NormalizePath(d.CueSourceFile),
                 assignedSceneId = d.AssignedSceneId,
                 sceneIdSource = d.CueSceneMappingSource,
@@ -6538,7 +6654,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record Phase15SrtBlock(string SceneId, TimeSpan Start, TimeSpan End, string Text);
     private sealed record Phase15SceneIdLineageResolution(IReadOnlyList<string> AssignedSceneIds, IReadOnlyList<string> ExpectedVisualSceneIds, IReadOnlyList<Phase15SceneIdLineageCueDiagnostic> Diagnostics);
-    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueId, string CueSourceFile, string ParentSceneId, string VisualSceneId, string CueSceneMappingSource, bool NumericSceneIdRejected)
+    private sealed record Phase15SceneDurationRange(string SceneId, double StartSec, double EndSec);
+    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueId, string CueSourceFile, string ParentSceneId, string VisualSceneId, string CueSceneMappingSource, bool NumericSceneIdRejected, double CueStartSec = 0, double CueEndSec = 0, string ResolvedParentSceneId = "", bool NumericCueIdIgnoredForSceneLineage = false)
     {
         public string AssignedSceneId => ParentSceneId;
         public string SceneIdSource => CueSceneMappingSource;
