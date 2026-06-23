@@ -199,7 +199,7 @@ internal static class LongSceneNarrationExpander
             "what-you-will-see" => "The view itself should be simple enough to recognize with patient eyes.",
             "viewing-tips" => "A little preparation will make the viewing experience calmer and clearer.",
             "final-reminder" => $"{title} is worth one last careful look before the moment passes.",
-            _ => $"{title} is connected to the {purpose.Replace('-', ' ')} part of this event through the supplied timing, direction, and object facts."
+            _ => $"{title} is connected to the {scene.ScenePurpose.Replace('-', ' ')} part of this event through the supplied timing, direction, and object facts."
         };
         if (usedOpenings.Add(Normalize(fallback))) return EnsureTerminalPunctuation(fallback);
         throw new InvalidOperationException($"Dynamic narration expansion failed for scene {scene.SceneId}: duplicate opening could not be rewritten from event facts without static fallback text.");
