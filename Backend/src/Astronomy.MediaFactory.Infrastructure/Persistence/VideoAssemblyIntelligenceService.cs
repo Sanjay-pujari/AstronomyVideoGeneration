@@ -16,6 +16,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed partial class VideoAssemblyIntelligenceService(
     IOptions<RenderingOptions> renderingOptions,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
+    IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null,
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
     IAzureSpeechClient? azureSpeechClient = null) : IVideoAssemblyIntelligenceService
 {
@@ -527,7 +528,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         ValidateLongFormVideoTtsTimings(timings);
 
         await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
-        var subtitleFiles = await GenerateSubtitlesAsync(new VideoTtsTimingsDto(request.EventId, request.RegionId, request.Language, request.Platform, timings.AudioFilePath, timings.EstimatedDurationSeconds, timings.ActualDurationSeconds, timings.SectionTimings.Select(s => new VideoTtsSceneTimingDto(s.SectionKey, s.StartSeconds, s.EndSeconds, s.Narration)).ToArray(), timings.TtsProvider, timings.VoiceUsed, timings.GeneratedUtc, timings.AudioValidation, timings.DurationValidation), ScenePresentationProfile.LongForm, cancellationToken);
+        var subtitleFiles = await GenerateSubtitlesAsync(new VideoTtsTimingsDto(request.EventId, request.RegionId, request.Language, request.Platform, timings.AudioFilePath, timings.EstimatedDurationSeconds, timings.ActualDurationSeconds, timings.SectionTimings.Select(s => new VideoTtsSceneTimingDto(s.SectionKey, s.StartSeconds, s.EndSeconds, s.Narration, s.WordTimings)).ToArray(), timings.TtsProvider, timings.VoiceUsed, timings.GeneratedUtc, timings.AudioValidation, timings.DurationValidation), ScenePresentationProfile.LongForm, cancellationToken);
 
         return BuildLongFormTtsResponse(
             request.Phase,
@@ -560,49 +561,28 @@ public sealed partial class VideoAssemblyIntelligenceService(
         return azureSpeechOptions?.Value.GetPreferredVoices("en").FirstOrDefault() ?? "en-US-JennyNeural";
     }
 
-    private async Task<IReadOnlyList<LongFormVideoTtsSectionTimingDto>> BuildActualLongFormSectionTimingsAsync(VideoNarrationScriptDto script, double actualDurationSeconds, CancellationToken cancellationToken)
+    private Task<IReadOnlyList<LongFormVideoTtsSectionTimingDto>> BuildActualLongFormSectionTimingsAsync(VideoNarrationScriptDto script, double actualDurationSeconds, CancellationToken cancellationToken)
     {
-        var measuredDurations = new List<double>();
-        var tempRoot = Path.Combine(Path.GetTempPath(), "astronomy-longform-tts", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempRoot);
-        try
-        {
-            for (var index = 0; index < script.SceneScripts.Count; index++)
-            {
-                var section = script.SceneScripts[index];
-                var tempPath = Path.Combine(tempRoot, $"section-{index:000}.mp3");
-                await WriteAzureLongFormTtsAudioAsync(section.Narration, tempPath, cancellationToken);
-                var measured = await ProbeDurationSecondsAsync(tempPath, cancellationToken);
-                if (measured <= 0)
-                    throw new InvalidOperationException($"Generated long-form TTS section '{section.SceneKey}' duration could not be measured.");
-                measuredDurations.Add(measured);
-            }
-        }
-        finally
-        {
-            try { Directory.Delete(tempRoot, recursive: true); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-
-        var measuredTotal = measuredDurations.Sum();
-        if (measuredTotal <= 0)
-            throw new InvalidOperationException("Generated long-form TTS section timings could not be measured.");
-
+        _ = cancellationToken;
+        var estimatedTotal = script.SceneScripts.Sum(section => Math.Max(0.001, section.DurationSeconds));
         var timings = new List<LongFormVideoTtsSectionTimingDto>();
         var cursor = 0.0;
         for (var index = 0; index < script.SceneScripts.Count; index++)
         {
             var section = script.SceneScripts[index];
-            var duration = measuredDurations[index] / measuredTotal * actualDurationSeconds;
+            var duration = estimatedTotal <= 0
+                ? actualDurationSeconds / Math.Max(1, script.SceneScripts.Count)
+                : actualDurationSeconds * Math.Max(0.001, section.DurationSeconds) / estimatedTotal;
             var startSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
             cursor = index == script.SceneScripts.Count - 1 ? actualDurationSeconds : cursor + duration;
             var endSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
-            timings.Add(new LongFormVideoTtsSectionTimingDto(section.SceneKey, startSeconds, endSeconds, section.Narration));
+            var sectionTiming = new VideoTtsSceneTimingDto(section.SceneKey, startSeconds, endSeconds, section.Narration);
+            timings.Add(new LongFormVideoTtsSectionTimingDto(section.SceneKey, startSeconds, endSeconds, section.Narration, BuildEstimatedWordTimings(sectionTiming)));
         }
 
-        return timings;
+        return Task.FromResult<IReadOnlyList<LongFormVideoTtsSectionTimingDto>>(timings);
     }
+
 
 
     private async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyPlanAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
@@ -1644,7 +1624,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var root = Path.Combine(BuildVideoAssemblyRoot(timings.EventId, timings.RegionId), "subtitles", folder);
         Directory.CreateDirectory(root);
         var outputs = new List<string>();
-        var blocks = BuildSubtitleBlocks(timings.SceneTimings, BuildVideoAssemblyRoot(timings.EventId, timings.RegionId), nameof(BuildSubtitleBlocks));
+        var options = NormalizeSubtitleTtsOptions(subtitleTtsOptions?.Value);
+        var blocks = BuildSubtitleBlocks(timings.SceneTimings, BuildVideoAssemblyRoot(timings.EventId, timings.RegionId), nameof(BuildSubtitleBlocks), options);
         if (subtitleOptions.GenerateSrt)
         {
             var path = Path.Combine(root, fileStem + ".srt");
@@ -1659,38 +1640,108 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
         var diagnosticsPath = Path.Combine(root, "subtitle-validation.json");
         var srtPath = Path.Combine(root, fileStem + ".srt");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "V1", srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count, subtitleBlocks = blocks.Select(block => new { blockId = $"cue-{block.Number}", sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).ToArray() }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "RC3SceneLevel", ttsMode = options.TtsMode, subtitleMaxWordsPerCue = options.SubtitleMaxWordsPerCue, srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count, subtitleBlocks = blocks.Select(block => new { blockId = $"cue-{block.Number}", sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).ToArray() }, JsonOptions), cancellationToken);
         outputs.Add(NormalizePath(diagnosticsPath));
         return outputs;
     }
 
-    private static IReadOnlyList<SubtitleBlock> BuildSubtitleBlocks(IReadOnlyList<VideoTtsSceneTimingDto> scenes, string planRoot, string generatorComponent)
+    private static IReadOnlyList<SubtitleBlock> BuildSubtitleBlocks(IReadOnlyList<VideoTtsSceneTimingDto> scenes, string planRoot, string generatorComponent, SubtitleTtsOptions options)
     {
         var blocks = new List<SubtitleBlock>();
         var number = 1;
+        var cueGapSeconds = options.CueGapMs / 1000.0;
         foreach (var scene in scenes)
         {
             var sourceFile = ResolveSubtitleNarrationSourceFile(planRoot, scene.SceneKey);
             ValidateSubtitleCueNarrationSource(planRoot, sourceFile, generatorComponent);
-            var sentences = Regex.Split(scene.Narration ?? string.Empty, @"(?<=[.!?])\s+").Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
-            if (sentences.Length == 0) sentences = [scene.Narration ?? string.Empty];
-            var duration = Math.Max(0.1, scene.EndSeconds - scene.StartSeconds);
-            for (var i = 0; i < sentences.Length; i++)
+            var words = (scene.WordTimings is { Count: > 0 } ? scene.WordTimings : BuildEstimatedWordTimings(scene)).ToArray();
+            for (var index = 0; index < words.Length;)
             {
-                var start = scene.StartSeconds + duration * i / sentences.Length;
-                var end = i == sentences.Length - 1 ? scene.EndSeconds : scene.StartSeconds + duration * (i + 1) / sentences.Length;
-                blocks.Add(new SubtitleBlock(number++, Math.Round(start, 3), Math.Round(end, 3), WrapSubtitle(sentences[i]), scene.SceneKey, NormalizePath(sourceFile), sentences[i], generatorComponent));
+                var take = ResolveSubtitleCueWordCount(words, index, options);
+                var cueWords = words.Skip(index).Take(take).ToArray();
+                var start = cueWords[0].StartSeconds;
+                var end = cueWords[^1].EndSeconds;
+                var minEnd = start + options.SubtitleMinCueDurationMs / 1000.0;
+                var maxEnd = start + options.SubtitleMaxCueDurationMs / 1000.0;
+                end = Math.Min(Math.Max(end, minEnd), Math.Min(maxEnd, scene.EndSeconds));
+                if (blocks.Count > 0 && start < blocks[^1].EndSeconds + cueGapSeconds)
+                    start = blocks[^1].EndSeconds + cueGapSeconds;
+                if (end <= start) end = Math.Min(scene.EndSeconds, start + 0.2);
+                var text = string.Join(' ', cueWords.Select(w => w.Word));
+                blocks.Add(new SubtitleBlock(number++, Math.Round(start, 3), Math.Round(end, 3), WrapSubtitle(text, options), scene.SceneKey, NormalizePath(sourceFile), text, generatorComponent));
+                index += take;
             }
         }
         return blocks;
     }
 
-    private static IReadOnlyList<string> WrapSubtitle(string text)
+    private static int ResolveSubtitleCueWordCount(IReadOnlyList<VideoTtsWordTimingDto> words, int startIndex, SubtitleTtsOptions options)
+    {
+        var maxWords = Math.Min(options.SubtitleMaxWordsPerCue, words.Count - startIndex);
+        var best = maxWords;
+        for (var count = Math.Min(maxWords, words.Count - startIndex); count >= Math.Min(4, maxWords); count--)
+        {
+            var word = words[startIndex + count - 1].Word;
+            var durationMs = (words[startIndex + count - 1].EndSeconds - words[startIndex].StartSeconds) * 1000.0;
+            var text = string.Join(' ', words.Skip(startIndex).Take(count).Select(w => w.Word));
+            if (durationMs <= options.SubtitleMaxCueDurationMs && WrapSubtitle(text, options).Count <= options.SubtitleMaxLines && (IsNaturalSubtitleBreak(word) || count == maxWords))
+                return count;
+            best = count;
+        }
+        return Math.Max(1, best);
+    }
+
+    private static bool IsNaturalSubtitleBreak(string word)
+        => Regex.IsMatch(word ?? string.Empty, @"[.!?,;:]$", RegexOptions.CultureInvariant)
+           || Regex.IsMatch(word ?? string.Empty, @"^(and|or|but|so|then|because|while|और|या|लेकिन|तो|फिर)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static IReadOnlyList<string> WrapSubtitle(string text, SubtitleTtsOptions options)
     {
         var words = Regex.Replace(text ?? string.Empty, "\\s+", " ").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length <= 7) return [string.Join(' ', words)];
-        var mid = (int)Math.Ceiling(words.Length / 2.0);
-        return [string.Join(' ', words.Take(mid)), string.Join(' ', words.Skip(mid))];
+        var lines = new List<string>();
+        var current = new List<string>();
+        foreach (var word in words)
+        {
+            var candidate = string.Join(' ', current.Append(word));
+            if (current.Count > 0 && candidate.Length > options.SubtitleMaxCharsPerLine && lines.Count + 1 < options.SubtitleMaxLines)
+            {
+                lines.Add(string.Join(' ', current));
+                current.Clear();
+            }
+            current.Add(word);
+        }
+        if (current.Count > 0) lines.Add(string.Join(' ', current));
+        return lines.Take(options.SubtitleMaxLines).ToArray();
+    }
+
+    private static IReadOnlyList<VideoTtsWordTimingDto> BuildEstimatedWordTimings(VideoTtsSceneTimingDto scene)
+    {
+        var matches = SpokenWordRegex().Matches(scene.Narration ?? string.Empty).Cast<Match>().ToArray();
+        if (matches.Length == 0) return [];
+        var duration = Math.Max(0.1, scene.EndSeconds - scene.StartSeconds);
+        return matches.Select((match, index) =>
+        {
+            var start = scene.StartSeconds + duration * index / matches.Length;
+            var end = scene.StartSeconds + duration * (index + 1) / matches.Length;
+            return new VideoTtsWordTimingDto(match.Value, Math.Round(start, 3), Math.Round(end, 3));
+        }).ToArray();
+    }
+
+    private static SubtitleTtsOptions NormalizeSubtitleTtsOptions(SubtitleTtsOptions? configured)
+    {
+        var fallback = new SubtitleTtsOptions();
+        var value = configured ?? fallback;
+        return new SubtitleTtsOptions
+        {
+            TtsMode = string.IsNullOrWhiteSpace(value.TtsMode) ? fallback.TtsMode : value.TtsMode,
+            SubtitleMaxWordsPerCue = value.SubtitleMaxWordsPerCue > 0 ? value.SubtitleMaxWordsPerCue : fallback.SubtitleMaxWordsPerCue,
+            SubtitleMaxLines = value.SubtitleMaxLines > 0 ? value.SubtitleMaxLines : fallback.SubtitleMaxLines,
+            SubtitleMaxCharsPerLine = value.SubtitleMaxCharsPerLine > 0 ? value.SubtitleMaxCharsPerLine : fallback.SubtitleMaxCharsPerLine,
+            SubtitleMinCueDurationMs = value.SubtitleMinCueDurationMs >= 0 ? value.SubtitleMinCueDurationMs : fallback.SubtitleMinCueDurationMs,
+            SubtitleMaxCueDurationMs = value.SubtitleMaxCueDurationMs > 0 ? value.SubtitleMaxCueDurationMs : fallback.SubtitleMaxCueDurationMs,
+            SentenceBreakPauseMs = value.SentenceBreakPauseMs >= 0 ? value.SentenceBreakPauseMs : fallback.SentenceBreakPauseMs,
+            CueGapMs = value.CueGapMs >= 0 ? value.CueGapMs : fallback.CueGapMs
+        };
     }
 
     private static string BuildSrt(IReadOnlyList<SubtitleBlock> blocks)
@@ -1762,7 +1813,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
             var startSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
             cursor = index == script.SceneScripts.Count - 1 ? actualDurationSeconds : cursor + sceneDuration;
             var endSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
-            sceneTimings.Add(new VideoTtsSceneTimingDto(scene.SceneKey, startSeconds, endSeconds, scene.Narration));
+            var sceneTiming = new VideoTtsSceneTimingDto(scene.SceneKey, startSeconds, endSeconds, scene.Narration);
+            sceneTimings.Add(sceneTiming with { WordTimings = BuildEstimatedWordTimings(sceneTiming) });
         }
 
         return new VideoTtsTimingsDto(

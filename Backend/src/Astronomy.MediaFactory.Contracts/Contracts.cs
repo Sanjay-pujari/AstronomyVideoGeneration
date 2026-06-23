@@ -354,6 +354,20 @@ public sealed class VideoDurationProfileOptions
     };
 }
 
+
+public sealed class SubtitleTtsOptions
+{
+    public const string SectionName = "SubtitleTtsOptions";
+    public string TtsMode { get; set; } = "SceneLevel";
+    public int SubtitleMaxWordsPerCue { get; set; } = 8;
+    public int SubtitleMaxLines { get; set; } = 2;
+    public int SubtitleMaxCharsPerLine { get; set; } = 42;
+    public int SubtitleMinCueDurationMs { get; set; } = 1200;
+    public int SubtitleMaxCueDurationMs { get; set; } = 4200;
+    public int SentenceBreakPauseMs { get; set; } = 80;
+    public int CueGapMs { get; set; } = 0;
+}
+
 public sealed class VideoAssemblySubtitleOptions
 {
     public bool Enabled { get; set; } = true;

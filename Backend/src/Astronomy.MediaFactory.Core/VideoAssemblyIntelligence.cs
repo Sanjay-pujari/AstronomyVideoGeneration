@@ -277,7 +277,13 @@ public sealed record VideoTtsSceneTimingDto(
     string SceneKey,
     double StartSeconds,
     double EndSeconds,
-    string Narration);
+    string Narration,
+    IReadOnlyList<VideoTtsWordTimingDto>? WordTimings = null);
+
+public sealed record VideoTtsWordTimingDto(
+    string Word,
+    double StartSeconds,
+    double EndSeconds);
 
 public sealed record LongFormVideoTtsTimingsDto(
     string EventId,
@@ -298,7 +304,8 @@ public sealed record LongFormVideoTtsSectionTimingDto(
     string SectionKey,
     double StartSeconds,
     double EndSeconds,
-    string Narration);
+    string Narration,
+    IReadOnlyList<VideoTtsWordTimingDto>? WordTimings = null);
 
 
 public sealed record VideoAssemblyPlanDto(

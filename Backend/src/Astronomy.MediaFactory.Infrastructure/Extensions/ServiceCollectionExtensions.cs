@@ -45,6 +45,15 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(VideoAssemblyOptions.SectionName))
             .ValidateOnStart();
 
+        services.AddOptions<SubtitleTtsOptions>()
+            .Bind(configuration.GetSection(SubtitleTtsOptions.SectionName))
+            .Validate(options => options.SubtitleMaxWordsPerCue > 0, "SubtitleTtsOptions:SubtitleMaxWordsPerCue must be greater than zero.")
+            .Validate(options => options.SubtitleMaxLines > 0, "SubtitleTtsOptions:SubtitleMaxLines must be greater than zero.")
+            .Validate(options => options.SubtitleMaxCharsPerLine > 0, "SubtitleTtsOptions:SubtitleMaxCharsPerLine must be greater than zero.")
+            .Validate(options => options.SubtitleMinCueDurationMs >= 0 && options.SubtitleMaxCueDurationMs > 0 && options.SubtitleMaxCueDurationMs >= options.SubtitleMinCueDurationMs, "SubtitleTtsOptions subtitle duration settings are invalid.")
+            .Validate(options => options.CueGapMs >= 0 && options.SentenceBreakPauseMs >= 0, "SubtitleTtsOptions pause/gap settings must be zero or greater.")
+            .ValidateOnStart();
+
         services.AddOptions<AstronomyApiOptions>()
             .Bind(configuration.GetSection(AstronomyApiOptions.SectionName))
             .ValidateOnStart();
