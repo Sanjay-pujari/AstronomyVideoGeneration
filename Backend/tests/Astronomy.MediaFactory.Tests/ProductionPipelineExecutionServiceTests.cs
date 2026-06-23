@@ -370,9 +370,9 @@ Fourth cue.
 
 
     [Fact]
-    public void Phase15VisualSceneIdResolution_MapsHindiProgressiveWordGroupCuesToParentVisualScenes()
+    public void Phase15VisualSceneIdResolution_MapsHindiOptionsBasedCuesToParentVisualScenes()
     {
-        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-hi-progressive-lineage-" + Guid.NewGuid().ToString("N"));
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-hi-options-lineage-" + Guid.NewGuid().ToString("N"));
         try
         {
             var narrationRoot = Path.Combine(planRoot, "narration", "hi", "short");
@@ -389,28 +389,20 @@ Fourth cue.
 
             var srt = """
 1
-00:00:00,000 --> 00:00:01,000
-आज रात आसमान में
+00:00:00,000 --> 00:00:01,500
+आज रात आसमान में उल्का वर्षा बेहद
 
 2
-00:00:01,000 --> 00:00:02,000
-उल्का वर्षा बेहद
+00:00:01,500 --> 00:00:03,000
+चमकीली दिखेगी सब लोग देखेंगे
 
 3
-00:00:02,000 --> 00:00:03,000
-चमकीली दिखेगी
+00:00:03,000 --> 00:00:04,500
+धरती जब धूल की धारा से गुजरती है
 
 4
-00:00:03,000 --> 00:00:04,000
-धरती जब धूल की
-
-5
-00:00:04,000 --> 00:00:05,000
-धारा से गुजरती है
-
-6
-00:00:05,000 --> 00:00:06,000
-तब उल्काएं चमकती हैं
+00:00:04,500 --> 00:00:06,000
+तब उल्काएं चमकती हैं खूब
 """;
             var parseMethod = typeof(ProductionPipelineExecutionService).GetMethod("ParseSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
             var resolveMethod = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15VisualSceneIdsForSrtBlocks", BindingFlags.NonPublic | BindingFlags.Static);
@@ -431,7 +423,7 @@ Fourth cue.
             var diagnostics = JsonNode.Parse(diagnosticsJson)!;
             var distinctTimelineSceneIds = diagnostics["distinctTimelineSceneIds"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
 
-            Assert.Equal(new[] { "001-hook", "001-hook", "001-hook", "002-cause", "002-cause", "002-cause" }, sceneIds);
+            Assert.Equal(new[] { "001-hook", "001-hook", "002-cause", "002-cause" }, sceneIds);
             Assert.Equal(visualSceneIds, distinctTimelineSceneIds);
             Assert.Empty(errors);
             Assert.DoesNotContain(sceneIds, id => Regex.IsMatch(id, @"^\d+$"));
@@ -439,7 +431,9 @@ Fourth cue.
             Assert.Equal("1", cues[0]!["cueId"]!.GetValue<string>());
             Assert.Equal("001-hook", cues[0]!["parentSceneId"]!.GetValue<string>());
             Assert.Equal("001-hook", cues[0]!["visualSceneId"]!.GetValue<string>());
-            Assert.Contains("progressive-word-group", cues[0]!["cueSceneMappingSource"]!.GetValue<string>());
+            Assert.Contains("options-based", cues[0]!["cueSceneMappingSource"]!.GetValue<string>());
+            Assert.Equal("OptionsBased", diagnostics["subtitleSplitter"]!.GetValue<string>());
+            Assert.Equal(4, diagnostics["reconstructedCueCount"]!.GetValue<int>());
         }
         finally
         {

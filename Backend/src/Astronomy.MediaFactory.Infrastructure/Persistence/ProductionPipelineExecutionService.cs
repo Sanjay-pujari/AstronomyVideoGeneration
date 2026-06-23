@@ -4088,13 +4088,14 @@ public sealed partial class ProductionPipelineExecutionService(
         if (durationPlanItems.Count == 0)
             durationPlanItems = BuildFallbackPhase14SceneDurationPlanItems(planRoot, format, items, narrationFiles);
 
+        var options = NormalizePhase14SubtitleTtsOptions(null);
         var cueRecords = new List<HindiCueDuplicateRewriteCandidate>();
         for (var i = 0; i < narrationFiles.Count; i++)
         {
             var narrationFile = narrationFiles[i];
             var sceneId = i < durationPlanItems.Count ? durationPlanItems[i].SceneId : SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var sceneText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
-            var chunks = SplitSubtitleChunks(sceneText);
+            var chunks = SplitSubtitleChunks(sceneText, options);
             for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
                 cueRecords.Add(new HindiCueDuplicateRewriteCandidate(narrationFile, sceneId, chunkIndex + 1, chunks[chunkIndex], NormalizeNarrationForDuplicateCheck(chunks[chunkIndex])));
         }
@@ -4165,14 +4166,12 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"Scene duration plan has fewer {format} scene items than narration files.");
 
         var options = NormalizePhase14SubtitleTtsOptions(subtitleOptions);
-        var sceneLevelSubtitleSplitting = string.Equals(options.TtsMode, "SceneLevel", StringComparison.OrdinalIgnoreCase);
         var blocks = new List<SubtitleCueBlock>();
         var perScene = new List<object>();
         var srtGenerationDiagnostics = new List<object>();
         var cueValidation = new List<object>();
         var number = 1;
         var subtitleStart = 0.0;
-        var oneWordTrailingCueMerged = false;
         for (var i = 0; i < narrationFiles.Count; i++)
         {
             var durationPlanItem = durationPlanItems[i];
@@ -4192,19 +4191,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var sceneStart = subtitleStart;
             var sceneEnd = subtitleStart + audioDuration;
             var sceneText = NormalizeNarrationWhitespace(text);
-            var progressiveHindi = IsHindiProgressiveWordGroupMode(requestedLanguage);
-            var wordGroupResult = progressiveHindi ? SplitProgressiveWordGroups(sceneText) : ProgressiveWordGroupResult.Empty;
-            if (progressiveHindi && wordGroupResult.OneWordTrailingCueMerged) oneWordTrailingCueMerged = true;
-            var cueChunks = progressiveHindi
-                ? wordGroupResult.Groups
-                : sceneLevelSubtitleSplitting
-                    ? SplitSubtitleChunks(sceneText, options)
-                    : SplitSubtitleChunks(sceneText);
-            var cueDurations = progressiveHindi
-                ? AllocateProgressiveWordGroupCueDurations(cueChunks, audioDuration)
-                : sceneLevelSubtitleSplitting
-                    ? AllocateSubtitleCueDurations(cueChunks, audioDuration, options)
-                    : AllocateSubtitleCueDurations(cueChunks, audioDuration);
+            var cueChunks = SplitSubtitleChunks(sceneText, options);
+            var cueDurations = AllocateSubtitleCueDurations(cueChunks, audioDuration, options);
             var cueStart = sceneStart;
             for (var chunkIndex = 0; chunkIndex < cueChunks.Count; chunkIndex++)
             {
@@ -4213,9 +4201,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 var cueEnd = chunkIndex == cueChunks.Count - 1
                     ? sceneEnd
                     : Math.Min(sceneEnd, cueStart + cueDurations[chunkIndex]);
-                if (progressiveHindi && chunkIndex == cueChunks.Count - 1 && cueChunks.Count > 1 && CountSpokenWords(cueText) == 1)
-                    throw new InvalidOperationException($"Phase 14 SRT validation failed: Hindi ProgressiveWordGroup created a one-word trailing cue. format={format}; sceneId={durationPlanItem.SceneId}");
-                blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), (sceneLevelSubtitleSplitting && !progressiveHindi ? WrapSubtitleChunk(cueText, options) : WrapSubtitleChunk(cueText)), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
+                blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText, options), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
                 cueValidation.Add(new
                 {
                     cueIndex = number - 1,
@@ -4271,6 +4257,8 @@ public sealed partial class ProductionPipelineExecutionService(
             });
             srtGenerationDiagnostics.Add(new
             {
+                subtitleSplitter = "OptionsBased",
+                subtitleOptionsLoaded = true,
                 subtitleTtsOptionsLoaded = subtitleOptions is not null,
                 ttsMode = options.TtsMode,
                 format,
@@ -4291,10 +4279,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicateBlockGroups = FindDuplicateSubtitleCueBlocks(blocks);
         var duplicateSubtitleBlockIds = BuildDuplicateSubtitleBlockIds(format, duplicateBlockGroups);
         var duplicateSubtitleTexts = duplicateBlockGroups.Select(group => group.First().Text).ToArray();
-        if (duplicateSubtitleBlockIds.Length > 0 && !IsHindiProgressiveWordGroupMode(requestedLanguage))
+        if (duplicateSubtitleBlockIds.Length > 0)
             throw new InvalidOperationException("Phase 14 SRT validation failed: duplicateSubtitleBlockCount must be 0.");
-        if (IsHindiProgressiveWordGroupMode(requestedLanguage) && HasBackToBackDuplicateCueInSameScene(blocks))
-            throw new InvalidOperationException("Phase 14 SRT validation failed: duplicate Hindi subtitle cue repeats back-to-back in the same scene.");
         var srt = new StringBuilder();
         foreach (var block in blocks)
         {
@@ -4325,9 +4311,11 @@ public sealed partial class ProductionPipelineExecutionService(
             perSceneTiming = perScene,
             duplicateCueBlocksDetected = duplicateSubtitleBlockIdsBeforeRewrite.Length,
             duplicateCueBlocksRewritten = cueRewriteDiagnostics.Length,
-            subtitleMode = IsHindiProgressiveWordGroupMode(requestedLanguage) ? "ProgressiveWordGroup" : "SentenceCue",
-            wordGroupCount = IsHindiProgressiveWordGroupMode(requestedLanguage) ? blocks.Count : 0,
-            oneWordTrailingCueMerged,
+            subtitleMode = "OptionsBased",
+            subtitleSplitter = "OptionsBased",
+            subtitleOptionsLoaded = true,
+            wordGroupCount = 0,
+            oneWordTrailingCueMerged = false,
             reconstructedWordMatch = true,
             cueTimingContinuityPassed = ValidateCueTimingContinuity(blocks),
             duplicateCueBlockIdsBefore = duplicateSubtitleBlockIdsBeforeRewrite,
@@ -4678,88 +4666,6 @@ public sealed partial class ProductionPipelineExecutionService(
         return RoundDuration(GetDouble(root?[format], propertyName) ?? fallback);
     }
 
-    private static bool IsHindiProgressiveWordGroupMode(string requestedLanguage)
-        => string.Equals(ResolvePipelineLanguage(requestedLanguage), "hi", StringComparison.OrdinalIgnoreCase);
-
-    private static ProgressiveWordGroupResult SplitProgressiveWordGroups(string text)
-    {
-        var words = Regex.Split(NormalizeNarrationWhitespace(text), @"\s+")
-            .Where(word => !string.IsNullOrWhiteSpace(word))
-            .ToArray();
-        if (words.Length == 0) return ProgressiveWordGroupResult.Empty;
-        if (words.Length <= 5) return new ProgressiveWordGroupResult([string.Join(' ', words)], false);
-
-        var groups = new List<string>();
-        var index = 0;
-        var oneWordTrailingCueMerged = false;
-        while (index < words.Length)
-        {
-            var remaining = words.Length - index;
-            var size = remaining switch
-            {
-                <= 5 => remaining,
-                6 => 3,
-                7 => 3,
-                8 => 4,
-                _ => 4
-            };
-            if (remaining - size == 1)
-            {
-                size++;
-                oneWordTrailingCueMerged = true;
-            }
-            groups.Add(string.Join(' ', words.Skip(index).Take(size)));
-            index += size;
-        }
-
-        if (groups.Count > 1 && CountSpokenWords(groups[^1]) == 1)
-        {
-            groups[^2] = $"{groups[^2]} {groups[^1]}";
-            groups.RemoveAt(groups.Count - 1);
-            oneWordTrailingCueMerged = true;
-        }
-
-        return new ProgressiveWordGroupResult(groups, oneWordTrailingCueMerged);
-    }
-
-    private static IReadOnlyList<double> AllocateProgressiveWordGroupCueDurations(IReadOnlyList<string> cueChunks, double sceneDurationSeconds)
-    {
-        const double minCueDurationSec = 0.7;
-        const double maxCueDurationSec = 2.2;
-        if (cueChunks.Count == 0) return [];
-        var weights = cueChunks.Select(chunk => Math.Max(1, CountSpokenWords(chunk))).ToArray();
-        var totalWeight = Math.Max(1, weights.Sum());
-        var durations = weights.Select(weight => sceneDurationSeconds * weight / totalWeight).ToArray();
-        if (sceneDurationSeconds >= minCueDurationSec * cueChunks.Count && sceneDurationSeconds <= maxCueDurationSec * cueChunks.Count)
-        {
-            durations = durations.Select(duration => Math.Clamp(duration, minCueDurationSec, maxCueDurationSec)).ToArray();
-            var delta = sceneDurationSeconds - durations.Sum();
-            for (var guard = 0; Math.Abs(delta) > 0.001 && guard < 1000; guard++)
-            {
-                var adjustable = Enumerable.Range(0, durations.Length)
-                    .Where(i => delta > 0 ? durations[i] < maxCueDurationSec : durations[i] > minCueDurationSec)
-                    .ToArray();
-                if (adjustable.Length == 0) break;
-                var share = delta / adjustable.Length;
-                foreach (var i in adjustable)
-                    durations[i] = Math.Clamp(durations[i] + share, minCueDurationSec, maxCueDurationSec);
-                delta = sceneDurationSeconds - durations.Sum();
-            }
-        }
-        return durations;
-    }
-
-    private static bool HasBackToBackDuplicateCueInSameScene(IReadOnlyList<SubtitleCueBlock> blocks)
-    {
-        for (var i = 1; i < blocks.Count; i++)
-        {
-            if (string.Equals(blocks[i - 1].SceneId, blocks[i].SceneId, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(NormalizeNarrationForDuplicateCheck(blocks[i - 1].Text), NormalizeNarrationForDuplicateCheck(blocks[i].Text), StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
     private static bool ValidateCueTimingContinuity(IReadOnlyList<SubtitleCueBlock> blocks)
     {
         for (var i = 1; i < blocks.Count; i++)
@@ -5036,15 +4942,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var duplicateGroups = duplicateBlockGroups.Select(g => g.First().Text).ToArray();
         var duplicateSubtitleBlockIds = duplicateBlockGroups.SelectMany(g => g.Select(block => block.Id)).ToArray();
         var duplicateSources = sourceTexts.GroupBy(NormalizeNarrationForDuplicateCheck, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
-        var hindiProgressiveWordGroup = IsHindiProgressiveWordGroupMode(requestedLanguage);
-        var backToBackDuplicateInSameScene = subtitleCueSources
-            .OrderBy(cue => cue.CueId)
-            .Zip(subtitleCueSources.OrderBy(cue => cue.CueId).Skip(1), (previous, current) => new { previous, current })
-            .Any(pair => string.Equals(pair.previous.SceneId, pair.current.SceneId, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(pair.previous.NormalizedText, pair.current.NormalizedText, StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrWhiteSpace(pair.current.NormalizedText));
-        if (duplicateGroups.Length > 0 && !duplicateSources && !hindiProgressiveWordGroup) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle text while narration files are unique");
-        if (hindiProgressiveWordGroup && backToBackDuplicateInSameScene) errors.Add($"{Path.GetFileName(srtPath)} contains back-to-back duplicate Hindi subtitle text in the same scene");
+        if (duplicateGroups.Length > 0 && !duplicateSources) errors.Add($"{Path.GetFileName(srtPath)} contains duplicate subtitle text while narration files are unique");
         var duplicateSourceScenes = subtitleCueSources.Where(cue => duplicateGroups.Any(text => string.Equals(NormalizeNarrationForDuplicateCheck(text), cue.NormalizedText, StringComparison.OrdinalIgnoreCase))).Select(cue => cue.SceneId).ToArray();
         var duplicateSourceFiles = subtitleCueSources.Where(cue => duplicateGroups.Any(text => string.Equals(NormalizeNarrationForDuplicateCheck(text), cue.NormalizedText, StringComparison.OrdinalIgnoreCase))).Select(cue => cue.SourceFile).ToArray();
         var nonNarrationSubtitleCues = subtitleCueSources.Where(cue => !string.Equals(cue.SourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -5986,10 +5884,6 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record SubtitleCueNarrationSourceValidation(string RequestedLanguage, string SourceFile, string AcceptedSourcePattern, bool LanguageScopedSourceAccepted);
 
     private sealed record SubtitleCueSource(string Format, int CueId, string SceneId, string Text, string NormalizedText, string SourceType, string SourceFile, string GeneratorComponent, DateTimeOffset CreatedUtc);
-    private sealed record ProgressiveWordGroupResult(IReadOnlyList<string> Groups, bool OneWordTrailingCueMerged)
-    {
-        public static ProgressiveWordGroupResult Empty { get; } = new([], false);
-    }
     private sealed record SubtitleCueDuplicateCandidate(int Number, string SceneId, string Text, string NormalizedText);
     private sealed record HindiCueDuplicateRewriteCandidate(string NarrationFile, string SceneId, int CueIndex, string CueText, string NormalizedCueText);
     private sealed record HindiCueDuplicateRewriteResult(string Format, bool RewriteApplied, bool CueRewriteAppliedAfterFileWrite, bool NarrationFileUpdatedAfterCueRewrite, IReadOnlyList<string> RewrittenCueIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> NarrationTextBeforeRewrite, IReadOnlyDictionary<string, string> NarrationTextAfterRewrite, IReadOnlyList<object> Diagnostics)
@@ -6355,6 +6249,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static Phase15SceneIdLineageResolution ResolvePhase15VisualSceneIdLineage(string planRoot, string language, string format, IReadOnlyList<Phase15SrtBlock> blocks)
     {
         var expectedVisualSceneIds = ResolvePhase15ExpectedVisualSceneIds(planRoot, format);
+        var options = NormalizePhase14SubtitleTtsOptions(null);
         if (blocks.Count == 0)
             return new Phase15SceneIdLineageResolution([], expectedVisualSceneIds, []);
 
@@ -6382,12 +6277,8 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!File.Exists(narrationFile)) continue;
             var sceneId = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var narrationText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
-            var cueCount = string.Equals(narrationLanguage, "hi", StringComparison.OrdinalIgnoreCase)
-                ? SplitProgressiveWordGroups(narrationText).Groups.Count
-                : SplitSubtitleChunks(narrationText).Count;
-            var cueSceneMappingSource = string.Equals(narrationLanguage, "hi", StringComparison.OrdinalIgnoreCase)
-                ? $"parentSceneId:progressive-word-group-narration-file-path:{narrationLanguage}"
-                : $"narration-file-path:{narrationLanguage}";
+            var cueCount = SplitSubtitleChunks(narrationText, options).Count;
+            var cueSceneMappingSource = $"parentSceneId:options-based-narration-file-path:{narrationLanguage}";
             for (var i = 0; i < cueCount; i++)
             {
                 sceneIds.Add(sceneId);
@@ -6573,6 +6464,9 @@ public sealed partial class ProductionPipelineExecutionService(
             expectedVisualSceneIds = expected,
             missingVisualSceneIds = missing,
             extraTimelineSceneIds = extra,
+            subtitleSplitter = "OptionsBased",
+            subtitleOptionsLoaded = true,
+            reconstructedCueCount = resolution.AssignedSceneIds.Count,
             cues = resolution.Diagnostics.Select(d => new
             {
                 eventFamily,
