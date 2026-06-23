@@ -44,6 +44,39 @@ public sealed class AstronomyEventDiscoveryPreviewServiceTests
     }
 
     [Fact]
+    public async Task DiscoverAstronomyEvents_GeneratesAllNamedFullMoonsForYear()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), "event-discovery-named-full-moon-" + Guid.NewGuid().ToString("N"));
+        var service = CreateService(outputRoot);
+
+        var result = await service.DiscoverAstronomyEventsAsync(new AstronomyEventDiscoveryPreviewRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            DryRun: false,
+            OverwriteExisting: true), CancellationToken.None);
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(result.EventPreviewPath));
+        var namedFullMoons = document.RootElement.GetProperty("events")
+            .EnumerateArray()
+            .Where(e => e.GetProperty("eventType").GetString() == "NamedFullMoon")
+            .ToArray();
+
+        Assert.Equal(12, namedFullMoons.Length);
+        Assert.All(namedFullMoons, e =>
+        {
+            Assert.Equal("Moon", e.GetProperty("eventFamily").GetString());
+            Assert.Equal(new[] { "Moon" }, e.GetProperty("primaryObjects").EnumerateArray().Select(o => o.GetString()).ToArray());
+            Assert.Empty(e.GetProperty("secondaryObjects").EnumerateArray());
+            Assert.Matches(@"^named-full-moon-2026-\d{8}$", e.GetProperty("sourceExternalEventId").GetString());
+        });
+        Assert.Contains(namedFullMoons, e => e.GetProperty("title").GetString() == "Strawberry Moon Full Moon" && e.GetProperty("shortTitle").GetString() == "Strawberry Moon");
+        Assert.Contains(namedFullMoons, e => e.GetProperty("title").GetString() == "Buck Moon Full Moon" && e.GetProperty("shortTitle").GetString() == "Buck Moon");
+        Assert.Contains(namedFullMoons, e => e.GetProperty("title").GetString() == "Harvest Moon Full Moon" && e.GetProperty("shortTitle").GetString() == "Harvest Moon");
+        Assert.Contains(namedFullMoons, e => e.GetProperty("title").GetString() == "Hunter's Moon Full Moon" && e.GetProperty("shortTitle").GetString() == "Hunter's Moon");
+    }
+
+    [Fact]
     public async Task DiscoverAstronomyEvents_DryRunDoesNotWriteFile()
     {
         var outputRoot = Path.Combine(Path.GetTempPath(), "event-discovery-preview-" + Guid.NewGuid().ToString("N"));

@@ -281,6 +281,8 @@ public sealed class AstronomyEventVerificationService(
         return new AstronomyEventVerifiedItem
         {
             EventId = draft.Event.EventId,
+            EventFamily = string.IsNullOrWhiteSpace(draft.Event.EventFamily) ? EventFamilyResolver.Resolve(draft.Event.EventType, null, draft.Event.PrimaryObjects, draft.Event.SecondaryObjects, draft.Event.Title).ToString() : draft.Event.EventFamily,
+            SourceExternalEventId = ResolveSourceExternalEventId(draft.Event, eventType, peakUtc),
             EventType = draft.Event.EventType,
             Title = draft.Event.Title,
             ShortTitle = draft.Event.ShortTitle,
@@ -322,6 +324,14 @@ public sealed class AstronomyEventVerificationService(
         };
     }
 
+    private static string ResolveSourceExternalEventId(AstronomyEventPreviewItem source, string eventType, DateTimeOffset peakUtc)
+    {
+        if (eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase))
+            return $"named-full-moon-{peakUtc.Year}-{peakUtc:yyyyMMdd}";
+
+        return string.IsNullOrWhiteSpace(source.SourceExternalEventId) ? source.EventId : source.SourceExternalEventId;
+    }
+
     private static AstronomyEventVerifiedItem ToPlanetPairingEvent(SkyfieldPlanetPairing pairing, string regionId)
     {
         var score = PairingScore(pairing.AngularSeparationDegrees);
@@ -332,6 +342,8 @@ public sealed class AstronomyEventVerificationService(
         var item = new AstronomyEventVerifiedItem
         {
             EventId = eventId,
+            EventFamily = Astronomy.MediaFactory.Core.EventFamily.PlanetGrouping.ToString(),
+            SourceExternalEventId = eventId,
             EventType = eventType,
             Title = title,
             ShortTitle = $"{pairing.PrimaryObject}-{pairing.SecondaryObject}",
@@ -555,6 +567,8 @@ public sealed class AstronomyEventVerificationService(
     private sealed class AstronomyEventVerifiedItem
     {
         public string EventId { get; set; } = string.Empty;
+        public string EventFamily { get; set; } = string.Empty;
+        public string SourceExternalEventId { get; set; } = string.Empty;
         public string EventType { get; set; } = string.Empty;
         public string Title { get; set; } = string.Empty;
         public string ShortTitle { get; set; } = string.Empty;

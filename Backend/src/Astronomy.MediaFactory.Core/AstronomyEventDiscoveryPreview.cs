@@ -48,7 +48,9 @@ public sealed record AstronomyEventPreviewItem(
     RecommendedPublishWindow RecommendedPublishWindow,
     string SourceType,
     string SourceNotes,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    string EventFamily = "",
+    string SourceExternalEventId = "");
 
 public sealed record RecommendedPublishWindow(
     DateTimeOffset PublishStartUtc,
