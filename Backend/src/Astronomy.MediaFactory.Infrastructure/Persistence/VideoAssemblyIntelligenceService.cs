@@ -1640,7 +1640,22 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
         var diagnosticsPath = Path.Combine(root, "subtitle-validation.json");
         var srtPath = Path.Combine(root, fileStem + ".srt");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "RC3SceneLevel", ttsMode = options.TtsMode, subtitleMaxWordsPerCue = options.SubtitleMaxWordsPerCue, srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= 2), blockCount = blocks.Count, subtitleBlocks = blocks.Select(block => new { blockId = $"cue-{block.Number}", sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).ToArray() }, JsonOptions), cancellationToken);
+        var sceneDiagnostics = timings.SceneTimings.Select(scene =>
+        {
+            var cueCount = blocks.Count(block => string.Equals(block.SourceSceneId, scene.SceneKey, StringComparison.OrdinalIgnoreCase));
+            var sceneAudioDuration = Math.Max(0, scene.EndSeconds - scene.StartSeconds);
+            var sceneSubtitleDuration = blocks
+                .Where(block => string.Equals(block.SourceSceneId, scene.SceneKey, StringComparison.OrdinalIgnoreCase))
+                .Sum(block => Math.Max(0, block.EndSeconds - block.StartSeconds));
+            return new
+            {
+                parentSceneId = scene.SceneKey,
+                cueCountPerScene = cueCount,
+                sceneAudioDuration = Math.Round(sceneAudioDuration, 3),
+                sceneSubtitleDuration = Math.Round(sceneSubtitleDuration, 3)
+            };
+        }).ToArray();
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { subtitleVersion = "RC3SceneLevel", ttsMode = options.TtsMode, subtitleOptionsLoaded = subtitleTtsOptions?.Value is not null, subtitleMaxWordsPerCue = options.SubtitleMaxWordsPerCue, subtitleMaxCharsPerLine = options.SubtitleMaxCharsPerLine, subtitleMaxLines = options.SubtitleMaxLines, subtitleMinCueDurationMs = options.SubtitleMinCueDurationMs, subtitleMaxCueDurationMs = options.SubtitleMaxCueDurationMs, cueGapMs = options.CueGapMs, srtGenerated = subtitleOptions.GenerateSrt, assGenerated = subtitleOptions.GenerateAss, burnInEnabled = subtitleOptions.BurnIn, enableSubtitles = subtitleOptions.EnableSubtitles, subtitleFilesGenerated = subtitleOptions.GenerateSrt && File.Exists(srtPath), shortSrtPath = profile == ScenePresentationProfile.ShortForm ? NormalizePath(srtPath) : string.Empty, longSrtPath = profile == ScenePresentationProfile.LongForm ? NormalizePath(srtPath) : string.Empty, timingValid = blocks.All(b => b.EndSeconds > b.StartSeconds), maxTwoLines = blocks.All(b => b.Lines.Count <= options.SubtitleMaxLines), blockCount = blocks.Count, cueCountPerScene = sceneDiagnostics, subtitleBlocks = blocks.Select(block => new { blockId = $"cue-{block.Number}", parentSceneId = block.SourceSceneId, sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent }).ToArray() }, JsonOptions), cancellationToken);
         outputs.Add(NormalizePath(diagnosticsPath));
         return outputs;
     }
@@ -1654,25 +1669,44 @@ public sealed partial class VideoAssemblyIntelligenceService(
         {
             var sourceFile = ResolveSubtitleNarrationSourceFile(planRoot, scene.SceneKey);
             ValidateSubtitleCueNarrationSource(planRoot, sourceFile, generatorComponent);
-            var words = (scene.WordTimings is { Count: > 0 } ? scene.WordTimings : BuildEstimatedWordTimings(scene)).ToArray();
+            var words = ResolveSubtitleWordTimings(scene, options).ToArray();
             for (var index = 0; index < words.Length;)
             {
                 var take = ResolveSubtitleCueWordCount(words, index, options);
                 var cueWords = words.Skip(index).Take(take).ToArray();
-                var start = cueWords[0].StartSeconds;
-                var end = cueWords[^1].EndSeconds;
+                var start = Math.Max(scene.StartSeconds, cueWords[0].StartSeconds);
+                var end = Math.Min(scene.EndSeconds, cueWords[^1].EndSeconds);
                 var minEnd = start + options.SubtitleMinCueDurationMs / 1000.0;
                 var maxEnd = start + options.SubtitleMaxCueDurationMs / 1000.0;
                 end = Math.Min(Math.Max(end, minEnd), Math.Min(maxEnd, scene.EndSeconds));
-                if (blocks.Count > 0 && start < blocks[^1].EndSeconds + cueGapSeconds)
-                    start = blocks[^1].EndSeconds + cueGapSeconds;
+                if (blocks.Count > 0 && string.Equals(blocks[^1].SourceSceneId, scene.SceneKey, StringComparison.OrdinalIgnoreCase) && start < blocks[^1].EndSeconds + cueGapSeconds)
+                    start = Math.Min(scene.EndSeconds, blocks[^1].EndSeconds + cueGapSeconds);
                 if (end <= start) end = Math.Min(scene.EndSeconds, start + 0.2);
+                if (end <= start) break;
                 var text = string.Join(' ', cueWords.Select(w => w.Word));
                 blocks.Add(new SubtitleBlock(number++, Math.Round(start, 3), Math.Round(end, 3), WrapSubtitle(text, options), scene.SceneKey, NormalizePath(sourceFile), text, generatorComponent));
                 index += take;
             }
         }
         return blocks;
+    }
+
+    private static IReadOnlyList<VideoTtsWordTimingDto> ResolveSubtitleWordTimings(VideoTtsSceneTimingDto scene, SubtitleTtsOptions options)
+    {
+        if (!string.Equals(options.TtsMode, "SceneLevel", StringComparison.OrdinalIgnoreCase)
+            && scene.WordTimings is { Count: > 1 } cueTimings
+            && cueTimings.All(word => !string.IsNullOrWhiteSpace(word.Word) && !word.Word.Contains(' ')))
+        {
+            return cueTimings;
+        }
+
+        if (scene.WordTimings is { Count: > 1 } wordTimings
+            && wordTimings.All(word => !string.IsNullOrWhiteSpace(word.Word) && !word.Word.Contains(' ')))
+        {
+            return wordTimings;
+        }
+
+        return BuildEstimatedWordTimings(scene);
     }
 
     private static int ResolveSubtitleCueWordCount(IReadOnlyList<VideoTtsWordTimingDto> words, int startIndex, SubtitleTtsOptions options)

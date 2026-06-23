@@ -1202,6 +1202,56 @@ public sealed class VideoAssemblyIntelligenceServiceTests
     private static int CountTestWords(string value)
         => Regex.Matches(value, "[\\p{L}\\p{N}]+(?:['’\u2010-\u2015-][\\p{L}\\p{N}]+)?").Count;
 
+    [Fact]
+    public void SceneLevelSubtitleBlocks_SplitSingleSceneNarrationIntoReadableDisplayCues()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "narration", "short"));
+        var sceneKey = "001-hook";
+        var narrationPath = Path.Combine(workingDirectory, "narration", "short", sceneKey + ".txt");
+        var narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";
+        File.WriteAllText(narrationPath, narration);
+
+        var method = typeof(VideoAssemblyIntelligenceService).GetMethod("BuildSubtitleBlocks", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var scene = new VideoTtsSceneTimingDto(
+            sceneKey,
+            0,
+            12,
+            narration,
+            [new VideoTtsWordTimingDto(narration, 0, 12)]);
+        var options = new SubtitleTtsOptions
+        {
+            TtsMode = "SceneLevel",
+            SubtitleMaxWordsPerCue = 8,
+            SubtitleMaxLines = 2,
+            SubtitleMaxCharsPerLine = 42,
+            SubtitleMinCueDurationMs = 1200,
+            SubtitleMaxCueDurationMs = 4200,
+            CueGapMs = 0
+        };
+
+        var blocks = ((System.Collections.IEnumerable)method!.Invoke(null, [new[] { scene }, workingDirectory, "test", options])!).Cast<object>().ToArray();
+
+        Assert.True(blocks.Count > 1);
+        Assert.All(blocks, block =>
+        {
+            var lines = (IReadOnlyList<string>)block.GetType().GetProperty("Lines")!.GetValue(block)!;
+            var start = (double)block.GetType().GetProperty("StartSeconds")!.GetValue(block)!;
+            var end = (double)block.GetType().GetProperty("EndSeconds")!.GetValue(block)!;
+            var sourceSceneId = (string)block.GetType().GetProperty("SourceSceneId")!.GetValue(block)!;
+
+            Assert.Equal(sceneKey, sourceSceneId);
+            Assert.InRange(end - start, 0.001, 4.2);
+            Assert.InRange(start, 0, 12);
+            Assert.InRange(end, 0, 12);
+            Assert.InRange(lines.Count, 1, 2);
+            Assert.All(lines, line => Assert.InRange(line.Length, 1, 42));
+        });
+        Assert.Equal(narration, string.Join(" ", blocks.Select(block => (string)block.GetType().GetProperty("SourceText")!.GetValue(block)!)));
+    }
+
     private static string CreateWorkingDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "video-assembly-intelligence-tests", Guid.NewGuid().ToString("N"));
