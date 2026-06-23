@@ -97,7 +97,13 @@ public sealed record QuestionDrivenNarrationDiagnosticsDto(
     int SubtitleCueCountAfterSplit = 0,
     bool DuplicateNarrationDetected = false,
     bool DuplicateNarrationFixed = false,
-    bool DuplicateSrtTextDetected = false);
+    bool DuplicateSrtTextDetected = false,
+    bool DynamicNarrationGenerated = false,
+    bool HardcodedTemplateUsed = false,
+    IReadOnlyList<string>? SourceEventFactsUsed = null,
+    IReadOnlyList<string>? ScenePurposeUsed = null,
+    int AiRewriteAttemptCount = 0,
+    bool FallbackStaticTextUsed = false);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,
