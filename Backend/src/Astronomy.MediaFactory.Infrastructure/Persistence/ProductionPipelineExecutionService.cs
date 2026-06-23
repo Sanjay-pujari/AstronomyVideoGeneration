@@ -2212,8 +2212,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             subtitleTtsOptionsLoaded = configuredSubtitleTtsOptions is not null,
             ttsMode = phase14SubtitleOptions.TtsMode,
-            short = shortSrtTiming.SrtGenerationDiagnostics,
-            long = longSrtTiming.SrtGenerationDiagnostics
+            @short = shortSrtTiming.SrtGenerationDiagnostics,
+            @long = longSrtTiming.SrtGenerationDiagnostics
         }, JsonOptions), cancellationToken);
         files.Add(srtGenerationDiagnosticsPath);
         var srtWrittenUtc = DateTimeOffset.UtcNow;
