@@ -40,7 +40,7 @@ internal static partial class EventStoryComposer
         var openingValid = IsOpeningAllowed(sections.ColdOpen) && ContainsNameAndDate(sections.ColdOpen, eventName, eventDateText);
         var documentaryScore = Math.Min(100, 55 + (openingValid ? 20 : 0) + (ContainsHistoricalOrObservationalContext(allText) ? 15 : 0) + (!ContainsAuthorInstruction(allText) ? 10 : 0));
         var storytellingScore = Math.Min(100, 50 + (sections.Context.Length > 80 ? 15 : 0) + (sections.MainStory.Length > 80 ? 15 : 0) + (sections.EmotionalClosing.Contains("memory", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (!ContainsRawTimestamp(allText) ? 10 : 0));
-        var diagnostics = new EventStoryComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore, ScoreWonderLanguage(allText), ScoreScientificAccuracy(family, allText));
+        var diagnostics = new EventStoryComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore, ScoreWonderLanguage(allText), ScoreScientificAccuracy(family, allText), DynamicNarrationGenerated: true, HardcodedTemplateUsed: false, SourceEventFactsUsed: BuildSourceEventFacts(intelligence, contextFact, eventDateText, direction, window), AiRewriteAttemptCount: 0, FallbackStaticTextUsed: false);
         return new EventStoryComposerResult(sections, diagnostics);
     }
 
@@ -53,7 +53,8 @@ internal static partial class EventStoryComposer
         var keptSentences = SplitSentences(source).Select(RemoveRawTimestampText).Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s)).Where(s => !ContainsAuthorInstruction(s)).Select(CleanPromptLanguage).Where(s => IsSpokenSentence(s) && !ContainsAuthorInstruction(s)).Select(EnsureTerminalPunctuation).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (keptSentences.Length > 0) return string.Join(" ", keptSentences);
         var converted = CleanPromptLanguage(RemoveRawTimestampText(source));
-        return IsSpokenSentence(converted) && !ContainsAuthorInstruction(converted) ? EnsureTerminalPunctuation(converted) : fallback;
+        if (IsSpokenSentence(converted) && !ContainsAuthorInstruction(converted)) return EnsureTerminalPunctuation(converted);
+        throw new InvalidOperationException($"Dynamic narration conversion failed; invalid AI/source guidance cannot be replaced with static fallback text. fallbackLabel={fallback}");
     }
 
     private static string OpeningVerb(string family) => family switch { "Meteor" => "reaches its peak", "Moon" => "will rise above the evening horizon", "Eclipse" => "will be visible across parts of the world", _ => "will appear in the sky" };
@@ -65,6 +66,21 @@ internal static partial class EventStoryComposer
         ? $"The event reaches its strongest visibility during {window}; look toward the Sun only with certified solar eclipse glasses."
         : $"The best view comes from a clear, open location facing {direction}. The event reaches its strongest visibility during {window}, so arrive early enough for your eyes to settle into the scene.";
     private static string BuildClosing(string family) => family switch { "Eclipse" => "Moments like this remind us how dynamic our sky really is. The shadow passes quickly. But the memory can stay with you for years.", _ => "Moments like this reward patience and attention. The sky moves on. But the memory of seeing it can stay with you for years." };
+
+    private static IReadOnlyList<string> BuildSourceEventFacts(ProductionEventIntelligence? intelligence, string contextFact, string eventDateText, string direction, string window)
+    {
+        var facts = new List<string>();
+        void Add(string? value) { if (!string.IsNullOrWhiteSpace(value)) facts.Add(Clean(value)); }
+        Add(intelligence?.Title);
+        Add(intelligence?.EventType);
+        Add(eventDateText);
+        Add(direction);
+        Add(window);
+        Add(contextFact);
+        foreach (var value in intelligence?.PrimaryObjects ?? []) Add(value);
+        foreach (var value in intelligence?.SecondaryObjects ?? []) Add(value);
+        return facts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     private static DateTimeOffset? ResolveEventDate(ProductionEventIntelligence? i) => i?.EventDate ?? i?.PeakUtc;
     private static string HumanizeNarrationWindow(string value) => ContainsRawTimestamp(value) ? "the local viewing window" : Clean(value);
@@ -118,7 +134,12 @@ internal sealed record EventStoryComposerDiagnostics(
     bool DuplicateFirstSentenceDetected = false,
     IReadOnlyList<string>? DuplicatePairs = null,
     IReadOnlyDictionary<string, string>? FirstSentenceByLongScene = null,
-    string? LongSceneNarrationExpansionStrategy = null);
+    string? LongSceneNarrationExpansionStrategy = null,
+    bool DynamicNarrationGenerated = true,
+    bool HardcodedTemplateUsed = false,
+    IReadOnlyList<string>? SourceEventFactsUsed = null,
+    int AiRewriteAttemptCount = 0,
+    bool FallbackStaticTextUsed = false);
 
 internal sealed record LongSceneNarrationExpansionContext(
     string EventType,
@@ -178,10 +199,10 @@ internal static class LongSceneNarrationExpander
             "what-you-will-see" => "The view itself should be simple enough to recognize with patient eyes.",
             "viewing-tips" => "A little preparation will make the viewing experience calmer and clearer.",
             "final-reminder" => $"{title} is worth one last careful look before the moment passes.",
-            _ => $"This scene adds a distinct part of the {title} story."
+            _ => $"{title} is connected to the {purpose.Replace('-', ' ')} part of this event through the supplied timing, direction, and object facts."
         };
         if (usedOpenings.Add(Normalize(fallback))) return EnsureTerminalPunctuation(fallback);
-        return EnsureTerminalPunctuation($"Scene {scene.SceneId} adds a separate {scene.ScenePurpose.Replace('-', ' ')} note for {title}");
+        throw new InvalidOperationException($"Dynamic narration expansion failed for scene {scene.SceneId}: duplicate opening could not be rewritten from event facts without static fallback text.");
     }
 
     private static string TemplateForPurpose(string family, LongSceneNarrationExpansionContext context, string purpose)

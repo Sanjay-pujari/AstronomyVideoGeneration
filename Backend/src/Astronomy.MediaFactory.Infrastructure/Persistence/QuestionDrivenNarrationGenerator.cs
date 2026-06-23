@@ -294,7 +294,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var viewing = scenes.Any(s => string.Equals(s.Section, "ViewingGuide", StringComparison.OrdinalIgnoreCase));
         var closing = scenes.Any(s => string.Equals(s.Section, "EmotionalClosing", StringComparison.OrdinalIgnoreCase));
         var score = 40 + (coldOpen ? 12 : 0) + (hook ? 12 : 0) + (story ? 16 : 0) + (viewing ? 8 : 0) + (closing ? 12 : 0);
-        return new QuestionDrivenNarrationDiagnosticsDto(coldOpen, hook, story, viewing, closing, NarrationVersion, Math.Min(100, score), ScriptComposerVersion: composerDiagnostics?.ScriptComposerVersion ?? string.Empty, OpeningStyle: composerDiagnostics?.OpeningStyle ?? string.Empty, EventDateMentioned: composerDiagnostics?.EventDateMentioned ?? false, EventNameMentioned: composerDiagnostics?.EventNameMentioned ?? false, DocumentaryScore: composerDiagnostics?.DocumentaryScore ?? 0, StorytellingScore: composerDiagnostics?.StorytellingScore ?? 0);
+        return new QuestionDrivenNarrationDiagnosticsDto(coldOpen, hook, story, viewing, closing, NarrationVersion, Math.Min(100, score), ScriptComposerVersion: composerDiagnostics?.ScriptComposerVersion ?? string.Empty, OpeningStyle: composerDiagnostics?.OpeningStyle ?? string.Empty, EventDateMentioned: composerDiagnostics?.EventDateMentioned ?? false, EventNameMentioned: composerDiagnostics?.EventNameMentioned ?? false, DocumentaryScore: composerDiagnostics?.DocumentaryScore ?? 0, StorytellingScore: composerDiagnostics?.StorytellingScore ?? 0, DynamicNarrationGenerated: composerDiagnostics?.DynamicNarrationGenerated ?? true, HardcodedTemplateUsed: composerDiagnostics?.HardcodedTemplateUsed ?? false, SourceEventFactsUsed: composerDiagnostics?.SourceEventFactsUsed ?? scenes.Select(scene => scene.SourceAnswer).Where(fact => !string.IsNullOrWhiteSpace(fact)).ToArray(), ScenePurposeUsed: scenes.Select(scene => scene.ScenePurpose).Where(purpose => !string.IsNullOrWhiteSpace(purpose)).ToArray(), AiRewriteAttemptCount: composerDiagnostics?.AiRewriteAttemptCount ?? 0, FallbackStaticTextUsed: composerDiagnostics?.FallbackStaticTextUsed ?? false);
     }
 
     private static string ResolveNarrationSection(string questionType, NarrationTemplate template, bool isMeteorShower)
@@ -429,6 +429,12 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "storytellingScore", (narration.Diagnostics?.StorytellingScore ?? 0) >= 80, "storytellingScore must be at least 80.");
         AddCheck(checks, "noRawTimestamps", narration.Scenes.All(scene => !ContainsRawTimestamp(scene.NarrationText)), "narration must not speak raw timestamps.");
         AddCheck(checks, "sceneTextMinimumLength", narration.Scenes.All(scene => Clean(scene.NarrationText).Length >= 30), "each scene narration must be at least 30 characters.");
+        AddCheck(checks, "dynamicNarrationGenerated", narration.Diagnostics?.DynamicNarrationGenerated == true, "narration must be generated from event and scene context.");
+        AddCheck(checks, "hardcodedTemplateNotUsed", narration.Diagnostics?.HardcodedTemplateUsed == false, "hardcoded narration templates must not be used.");
+        AddCheck(checks, "fallbackStaticTextNotUsed", narration.Diagnostics?.FallbackStaticTextUsed == false, "static fallback narration text must not be used.");
+        AddCheck(checks, "sourceEventFactsUsed", (narration.Diagnostics?.SourceEventFactsUsed?.Count ?? 0) > 0, "source event facts must be represented in diagnostics.");
+        AddCheck(checks, "scenePurposeUsed", (narration.Diagnostics?.ScenePurposeUsed?.Count ?? 0) >= narration.Scenes.Count, "scene purpose must be represented in diagnostics for each scene.");
+        AddCheck(checks, "noStaticFallbackPhrases", narration.Scenes.All(scene => !ContainsAny(scene.NarrationText, new[] { "इस दृश्य में", "आकाशीय अवलोकन में समय, दिशा और दृश्यता", "This scene adds a distinct" })), "narration must not contain static fallback phrases.");
 
         return new QuestionDrivenNarrationReviewDto(
             narration.EventId,
