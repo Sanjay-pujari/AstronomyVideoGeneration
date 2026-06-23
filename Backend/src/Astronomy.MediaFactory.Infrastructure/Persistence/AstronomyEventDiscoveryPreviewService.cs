@@ -102,11 +102,16 @@ public sealed class AstronomyEventDiscoveryPreviewService(
             }
             monthFullMoons.Add(fullMoon);
 
-            var name = NamedFullMoonName(fullMoon.Month);
             events.Add(CreateEvent($"full-moon-{year}-{fullMoon:yyyyMMdd}", "FullMoon", "Full Moon", "Full Moon", fullMoon, 18, regionId, zone,
                 ["Moon"], [], "Eastern sky near moonrise; overhead around local midnight when visible.", 72, 92, 45, 84, "Computed",
                 "Approximate full moon timing calculated from the mean lunar synodic cycle.", ["Full moon peak time is approximate in Preview V1."]));
-            events.Add(CreateEvent($"named-full-moon-{year}-{fullMoon:yyyyMMdd}", "NamedFullMoon", $"{name} Full Moon", name, fullMoon, 18, regionId, zone,
+        }
+
+        foreach (var pair in fullMoonsByMonth.OrderBy(p => p.Key))
+        {
+            var fullMoon = pair.Value.OrderBy(d => d).First();
+            var name = NamedFullMoonName(pair.Key);
+            events.Add(CreateEvent($"named-full-moon-{year}-{fullMoon:yyyyMMdd}", "NamedFullMoon", $"{name} Moon Full Moon", $"{name} Moon", fullMoon, 18, regionId, zone,
                 ["Moon"], [], "Eastern sky near moonrise; overhead around local midnight when visible.", 76, 92, 48, 88, "Computed",
                 "Named full moon label mapped from common public monthly naming conventions; phase timing uses mean synodic month calculation.", ["Full moon peak time is approximate in Preview V1."]));
         }
@@ -200,7 +205,9 @@ public sealed class AstronomyEventDiscoveryPreviewService(
             new RecommendedPublishWindow(peakUtc.AddDays(-7), peakUtc.AddHours(-2)),
             sourceType,
             sourceNotes,
-            warnings);
+            warnings,
+            EventFamilyResolver.Resolve(eventType, null, primaryObjects, secondaryObjects, title).ToString(),
+            eventId);
     }
 
     private RegionScheduleOptions ResolveRegion(string regionId)
@@ -244,18 +251,18 @@ public sealed class AstronomyEventDiscoveryPreviewService(
 
     private static string NamedFullMoonName(int month) => month switch
     {
-        1 => "Wolf Moon",
-        2 => "Snow Moon",
-        3 => "Worm Moon",
-        4 => "Pink Moon",
-        5 => "Flower Moon",
-        6 => "Strawberry Moon",
-        7 => "Buck Moon",
-        8 => "Sturgeon Moon",
-        9 => "Harvest Moon",
-        10 => "Hunter's Moon",
-        11 => "Beaver Moon",
-        12 => "Cold Moon",
+        1 => "Wolf",
+        2 => "Snow",
+        3 => "Worm",
+        4 => "Pink",
+        5 => "Flower",
+        6 => "Strawberry",
+        7 => "Buck",
+        8 => "Sturgeon",
+        9 => "Harvest",
+        10 => "Hunter's",
+        11 => "Beaver",
+        12 => "Cold",
         _ => "Full Moon"
     };
 
