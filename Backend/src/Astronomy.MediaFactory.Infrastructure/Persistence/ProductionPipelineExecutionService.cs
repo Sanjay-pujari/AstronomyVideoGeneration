@@ -3326,37 +3326,16 @@ public sealed partial class ProductionPipelineExecutionService(
             var isMeteor = string.Equals(eventType, "Meteor", StringComparison.OrdinalIgnoreCase) || lower.Contains("meteor") || lower.Contains("geminids") || lower.Contains("radiant");
             var isConjunction = string.Equals(eventType, "PlanetConjunction", StringComparison.OrdinalIgnoreCase) || lower.Contains("jupiter") || lower.Contains("venus") || lower.Contains("conjunction") || lower.Contains("planet");
 
-            string result;
-            if (isMeteor)
-            {
-                var subject = lower.Contains("geminids") ? "जेमिनिड्स उल्का वर्षा" : "उल्का वर्षा";
-                if (lower.Contains("earth") && lower.Contains("comet"))
-                    result = $"{subject} की वजह पृथ्वी का धूमकेतु के छोड़े मलबे वाली धारा से गुजरना है, इसलिए छोटी धूल कण अंधेरे आसमान में तेज चमकती लकीरें बनाते हैं।";
-                else if (lower.Contains("radiant") || scene.Contains("radiant"))
-                    result = $"{subject} का रेडिएंट दिशा पहचानने में मदद करता है, लेकिन चमकती उल्काएं पूरे खुले अंधेरे आसमान में कहीं भी दौड़ सकती हैं।";
-                else if (lower.Contains("moon") || lower.Contains("dark"))
-                    result = $"{subject} के लिए चांदनी से दूर अंधेरी जगह चुनें, आंखों को ढलने दें और आसमान के बड़े हिस्से को लगातार देखते रहें।";
-                else if (lower.Contains("strongest") || lower.Contains("peak"))
-                    result = $"आज रात {subject} अपने बेहतर दौर में है, इसलिए साफ मौसम और कम रोशनी वाली जगह पर अधिक चमकीली झलकें दिख सकती हैं।";
-                else
-                    result = $"{subject} देखने के लिए धैर्य जरूरी है, क्योंकि अचानक आती रोशन लकीरें कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार कर जाती हैं।";
-            }
-            else if (isConjunction)
-            {
-                result = BuildPlanetConjunctionHindiSceneTranslation(text, scene, scenePurpose);
-            }
-            else if (lower.Contains("eclipse") || string.Equals(eventType, "Eclipse", StringComparison.OrdinalIgnoreCase))
-            {
-                result = BuildEclipseHindiSceneTranslation(text, scene, scenePurpose);
-            }
-            else if (lower.Contains("moon") || lower.Contains("lunar") || string.Equals(eventType, "Moon", StringComparison.OrdinalIgnoreCase))
-            {
-                result = BuildMoonHindiSceneTranslation(text, scene, scenePurpose);
-            }
-            else
-            {
-                result = "स्रोत वर्णन के अलग संकेतों को जोड़कर आकाशीय घटना का क्रम, स्थान और देखने का तरीका स्पष्ट किया गया है।";
-            }
+            var resolvedFamily = isMeteor
+                ? "Meteor"
+                : isConjunction
+                    ? "PlanetConjunction"
+                    : lower.Contains("eclipse") || string.Equals(eventType, "Eclipse", StringComparison.OrdinalIgnoreCase)
+                        ? "Eclipse"
+                        : lower.Contains("moon") || lower.Contains("lunar") || string.Equals(eventType, "Moon", StringComparison.OrdinalIgnoreCase)
+                            ? "Moon"
+                            : eventType;
+            var result = BuildPurposePreservingHindiSceneTranslation(resolvedFamily, text, scene, scenePurpose);
 
             result = PreserveHindiScenePurpose(result, scenePurpose, scene);
             return Task.FromResult(result);
@@ -3416,6 +3395,51 @@ public sealed partial class ProductionPipelineExecutionService(
             _ => Array.Empty<string>()
         };
         return terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    private static string BuildPurposePreservingHindiSceneTranslation(string family, string sourceText, string scene, string scenePurpose)
+    {
+        var lower = (sourceText ?? string.Empty).ToLowerInvariant();
+        var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+        if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase) || string.Equals(family, "MeteorShower", StringComparison.OrdinalIgnoreCase))
+        {
+            var subject = lower.Contains("geminids") ? "जेमिनिड्स उल्का वर्षा" : "उल्का वर्षा";
+            return purpose switch
+            {
+                "hook" => $"आज रात {subject} जिज्ञासा की शुरुआत करती है: अंधेरे आसमान में अचानक चमकती लकीरें कब निकलेंगी, यही रोमांच है।",
+                "what-is-it" => $"{subject} वह समय है जब पृथ्वी मलबे की धारा से गुजरती है और छोटे कण वायुमंडल में चमकदार उल्का लकीर बनाते हैं।",
+                "cause" => $"कारण यह है कि पृथ्वी धूमकेतु या क्षुद्रग्रह से छूटे कणों की धारा काटती है; ये कण जलकर तेज चमक पैदा करते हैं।",
+                "interesting-fact" => $"रोचक तथ्य यह है कि कई उल्काएं रेडिएंट की दिशा से आती लगती हैं, फिर भी उनकी चमक पूरे आकाश में कहीं भी दिख सकती है।",
+                "best-time" => $"सबसे अच्छा समय देर रात से भोर से पहले की अंधेरी खिड़की है, जब रेडिएंट ऊँचा होता है और चांदनी कम बाधा देती है।",
+                "accurate-sky-guide" => $"कहाँ देखें: रेडिएंट की दिशा पहचानें, लेकिन आँखों को पूरे खुले अंधेरे आसमान पर रखें ताकि किसी भी ओर की उल्का छूटे नहीं।",
+                "what-you-will-see" => $"दिखने वाला दृश्य छोटी और कभी-कभी लंबी चमकती लकीरों का होगा, जो कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार करेंगी।",
+                "viewing-tips" => $"अवलोकन सलाह: नंगी आँखों से देखें, फोन की रोशनी कम रखें, लेटकर आराम से आसमान देखें और कम से कम बीस मिनट धैर्य दें।",
+                "final-reminder" => $"अंतिम याद रखें: {subject} में धैर्य ही सबसे बड़ा उपकरण है, इसलिए अंधेरी जगह पर शांत रहें और अचानक आती चमक का इंतज़ार करें।",
+                _ when lower.Contains("earth") && lower.Contains("comet") => $"कारण यह है कि {subject} तब बनती है जब पृथ्वी छोड़े गए मलबे की धारा से गुजरती है और कण वायुमंडल में जलते हैं।",
+                _ when lower.Contains("radiant") || scene.Contains("radiant") => $"कहाँ देखें: रेडिएंट दिशा का संकेत देता है, लेकिन {subject} की चमकती उल्काएं पूरे खुले आसमान में कहीं भी निकल सकती हैं।",
+                _ when lower.Contains("moon") || lower.Contains("dark") => $"अवलोकन सलाह: {subject} के लिए चांदनी से दूर अंधेरी जगह चुनें, आँखों को ढलने दें और बड़ा आकाश देखते रहें।",
+                _ when lower.Contains("strongest") || lower.Contains("peak") => $"सबसे अच्छा समय शिखर के आसपास है, जब साफ मौसम और कम रोशनी वाली जगह पर अधिक चमकीली झलकें दिख सकती हैं।",
+                _ => $"{subject} देखने के लिए धैर्य जरूरी है, क्योंकि अचानक आती रोशन लकीरें कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार कर जाती हैं।"
+            };
+        }
+
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            return BuildPlanetConjunctionHindiSceneTranslation(sourceText, scene, scenePurpose);
+        if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
+            return BuildEclipseHindiSceneTranslation(sourceText, scene, scenePurpose);
+        if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
+            return BuildMoonHindiSceneTranslation(sourceText, scene, scenePurpose);
+
+        return purpose switch
+        {
+            "hook" => "जिज्ञासा की शुरुआत में आज की आकाशीय घटना ध्यान खींचती है और आगे देखने का कारण देती है।",
+            "cause" => "कारण और प्रक्रिया के रूप में यह घटना आकाशीय गति, स्थिति और हमारी दृष्टि से समझ में आती है।",
+            "accurate-sky-guide" => "कहाँ देखना है: दिशा, ऊँचाई और खुला क्षितिज तय करके लक्ष्य को आराम से खोजें।",
+            "viewing-tips" => "अवलोकन सलाह: रोशनी कम रखें, आँखों को ढलने दें और उपकरणों से पहले नंगी आँखों से दृश्य पहचानें।",
+            "final-reminder" => "अंतिम याद रखें: शांत होकर देखें, मौसम का ध्यान रखें और इस छोटे आकाशीय अवसर को न चूकें।",
+            _ => "स्रोत वर्णन के अलग संकेतों को जोड़कर आकाशीय घटना का क्रम, स्थान और देखने का तरीका स्पष्ट किया गया है।"
+        };
     }
 
     private static string BuildPlanetConjunctionHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
@@ -3498,6 +3522,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     sourceEnglishText = source,
                     translatedHindiText = item.Text,
                     semanticFingerprint = BuildScenePurposeSemanticFingerprint(ResolvePhase14ScenePurpose(item.SceneId), source, item.Text),
+                    similarityScore = CalculateMaxScenePurposeSimilarityScore(item.Format, item.SceneId, item.Text, shortTexts, longTexts),
                     similarityScoreToOtherScenes = CalculateMaxScenePurposeSimilarityScore(item.Format, item.SceneId, item.Text, shortTexts, longTexts),
                     semanticSimilarityScore = CalculateScenePurposeSemanticSimilarityScore(ResolvePhase14ScenePurpose(item.SceneId), source, item.Text)
                 };

@@ -1214,6 +1214,8 @@ Second display cue.
             Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("scenePurpose")!.GetValue(item)!));
             Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("sourceEnglishText")!.GetValue(item)!));
             Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("translatedHindiText")!.GetValue(item)!));
+            Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("semanticFingerprint")!.GetValue(item)!));
+            Assert.True((double)item.GetType().GetProperty("similarityScore")!.GetValue(item)! >= 0);
             Assert.True((double)item.GetType().GetProperty("semanticSimilarityScore")!.GetValue(item)! > 0);
         });
     }
@@ -1245,6 +1247,7 @@ Second display cue.
         {
             Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("scenePurpose")!.GetValue(item)!));
             Assert.False(string.IsNullOrWhiteSpace((string)item.GetType().GetProperty("semanticFingerprint")!.GetValue(item)!));
+            Assert.True((double)item.GetType().GetProperty("similarityScore")!.GetValue(item)! >= 0);
             Assert.True((double)item.GetType().GetProperty("similarityScoreToOtherScenes")!.GetValue(item)! >= 0);
         });
     }
