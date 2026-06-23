@@ -5148,62 +5148,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var timelineItems = ReadCanonicalTtsTimelineItems(planRoot, format, language);
         if (timelineItems.Count == 0)
-            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "Phase16SceneDurationPlanActualMp3Durations", []);
+            return new CueLevelSubtitleValidationResult(false, [], 0, 0, 0, NormalizePath(srtPath), "Phase18SceneBasedTtsActualMp3Durations", []);
 
         var actualCues = ParseSrtCues(srtPath);
-        var expectedCues = new List<(int CueIndex, string CueText, string TtsAudioPath, double AudioDurationSec, double Start, double End)>();
-        var start = 0.0;
-        for (var i = 0; i < timelineItems.Count; i++)
-        {
-            var item = timelineItems[i];
-            var duration = Math.Max(0, item.AudioDurationSec);
-            expectedCues.Add((i + 1, NormalizeNarrationWhitespace(item.CueText), item.AudioPath, duration, start, start + duration));
-            start += duration;
-        }
-
-        var drift = new List<double>();
-        var details = new List<object>();
-        var count = Math.Min(actualCues.Count, expectedCues.Count);
-        for (var i = 0; i < count; i++)
-        {
-            var startDriftMs = Math.Abs(actualCues[i].Start - expectedCues[i].Start) * 1000.0;
-            var endDriftMs = Math.Abs(actualCues[i].End - expectedCues[i].End) * 1000.0;
-            var cueDriftMs = RoundDuration(Math.Max(startDriftMs, endDriftMs));
-            drift.Add(cueDriftMs);
-            details.Add(new
-            {
-                cueIndex = i + 1,
-                cueText = actualCues[i].Text,
-                ttsAudioPath = NormalizePath(expectedCues[i].TtsAudioPath),
-                audioDurationSec = RoundDuration(expectedCues[i].AudioDurationSec),
-                expectedStartSec = RoundDuration(expectedCues[i].Start),
-                expectedEndSec = RoundDuration(expectedCues[i].End),
-                srtStartSec = RoundDuration(actualCues[i].Start),
-                srtEndSec = RoundDuration(actualCues[i].End),
-                driftMs = cueDriftMs
-            });
-        }
-
-        if (actualCues.Count != expectedCues.Count)
-            drift.Add(Math.Abs(actualCues.Count - expectedCues.Count) * 1000.0);
-
-        var maxDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Max());
-        var averageDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Average());
-        if (actualCues.Count != expectedCues.Count)
-        {
-            var sceneValidation = ValidateSceneBasedSubtitleSync(planRoot, format, srtPath, language, timelineItems, actualCues);
-            if (sceneValidation.Passed) return sceneValidation;
-        }
-
-        return new CueLevelSubtitleValidationResult(
-            actualCues.Count == expectedCues.Count && maxDrift <= 100.0,
-            drift,
-            maxDrift,
-            averageDrift,
-            actualCues.Count,
-            NormalizePath(srtPath),
-            "Phase16SceneDurationPlanActualMp3Durations",
-            details);
+        return ValidateSceneBasedSubtitleSync(planRoot, format, srtPath, language, timelineItems, actualCues);
     }
 
     private static CueLevelSubtitleValidationResult ValidateSceneBasedSubtitleSync(
@@ -5240,6 +5188,7 @@ public sealed partial class ProductionPipelineExecutionService(
             drift.Add(RoundDuration(sceneDriftMs));
             details.Add(new
             {
+                parentSceneId = scene.Key,
                 sceneId = scene.Key,
                 sceneAudioDuration = RoundDuration(scene.Value),
                 sceneSubtitleDuration = RoundDuration(Math.Max(0, srtEnd - srtStart)),
@@ -5254,16 +5203,36 @@ public sealed partial class ProductionPipelineExecutionService(
             cursor = expectedEnd;
         }
 
+        var expectedFinalEnd = cursor;
+        var actualFinalEnd = actualCues.Count == 0 ? 0 : actualCues[^1].End;
+        var finalEndDriftMs = Math.Abs(actualFinalEnd - expectedFinalEnd) * 1000.0;
+        drift.Add(RoundDuration(finalEndDriftMs));
+        details.Add(new
+        {
+            parentSceneId = "__total__",
+            sceneId = "__total__",
+            sceneAudioDuration = RoundDuration(expectedFinalEnd),
+            sceneSubtitleDuration = RoundDuration(actualFinalEnd),
+            subtitleCueCount = actualCues.Count,
+            subtitleDurationDelta = RoundDuration(Math.Abs(actualFinalEnd - expectedFinalEnd)),
+            expectedStartSec = 0,
+            expectedEndSec = RoundDuration(expectedFinalEnd),
+            srtStartSec = actualCues.Count == 0 ? 0 : RoundDuration(actualCues[0].Start),
+            srtEndSec = RoundDuration(actualFinalEnd),
+            driftMs = RoundDuration(finalEndDriftMs),
+            finalSrtEndMatchesSceneNarrationDuration = finalEndDriftMs <= 100.0
+        });
+
         var maxDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Max());
         var averageDrift = drift.Count == 0 ? 0 : RoundDuration(drift.Average());
         return new CueLevelSubtitleValidationResult(
-            expectedByScene.Count > 0 && maxDrift <= 100.0,
+            expectedByScene.Count > 0 && actualCues.Count > 0 && maxDrift <= 100.0,
             drift,
             maxDrift,
             averageDrift,
             actualCues.Count,
             NormalizePath(srtPath),
-            "Phase18SceneBasedTtsActualMp3Durations",
+            "Phase18SceneBasedParentSceneTtsDurations",
             details);
     }
 

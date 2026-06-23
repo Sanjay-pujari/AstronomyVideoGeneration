@@ -610,6 +610,54 @@ First cue.
             => (double)item.GetType().GetProperty("SceneDurationSec")!.GetValue(item)!;
     }
 
+
+    [Fact]
+    public void Phase18SubtitleValidation_UsesParentSceneDurationsForEnglishSceneLevelTts()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase18-en-scene-subtitle-validation-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(planRoot, "tts", "en"));
+            Directory.CreateDirectory(Path.Combine(planRoot, "narration", "short"));
+            Directory.CreateDirectory(Path.Combine(planRoot, "subtitles", "en"));
+            File.WriteAllText(Path.Combine(planRoot, "narration", "short", "001-hook.txt"), "First display cue. Second display cue.");
+            File.WriteAllText(Path.Combine(planRoot, "tts", "en", "tts-timeline.json"), JsonSerializer.Serialize(new
+            {
+                @short = new
+                {
+                    items = new[]
+                    {
+                        new { format = "short", sceneId = "001-hook", cueIndex = 1, cueText = "First display cue. Second display cue.", audioPath = "tts/en/short/001-hook.mp3", audioDurationSec = 4.0 }
+                    }
+                }
+            }));
+            var srtPath = Path.Combine(planRoot, "subtitles", "en", "short.srt");
+            File.WriteAllText(srtPath, """
+1
+00:00:00,000 --> 00:00:02,000
+First display cue.
+
+2
+00:00:02,000 --> 00:00:04,000
+Second display cue.
+""");
+
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCueLevelSubtitleSync", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var result = method!.Invoke(null, new object?[] { planRoot, "short", srtPath, "en" })!;
+
+            Assert.True((bool)result.GetType().GetProperty("Passed")!.GetValue(result)!);
+            Assert.Equal("Phase18SceneBasedParentSceneTtsDurations", (string)result.GetType().GetProperty("TimingSource")!.GetValue(result)!);
+            Assert.Equal(2, (int)result.GetType().GetProperty("CueCount")!.GetValue(result)!);
+            Assert.Equal(0, (double)result.GetType().GetProperty("MaxCueDriftMs")!.GetValue(result)!);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
     [Fact]
     public void Phase18VisualAssembly_UsesRequestedLanguageTtsTimelineForDurationExpansion()
     {
