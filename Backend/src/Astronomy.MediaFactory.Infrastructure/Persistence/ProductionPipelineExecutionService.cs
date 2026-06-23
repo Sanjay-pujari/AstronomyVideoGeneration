@@ -2848,6 +2848,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
         TracePhase14Checkpoint("phase14.forbiddenLeakageCheck.completed");
         var scenePurposeTranslationDiagnostics = BuildScenePurposeTranslationDiagnostics(sourceSceneTextByKey, shortTexts, longTexts);
+        ValidateScenePurposeTranslationDistinctness(scenePurposeTranslationDiagnostics);
         var diagnostics = new Phase14TranslationDiagnostics(
             requestedLanguage,
             resolvedFamily,
@@ -3357,8 +3358,64 @@ public sealed partial class ProductionPipelineExecutionService(
                 result = "स्रोत वर्णन के अलग संकेतों को जोड़कर आकाशीय घटना का क्रम, स्थान और देखने का तरीका स्पष्ट किया गया है।";
             }
 
+            result = PreserveHindiScenePurpose(result, scenePurpose, scene);
             return Task.FromResult(result);
         }
+    }
+
+    private static string PreserveHindiScenePurpose(string translatedHindiText, string scenePurpose, string sceneId)
+    {
+        var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(sceneId) : scenePurpose;
+        var text = NormalizeNarrationWhitespace(translatedHindiText ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        var purposeClause = purpose switch
+        {
+            "hook" => "जिज्ञासा की शुरुआत के लिए",
+            "what-is-it" => "परिभाषा के रूप में",
+            "cause" => "कारण और प्रक्रिया समझाने के लिए",
+            "interesting-fact" => "रोचक तथ्य के रूप में",
+            "best-time" => "समय की सलाह के लिए",
+            "accurate-sky-guide" => "कहाँ देखना है, यह बताने के लिए",
+            "what-you-will-see" => "दिखने वाले दृश्य के रूप में",
+            "viewing-tips" => "अवलोकन सलाह के तौर पर",
+            "final-reminder" => "अंतिम याद रखने वाली बात के रूप में",
+            _ => string.Empty
+        };
+        if (string.IsNullOrWhiteSpace(purposeClause) || ContainsHindiPurposeSignal(text, purpose))
+            return text;
+
+        return purpose switch
+        {
+            "hook" => $"{purposeClause}, {text}",
+            "what-is-it" => $"{purposeClause}, {text}",
+            "cause" => $"{purposeClause}, {text}",
+            "interesting-fact" => $"{purposeClause}, {text}",
+            "best-time" => $"{purposeClause}, {text}",
+            "accurate-sky-guide" => $"{purposeClause}, {text}",
+            "what-you-will-see" => $"{purposeClause}, {text}",
+            "viewing-tips" => $"{purposeClause}, {text}",
+            "final-reminder" => $"{purposeClause}, {text}",
+            _ => text
+        };
+    }
+
+    private static bool ContainsHindiPurposeSignal(string text, string purpose)
+    {
+        var terms = purpose switch
+        {
+            "hook" => new[] { "जिज्ञासा", "शुरुआत", "सोचने" },
+            "what-is-it" => new[] { "परिभाषा", "कहलाता", "होता है", "क्या" },
+            "cause" => new[] { "कारण", "वजह", "प्रक्रिया", "दृष्टि-रेखा", "कक्षीय" },
+            "interesting-fact" => new[] { "रोचक", "खास", "दिलचस्प", "तथ्य" },
+            "best-time" => new[] { "समय", "सबसे अच्छा", "कब", "खिड़की" },
+            "accurate-sky-guide" => new[] { "कहाँ", "दिशा", "क्षितिज", "ओर" },
+            "what-you-will-see" => new[] { "दिख", "दृश्य", "नज़र", "चमक" },
+            "viewing-tips" => new[] { "सलाह", "अवलोकन", "दूरबीन", "नंगी आंख" },
+            "final-reminder" => new[] { "याद", "अंतिम", "समापन", "ध्यान रखें" },
+            _ => Array.Empty<string>()
+        };
+        return terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string BuildPlanetConjunctionHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
@@ -3440,10 +3497,79 @@ public sealed partial class ProductionPipelineExecutionService(
                     scenePurpose = ResolvePhase14ScenePurpose(item.SceneId),
                     sourceEnglishText = source,
                     translatedHindiText = item.Text,
+                    semanticFingerprint = BuildScenePurposeSemanticFingerprint(ResolvePhase14ScenePurpose(item.SceneId), source, item.Text),
+                    similarityScoreToOtherScenes = CalculateMaxScenePurposeSimilarityScore(item.Format, item.SceneId, item.Text, shortTexts, longTexts),
                     semanticSimilarityScore = CalculateScenePurposeSemanticSimilarityScore(ResolvePhase14ScenePurpose(item.SceneId), source, item.Text)
                 };
             })
             .ToArray();
+
+    private static void ValidateScenePurposeTranslationDistinctness(IReadOnlyList<object> diagnostics)
+    {
+        var nearDuplicates = diagnostics
+            .SelectMany((left, i) => diagnostics.Skip(i + 1).Select(right => (Left: left, Right: right)))
+            .Where(pair => !string.Equals(GetAnonymousString(pair.Left, "scenePurpose"), GetAnonymousString(pair.Right, "scenePurpose"), StringComparison.OrdinalIgnoreCase))
+            .Select(pair => new
+            {
+                leftSceneId = GetAnonymousString(pair.Left, "sceneId"),
+                leftScenePurpose = GetAnonymousString(pair.Left, "scenePurpose"),
+                leftSemanticFingerprint = GetAnonymousString(pair.Left, "semanticFingerprint"),
+                rightSceneId = GetAnonymousString(pair.Right, "sceneId"),
+                rightScenePurpose = GetAnonymousString(pair.Right, "scenePurpose"),
+                rightSemanticFingerprint = GetAnonymousString(pair.Right, "semanticFingerprint"),
+                similarityScoreToOtherScenes = CalculateHindiSceneSimilarity(GetAnonymousString(pair.Left, "translatedHindiText"), GetAnonymousString(pair.Right, "translatedHindiText"))
+            })
+            .Where(pair => pair.similarityScoreToOtherScenes >= 0.92)
+            .ToArray();
+
+        if (nearDuplicates.Length > 0)
+            throw new InvalidOperationException("Phase 14 Hindi scene-purpose validation failed: different scene purposes produced nearly identical Hindi narration. diagnostics=" + JsonSerializer.Serialize(nearDuplicates, JsonOptions));
+    }
+
+    private static string GetAnonymousString(object value, string propertyName)
+        => value.GetType().GetProperty(propertyName)?.GetValue(value)?.ToString() ?? string.Empty;
+
+    private static string BuildScenePurposeSemanticFingerprint(string scenePurpose, string sourceEnglishText, string translatedHindiText)
+    {
+        var normalized = NormalizeNarrationForDuplicateCheck($"{scenePurpose} {sourceEnglishText} {translatedHindiText}");
+        var tokens = Regex.Matches(normalized, @"[\p{L}\p{Nd}]+")
+            .Select(match => match.Value)
+            .Where(token => token.Length > 1)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(token => token, StringComparer.OrdinalIgnoreCase)
+            .Take(24);
+        return string.Join("|", tokens);
+    }
+
+    private static double CalculateMaxScenePurposeSimilarityScore(string format, string sceneId, string text, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+        => EnumerateHindiSceneTexts(shortTexts, longTexts)
+            .Where(item => !string.Equals(item.Format, format, StringComparison.OrdinalIgnoreCase) || !string.Equals(item.SceneId, sceneId, StringComparison.OrdinalIgnoreCase))
+            .Where(item => !string.Equals(ResolvePhase14ScenePurpose(item.SceneId), ResolvePhase14ScenePurpose(sceneId), StringComparison.OrdinalIgnoreCase))
+            .Select(item => CalculateHindiSceneSimilarity(text, item.Text))
+            .DefaultIfEmpty(0)
+            .Max();
+
+    private static double CalculateHindiSceneSimilarity(string left, string right)
+    {
+        var leftNormalized = NormalizeNarrationForDuplicateCheck(left);
+        var rightNormalized = NormalizeNarrationForDuplicateCheck(right);
+        if (string.IsNullOrWhiteSpace(leftNormalized) || string.IsNullOrWhiteSpace(rightNormalized)) return 0;
+        if (string.Equals(leftNormalized, rightNormalized, StringComparison.OrdinalIgnoreCase)) return 1;
+        var leftTokens = Regex.Matches(leftNormalized, @"[\p{L}\p{Nd}]+")
+            .Select(match => match.Value)
+            .Where(token => token.Length > 1)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rightTokens = Regex.Matches(rightNormalized, @"[\p{L}\p{Nd}]+")
+            .Select(match => match.Value)
+            .Where(token => token.Length > 1)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (leftTokens.Count == 0 || rightTokens.Count == 0) return 0;
+        var intersection = leftTokens.Count(token => rightTokens.Contains(token));
+        var union = leftTokens.Union(rightTokens, StringComparer.OrdinalIgnoreCase).Count();
+        var tokenScore = union == 0 ? 0 : intersection / (double)union;
+        var lengthScore = 1 - Math.Abs(leftNormalized.Length - rightNormalized.Length) / (double)Math.Max(leftNormalized.Length, rightNormalized.Length);
+        return Math.Round((tokenScore * 0.75) + (lengthScore * 0.25), 3);
+    }
 
     private static double CalculateScenePurposeSemanticSimilarityScore(string scenePurpose, string sourceEnglishText, string translatedHindiText)
     {
