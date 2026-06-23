@@ -2017,7 +2017,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
             longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
-            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, cancellationToken);
+            var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, subtitleTtsOptions?.Value, cancellationToken);
             var documentaryNarrationV2DiagnosticsPath = await WritePhase14DocumentaryNarrationV2DiagnosticsAsync(planRoot, documentaryNarration, cancellationToken);
             selectedShortNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "short");
             selectedLongNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "long");
@@ -2171,7 +2171,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, string language, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, Phase14DocumentaryNarration documentaryNarration, CancellationToken cancellationToken)
+    private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, string language, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, Phase14DocumentaryNarration documentaryNarration, SubtitleTtsOptions? configuredSubtitleTtsOptions, CancellationToken cancellationToken)
     {
         var narrationRoot = Path.Combine(planRoot, "narration");
         var selectedNarrationRoot = Path.Combine(narrationRoot, language);
@@ -2199,11 +2199,23 @@ public sealed partial class ProductionPipelineExecutionService(
         var sceneDurationPlanResolution = EnsurePhase14SceneDurationPlan(planRoot, shortNarrationFiles, longNarrationFiles, shortItems, longNarrationV3Items);
         var shortCueRewrite = HindiCueDuplicateRewriteResult.Empty("short");
         var longCueRewrite = HindiCueDuplicateRewriteResult.Empty("long");
-        var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "short", shortNarrationFiles, shortItems);
-        var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "long", longNarrationFiles, longNarrationV3Items);
+        var phase14SubtitleOptions = NormalizePhase14SubtitleTtsOptions(configuredSubtitleTtsOptions);
+        var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "short", shortNarrationFiles, shortItems, phase14SubtitleOptions);
+        var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "long", longNarrationFiles, longNarrationV3Items, phase14SubtitleOptions);
         ValidateSceneNarrationFileOnlyCueSources(shortSrtTiming.Diagnostics, longSrtTiming.Diagnostics);
         await File.WriteAllTextAsync(shortSrtPath, shortSrtTiming.Srt, cancellationToken);
         await File.WriteAllTextAsync(longSrtPath, longSrtTiming.Srt, cancellationToken);
+        var validationRoot = Path.Combine(planRoot, "validation");
+        Directory.CreateDirectory(validationRoot);
+        var srtGenerationDiagnosticsPath = Path.Combine(validationRoot, "phase-14-srt-generation-diagnostics.json");
+        await File.WriteAllTextAsync(srtGenerationDiagnosticsPath, JsonSerializer.Serialize(new
+        {
+            subtitleTtsOptionsLoaded = configuredSubtitleTtsOptions is not null,
+            ttsMode = phase14SubtitleOptions.TtsMode,
+            short = shortSrtTiming.SrtGenerationDiagnostics,
+            long = longSrtTiming.SrtGenerationDiagnostics
+        }, JsonOptions), cancellationToken);
+        files.Add(srtGenerationDiagnosticsPath);
         var srtWrittenUtc = DateTimeOffset.UtcNow;
         files.Add(shortSrtPath);
         files.Add(longSrtPath);
@@ -4144,7 +4156,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return index < 0 ? text : text[..index] + newValue + text[(index + oldValue.Length)..];
     }
 
-    private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string requestedLanguage, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items)
+    private static NarrationSrtTimingResult BuildNarrationSrtFromCleanFiles(string planRoot, string requestedLanguage, string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SceneAudioSyncItem> items, SubtitleTtsOptions? subtitleOptions = null)
     {
         var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
         if (durationPlanItems.Count == 0)
@@ -4152,8 +4164,11 @@ public sealed partial class ProductionPipelineExecutionService(
         if (durationPlanItems.Count < narrationFiles.Count)
             throw new InvalidOperationException($"Scene duration plan has fewer {format} scene items than narration files.");
 
+        var options = NormalizePhase14SubtitleTtsOptions(subtitleOptions);
+        var sceneLevelSubtitleSplitting = string.Equals(options.TtsMode, "SceneLevel", StringComparison.OrdinalIgnoreCase);
         var blocks = new List<SubtitleCueBlock>();
         var perScene = new List<object>();
+        var srtGenerationDiagnostics = new List<object>();
         var cueValidation = new List<object>();
         var number = 1;
         var subtitleStart = 0.0;
@@ -4180,8 +4195,16 @@ public sealed partial class ProductionPipelineExecutionService(
             var progressiveHindi = IsHindiProgressiveWordGroupMode(requestedLanguage);
             var wordGroupResult = progressiveHindi ? SplitProgressiveWordGroups(sceneText) : ProgressiveWordGroupResult.Empty;
             if (progressiveHindi && wordGroupResult.OneWordTrailingCueMerged) oneWordTrailingCueMerged = true;
-            var cueChunks = progressiveHindi ? wordGroupResult.Groups : SplitSubtitleChunks(sceneText);
-            var cueDurations = progressiveHindi ? AllocateProgressiveWordGroupCueDurations(cueChunks, audioDuration) : AllocateSubtitleCueDurations(cueChunks, audioDuration);
+            var cueChunks = progressiveHindi
+                ? wordGroupResult.Groups
+                : sceneLevelSubtitleSplitting
+                    ? SplitSubtitleChunks(sceneText, options)
+                    : SplitSubtitleChunks(sceneText);
+            var cueDurations = progressiveHindi
+                ? AllocateProgressiveWordGroupCueDurations(cueChunks, audioDuration)
+                : sceneLevelSubtitleSplitting
+                    ? AllocateSubtitleCueDurations(cueChunks, audioDuration, options)
+                    : AllocateSubtitleCueDurations(cueChunks, audioDuration);
             var cueStart = sceneStart;
             for (var chunkIndex = 0; chunkIndex < cueChunks.Count; chunkIndex++)
             {
@@ -4192,7 +4215,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     : Math.Min(sceneEnd, cueStart + cueDurations[chunkIndex]);
                 if (progressiveHindi && chunkIndex == cueChunks.Count - 1 && cueChunks.Count > 1 && CountSpokenWords(cueText) == 1)
                     throw new InvalidOperationException($"Phase 14 SRT validation failed: Hindi ProgressiveWordGroup created a one-word trailing cue. format={format}; sceneId={durationPlanItem.SceneId}");
-                blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), WrapSubtitleChunk(cueText), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
+                blocks.Add(new SubtitleCueBlock(number++, TimeSpan.FromSeconds(cueStart), TimeSpan.FromSeconds(cueEnd), (sceneLevelSubtitleSplitting && !progressiveHindi ? WrapSubtitleChunk(cueText, options) : WrapSubtitleChunk(cueText)), durationPlanItem.SceneId, cueText, text, SubtitleChunkHash(cueText), "NarrationFile", NormalizePath(narrationFile), sceneIdOrigin, "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan", DateTimeOffset.UtcNow));
                 cueValidation.Add(new
                 {
                     cueIndex = number - 1,
@@ -4245,6 +4268,19 @@ public sealed partial class ProductionPipelineExecutionService(
                 normalizedSceneId = normalizedPlanSceneId,
                 normalizedSceneIdMatching = true,
                 generatorComponent = "ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan"
+            });
+            srtGenerationDiagnostics.Add(new
+            {
+                subtitleTtsOptionsLoaded = subtitleOptions is not null,
+                ttsMode = options.TtsMode,
+                format,
+                sceneId = durationPlanItem.SceneId,
+                narrationWordCount = CountSpokenWords(sceneText),
+                generatedCueCount = cueChunks.Count,
+                maxWordsPerCue = options.SubtitleMaxWordsPerCue,
+                maxCharsPerLine = options.SubtitleMaxCharsPerLine,
+                maxLines = options.SubtitleMaxLines,
+                cueGapMs = options.CueGapMs
             });
             subtitleStart = sceneEnd;
         }
@@ -4338,7 +4374,7 @@ public sealed partial class ProductionPipelineExecutionService(
             false,
             BuildSrtPreview(srt.ToString()),
             timingDiagnostics);
-        return new NarrationSrtTimingResult(srt.ToString(), diagnostics);
+        return new NarrationSrtTimingResult(srt.ToString(), diagnostics, srtGenerationDiagnostics);
     }
 
     private static bool ContainsSubtitleTraceText(string text)
@@ -4763,6 +4799,34 @@ public sealed partial class ProductionPipelineExecutionService(
         return chunks;
     }
 
+    private static IReadOnlyList<string> SplitSubtitleChunks(string text, SubtitleTtsOptions options)
+    {
+        var normalizedText = NormalizeNarrationWhitespace(text);
+        var phrases = Regex.Split(normalizedText, @"(?<=[.!?])\s+|(?<=[,;:])\s+")
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .Select(part => part.Trim())
+            .ToArray();
+        var chunks = new List<string>();
+        var current = string.Empty;
+        foreach (var phrase in phrases)
+        {
+            var candidate = (current + " " + phrase).Trim();
+            if (CanWrapSubtitleChunk(candidate, options) && CountSpokenWords(candidate) <= options.SubtitleMaxWordsPerCue)
+            {
+                current = candidate;
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+
+            var phraseChunks = SplitSubtitleChunkOnWhitespace(phrase, options);
+            chunks.AddRange(phraseChunks.Take(Math.Max(0, phraseChunks.Count - 1)));
+            current = phraseChunks.Count == 0 ? string.Empty : phraseChunks[^1];
+        }
+        if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+        return chunks;
+    }
+
     private static IReadOnlyList<string> SplitSubtitleChunkOnWhitespace(string text)
     {
         var words = Regex.Split(text, @"\s+")
@@ -4792,6 +4856,35 @@ public sealed partial class ProductionPipelineExecutionService(
         return chunks;
     }
 
+    private static IReadOnlyList<string> SplitSubtitleChunkOnWhitespace(string text, SubtitleTtsOptions options)
+    {
+        var words = Regex.Split(text, @"\s+")
+            .Where(word => !string.IsNullOrWhiteSpace(word))
+            .ToArray();
+        var chunks = new List<string>();
+        var current = string.Empty;
+        foreach (var word in words)
+        {
+            if (word.Length > options.SubtitleMaxCharsPerLine)
+                throw new InvalidOperationException($"SRT validation failed: subtitle text contains a word longer than {options.SubtitleMaxCharsPerLine} characters and cannot be wrapped without breaking a word. text={text}");
+
+            var candidate = (current + " " + word).Trim();
+            if (CanWrapSubtitleChunk(candidate, options) && CountSpokenWords(candidate) <= options.SubtitleMaxWordsPerCue)
+            {
+                current = candidate;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(current))
+                throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be split without breaking a word. text={text}");
+
+            chunks.Add(current);
+            current = word;
+        }
+        if (!string.IsNullOrWhiteSpace(current)) chunks.Add(current);
+        return chunks;
+    }
+
     private static IReadOnlyList<double> AllocateSubtitleCueDurations(IReadOnlyList<string> cueChunks, double sceneDurationSeconds)
     {
         if (cueChunks.Count == 0) return [];
@@ -4806,6 +4899,38 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
     }
 
+    private static IReadOnlyList<double> AllocateSubtitleCueDurations(IReadOnlyList<string> cueChunks, double sceneDurationSeconds, SubtitleTtsOptions options)
+    {
+        if (cueChunks.Count == 0) return [];
+        var gapSeconds = Math.Max(0, options.CueGapMs) / 1000.0;
+        var availableSeconds = Math.Max(0, sceneDurationSeconds - (cueChunks.Count - 1) * gapSeconds);
+        var minSeconds = Math.Max(0, options.SubtitleMinCueDurationMs) / 1000.0;
+        var maxSeconds = Math.Max(minSeconds, options.SubtitleMaxCueDurationMs / 1000.0);
+        if (availableSeconds <= 0) return cueChunks.Select(_ => 0.0).ToArray();
+        if (minSeconds * cueChunks.Count > availableSeconds)
+            return cueChunks.Select(_ => availableSeconds / cueChunks.Count + gapSeconds).ToArray();
+
+        var weights = cueChunks.Select(chunk => Math.Max(1, CountSpokenWords(chunk))).ToArray();
+        var totalWeight = weights.Sum();
+        var durations = weights.Select(weight => Math.Clamp(availableSeconds * weight / totalWeight, minSeconds, maxSeconds)).ToArray();
+        var delta = availableSeconds - durations.Sum();
+        for (var pass = 0; Math.Abs(delta) > 0.001 && pass < cueChunks.Count * 2; pass++)
+        {
+            var adjustable = durations
+                .Select((duration, index) => new { duration, index })
+                .Where(item => delta > 0 ? item.duration < maxSeconds : item.duration > minSeconds)
+                .ToArray();
+            if (adjustable.Length == 0) break;
+            var share = delta / adjustable.Length;
+            foreach (var item in adjustable)
+                durations[item.index] = Math.Clamp(durations[item.index] + share, minSeconds, maxSeconds);
+            delta = availableSeconds - durations.Sum();
+        }
+        if (gapSeconds > 0)
+            durations = durations.Select((duration, index) => index < durations.Length - 1 ? duration + gapSeconds : duration).ToArray();
+        return durations;
+    }
+
     private static IReadOnlyList<string> WrapSubtitleChunk(string text)
     {
         if (text.Length <= 42) return [text];
@@ -4815,6 +4940,26 @@ public sealed partial class ProductionPipelineExecutionService(
         if (cut < minCut)
             throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be wrapped into two 42-character lines without splitting a word. text={text}");
         return [text[..cut].Trim(), text[cut..].Trim()];
+    }
+
+    private static IReadOnlyList<string> WrapSubtitleChunk(string text, SubtitleTtsOptions options)
+    {
+        var maxChars = options.SubtitleMaxCharsPerLine;
+        if (text.Length <= maxChars) return [text];
+        var lines = new List<string>();
+        var remaining = text.Trim();
+        while (remaining.Length > maxChars && lines.Count < options.SubtitleMaxLines - 1)
+        {
+            var cut = remaining.LastIndexOf(' ', maxChars);
+            if (cut <= 0)
+                throw new InvalidOperationException($"SRT validation failed: subtitle cue cannot be wrapped into {options.SubtitleMaxLines} {maxChars}-character lines without splitting a word. text={text}");
+            lines.Add(remaining[..cut].Trim());
+            remaining = remaining[cut..].Trim();
+        }
+        if (remaining.Length > maxChars || lines.Count >= options.SubtitleMaxLines)
+            throw new InvalidOperationException($"SRT validation failed: subtitle cue exceeds configured wrapping limits. text={text}");
+        lines.Add(remaining);
+        return lines;
     }
 
 
@@ -4833,6 +4978,30 @@ public sealed partial class ProductionPipelineExecutionService(
         var maxCut = Math.Min(42, text.Length - 1);
         var cut = text.LastIndexOf(' ', maxCut);
         return cut >= minCut;
+    }
+
+    private static bool CanWrapSubtitleChunk(string text, SubtitleTtsOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > options.SubtitleMaxCharsPerLine * options.SubtitleMaxLines) return false;
+        if (Regex.Split(text, @"\s+").Any(word => word.Length > options.SubtitleMaxCharsPerLine)) return false;
+        try { return WrapSubtitleChunk(text, options).Count <= options.SubtitleMaxLines; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private static SubtitleTtsOptions NormalizePhase14SubtitleTtsOptions(SubtitleTtsOptions? configured)
+    {
+        var fallback = new SubtitleTtsOptions();
+        return new SubtitleTtsOptions
+        {
+            TtsMode = string.IsNullOrWhiteSpace(configured?.TtsMode) ? fallback.TtsMode : configured.TtsMode,
+            SubtitleMaxWordsPerCue = Math.Max(1, configured?.SubtitleMaxWordsPerCue ?? fallback.SubtitleMaxWordsPerCue),
+            SubtitleMaxLines = Math.Max(1, configured?.SubtitleMaxLines ?? fallback.SubtitleMaxLines),
+            SubtitleMaxCharsPerLine = Math.Max(1, configured?.SubtitleMaxCharsPerLine ?? fallback.SubtitleMaxCharsPerLine),
+            SubtitleMinCueDurationMs = Math.Max(0, configured?.SubtitleMinCueDurationMs ?? fallback.SubtitleMinCueDurationMs),
+            SubtitleMaxCueDurationMs = Math.Max(1, configured?.SubtitleMaxCueDurationMs ?? fallback.SubtitleMaxCueDurationMs),
+            SentenceBreakPauseMs = Math.Max(0, configured?.SentenceBreakPauseMs ?? fallback.SentenceBreakPauseMs),
+            CueGapMs = Math.Max(0, configured?.CueGapMs ?? fallback.CueGapMs)
+        };
     }
 
     private static SrtValidationResult ValidateNarrationSrt(string srtPath, IReadOnlyList<string> narrationFiles, IReadOnlyList<SubtitleCueSource> subtitleCueSources, string requestedLanguage)
@@ -5811,7 +5980,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace, Phase14SceneDurationPlanResolution SceneDurationPlanResolution);
     private sealed record Phase14SceneDurationPlanResolution(string SceneDurationPlanPath, bool SceneDurationPlanFound, int ShortSceneDurationPlanItemCount, int LongSceneDurationPlanItemCount, bool SceneDurationPlanGeneratedFallback, string SceneDurationPlanGenerationSource, IReadOnlyList<string> MissingDurationSceneIds);
-    private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics);
+    private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics, IReadOnlyList<object> SrtGenerationDiagnostics);
     private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, IReadOnlyDictionary<string, string> SubtitleTextSource, IReadOnlyDictionary<string, string> SubtitleTextOrigin, IReadOnlyDictionary<string, string> SceneIdOrigin, IReadOnlyDictionary<string, string> GeneratorComponent, IReadOnlyList<object> SubtitleBlocks, IReadOnlyList<SubtitleCueSource> SubtitleCueSources, int NonNarrationSubtitleCueCount, IReadOnlyList<SubtitleCueSource> NonNarrationSubtitleCues, string SrtSourceMode, bool FallbackSubtitleSourcesDisabled, bool EventProductionIntelligenceUsedForSrt, bool VideoAssemblyIntelligenceUsedForSrt, bool DocumentaryNarrationComposerUsedForSrt, string GeneratedSrtPreview, object Timing);
     private sealed record SrtValidationResult(bool MatchesNarrationFiles, bool DuplicateSrtTextDetected, IReadOnlyList<string> DuplicateSrtGroups, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyList<string> DuplicateSubtitleSourceScenes, IReadOnlyList<string> DuplicateSubtitleSourceFiles, string GeneratedSrtPreview, bool ValidationPassed, IReadOnlyList<string> Errors, string SrtPreservationValidationMode, int CleanNarrationNormalizedLength, int SrtNormalizedLength, bool SrtPreservesNarration, IReadOnlyList<string> SrtMissingSceneTexts, IReadOnlyList<string> SrtExtraUnexpectedTexts, string SrtComparisonFailureReason);
     private sealed record SubtitleCueNarrationSourceValidation(string RequestedLanguage, string SourceFile, string AcceptedSourcePattern, bool LanguageScopedSourceAccepted);
