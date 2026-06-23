@@ -3177,11 +3177,16 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
             return purpose switch
             {
-                "hook" => "सूर्य, चंद्रमा और छाया की सीध मिलते ही ग्रहण का दुर्लभ दृश्य बनता है।",
-                "cause" => "ग्रहण तब दिखता है जब चंद्रमा या पृथ्वी की छाया प्रकाश के रास्ते को बदल देती है।",
-                "gear" => "सूर्य ग्रहण देखते समय eclipse safety सबसे जरूरी है; प्रमाणित सौर फिल्टर के बिना सीधे सूर्य को न देखें।",
-                "closing" => "ग्रहण की हर अवस्था धीरे-धीरे बदलती है, इसलिए सुरक्षित तरीके से समय लेकर अवलोकन करें।",
-                _ => BuildNaturalHindiFallbackFromDuplicateText(duplicateText, family)
+                "hook" => isLong ? "पूर्ण सूर्य ग्रहण में चंद्रमा की छाया सूर्य का ढकना दिखाती है और उसी क्षण सूर्य की कोरोना उभर सकती है।" : "सूर्य ग्रहण में चंद्रमा की छाया सूर्य का ढकना साफ दिखाती है।",
+                "what-is-it" => "सूर्य ग्रहण तब होता है जब चंद्रमा की छाया पृथ्वी पर पड़ती है और सूर्य का ढकना दिखाई देता है।",
+                "cause" => "पूर्ण सूर्य ग्रहण में चंद्रमा की छाया ग्रहण पथ पर आती है, इसलिए सूर्य का ढकना और पूर्णता का क्षण बनता है।",
+                "interesting-fact" => "पूर्णता का क्षण छोटा होता है, लेकिन उसी दौरान सूर्य की कोरोना ग्रहण पथ में सबसे अलग पहचान देती है।",
+                "best-time" => "आंशिक चरण से पहले समय तय करें और ग्रहण पथ में सुरक्षित अवलोकन की तैयारी पूरी रखें।",
+                "accurate-sky-guide" => "ग्रहण पथ, सूर्य की दिशा और आँखों की सुरक्षा को साथ जांचें; सुरक्षित अवलोकन के बिना आगे न बढ़ें।",
+                "what-you-will-see" => "आंशिक चरण में सूर्य का ढकना धीरे-धीरे बढ़ता है और पूर्णता का क्षण आने पर सूर्य की कोरोना दिख सकती है।",
+                "viewing-tips" => "सुरक्षित अवलोकन के लिए प्रमाणित सोलर फिल्टर लगाएं और आंशिक चरण में आँखों की सुरक्षा कभी न हटाएं।",
+                "final-reminder" => "पूर्ण सूर्य ग्रहण यादगार है, लेकिन हर आंशिक चरण में प्रमाणित सोलर फिल्टर और आँखों की सुरक्षा जरूरी है।",
+                _ => BuildEclipseHindiDuplicateCleanupText(purpose, isLong)
             };
 
         return purpose switch
@@ -3200,8 +3205,24 @@ public sealed partial class ProductionPipelineExecutionService(
             return timingSuffix ? " इसी कारण अवलोकन में क्षितिज, चमक और समय—तीनों पर ध्यान रखें।" : " यह बात दर्शक को केवल सुंदरता नहीं, बल्कि ग्रहों की वास्तविक व्यवस्था भी समझाती है।";
         if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
             return timingSuffix ? " चंद्र उदय, क्षितिज और चंद्र प्रकाश को साथ देखकर अनुभव बेहतर होता है।" : " पूर्णिमा की लोक परंपरा और चमक इस वर्णन को अलग अर्थ देती है।";
+        if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
+            return timingSuffix ? " ग्रहण पथ और आंशिक चरण का समय पहले जांचें।" : " सुरक्षित अवलोकन और आँखों की सुरक्षा को प्राथमिकता दें।";
         return timingSuffix ? " इसी कारण अवलोकन में समय, दिशा और आसमान की स्थिति पर ध्यान रखें।" : " यह विवरण उसी आकाशीय परिवार की जानकारी को स्पष्ट रखता है।";
     }
+
+    private static string BuildEclipseHindiDuplicateCleanupText(string purpose, bool isLong)
+        => purpose switch
+        {
+            "what-is-it" => "सूर्य ग्रहण में चंद्रमा की छाया के कारण सूर्य का ढकना दिखाई देता है।",
+            "cause" => "पूर्ण सूर्य ग्रहण तब बनता है जब चंद्रमा की छाया ग्रहण पथ पर आती है।",
+            "interesting-fact" => "पूर्णता का क्षण छोटा होता है, लेकिन सूर्य की कोरोना उसे खास बनाती है।",
+            "best-time" => "आंशिक चरण शुरू होने से पहले सुरक्षित अवलोकन की तैयारी पूरी रखें।",
+            "accurate-sky-guide" => "ग्रहण पथ, सूर्य की दिशा और आँखों की सुरक्षा को पहले जांचें।",
+            "what-you-will-see" => "सूर्य का ढकना बढ़ते-बढ़ते पूर्णता का क्षण और सूर्य की कोरोना दिखा सकता है।",
+            "viewing-tips" => "प्रमाणित सोलर फिल्टर लगाएं और आंशिक चरण में आँखों की सुरक्षा बनाए रखें।",
+            "final-reminder" => "सूर्य ग्रहण देखते समय सुरक्षित अवलोकन ही सबसे जरूरी नियम है।",
+            _ => isLong ? "पूर्ण सूर्य ग्रहण में ग्रहण पथ, सूर्य का ढकना और सुरक्षित अवलोकन साथ समझें।" : "सूर्य ग्रहण में आँखों की सुरक्षा के साथ सूर्य का ढकना देखें।"
+        };
 
     private static string BuildMoonHindiDuplicateCleanupText(string purpose, bool isLong)
         => purpose switch
@@ -3225,6 +3246,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 return "अंधेरे आसमान में उल्का वर्षा की चमकदार धारियां अनियमित अंतरालों पर दिखती हैं, इसलिए धैर्य से व्यापक आसमान देखते रहें।";
             if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
                 return BuildMoonHindiDuplicateCleanupText("what-you-will-see", false);
+            if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
+                return BuildEclipseHindiDuplicateCleanupText("what-you-will-see", false);
             return "आकाशीय अवलोकन में समय, दिशा और दृश्यता को प्राकृतिक भाषा में समझाने से जानकारी साफ रहती है।";
         }
 
@@ -3307,13 +3330,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 else
                     result = $"{subject} की यह युति एक दृश्यात्मक मिलन है, जिसमें चमक, दूरी और क्षितिज की स्थिति मिलकर शाम के आसमान को समझने योग्य बनाते हैं।";
             }
+            else if (lower.Contains("eclipse") || string.Equals(eventType, "Eclipse", StringComparison.OrdinalIgnoreCase))
+            {
+                result = BuildEclipseHindiSceneTranslation(text, scene, scenePurpose);
+            }
             else if (lower.Contains("moon") || lower.Contains("lunar") || string.Equals(eventType, "Moon", StringComparison.OrdinalIgnoreCase))
             {
                 result = BuildMoonHindiSceneTranslation(text, scene, scenePurpose);
-            }
-            else if (lower.Contains("eclipse") || string.Equals(eventType, "Eclipse", StringComparison.OrdinalIgnoreCase))
-            {
-                result = "ग्रहण के दौरान सूर्य, चंद्रमा और पृथ्वी की सीध को सुरक्षित तरीके से समझें और केवल स्वीकृत सुरक्षा साधनों से अवलोकन करें।";
             }
             else
             {
@@ -3324,7 +3347,30 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-        private static string BuildMoonHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
+    private static string BuildEclipseHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
+        {
+            var lower = sourceText.ToLowerInvariant();
+            var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+            if (lower.Contains("certified") || lower.Contains("filter") || lower.Contains("glasses") || lower.Contains("eyes") || purpose == "viewing-tips")
+                return "सुरक्षित अवलोकन के लिए प्रमाणित सोलर फिल्टर लगाएं और आंशिक चरण में आँखों की सुरक्षा कभी न हटाएं।";
+            if (lower.Contains("corona") || purpose == "interesting-fact")
+                return "पूर्णता का क्षण छोटा होता है, लेकिन उसी समय सूर्य की कोरोना पूर्ण सूर्य ग्रहण को खास बनाती है।";
+            if (lower.Contains("path") || lower.Contains("unobstructed") || purpose == "accurate-sky-guide")
+                return "ग्रहण पथ, सूर्य की दिशा और आँखों की सुरक्षा को साथ जांचें; सुरक्षित अवलोकन के बिना आगे न बढ़ें।";
+            if (lower.Contains("best") || lower.Contains("time") || purpose == "best-time")
+                return "आंशिक चरण से पहले समय तय करें और ग्रहण पथ में सुरक्षित अवलोकन की तैयारी पूरी रखें।";
+            if (lower.Contains("block") || lower.Contains("between") || lower.Contains("shadow") || purpose == "cause")
+                return "पूर्ण सूर्य ग्रहण में चंद्रमा की छाया ग्रहण पथ पर आती है, इसलिए सूर्य का ढकना और पूर्णता का क्षण बनता है।";
+            if (lower.Contains("see") || lower.Contains("view") || purpose == "what-you-will-see")
+                return "आंशिक चरण में सूर्य का ढकना धीरे-धीरे बढ़ता है और पूर्णता का क्षण आने पर सूर्य की कोरोना दिख सकती है।";
+            if (lower.Contains("reminder") || scene.Contains("final") || purpose == "final-reminder")
+                return "पूर्ण सूर्य ग्रहण यादगार है, लेकिन हर आंशिक चरण में प्रमाणित सोलर फिल्टर और आँखों की सुरक्षा जरूरी है।";
+            if (purpose == "what-is-it")
+                return "सूर्य ग्रहण तब होता है जब चंद्रमा की छाया पृथ्वी पर पड़ती है और सूर्य का ढकना दिखाई देता है।";
+            return "सूर्य ग्रहण में चंद्रमा की छाया सूर्य का ढकना दिखाती है और सुरक्षित अवलोकन सबसे जरूरी रहता है।";
+        }
+
+    private static string BuildMoonHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
         {
             var lower = sourceText.ToLowerInvariant();
             var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
@@ -3381,7 +3427,8 @@ public sealed partial class ProductionPipelineExecutionService(
             "इस क्षण",
             "इस रात",
             "इस अवलोकन में",
-            "अपना अलग आकाशीय संदर्भ"
+            "अपना अलग आकाशीय संदर्भ",
+            "आकाशीय अवलोकन में समय, दिशा और दृश्यता"
         ]);
 
     private static IReadOnlyList<string> FindPhase14HindiCrossFamilyLeakageTerms(string resolvedFamily, string text)
@@ -3394,6 +3441,8 @@ public sealed partial class ProductionPipelineExecutionService(
             crossFamilyTerms.AddRange(["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"]);
         else if (string.Equals(resolvedFamily, "Moon", StringComparison.OrdinalIgnoreCase))
             crossFamilyTerms.AddRange(["meteor", "meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स", "Jupiter", "Venus", "Mars", "conjunction", "pairing", "alignment", "separation", "planet conjunction", "planet pairing", "Jupiter + Venus", "debris stream", "Phaethon", "बृहस्पति", "शुक्र", "मंगल", "युति", "खगोलीय जोड़ी", "दृष्टि-रेखा", "line-of-sight", "two planets"]);
+        else if (string.Equals(resolvedFamily, "Eclipse", StringComparison.OrdinalIgnoreCase))
+            crossFamilyTerms.AddRange(["पूर्णिमा", "वुल्फ मून", "चंद्र चमक", "सर्दियों का आकाश", "चंद्रमा की कलाएँ"]);
 
         return FindForbiddenNarrationLeakage(text, crossFamilyTerms);
     }
