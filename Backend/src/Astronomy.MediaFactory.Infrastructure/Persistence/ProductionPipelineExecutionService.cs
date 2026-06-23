@@ -38,7 +38,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
     ISceneAssetsV3Service? sceneAssetsV3Service = null,
-    IOptions<ThumbnailOptions>? thumbnailOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IOptions<ThumbnailOptions>? thumbnailOptions = null,
+    IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -5896,6 +5897,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase16DurationInputs = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         var errors = new List<string>();
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
+        var configuredTtsMode = subtitleTtsOptions?.Value?.TtsMode ?? new SubtitleTtsOptions().TtsMode;
+        var sceneLevelTtsRequested = string.Equals(configuredTtsMode, "SceneLevel", StringComparison.OrdinalIgnoreCase);
+        var selectedBranch = sceneLevelTtsRequested ? "SceneLevel" : "LegacyCueLevel";
+        var generatedAudioFileCount = 0;
 
         var selectedShortSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");
         var selectedLongSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "long");
@@ -5924,9 +5929,9 @@ public sealed partial class ProductionPipelineExecutionService(
             var sceneAudioDiagnostics = new List<TtsAudioContentDiagnostics>();
             var sceneTimelineItems = new List<object>();
             var generatedSceneTimelineIds = new List<string>();
-            var hindiSceneLevelTts = string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase);
+            var sceneLevelTtsUsed = sceneLevelTtsRequested;
 
-            if (hindiSceneLevelTts)
+            if (sceneLevelTtsUsed)
             {
                 var expectedVisualSceneIds = sceneIdResolution.ExpectedVisualSceneIds.Count > 0
                     ? sceneIdResolution.ExpectedVisualSceneIds
@@ -5950,6 +5955,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     sceneAudio.Add(audioPath);
                     sceneAudioDiagnostics.Add(validation);
                     outputs.Add(audioPath);
+                    generatedAudioFileCount++;
                     if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{visualSceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
                     if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{visualSceneId} missing MP3: {NormalizePath(audioPath)}");
 
@@ -5993,6 +5999,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     sceneAudio.Add(audioPath);
                     sceneAudioDiagnostics.Add(validation);
                     outputs.Add(audioPath);
+                    generatedAudioFileCount++;
                     if (!validation.ValidationPassed) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} audio validation failed: {string.Join("; ", validation.Errors)}");
                     if (!File.Exists(audioPath)) errors.Add($"{language}:{format}:{visualSceneId}:cue-{block.SceneId} missing MP3: {NormalizePath(audioPath)}");
                 }
@@ -6005,8 +6012,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var audioDurationSec = (await ProbeAudioContentMetricsAsync(narrationTrackPath, cancellationToken)).DurationSec;
             var srtDurationSec = blocks.Count == 0 ? 0 : blocks.Max(b => b.End.TotalSeconds);
             var delta = Math.Abs(audioDurationSec - srtDurationSec);
-            if (!hindiSceneLevelTts && (blocks.Count != sceneAudio.Count || sceneAudio.Any(p => !File.Exists(p)))) errors.Add($"{language}:{format} every SRT block must have audio.");
-            if (hindiSceneLevelTts && sceneAudio.Any(p => !File.Exists(p))) errors.Add($"{language}:{format} every visual scene must have audio.");
+            if (!sceneLevelTtsUsed && (blocks.Count != sceneAudio.Count || sceneAudio.Any(p => !File.Exists(p)))) errors.Add($"{language}:{format} every SRT block must have audio.");
+            if (sceneLevelTtsUsed && sceneAudio.Any(p => !File.Exists(p))) errors.Add($"{language}:{format} every visual scene must have audio.");
             if (audioDurationSec <= 0) errors.Add($"{language}:{format} narration audio is silent or unreadable.");
             var srtText = string.Join("\n", blocks.Select(b => b.Text));
             if (language == "hi" && !ContainsHindiText(srtText)) errors.Add("Hindi SRT must contain Hindi text.");
@@ -6042,11 +6049,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 }).ToArray();
                 phase16DurationInputs[format] = new
                 {
-                    items = hindiSceneLevelTts ? sceneTimelineItems.ToArray() : cueTimelineItems.Cast<object>().ToArray(),
-                    subtitleItems = hindiSceneLevelTts ? cueTimelineItems : null,
-                    subtitleSourcePath = hindiSceneLevelTts ? NormalizePath(inputSrtPath) : null,
-                    distinctTimelineSceneIds = hindiSceneLevelTts ? generatedSceneTimelineIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : null,
-                    expectedVisualSceneIds = hindiSceneLevelTts ? sceneIdResolution.ExpectedVisualSceneIds.ToArray() : null,
+                    items = sceneLevelTtsUsed ? sceneTimelineItems.ToArray() : cueTimelineItems.Cast<object>().ToArray(),
+                    subtitleItems = sceneLevelTtsUsed ? cueTimelineItems : null,
+                    subtitleSourcePath = sceneLevelTtsUsed ? NormalizePath(inputSrtPath) : null,
+                    distinctTimelineSceneIds = sceneLevelTtsUsed ? generatedSceneTimelineIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : null,
+                    expectedVisualSceneIds = sceneLevelTtsUsed ? sceneIdResolution.ExpectedVisualSceneIds.ToArray() : null,
                     audioDurationSec = roundedAudioDurationSec,
                     srtDurationSec = roundedSrtDurationSec,
                     audioSrtDurationDeltaSec = roundedDeltaSec
@@ -6057,6 +6064,10 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 language,
                 format,
+                ttsMode = configuredTtsMode,
+                selectedBranch,
+                sceneLevelTtsUsed,
+                legacyCueTtsUsed = !sceneLevelTtsUsed,
                 ttsProvider = ResolveConfiguredPhase15TtsProviderName(),
                 voiceName = azureSpeechOptions?.Value.GetPreferredVoices(language).FirstOrDefault() ?? string.Empty,
                 inputSrtPath = NormalizePath(inputSrtPath),
@@ -6091,6 +6102,17 @@ public sealed partial class ProductionPipelineExecutionService(
         outputs.Add(ttsTimelinePath);
 
         var validationPassed = errors.Count == 0 && diagnostics.Count > 0;
+        var ttsModeDiagnosticsPath = Path.Combine(validationRoot, "phase-15-tts-mode-diagnostics.json");
+        await File.WriteAllTextAsync(ttsModeDiagnosticsPath, JsonSerializer.Serialize(new
+        {
+            language = requestedLanguage,
+            ttsMode = configuredTtsMode,
+            selectedBranch,
+            generatedAudioFileCount,
+            sceneLevelTtsUsed = sceneLevelTtsRequested,
+            legacyCueTtsUsed = !sceneLevelTtsRequested
+        }, JsonOptions), cancellationToken);
+        outputs.Add(ttsModeDiagnosticsPath);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-15-real-tts-v2-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-15-validation.json");
