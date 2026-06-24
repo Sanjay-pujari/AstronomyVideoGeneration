@@ -2186,11 +2186,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var files = new List<string>();
         var manifestItems = new List<object>();
         var narrationFileWriteTrace = new List<NarrationFileWriteTraceEntry>();
+        var narrationFileDeduplicationDiagnostics = new List<NarrationFileDeduplicationDiagnostic>();
         var cleanupService = new NarrationCleanupService();
         var cleanedNarrationFiles = new List<string>();
         var longNarrationV3Items = BuildLongDocumentaryNarrationV3Items(longItems);
-        var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
-        var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
+        var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, narrationFileDeduplicationDiagnostics, cancellationToken);
+        var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, narrationFileDeduplicationDiagnostics, cancellationToken);
         var narrationFileWriteDiagnostics = ValidateNarrationFileWriteTrace(narrationFileWriteTrace, shortItems.Count + longNarrationV3Items.Count);
 
         var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
@@ -2218,9 +2219,10 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             validator = nameof(SceneNarrationDuplicateValidator),
             pass = nameof(FinalNarrationDeduplicationPass),
-            wiredIntoProductionNarrationFileWrite = false,
-            note = "Diagnostic only: shows what SceneNarrationDuplicateValidator.RemoveDuplicates would change for selected production narration scenes before subtitle generation.",
-            scenes = requestedDeduplicationDiagnostics
+            wiredIntoProductionNarrationFileWrite = true,
+            note = "Production narration file writes use SceneNarrationDuplicateValidator.RemoveDuplicates after cleanup and before subtitle generation.",
+            scenes = requestedDeduplicationDiagnostics,
+            fileWriteScenes = narrationFileDeduplicationDiagnostics
         }, JsonOptions), cancellationToken);
         files.Add(narrationDeduplicationDiagnosticsPath);
         var srtGenerationDiagnosticsPath = Path.Combine(validationRoot, "phase-14-srt-generation-diagnostics.json");
@@ -2302,6 +2304,7 @@ public sealed partial class ProductionPipelineExecutionService(
             srtValidation = new { @short = shortSrtValidation, @long = longSrtValidation },
             narrationDeduplicationDiagnosticsPath = NormalizePath(narrationDeduplicationDiagnosticsPath),
             narrationDeduplicationDiagnostics = requestedDeduplicationDiagnostics,
+            narrationFileDeduplicationDiagnostics,
             srtPreservationValidationMode = "NormalizedOrderedSceneText",
             shortCleanNarrationNormalizedLength = shortSrtValidation.CleanNarrationNormalizedLength,
             shortSrtNormalizedLength = shortSrtValidation.SrtNormalizedLength,
@@ -4189,7 +4192,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray<object>();
     }
 
-    private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, List<NarrationFileWriteTraceEntry> writeTrace, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, List<NarrationFileWriteTraceEntry> writeTrace, List<NarrationFileDeduplicationDiagnostic> deduplicationDiagnostics, CancellationToken cancellationToken)
     {
         var written = new List<string>();
         foreach (var item in items)
@@ -4197,12 +4200,17 @@ public sealed partial class ProductionPipelineExecutionService(
             var path = Path.Combine(outputRoot, $"{SanitizeFileName(item.SceneId)}.txt");
             var cleanup = cleanupService.Clean(item.NarrationText ?? string.Empty);
             cleanupService.ValidateClean(cleanup.CleanedText);
-            if (ContainsAuthoringInstructionText(cleanup.CleanedText))
+            var dedupedText = SceneNarrationDuplicateValidator.RemoveDuplicates(cleanup.CleanedText);
+            cleanupService.ValidateClean(dedupedText);
+            if (ShouldCaptureNarrationFileDeduplicationDiagnostic(item.SceneId)
+                && !deduplicationDiagnostics.Any(diagnostic => string.Equals(diagnostic.SceneId, item.SceneId, StringComparison.OrdinalIgnoreCase)))
+                deduplicationDiagnostics.Add(new NarrationFileDeduplicationDiagnostic(item.SceneId, cleanup.CleanedText, dedupedText));
+            if (ContainsAuthoringInstructionText(dedupedText))
                 throw new InvalidOperationException($"Phase 14 final narration text contains authoring instructions: {format}:{item.SceneId}");
             var existedBeforeWrite = File.Exists(path);
-            var traceEntry = BuildNarrationFileWriteTraceEntry(path, item, format, writeTrace.Count + 1, cleanup.CleanedText, existedBeforeWrite);
+            var traceEntry = BuildNarrationFileWriteTraceEntry(path, item, format, writeTrace.Count + 1, dedupedText, existedBeforeWrite);
             writeTrace.Add(traceEntry);
-            await File.WriteAllTextAsync(path, cleanup.CleanedText, cancellationToken);
+            await File.WriteAllTextAsync(path, dedupedText, cancellationToken);
             files.Add(path);
             cleanedNarrationFiles.Add(path);
             written.Add(path);
@@ -4213,13 +4221,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 beatNo = item.BeatNo,
                 path = NormalizePath(path),
                 cleanupApplied = true,
+                deduplicationApplied = true,
                 labelsRemovedCount = cleanup.LabelsRemovedCount,
                 instructionsRemovedCount = cleanup.InstructionsRemovedCount,
-                characterCount = cleanup.CleanedText.Length
+                characterCount = dedupedText.Length
             });
         }
         return written;
     }
+
+    private static bool ShouldCaptureNarrationFileDeduplicationDiagnostic(string sceneId)
+        => string.Equals(sceneId, "004-interesting-fact", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sceneId, "005-best-time", StringComparison.OrdinalIgnoreCase);
 
 
     private static NarrationFileWriteTraceEntry BuildNarrationFileWriteTraceEntry(string path, SceneAudioSyncItem item, string format, int writeOrder, string content, bool existedBeforeWrite)
@@ -6396,6 +6409,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
     private sealed record SceneNarrationSanitizeResult(string Text, IReadOnlyList<string> RemovedFallbackSentences);
     private sealed record SceneAudioSyncItem(string Format, int BeatNo, string SceneId, string SceneImagePath, string NarrationText, string NarrationBeat, string VisualIntent, string RenderMode, int EstimatedDurationSec, string RecommendedTransition, string RecommendedMotion, string SyncStatus, string SourceNarrationStrategy);
+    private sealed record NarrationFileDeduplicationDiagnostic(string SceneId, string BeforeWrite, string AfterDedup);
     private sealed record NarrationFileWriteTraceEntry(string FilePath, string SceneId, string Format, string WriterComponent, string WriteMode, int WriteOrder, string ContentPreview, bool ContainsCentersOn, bool ContainsMoonNamesCulturalMemory, string SourceComponent, string SourceStrategy);
     private sealed record NarrationFileWriteDiagnostics(int NarrationFileWriteCount, IReadOnlyList<string> DuplicateNarrationFileWrites, IReadOnlyList<string> OverwrittenNarrationFiles, IReadOnlyList<string> AppendedNarrationFiles, bool FallbackNarrationTextInjected);
 
