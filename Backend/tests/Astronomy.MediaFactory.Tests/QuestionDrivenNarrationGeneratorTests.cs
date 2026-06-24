@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -348,6 +349,51 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         Assert.Contains("Moon", combined);
         Assert.DoesNotContain("Venus", combined, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Jupiter", combined, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenerateQuestionDrivenNarrationAsync_RemovesDuplicateFactTimingAndTransitionSentencesBeforeSubtitles()
+    {
+        const string geminidsEventId = "e60aa11f-ad8c-440f-ad49-2079a435f8c1";
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteEnrichedQuestionDrivenScenePlanAsync(workingDirectory, BuildEnrichedPlan(geminidsEventId));
+        var generator = CreateGenerator(workingDirectory);
+        var context = BuildMeteorProductionContext(Guid.Parse(geminidsEventId));
+        var duplicatedFact = "The Geminids are unusual because they originate from asteroid 3200 Phaethon rather than a typical comet.";
+        context = context with
+        {
+            ProductionEventIntelligence = context.ProductionEventIntelligence! with
+            {
+                ScientificContext = duplicatedFact,
+                RequiredNarrationFacts = [duplicatedFact]
+            }
+        };
+
+        var result = await generator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(
+            geminidsEventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            ProductionContext: context), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Contains(result.Review.Checks, check => check.Name == "sceneNarrationDuplicateValidator" && check.Passed);
+        Assert.All(result.Narration.Scenes, scene =>
+        {
+            var sentences = Regex.Split(scene.NarrationText, @"(?<=[.!?])\s+")
+                .Select(Normalize)
+                .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
+                .ToArray();
+            Assert.Equal(sentences.Length, sentences.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        });
+
+        var shortSrt = await File.ReadAllTextAsync(Path.Combine(workingDirectory, "assets", RegionId, "events", geminidsEventId, "question-engine", "narration", "subtitles", "short.srt"));
+        var subtitleBlocks = shortSrt.Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Select(block => Normalize(string.Join(' ', block.Split('\n').Skip(2))))
+            .Where(block => !string.IsNullOrWhiteSpace(block))
+            .ToArray();
+        Assert.Equal(subtitleBlocks.Length, subtitleBlocks.Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
 
