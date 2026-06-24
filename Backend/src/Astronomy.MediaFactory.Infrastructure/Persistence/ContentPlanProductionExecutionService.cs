@@ -88,7 +88,7 @@ public sealed class ContentPlanProductionExecutionService(
             plan.Status = "ProductionRunning";
             await db.SaveChangesAsync(cancellationToken);
 
-            var pipelineResult = await productionPipeline.ExecuteAsync(new ProductionPipelineRequest(
+            var productionPipelineRequest = new ProductionPipelineRequest(
                 productionRequest,
                 intelligence.Id,
                 outputRoot,
@@ -108,7 +108,11 @@ public sealed class ContentPlanProductionExecutionService(
                 PublishApproved: request.PublishApproved,
                 MotionPreviewOnly: request.MotionPreviewOnly,
                 MotionV2Strength: request.MotionV2Strength,
-                DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
+                DependencyExpansionMode: request.DependencyExpansionMode);
+
+            logger.LogInformation("ProductionPipelineRequest before execution: MotionV2Strength={MotionV2Strength}", productionPipelineRequest.MotionV2Strength);
+
+            var pipelineResult = await productionPipeline.ExecuteAsync(productionPipelineRequest, cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
             errors.AddRange(pipelineResult.Errors);

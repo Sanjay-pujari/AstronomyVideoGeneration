@@ -1316,8 +1316,34 @@ app.MapGet("/api/content-planning/plans-ready-for-generation", async (int year, 
     }
 });
 
-app.MapPost("/api/content-planning/batch-generate-from-plans", async (BatchGenerateFromPlansRequest request, IContentPlanBatchGenerationService batchGeneration, ILogger<Program> logger, CancellationToken ct) =>
+app.MapPost("/api/content-planning/batch-generate-from-plans", async (HttpRequest httpRequest, IContentPlanBatchGenerationService batchGeneration, ILogger<Program> logger, CancellationToken ct) =>
 {
+    string rawRequestBody;
+    using (var reader = new StreamReader(httpRequest.Body, leaveOpen: true))
+    {
+        rawRequestBody = await reader.ReadToEndAsync(ct);
+    }
+
+    logger.LogInformation("Content plan batch generation raw API request body received: {RawRequestBody}", rawRequestBody);
+
+    BatchGenerateFromPlansRequest? request;
+    try
+    {
+        request = JsonSerializer.Deserialize<BatchGenerateFromPlansRequest>(rawRequestBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+    catch (JsonException ex)
+    {
+        logger.LogWarning(ex, "Content plan batch generation request JSON binding failed. Raw API request body: {RawRequestBody}", rawRequestBody);
+        return Results.BadRequest(new { message = "Invalid request JSON.", detail = ex.Message });
+    }
+
+    if (request is null)
+    {
+        logger.LogWarning("Content plan batch generation request binding produced a null DTO. Raw API request body: {RawRequestBody}", rawRequestBody);
+        return Results.BadRequest(new { message = "Request body is required." });
+    }
+
+    logger.LogInformation("Content plan batch generation DTO after model binding: MotionV2Strength={MotionV2Strength}", request.MotionV2Strength);
     logger.LogInformation("Content plan batch generation requested for {RegionId}/{Language}/{Year}. DryRun={DryRun}; MaxPlans={MaxPlans}; OnlyHighPriority={OnlyHighPriority}; UseProductionPipeline={UseProductionPipeline}; RequestedTitles={RequestedTitleCount}", request.RegionId, request.Language, request.Year, request.DryRun, request.MaxPlans, request.OnlyHighPriority, request.UseProductionPipeline, request.PlanTitles?.Count ?? 0);
     try
     {

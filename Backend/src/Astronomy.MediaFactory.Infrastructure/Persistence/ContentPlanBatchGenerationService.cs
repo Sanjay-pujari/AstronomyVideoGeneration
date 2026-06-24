@@ -98,6 +98,8 @@ public sealed class ContentPlanBatchGenerationService(
                 SiblingPlanCreated: languageMismatch.SiblingPlanCreated);
         }
 
+        logger.LogInformation("BatchGenerateFromPlansRequest before production handoff: MotionV2Strength={MotionV2Strength}", request.MotionV2Strength);
+
         if (request.UseProductionPipeline)
         {
             if (selectedPlans.Length != 1)

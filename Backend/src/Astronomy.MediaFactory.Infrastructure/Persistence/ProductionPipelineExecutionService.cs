@@ -80,6 +80,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
         var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite);
+        logger.LogInformation("ProductionPhaseContext created: context.PipelineRequest.MotionV2Strength={MotionV2Strength}", context.PipelineRequest.MotionV2Strength);
         if (request.OverwriteExisting)
             ClearPhaseRangeOutputsForOverwrite(context);
 
@@ -115,6 +116,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
             }
+            if (phase.No == 17)
+            {
+                logger.LogInformation("Before Phase 17 begins: context.PipelineRequest.MotionV2Strength={MotionV2Strength}", context.PipelineRequest.MotionV2Strength);
+            }
+
             var result = await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken);
             phaseResults.Add(result);
             generatedFiles.AddRange(result.OutputFiles.Where(File.Exists));
