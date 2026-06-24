@@ -2200,6 +2200,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var sceneDurationPlanResolution = EnsurePhase14SceneDurationPlan(planRoot, shortNarrationFiles, longNarrationFiles, shortItems, longNarrationV3Items);
         var shortCueRewrite = HindiCueDuplicateRewriteResult.Empty("short");
         var longCueRewrite = HindiCueDuplicateRewriteResult.Empty("long");
+        var requestedDeduplicationDiagnostics = BuildNarrationDeduplicationDiagnostics(shortItems.Concat(longNarrationV3Items));
         var phase14SubtitleOptions = NormalizePhase14SubtitleTtsOptions(configuredSubtitleTtsOptions);
         var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "short", shortNarrationFiles, shortItems, phase14SubtitleOptions);
         var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "long", longNarrationFiles, longNarrationV3Items, phase14SubtitleOptions);
@@ -2212,6 +2213,16 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"Phase 14 final SRT writer mismatch: short actual={shortSrtWriteValidation.ActualSrtBlockCount}, diagnostic={shortSrtWriteValidation.DiagnosticGeneratedCueCount}; long actual={longSrtWriteValidation.ActualSrtBlockCount}, diagnostic={longSrtWriteValidation.DiagnosticGeneratedCueCount}");
         var validationRoot = Path.Combine(planRoot, "validation");
         Directory.CreateDirectory(validationRoot);
+        var narrationDeduplicationDiagnosticsPath = Path.Combine(validationRoot, "phase-14-narration-deduplication-diagnostics.json");
+        await File.WriteAllTextAsync(narrationDeduplicationDiagnosticsPath, JsonSerializer.Serialize(new
+        {
+            validator = nameof(SceneNarrationDuplicateValidator),
+            pass = nameof(FinalNarrationDeduplicationPass),
+            wiredIntoProductionNarrationFileWrite = false,
+            note = "Diagnostic only: shows what SceneNarrationDuplicateValidator.RemoveDuplicates would change for selected production narration scenes before subtitle generation.",
+            scenes = requestedDeduplicationDiagnostics
+        }, JsonOptions), cancellationToken);
+        files.Add(narrationDeduplicationDiagnosticsPath);
         var srtGenerationDiagnosticsPath = Path.Combine(validationRoot, "phase-14-srt-generation-diagnostics.json");
         await File.WriteAllTextAsync(srtGenerationDiagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -2289,6 +2300,8 @@ public sealed partial class ProductionPipelineExecutionService(
             nonNarrationSubtitleCueCount = shortSrtTiming.Diagnostics.NonNarrationSubtitleCueCount + longSrtTiming.Diagnostics.NonNarrationSubtitleCueCount,
             nonNarrationSubtitleCues = shortSrtTiming.Diagnostics.NonNarrationSubtitleCues.Concat(longSrtTiming.Diagnostics.NonNarrationSubtitleCues).ToArray(),
             srtValidation = new { @short = shortSrtValidation, @long = longSrtValidation },
+            narrationDeduplicationDiagnosticsPath = NormalizePath(narrationDeduplicationDiagnosticsPath),
+            narrationDeduplicationDiagnostics = requestedDeduplicationDiagnostics,
             srtPreservationValidationMode = "NormalizedOrderedSceneText",
             shortCleanNarrationNormalizedLength = shortSrtValidation.CleanNarrationNormalizedLength,
             shortSrtNormalizedLength = shortSrtValidation.SrtNormalizedLength,
@@ -4142,6 +4155,38 @@ public sealed partial class ProductionPipelineExecutionService(
         if (text.Contains("moon", StringComparison.OrdinalIgnoreCase) || text.Contains("lunar", StringComparison.OrdinalIgnoreCase)) return "Moon";
         if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
         return "PlanetGrouping";
+    }
+
+
+    private static IReadOnlyList<object> BuildNarrationDeduplicationDiagnostics(IEnumerable<SceneAudioSyncItem> items)
+    {
+        var requestedSceneIds = new[]
+        {
+            "004-interesting-fact",
+            "005-best-time",
+            "009-final-reminder"
+        };
+
+        return items
+            .Where(item => requestedSceneIds.Contains(item.SceneId, StringComparer.OrdinalIgnoreCase))
+            .GroupBy(item => item.SceneId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(item => Array.FindIndex(requestedSceneIds, sceneId => string.Equals(sceneId, item.SceneId, StringComparison.OrdinalIgnoreCase)))
+            .Select(item =>
+            {
+                var beforeDeduplication = item.NarrationText ?? string.Empty;
+                var afterDeduplication = SceneNarrationDuplicateValidator.RemoveDuplicates(beforeDeduplication);
+                return new
+                {
+                    sceneId = item.SceneId,
+                    format = item.Format,
+                    beforeDeduplication,
+                    afterDeduplication,
+                    changed = !string.Equals(beforeDeduplication, afterDeduplication, StringComparison.Ordinal),
+                    duplicateNarrationDetected = SceneNarrationDuplicateValidator.HasDuplicateNarration(beforeDeduplication)
+                };
+            })
+            .ToArray<object>();
     }
 
     private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, List<NarrationFileWriteTraceEntry> writeTrace, CancellationToken cancellationToken)
