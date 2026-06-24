@@ -106,6 +106,7 @@ public sealed class QuestionDrivenNarrationGenerator(
                 ?? throw new InvalidOperationException("Existing question-driven narration could not be parsed.");
             var existingReview = JsonSerializer.Deserialize<QuestionDrivenNarrationReviewDto>(await File.ReadAllTextAsync(reviewPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing question-driven narration review could not be parsed.");
+            existingNarration = SceneNarrationDuplicateValidator.ValidateAndRepair(existingNarration);
             var existingValidationReview = BuildReview(existingNarration, warnings, request.ProductionContext);
             if (existingReview.IsValid && existingValidationReview.IsValid)
             {
@@ -126,7 +127,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var enrichedPlan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(inputJson, JsonOptions)
             ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
 
-        var narration = BuildNarration(enrichedPlan, request);
+        var narration = SceneNarrationDuplicateValidator.ValidateAndRepair(BuildNarration(enrichedPlan, request));
         var subtitlePaths = request.DryRun ? (Short: string.Empty, Long: string.Empty) : await GenerateNarrationSubtitlesAsync(narration, narrationPath, cancellationToken);
         narration = narration with { Diagnostics = EnrichDiagnosticsWithSubtitles(narration.Diagnostics, subtitlePaths.Short, subtitlePaths.Long) };
         ValidateNarrationHasNoForbiddenLeakage(narration, request.ProductionContext);
@@ -398,6 +399,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         AddCheck(checks, "positiveDurations", narration.Scenes.All(scene => scene.EstimatedDurationSeconds > 0), "estimatedDurationSeconds > 0 for every scene.");
         AddCheck(checks, "targetDuration", narration.TotalEstimatedDurationSeconds is >= 45 and <= 75, "total duration must be between 45 and 75 seconds for Narration V3.");
         AddCheck(checks, "noDuplicateNarration", narration.Scenes.Select(scene => Clean(scene.NarrationText)).Distinct(StringComparer.OrdinalIgnoreCase).Count() == narration.Scenes.Count, "no duplicate narration lines.");
+        AddCheck(checks, "sceneNarrationDuplicateValidator", narration.Scenes.All(scene => !SceneNarrationDuplicateValidator.HasDuplicateNarration(scene.NarrationText)), "scene-level narration has no duplicate, timing, fact, or transition sentences before subtitle generation.");
         var copiedSourceAnswers = CountCopiedSourceAnswers(narration);
         AddCheck(checks, "notSourceAnswerCopies", copiedSourceAnswers == 0, "narrationText must not exactly copy sourceAnswer.");
         AddCheck(checks, "noInternalTerms", narration.Scenes.All(SceneHasNoInternalTerms), "narration and captions must not contain internal/debug terms.");
@@ -466,6 +468,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var longNarrationRoot = Path.Combine(narrationRoot, "long");
         Directory.CreateDirectory(shortNarrationRoot);
         Directory.CreateDirectory(longNarrationRoot);
+        narration = SceneNarrationDuplicateValidator.ValidateAndRepair(narration);
         var sourceScenes = narration.Scenes.ToArray();
         var shortFiles = await WriteSubtitleNarrationSourceFilesAsync(shortNarrationRoot, sourceScenes.Take(6).ToArray(), cancellationToken);
         var longFiles = await WriteSubtitleNarrationSourceFilesAsync(longNarrationRoot, sourceScenes, cancellationToken);
@@ -511,10 +514,11 @@ public sealed class QuestionDrivenNarrationGenerator(
                 start = end;
             }
         }
-        var duplicates = blocks.Select(block => NormalizeSubtitleText(string.Join(" ", block.Lines)))
-            .GroupBy(text => text, StringComparer.OrdinalIgnoreCase)
-            .Any(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
-        if (duplicates) throw new InvalidOperationException("SRT validation failed: duplicate subtitle blocks were produced.");
+        blocks = blocks
+            .GroupBy(block => NormalizeSubtitleText(string.Join(" ", block.Lines)), StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+            .Select((group, index) => group.First() with { Number = index + 1 })
+            .ToList();
         var srt = string.Join("\n\n", blocks.Select(block => $"{block.Number}\n{FormatSrtTime(block.Start)} --> {FormatSrtTime(block.End)}\n{string.Join("\n", block.Lines)}")) + "\n";
         var subtitleBlocks = blocks.Select(block => new { format, cueId = block.Number, blockId = $"{format}:cue-{block.Number}", sceneId = block.SourceSceneId, text = string.Join(" ", block.Lines), normalizedText = NormalizeSubtitleText(string.Join(" ", block.Lines)), sourceType = block.SourceType, sourceSceneId = block.SourceSceneId, sourceFile = block.SourceFile, sourceText = block.SourceText, generatorComponent = block.GeneratorComponent, createdUtc = block.CreatedUtc }).Cast<object>().ToArray();
         var nonNarrationSubtitleCues = blocks.Where(block => !string.Equals(block.SourceType, "NarrationFile", StringComparison.OrdinalIgnoreCase)).ToArray();
