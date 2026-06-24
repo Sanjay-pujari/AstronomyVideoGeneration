@@ -6,7 +6,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 internal static partial class EventStoryComposer
 {
-    public const string Version = "EventStoryComposerV1";
+    public const string Version = "EventStoryComposerV3_1";
     private static readonly string[] AuthorInstructionPhrases =
     [
         "explain", "describe", "focus on", "call out", "give safe", "close with",
@@ -14,29 +14,33 @@ internal static partial class EventStoryComposer
         "primary sky objects", "event experience", "sky geometry"
     ];
 
-    private static readonly string[] ForbiddenOpeningWords = ["For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow"];
+    private static readonly string[] ForbiddenOpeningWords = ["For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow", "Today", "Yesterday"];
+    private static readonly string[] RelativeDateTerms = ["today", "tonight", "tomorrow", "this evening", "yesterday", "आज", "आज रात", "कल", "कल रात", "आज शाम"];
 
     public static EventStoryComposerResult Compose(string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
     {
         var eventName = NormalizeEventName(Clean(FirstNonEmpty(intelligence?.ShortTitle, intelligence?.Title, context?.EventType, "This event")));
         var eventDate = ResolveEventDate(intelligence);
         var eventDateKnown = eventDate is not null;
-        var eventDateText = eventDateKnown ? eventDate!.Value.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) : "the event date";
+        var eventDateText = eventDateKnown ? eventDate!.Value.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) : "the exact event date supplied for this event";
         var direction = CleanSolarSafetyDirection(FirstNonEmpty(intelligence?.SkyDirectionHint, "the clearest part of the sky"), family);
+        var peak = HumanizeNarrationWindow(FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "the local peak time"));
         var window = HumanizeNarrationWindow(FirstNonEmpty(intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, intelligence?.LocalPeakTime, "the local viewing window"));
+        var timezone = ResolveTimezoneText(intelligence, context);
         var contextFact = Clean(FirstNonEmpty(intelligence?.ScientificContext, BuildDefaultContext(family, eventName)));
         var importance = BuildImportance(family, eventName, contextFact);
 
         var sections = new DocumentaryNarrationSections(
             $"On {eventDateText}, {eventName} {OpeningVerb(family)}. {importance}",
-            BuildHook(family, eventName),
+            BuildHook(family, eventName, eventDateText, importance),
             BuildContext(family, eventName, contextFact),
             BuildMainStory(family, eventName),
-            BuildViewingGuide(family, direction, window),
+            BuildViewingGuide(family, direction, eventDateText, peak, window, timezone),
             BuildClosing(family));
 
         sections = Compose(sections);
         var allText = string.Join(" ", sections.ColdOpen, sections.Hook, sections.Context, sections.MainStory, sections.ViewingGuide, sections.EmotionalClosing);
+        ValidateNarrationQuality(family, eventName, eventDateText, sections);
         var openingValid = IsOpeningAllowed(sections.ColdOpen) && ContainsNameAndDate(sections.ColdOpen, eventName, eventDateText);
         var documentaryScore = Math.Min(100, 55 + (openingValid ? 20 : 0) + (ContainsHistoricalOrObservationalContext(allText) ? 15 : 0) + (!ContainsAuthorInstruction(allText) ? 10 : 0));
         var storytellingScore = Math.Min(100, 50 + (sections.Context.Length > 80 ? 15 : 0) + (sections.MainStory.Length > 80 ? 15 : 0) + (sections.EmotionalClosing.Contains("memory", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (!ContainsRawTimestamp(allText) ? 10 : 0));
@@ -59,13 +63,13 @@ internal static partial class EventStoryComposer
 
     private static string OpeningVerb(string family) => family switch { "Meteor" => "reaches its peak", "Moon" => "will rise above the evening horizon", "Eclipse" => "will be visible across parts of the world", _ => "will appear in the sky" };
     private static string BuildImportance(string family, string eventName, string contextFact) => family switch { "Meteor" => "Under dark skies, observers may see repeated meteors crossing the night, each one a tiny fragment of cosmic history burning into light.", "Moon" => "As a full moon tied to winter traditions, it connects a familiar sight with centuries of skywatching memory.", "Eclipse" => "For a brief time, the Moon will move across the face of the Sun, creating one of the most dramatic daytime sky events in astronomy.", "PlanetConjunction" => "For a short time, perspective brings distant worlds into the same human field of view, revealing the solar system in motion without suggesting they are physically close.", _ => "For a short time, perspective will bring distant worlds into the same human field of view, revealing the solar system in motion." };
-    private static string BuildHook(string family, string eventName) => family switch { "Meteor" => "The story begins quietly, then suddenly: a streak, a pause, and another flash where empty darkness seemed to be.", "Moon" => "Its light is familiar, but the first full moon of the year still changes the landscape, softening edges and pulling attention back to the horizon.", "Eclipse" => "Eclipses turn celestial mechanics into something physical, letting daylight itself become part of the drama.", _ => "To the eye, the planets may seem almost close enough to belong together, even though space keeps them separated by enormous distances." };
+    private static string BuildHook(string family, string eventName, string eventDateText, string importance) => family switch { "Meteor" => $"On {eventDateText}, {eventName} matters because Earth meets a debris stream that can turn darkness into sudden light. Watch for the question every meteor raises: which tiny fragment will flare next?", "Moon" => $"On {eventDateText}, {eventName} matters because a familiar full Moon carries a specific seasonal story. The curiosity is simple: what changes when an ordinary moonrise has a name and a history?", "Eclipse" => $"On {eventDateText}, {eventName} matters because solar-system geometry becomes visible in daylight. The question is unforgettable: how can the Sun seem to change shape before your eyes?", "PlanetConjunction" => $"On {eventDateText}, {eventName} matters because distant planets briefly share one line of sight. The curiosity is this: why can separate worlds look almost side by side?", _ => $"On {eventDateText}, {eventName} matters because a real sky event becomes visible from Earth. The curiosity is what that moment reveals when you watch closely." };
     private static string BuildContext(string family, string eventName, string fact) => family switch { "Meteor" => $"Meteor showers are old trails crossing a new night. {fact}", "Moon" => $"Moon names are cultural memory written onto a predictable orbit. {fact}", "Eclipse" => $"An eclipse is a shadow story, possible only when the Sun, Moon, and Earth line up with rare precision. {fact}", "PlanetConjunction" => $"A planetary conjunction is a story of perspective, not proximity. {fact}", _ => $"Planetary conjunctions are stories of perspective, not proximity. {fact}" };
     private static string BuildMainStory(string family, string eventName) => family switch { "Meteor" => "Each meteor is small enough to fit in your hand, but fast enough to announce itself across the atmosphere in a line of fire.", "Moon" => "As the Moon climbs, its color and brightness change with the air near the horizon, making a familiar world feel newly discovered.", "Eclipse" => "The change arrives in stages: a bite from the Sun, a dimming of the ground, and then the unmistakable sense that the sky is moving on a grand scale.", "PlanetConjunction" => "One planet may blaze brighter while the other looks steadier, but their apparent closeness is a line-of-sight effect across deep space.", _ => "One object may blaze brighter, the other may seem steadier, but together they make orbital motion visible without a telescope." };
-    private static string BuildViewingGuide(string family, string direction, string window) => family == "Eclipse"
-        ? $"The event reaches its strongest visibility during {window}; look toward the Sun only with certified solar eclipse glasses."
-        : $"The best view comes from a clear, open location facing {direction}. The event reaches its strongest visibility during {window}, so arrive early enough for your eyes to settle into the scene.";
-    private static string BuildClosing(string family) => family switch { "Eclipse" => "Moments like this remind us how dynamic our sky really is. The shadow passes quickly. But the memory can stay with you for years.", _ => "Moments like this reward patience and attention. The sky moves on. But the memory of seeing it can stay with you for years." };
+    private static string BuildViewingGuide(string family, string direction, string eventDateText, string peak, string window, string timezone) => family == "Eclipse"
+        ? $"On {eventDateText}, peak visibility is around {peak}, with the safest viewing window described as {window}{timezone}; look toward the Sun only with certified solar eclipse glasses."
+        : $"On {eventDateText}, peak viewing is around {peak}, with a viewing window of {window}{timezone}. Start from a clear, open location facing {direction}, and arrive early enough for your eyes to settle into the scene.";
+    private static string BuildClosing(string family) => family switch { "Eclipse" => "That is your professional observing reminder: confirm the exact local circumstances, use certified eye protection, and watch only when conditions are safe. Thank you for joining this sky guide; keep looking up with care.", _ => "That is your professional observing reminder: save the exact window, check the forecast, choose a safe open view, and let the sky speak for itself. Thank you for joining this sky guide." };
 
     private static IReadOnlyList<string> BuildSourceEventFacts(ProductionEventIntelligence? intelligence, string contextFact, string eventDateText, string direction, string window)
     {
@@ -83,7 +87,13 @@ internal static partial class EventStoryComposer
     }
 
     private static DateTimeOffset? ResolveEventDate(ProductionEventIntelligence? i) => i?.EventDate ?? i?.PeakUtc;
-    private static string HumanizeNarrationWindow(string value) => ContainsRawTimestamp(value) ? "the local viewing window" : Clean(value);
+    private static string HumanizeNarrationWindow(string value) => Clean(value);
+    private static string ResolveTimezoneText(ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    {
+        var joined = string.Join(" ", intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow);
+        var match = Regex.Match(joined, @"\b(?:UTC|GMT|IST|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[A-Z][A-Za-z_]+/[A-Z][A-Za-z_]+)\b");
+        return match.Success ? $" ({match.Value})" : string.Empty;
+    }
     private static bool ContainsRawTimestamp(string value) => RawTimestampRegex().IsMatch(value ?? string.Empty);
     private static bool IsOpeningAllowed(string value) { var first = Clean(value).Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty; return !ForbiddenOpeningWords.Contains(first, StringComparer.OrdinalIgnoreCase); }
     private static bool ContainsNameAndDate(string opening, string name, string date) => opening.Contains(date, StringComparison.OrdinalIgnoreCase) && ContainsEventName(opening, name);
@@ -114,6 +124,46 @@ internal static partial class EventStoryComposer
             return "the Sun only with certified solar eclipse glasses";
         return cleaned;
     }
+
+    private static void ValidateNarrationQuality(string family, string eventName, string eventDateText, DocumentaryNarrationSections sections)
+    {
+        var scenes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ColdOpen"] = sections.ColdOpen,
+            ["Hook"] = sections.Hook,
+            ["Context"] = sections.Context,
+            ["MainStory"] = sections.MainStory,
+            ["ViewingGuide"] = sections.ViewingGuide,
+            ["EmotionalClosing"] = sections.EmotionalClosing
+        };
+        var errors = new List<string>();
+        foreach (var scene in scenes)
+        {
+            var relativeHits = RelativeDateTerms.Where(term => ContainsRelativeDateTerm(scene.Value, term)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (relativeHits.Length > 0) errors.Add($"{scene.Key} contains relative date terms: {string.Join(", ", relativeHits)}");
+            var duplicateSentences = SplitSentences(scene.Value).GroupBy(NormalizeSentence, StringComparer.OrdinalIgnoreCase).Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1).Select(g => g.First()).ToArray();
+            if (duplicateSentences.Length > 0) errors.Add($"{scene.Key} contains duplicate sentences: {string.Join(" | ", duplicateSentences)}");
+        }
+        if (!sections.Hook.Contains(eventDateText, StringComparison.OrdinalIgnoreCase) || !ContainsEventName(sections.Hook, eventName) || !Regex.IsMatch(sections.Hook, @"\b(matters?|important|because|reveals?)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(sections.Hook, @"\b(question|curiosity|why|how|what)\b", RegexOptions.IgnoreCase))
+            errors.Add("Hook must include exact event date, event name, why it matters, and a curiosity trigger.");
+        if (!sections.ViewingGuide.Contains(eventDateText, StringComparison.OrdinalIgnoreCase) || !Regex.IsMatch(sections.ViewingGuide, @"\b(peak|around|at)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(sections.ViewingGuide, @"\b(window|from|between|during)\b", RegexOptions.IgnoreCase))
+            errors.Add("BestTime/View guide must include exact date, peak/local time, and viewing window.");
+        if (!ContainsHistoricalOrObservationalContext(sections.Context + " " + sections.MainStory))
+            errors.Add("InterestingFact/context must include scientific, rarity, historical, or observation fact.");
+        if (!Regex.IsMatch(sections.EmotionalClosing, @"\b(professional observing reminder|Thank you|forecast|safe)\b", RegexOptions.IgnoreCase))
+            errors.Add("FinalReminder must be a professional presenter-style closing.");
+        if (errors.Count > 0) throw new InvalidOperationException("Pre-Phase-14 narration validation failed: " + string.Join("; ", errors));
+    }
+
+    private static bool ContainsRelativeDateTerm(string text, string term)
+    {
+        if (Regex.IsMatch(term, @"^[a-z ]+$", RegexOptions.IgnoreCase))
+            return Regex.IsMatch(text ?? string.Empty, @"(?<![\p{L}\p{N}])" + Regex.Escape(term) + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase);
+        return Regex.IsMatch(text ?? string.Empty, @"(?<![\p{L}\p{N}])" + Regex.Escape(term) + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase);
+    }
+
+    private static string NormalizeSentence(string value) => Regex.Replace(value ?? string.Empty, @"[^\p{L}\p{N}]+", " ").Trim();
+
     [GeneratedRegex(@"(?<=[.!?])\s+")] private static partial Regex SentenceSplitRegex();
     [GeneratedRegex(@"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)?\b|\b\d{1,2}:\d{2}\s*(?:[+-]\d{2}:?\d{2}|UTC|GMT)\b", RegexOptions.IgnoreCase)] private static partial Regex RawTimestampRegex();
 }
@@ -144,8 +194,11 @@ internal sealed record EventStoryComposerDiagnostics(
 internal sealed record LongSceneNarrationExpansionContext(
     string EventType,
     string ShortTitle,
+    string EventDateText,
     string? LocalPeakTime,
+    string? ViewingWindow,
     string? SkyDirectionHint,
+    string? Timezone,
     string? ContentStrategy);
 
 internal sealed record LongSceneNarrationDraft(string SceneId, string ScenePurpose, string BodyText);
@@ -209,7 +262,10 @@ internal static class LongSceneNarrationExpander
     {
         var tone = ResolveTone($"{context.EventType} {context.ContentStrategy}", family);
         var title = CleanTitle(context.ShortTitle);
-        var time = CleanText(context.LocalPeakTime, "the best local viewing window");
+        var date = CleanText(context.EventDateText, "the exact event date supplied for this event");
+        var time = CleanText(context.LocalPeakTime, "the local peak time");
+        var window = CleanText(context.ViewingWindow, "the local viewing window");
+        var timezone = string.IsNullOrWhiteSpace(context.Timezone) ? string.Empty : $" ({context.Timezone})";
         var direction = CleanText(context.SkyDirectionHint, family == "Eclipse" ? "the Sun with certified eclipse eye protection" : "the clearest part of the sky");
         return (tone, purpose) switch
         {
@@ -217,39 +273,40 @@ internal static class LongSceneNarrationExpander
             ("SolarEclipse", "interesting-fact") => "Eclipse details matter because eye safety changes with each stage of the event.",
             ("SolarEclipse", "accurate-sky-guide") => $"Use certified solar filters any time you look toward {direction}.",
             ("SolarEclipse", "viewing-tips") => "Keep eclipse glasses on before and after totality, and supervise every viewer closely.",
-            ("NamedFullMoon", "hook") => "The first full moon of the year rises with a name many people recognize.",
+            ("NamedFullMoon", "hook") => $"On {date}, {title} matters because this named full moon connects a familiar moonrise with seasonal memory. The curiosity is what its name reveals about the year.",
             ("NamedFullMoon", "what-is-it") => $"{title} is a traditional name for this full moon.",
             ("NamedFullMoon", "cause") => "Full moons happen when the Moon is opposite the Sun in our sky.",
             ("NamedFullMoon", "interesting-fact") => $"The name {title} comes from old seasonal traditions, not from a change in the Moon itself.",
-            ("NamedFullMoon", "best-time") => $"The best time to enjoy this full moon is during {time}.",
+            ("NamedFullMoon", "best-time") => $"On {date}, the peak local time is around {time}, with the viewing window described as {window}{timezone}.",
             ("NamedFullMoon", "accurate-sky-guide") => $"Look toward {direction} first, then follow the Moon higher as the night continues.",
             ("NamedFullMoon", "what-you-will-see") => "You will see a bright round Moon, often warmer near the horizon and whiter as it climbs.",
             ("NamedFullMoon", "viewing-tips") => "Choose an open horizon and give your eyes a few minutes to settle into the night.",
-            ("NamedFullMoon", "final-reminder") => $"{title} is familiar, but that is exactly what makes it worth noticing.",
-            ("MeteorShower", "hook") => $"{title} can turn a quiet dark sky into sudden streaks of light.",
-            ("MeteorShower", "best-time") => $"Meteor watching is strongest during {time}, especially under darker skies.",
+            ("NamedFullMoon", "final-reminder") => $"That is your professional observing reminder for {title}: save {date}, check the forecast, choose a safe open horizon, and enjoy the Moon with family or friends.",
+            ("MeteorShower", "hook") => $"On {date}, {title} matters because Earth crosses a stream of old debris that can spark sudden meteors. The curiosity is which tiny grain will write the next bright streak.",
+            ("MeteorShower", "interesting-fact") => $"{title} meteors are pieces of comet or asteroid debris that heat the air as they enter Earth's atmosphere at high speed.",
+            ("MeteorShower", "best-time") => $"On {date}, the peak local time is around {time}, with the viewing window described as {window}{timezone}; darker skies improve meteor watching.",
             ("MeteorShower", "viewing-tips") => "Lie back, avoid bright screens, and scan a wide area of the night sky.",
-            ("PlanetConjunction", "hook") => $"Low in the evening sky, {title} draws attention because two distant worlds seem to share the same quiet patch of light.",
+            ("PlanetConjunction", "hook") => $"On {date}, {title} matters because two distant worlds briefly align in our view. The curiosity is why planets separated by space can seem almost side by side.",
             ("PlanetConjunction", "what-is-it") => "That close pairing is a planetary conjunction, an alignment in our view rather than a meeting in space.",
             ("PlanetConjunction", "cause") => "Although the two planets appear close together, they remain separated by vast distances while their paths briefly align from Earth's perspective.",
             ("PlanetConjunction", "interesting-fact") => "From night to night, the changing gap between them reveals orbital motion at a pace the eye can follow.",
-            ("PlanetConjunction", "best-time") => $"The conjunction reaches its finest appearance during {time}.",
+            ("PlanetConjunction", "best-time") => $"On {date}, the peak local time is around {time}, with the viewing window described as {window}{timezone}.",
             ("PlanetConjunction", "accurate-sky-guide") => $"About thirty minutes after sunset, turn your attention toward {direction} and look for the two bright planetary points near each other.",
             ("PlanetConjunction", "what-you-will-see") => "In the deepening twilight, one planet may blaze while the other holds a steadier glow, making the separation feel delicate and temporary.",
             ("PlanetConjunction", "viewing-tips") => "Let your eyes settle first, keep the horizon clear, and only then use binoculars to linger on the pairing.",
-            ("PlanetConjunction", "final-reminder") => "In a few nights, the planets will drift apart once again. Their brief meeting in our evening sky will end, just as all celestial alignments eventually do. But for those who pause to look up, the memory of seeing two distant worlds share the same patch of sky can remain long after the conjunction itself has passed.",
+            ("PlanetConjunction", "final-reminder") => $"That is your professional observing reminder for {title}: save {date}, check the forecast and horizon, and enjoy this line-of-sight pairing before the planets drift apart in our sky.",
             ("PlanetGrouping", "accurate-sky-guide") => $"Start with {direction}, then compare the bright points one by one.",
             ("PlanetGrouping", "what-you-will-see") => "You will see separate worlds appearing close together from our point of view.",
             ("PlanetGrouping", "viewing-tips") => "Use the horizon and nearby bright objects as guideposts before reaching for binoculars.",
-            (_, "hook") => $"{title} reveals a sky moment worth noticing.",
+            (_, "hook") => $"On {date}, {title} matters because a real sky event becomes visible from Earth. The curiosity is what changes when you watch the moment carefully.",
             (_, "what-is-it") => $"{title} is the event this guide is built around.",
             (_, "cause") => "This event happens because familiar objects keep moving through predictable positions.",
             (_, "interesting-fact") => "The most interesting detail is how ordinary motion can create an uncommon view.",
-            (_, "best-time") => $"The best time to watch is during {time}.",
+            (_, "best-time") => $"On {date}, the peak local time is around {time}, with the viewing window described as {window}{timezone}.",
             (_, "accurate-sky-guide") => $"Use {direction} as your practical sky guide.",
             (_, "what-you-will-see") => "You will see the event as a real change in the sky, not just a date on a calendar.",
             (_, "viewing-tips") => "Give yourself a clear view, a few quiet minutes, and as little stray light as possible.",
-            (_, "final-reminder") => $"{title} is brief enough to miss, and memorable enough to plan for.",
+            (_, "final-reminder") => $"That is your professional observing reminder for {title}: save {date}, check local conditions, choose a safe view, and let the sky do the rest.",
             _ => $"{title} deserves a distinct note for this part of the story."
         };
     }

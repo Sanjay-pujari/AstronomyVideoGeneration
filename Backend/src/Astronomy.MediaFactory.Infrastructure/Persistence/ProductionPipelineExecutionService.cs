@@ -2491,6 +2491,13 @@ public sealed partial class ProductionPipelineExecutionService(
         return Math.Min(100, score);
     }
 
+    private static string ResolveNarrationTimezoneText(params string?[] values)
+    {
+        var joined = string.Join(" ", values.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var match = Regex.Match(joined, @"\b(?:UTC|GMT|IST|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[A-Z][A-Za-z_]+/[A-Z][A-Za-z_]+)\b");
+        return match.Success ? match.Value : string.Empty;
+    }
+
     private static Phase14DocumentaryNarration BuildPhase14DocumentaryNarration(ProductionPhaseContext context)
     {
         Phase14LastTraceName = null;
@@ -2521,8 +2528,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var expansionContext = new LongSceneNarrationExpansionContext(
             FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.ExecutionContext?.EventType, family),
             FirstNonEmpty(context.ProductionEventIntelligence.ShortTitle, context.Request.ShortTitle, context.ProductionEventIntelligence.Title),
+            (context.ProductionEventIntelligence.EventDate ?? context.ProductionEventIntelligence.PeakUtc)?.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture) ?? "the exact event date supplied for this event",
             FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime, context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal),
+            FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal, context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime),
             FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint),
+            ResolveNarrationTimezoneText(context.ProductionEventIntelligence.LocalPeakTime, context.ProductionEventIntelligence.BestViewingWindowLocal, context.ProductionEventIntelligence.PreferredViewingWindow, context.Request.LocalPeakTime, context.Request.BestViewingWindowLocal),
             FirstNonEmpty(context.ExecutionContext?.ContentStrategy, context.ProductionEventIntelligence.StrategyId, context.Request.ContentStrategy));
         var shortDrafts = BuildSceneLevelNarrationDrafts(context, "short", script.Sections, family);
         var longDrafts = BuildSceneLevelNarrationDrafts(context, "long", script.Sections, family);
@@ -2568,6 +2578,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
             .ToArray();
         var combinedText = string.Join(" ", finalText.Select(item => item.text));
+        ValidatePrePhase14NarrationV31(finalText.Select(item => ($"{item.format}:{item.sceneId}", item.text)).ToArray());
         if (ContainsAuthoringInstructionText(combinedText))
         {
             TracePhase14Throw("Phase14.BuildPhase14DocumentaryNarration.throw.AuthoringInstructionText", "Phase 14 EventStoryComposer output contains authoring instructions and cannot be written.");
@@ -2602,6 +2613,35 @@ public sealed partial class ProductionPipelineExecutionService(
 
         static string combinedCandidateText(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts)
             => string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+    }
+
+
+    private static void ValidatePrePhase14NarrationV31(IReadOnlyList<(string SceneKey, string Text)> sceneTexts)
+    {
+        var relativeDateTerms = new[] { "today", "tonight", "tomorrow", "this evening", "yesterday", "आज", "आज रात", "कल", "कल रात", "आज शाम" };
+        var errors = new List<string>();
+        foreach (var (sceneKey, text) in sceneTexts)
+        {
+            var relativeHits = relativeDateTerms
+                .Where(term => Regex.IsMatch(term, @"^[a-z ]+$", RegexOptions.IgnoreCase)
+                    ? Regex.IsMatch(text ?? string.Empty, @"(?<![\p{L}\p{N}])" + Regex.Escape(term) + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase)
+                    : Regex.IsMatch(text ?? string.Empty, @"(?<![\p{L}\p{N}])" + Regex.Escape(term) + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (relativeHits.Length > 0) errors.Add($"{sceneKey} contains relative date terms: {string.Join(", ", relativeHits)}");
+
+            var duplicateSentences = Regex.Split(text ?? string.Empty, @"(?<=[.!?।])\s+")
+                .Select(sentence => Regex.Replace(sentence, @"[^\p{L}\p{N}]+", " ").Trim())
+                .Where(sentence => !string.IsNullOrWhiteSpace(sentence))
+                .GroupBy(sentence => sentence, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key)
+                .ToArray();
+            if (duplicateSentences.Length > 0) errors.Add($"{sceneKey} contains duplicate sentences: {string.Join(" | ", duplicateSentences)}");
+        }
+
+        if (errors.Count > 0)
+            throw new InvalidOperationException("Pre-Phase-14 narration validation failed: " + string.Join("; ", errors));
     }
 
     private static Phase14EventConsistencyDiagnostics ValidatePhase14EventConsistency(
@@ -3190,7 +3230,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
             return purpose switch
             {
-                "hook" => isLong ? "पूर्णिमा का चंद्र प्रकाश सर्दियों के आकाश में शांत चमक फैलाता है और रात्रि का दृश्य तुरंत पहचान में आ जाता है।" : "पूर्णिमा की चंद्र चमक आज रात क्षितिज और आकाश को खास बनाती है।",
+                "hook" => isLong ? "पूर्णिमा का चंद्र प्रकाश सर्दियों के आकाश में शांत चमक फैलाता है और रात्रि का दृश्य तुरंत पहचान में आ जाता है।" : "पूर्णिमा की चंद्र चमक तय तारीख पर क्षितिज और आकाश को खास बनाती है।",
                 "what-is-it" => "वुल्फ मून पूर्णिमा का सांस्कृतिक नाम है, जिसमें चंद्रमा की पूरी चमक लोक परंपराओं और मौसम की यादों से जुड़ती है।",
                 "cause" => "पूर्णिमा तब बनती है जब पृथ्वी से देखने पर चंद्रमा सूर्य के विपरीत दिशा में होता है और उसका प्रकाशित भाग लगभग पूरा दिखता है।",
                 "interesting-fact" => "वुल्फ मून जैसे नाम वैज्ञानिक चरण को लोक परंपराओं, ऋतुओं और सांस्कृतिक नामकरण की कहानी से जोड़ते हैं।",
@@ -3408,7 +3448,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var subject = lower.Contains("geminids") ? "जेमिनिड्स उल्का वर्षा" : "उल्का वर्षा";
             return purpose switch
             {
-                "hook" => $"आज रात {subject} जिज्ञासा की शुरुआत करती है: अंधेरे आसमान में अचानक चमकती लकीरें कब निकलेंगी, यही रोमांच है।",
+                "hook" => $"{subject} तय तारीख पर जिज्ञासा की शुरुआत करती है: अंधेरे आसमान में अचानक चमकती लकीरें कब निकलेंगी, यही रोमांच है।",
                 "what-is-it" => $"{subject} वह समय है जब पृथ्वी मलबे की धारा से गुजरती है और छोटे कण वायुमंडल में चमकदार उल्का लकीर बनाते हैं।",
                 "cause" => $"कारण यह है कि पृथ्वी धूमकेतु या क्षुद्रग्रह से छूटे कणों की धारा काटती है; ये कण जलकर तेज चमक पैदा करते हैं।",
                 "interesting-fact" => $"रोचक तथ्य यह है कि कई उल्काएं रेडिएंट की दिशा से आती लगती हैं, फिर भी उनकी चमक पूरे आकाश में कहीं भी दिख सकती है।",
@@ -3434,7 +3474,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return purpose switch
         {
-            "hook" => "जिज्ञासा की शुरुआत में आज की आकाशीय घटना ध्यान खींचती है और आगे देखने का कारण देती है।",
+            "hook" => "जिज्ञासा की शुरुआत में यह आकाशीय घटना ध्यान खींचती है और आगे देखने का कारण देती है।",
             "cause" => "कारण और प्रक्रिया के रूप में यह घटना आकाशीय गति, स्थिति और हमारी दृष्टि से समझ में आती है।",
             "accurate-sky-guide" => "कहाँ देखना है: दिशा, ऊँचाई और खुला क्षितिज तय करके लक्ष्य को आराम से खोजें।",
             "viewing-tips" => "अवलोकन सलाह: रोशनी कम रखें, आँखों को ढलने दें और उपकरणों से पहले नंगी आँखों से दृश्य पहचानें।",
@@ -3450,7 +3490,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var subject = lower.Contains("jupiter") && lower.Contains("venus") ? "बृहस्पति और शुक्र" : "चमकीले ग्रह";
         return purpose switch
         {
-            "hook" => $"आज शाम {subject} की युति जिज्ञासा जगाती है: दो तेज रोशनियां इतनी पास क्यों दिख रही हैं, यह देखने लायक शुरुआत है।",
+            "hook" => $"{subject} की युति तय तारीख पर जिज्ञासा जगाती है: दो तेज रोशनियां इतनी पास क्यों दिख रही हैं, यह देखने लायक शुरुआत है।",
             "cause" => $"{subject} सचमुच पास नहीं आ जाते; पृथ्वी से हमारी दृष्टि-रेखा और उनकी कक्षीय स्थितियां उन्हें एक ही दिशा में दिखाती हैं।",
             "accurate-sky-guide" => $"देखने के लिए सूर्यास्त के बाद पश्चिमी क्षितिज की ओर खुली जगह चुनें और कम ऊंचाई पर दो चमकीले बिंदुओं को ढूंढें।",
             "best-time" => $"सबसे अच्छा समय शाम ढलने के तुरंत बाद है, जब आसमान गहरा हो रहा हो लेकिन ग्रह अभी क्षितिज के ऊपर साफ दिखते हों।",
@@ -3507,7 +3547,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 return "नंगी आंखों से पहले पूरा आकाश देखें, फिर दूरबीन हो तो चंद्र किनारे, गड्ढों और चमकदार सतह को शांत ढंग से देखें।";
             if (lower.Contains("reminder") || scene.Contains("final") || purpose == "final-reminder")
                 return "पूर्णिमा की शांत चमक के साथ कुछ पल रुकें; सरल आकाशीय अवलोकन भी रात को यादगार बना सकता है।";
-            return "पूर्णिमा की चंद्र चमक, खुला क्षितिज और सर्दियों का आकाश मिलकर आज रात का रात्रि दृश्य खास बनाते हैं।";
+            return "पूर्णिमा की चंद्र चमक, खुला क्षितिज और सर्दियों का आकाश मिलकर तय तारीख का रात्रि दृश्य खास बनाते हैं।";
         }
 
     private static IReadOnlyList<object> BuildScenePurposeTranslationDiagnostics(IReadOnlyDictionary<string, string> sourceSceneTextByKey, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
@@ -6553,7 +6593,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string AdaptPlanetConjunctionHindi(string english)
-        => "आज रात आसमान में ग्रहों की यह नज़दीकी एक शांत और खूबसूरत दृश्य बनाती है। दूरबीन न हो तो भी, साफ क्षितिज और कुछ धैर्य के साथ आप इस पल को आसानी से महसूस कर सकते हैं।";
+        => "तय तारीख पर आसमान में ग्रहों की यह नज़दीकी एक शांत और खूबसूरत दृश्य बनाती है। दूरबीन न हो तो भी, साफ क्षितिज और कुछ धैर्य के साथ आप इस पल को आसानी से महसूस कर सकते हैं।";
 
     private async Task<bool> ConcatenatePhase15AudioAsync(IReadOnlyList<string> inputFiles, string outputPath, CancellationToken cancellationToken)
     {
@@ -8388,7 +8428,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return string.Join(" ", new[]
         {
-            $"{title} is the current {eventType} highlight, and {shortTitle} is worth planning for tonight.",
+            $"{title} is the current {eventType} highlight, and {shortTitle} is worth planning for on the exact event date.",
             $"Watch for {objects} near {direction}, with peak timing around {localPeak} and the best viewing window at {window}.",
             viewingTip,
             "Check clouds, choose a safe open spot, save this viewing window, share it nearby, and step outside safely."
