@@ -1124,4 +1124,35 @@ Saturn, Mars, Jupiter, and Venus share the western sky.
         Assert.Contains("requiredObjectValidationSkippedBecause", diagnosticsText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void MeteorQuestionAnswerSet_FormatsBestTimeAsNaturalPresenterParagraph()
+    {
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy", "MeteorShower", "Geminids Meteor Shower Peak", "Geminids",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"), DateTimeOffset.Parse("2026-12-14T06:00:00Z"),
+            "2026-12-14 11:30 +05:30", "2026-12-14 00:00–05:00 IST", "east to overhead", "India",
+            ["Geminids"], [], null, "Low", 10m, "Geminids Meteor Shower Peak", [], [], [], [], []);
+        var context = new QuestionAnswerSetBuildContext(
+            Guid.NewGuid(),
+            "geminids-2026",
+            "IN-RJ-UDAIPUR",
+            "en",
+            "V3.1",
+            "Udaipur",
+            DateTimeOffset.Parse("2026-12-14T11:30:00+05:30"),
+            "IST",
+            DateTimeOffset.Parse("2026-06-24T00:00:00Z"));
+
+        var answerSet = new MeteorShowerStrategy().BuildQuestionAnswerSet(intelligence, context);
+        var bestTime = answerSet.Answers.Single(answer => answer.Type == AstronomyQuestionTypes.When).Answer;
+
+        Assert.Equal("For observers in Udaipur, the recommended viewing window runs from midnight to 5:00 AM IST on December 14, 2026. Find a dark, open location and look from the eastern sky toward overhead after 10 PM as the radiant climbs higher.", bestTime);
+        Assert.DoesNotMatch(@"\b\d{4}-\d{2}-\d{2}\b", bestTime);
+        Assert.DoesNotMatch(@"(?<!\w)[+-]\d{2}:\d{2}(?!\w)", bestTime);
+        Assert.DoesNotContain("during December", bestTime, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("listed viewing window", bestTime, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("local viewing window", bestTime, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(bestTime, "December 14, 2026").Count);
+    }
+
 }

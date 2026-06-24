@@ -298,10 +298,55 @@ public abstract class MediaEventStrategyBase : IMediaEventStrategy
 
     protected static string ViewingTime(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
         => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)
-            ? intelligence.BestViewingWindowLocal!
+            ? FormatViewingWindowForSpeech(intelligence.BestViewingWindowLocal!, context.TimeZoneAbbreviation)
             : !string.IsNullOrWhiteSpace(intelligence.LocalPeakTime)
-                ? intelligence.LocalPeakTime!
+                ? FormatLocalPeakTimeForSpeech(intelligence.LocalPeakTime!, context.TimeZoneAbbreviation)
                 : $"around {context.LocalPeakTime:h:mm tt} {context.TimeZoneAbbreviation}";
+
+    protected static string ViewingWindowOnly(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
+        => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)
+            ? FormatViewingWindowForSpeech(intelligence.BestViewingWindowLocal!, context.TimeZoneAbbreviation)
+            : "from midnight to 5:00 AM " + context.TimeZoneAbbreviation;
+
+    protected static string FormatViewingWindowForSpeech(string value, string fallbackTimeZone)
+    {
+        var cleaned = Clean(value);
+        var match = Regex.Match(cleaned, @"^(?<date>\d{4}-\d{2}-\d{2})\s+(?<start>\d{1,2}:\d{2})\s*[–-]\s*(?<end>\d{1,2}:\d{2})\s*(?<tz>[A-Z]{2,5})?$", RegexOptions.IgnoreCase);
+        if (!match.Success || !DateTime.TryParseExact(match.Groups["date"].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            return RemoveTechnicalTimeArtifacts(cleaned);
+
+        var timeZone = !string.IsNullOrWhiteSpace(match.Groups["tz"].Value) ? match.Groups["tz"].Value.ToUpperInvariant() : fallbackTimeZone;
+        return $"from {FormatClockForSpeech(match.Groups["start"].Value)} to {FormatClockForSpeech(match.Groups["end"].Value)} {timeZone} on {date:MMMM d, yyyy}";
+    }
+
+    protected static string FormatLocalPeakTimeForSpeech(string value, string fallbackTimeZone)
+    {
+        var cleaned = Clean(value);
+        var match = Regex.Match(cleaned, @"^(?<date>\d{4}-\d{2}-\d{2})\s+(?<time>\d{1,2}:\d{2})(?:\s+(?<offset>[+-]\d{2}:\d{2}))?(?:\s+(?<tz>[A-Z]{2,5}))?$", RegexOptions.IgnoreCase);
+        if (!match.Success || !DateTime.TryParseExact(match.Groups["date"].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            return RemoveTechnicalTimeArtifacts(cleaned);
+
+        var timeZone = !string.IsNullOrWhiteSpace(match.Groups["tz"].Value) ? match.Groups["tz"].Value.ToUpperInvariant() : fallbackTimeZone;
+        return $"around {FormatClockForSpeech(match.Groups["time"].Value)} {timeZone} on {date:MMMM d, yyyy}";
+    }
+
+    private static string FormatClockForSpeech(string value)
+    {
+        if (!TimeOnly.TryParseExact(value, "H:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time)
+            && !TimeOnly.TryParseExact(value, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time))
+            return value;
+        if (time.Hour == 0 && time.Minute == 0) return "midnight";
+        if (time.Hour == 12 && time.Minute == 0) return "noon";
+        return DateTime.Today.Add(time.ToTimeSpan()).ToString(time.Minute == 0 ? "h:mm tt" : "h:mm tt", CultureInfo.InvariantCulture);
+    }
+
+    private static string RemoveTechnicalTimeArtifacts(string value)
+    {
+        var cleaned = Regex.Replace(value, @"\b\d{4}-\d{2}-\d{2}\b", string.Empty);
+        cleaned = Regex.Replace(cleaned, @"(?<!\w)[+-]\d{2}:\d{2}(?!\w)", string.Empty);
+        cleaned = Regex.Replace(cleaned, @"\b(?:listed|local) viewing window\b", "recommended viewing window", RegexOptions.IgnoreCase);
+        return Clean(cleaned.Trim(' ', ',', '-', '–', '—'));
+    }
 
     protected static string Direction(ProductionEventIntelligence intelligence)
         => !string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint) ? intelligence.SkyDirectionHint! : "the clearest open sky";
@@ -412,6 +457,7 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
     {
         var showerName = intelligence.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? intelligence.Title : $"{intelligence.Title} meteor shower";
         var bestWindow = ViewingTime(intelligence, context);
+        var recommendedWindow = ViewingWindowOnly(intelligence, context);
         var direction = Direction(intelligence);
         var moonInterference = string.IsNullOrWhiteSpace(intelligence.MoonInterference) ? "low" : intelligence.MoonInterference!;
         var moonPhrase = intelligence.MoonIlluminationPercent.HasValue
@@ -422,11 +468,26 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
         [
             Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{showerName} peaks as Earth crosses space debris, producing bright meteor streaks.", 1),
             Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction}; {(!string.IsNullOrWhiteSpace(intelligence.ReferenceObject) ? intelligence.ReferenceObject : "meteors can appear anywhere across the dark sky")}.", 2),
-            Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"Best viewing is {bestWindow}, when the sky is darkest.", 3),
+            Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"For observers in {context.LocationName}, the recommended viewing window runs {recommendedWindow}. Find a dark, open location and look {FormatMeteorDirectionForSpeech(direction)} after 10 PM as the radiant climbs higher.", 3),
             Answer(AstronomyQuestionTypes.How, "How do I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adjust.", 4),
             Answer(AstronomyQuestionTypes.Why, "Why is this event special?", "Why it matters", $"{showerName} is one of the strongest annual meteor showers, with {moonPhrase} improving viewing quality.", 5),
             Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", $"Set a reminder for {reminder}, check weather, and pick a dark open location.", 6)
         ]);
+    }
+
+
+    private static string FormatMeteorDirectionForSpeech(string direction)
+    {
+        var cleaned = Clean(direction).ToLowerInvariant();
+        if (cleaned.Contains("east") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the eastern sky toward overhead";
+        if (cleaned.Contains("north") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the northern sky toward overhead";
+        if (cleaned.Contains("south") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the southern sky toward overhead";
+        if (cleaned.Contains("west") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the western sky toward overhead";
+        if (cleaned.Contains("east")) return "toward the eastern sky";
+        if (cleaned.Contains("west")) return "toward the western sky";
+        if (cleaned.Contains("north")) return "toward the northern sky";
+        if (cleaned.Contains("south")) return "toward the southern sky";
+        return "across the darkest open sky";
     }
 
     private static string FormatMeteorReminderNight(string bestWindow, DateTimeOffset localPeak)
