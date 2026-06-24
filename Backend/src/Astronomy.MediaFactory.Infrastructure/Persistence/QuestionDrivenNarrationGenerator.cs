@@ -106,7 +106,7 @@ public sealed class QuestionDrivenNarrationGenerator(
                 ?? throw new InvalidOperationException("Existing question-driven narration could not be parsed.");
             var existingReview = JsonSerializer.Deserialize<QuestionDrivenNarrationReviewDto>(await File.ReadAllTextAsync(reviewPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing question-driven narration review could not be parsed.");
-            existingNarration = SceneNarrationDuplicateValidator.ValidateAndRepair(existingNarration);
+            existingNarration = FinalNarrationDeduplicationPass.Apply(existingNarration);
             var existingValidationReview = BuildReview(existingNarration, warnings, request.ProductionContext);
             if (existingReview.IsValid && existingValidationReview.IsValid)
             {
@@ -127,7 +127,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var enrichedPlan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(inputJson, JsonOptions)
             ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
 
-        var narration = SceneNarrationDuplicateValidator.ValidateAndRepair(BuildNarration(enrichedPlan, request));
+        var narration = FinalNarrationDeduplicationPass.Apply(BuildNarration(enrichedPlan, request));
         var subtitlePaths = request.DryRun ? (Short: string.Empty, Long: string.Empty) : await GenerateNarrationSubtitlesAsync(narration, narrationPath, cancellationToken);
         narration = narration with { Diagnostics = EnrichDiagnosticsWithSubtitles(narration.Diagnostics, subtitlePaths.Short, subtitlePaths.Long) };
         ValidateNarrationHasNoForbiddenLeakage(narration, request.ProductionContext);
@@ -468,7 +468,7 @@ public sealed class QuestionDrivenNarrationGenerator(
         var longNarrationRoot = Path.Combine(narrationRoot, "long");
         Directory.CreateDirectory(shortNarrationRoot);
         Directory.CreateDirectory(longNarrationRoot);
-        narration = SceneNarrationDuplicateValidator.ValidateAndRepair(narration);
+        narration = FinalNarrationDeduplicationPass.Apply(narration);
         var sourceScenes = narration.Scenes.ToArray();
         var shortFiles = await WriteSubtitleNarrationSourceFilesAsync(shortNarrationRoot, sourceScenes.Take(6).ToArray(), cancellationToken);
         var longFiles = await WriteSubtitleNarrationSourceFilesAsync(longNarrationRoot, sourceScenes, cancellationToken);

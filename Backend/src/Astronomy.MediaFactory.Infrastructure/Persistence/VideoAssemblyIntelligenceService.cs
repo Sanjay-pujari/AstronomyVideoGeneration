@@ -365,7 +365,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
 
         var intelligence = await EnsureRequiredScriptInputsAsync(request.EventId, request.RegionId, ResolveRequestProfile(request), cancellationToken);
-        var script = BuildVideoNarrationScript(request, intelligence);
+        var script = FinalNarrationDeduplicationPass.Apply(BuildVideoNarrationScript(request, intelligence));
         ValidateVideoNarrationScript(script);
 
         if (!request.DryRun)
@@ -405,8 +405,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
 
         var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, profile, cancellationToken);
-        var narrationText = await ReadRequiredNarrationTextAsync(request, profile, script, cancellationToken);
-        script = script with { FullNarrationText = narrationText };
+        _ = await ReadRequiredNarrationTextAsync(request, profile, script, cancellationToken);
+        script = FinalNarrationDeduplicationPass.Apply(script);
+        var narrationText = script.FullNarrationText;
         var provider = ResolveTtsProvider(request, script);
         var actualDurationSeconds = NormalizeTtsDuration(profile, script.TotalEstimatedDurationSeconds);
         var narrationWordCount = CountSpokenWords(narrationText);
@@ -448,6 +449,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
                 Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
                 File.Copy(tempAudioPath, audioPath, overwrite: true);
+                timings = FinalNarrationDeduplicationPass.Apply(timings);
+                ValidateVideoTtsTimings(timings);
                 await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
                 generatedFiles.Add(NormalizePath(audioPath));
                 generatedFiles.Add(NormalizePath(timingsPath));
@@ -464,7 +467,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             }
         }
 
-        var dryRunTimings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds, provider.ProviderName, provider.VoiceUsed, audioValidation);
+        var dryRunTimings = FinalNarrationDeduplicationPass.Apply(BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds, provider.ProviderName, provider.VoiceUsed, audioValidation));
         ValidateVideoTtsTimings(dryRunTimings);
         return BuildTtsResponse(request.Phase, audioPath, timingsPath, dryRunTimings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
     }
@@ -488,8 +491,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
         EnsureLongFormAzureTtsAvailable();
         var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, ScenePresentationProfile.LongForm, cancellationToken);
-        var narrationText = await ReadRequiredNarrationTextAsync(request, ScenePresentationProfile.LongForm, script, cancellationToken);
-        script = script with { FullNarrationText = narrationText };
+        _ = await ReadRequiredNarrationTextAsync(request, ScenePresentationProfile.LongForm, script, cancellationToken);
+        script = FinalNarrationDeduplicationPass.Apply(script);
+        var narrationText = script.FullNarrationText;
         var voiceUsed = ResolveNeutralEducationalAzureVoice(script);
 
         Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
@@ -525,6 +529,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             audioValidation,
             DateTimeOffset.UtcNow,
             durationValidation);
+        timings = FinalNarrationDeduplicationPass.Apply(timings);
         ValidateLongFormVideoTtsTimings(timings);
 
         await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
@@ -715,6 +720,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
         var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException($"Required TTS input '{scriptFileName}' could not be parsed.");
+        script = FinalNarrationDeduplicationPass.Apply(script);
         ValidateVideoNarrationScript(script);
         return script;
     }
