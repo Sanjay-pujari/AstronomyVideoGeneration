@@ -4336,7 +4336,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 occupied.Remove(duplicate.NormalizedCueText);
                 syncBySceneId.TryGetValue(duplicate.SceneId, out var syncItem);
                 durationBySceneId.TryGetValue(duplicate.SceneId, out var durationItem);
-                var rewrittenCueText = BuildHindiUniqueSubtitleCueText(duplicate.CueText, duplicate.SceneId, syncItem, durationItem, occupied, "Hindi cue rewrite uniqueness loop", format, duplicate.CueIndex, duplicateCountBefore);
+                var rewrittenCueText = BuildHindiUniqueSubtitleCueText(duplicate.CueText, duplicate.SceneId, syncItem, durationItem, occupied, "Hindi cue rewrite uniqueness loop", format, duplicate.CueIndex, duplicateCountBefore, options, out var cueRewriteAttemptCount, out var cueRewriteWrappingRejectCount, out var cueRewriteAcceptedByWrapping);
                 var normalizedRewrite = NormalizeNarrationForDuplicateCheck(rewrittenCueText);
                 TracePhase14HindiLoop("Hindi cue rewrite uniqueness loop", duplicate.SceneId, $"{format}:{duplicate.SceneId}:cue-{duplicate.CueIndex}", 1, rewrittenCueText, duplicateCountBefore, occupied.Contains(normalizedRewrite) ? 1 : 0);
                 if (string.IsNullOrWhiteSpace(normalizedRewrite) || occupied.Contains(normalizedRewrite))
@@ -4352,7 +4352,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 var cueId = $"{format}:{duplicate.SceneId}:cue-{duplicate.CueIndex}";
                 rewrittenCueIds.Add(cueId);
                 rewrittenSceneIds.Add(duplicate.SceneId);
-                diagnostics.Add(new { cueId, sceneId = duplicate.SceneId, sourceFile = normalizedPath, originalCueText = duplicate.CueText, rewrittenCueText, wrapLengthBefore = MeasureSubtitleWrapLength(duplicate.CueText), wrapLengthAfter = MeasureSubtitleWrapLength(rewrittenCueText), cueRewriteWithinWrapLimit = CanWrapSubtitleChunk(rewrittenCueText), cueRewriteAppliedBeforeFileWrite = true, cueRewriteAppliedAfterFileWrite = false, narrationFileUpdatedAfterCueRewrite = true });
+                var cueRewriteWithinWrapLimit = IsValidSubtitleCueCandidate(rewrittenCueText, options, out var finalWrappedLines);
+                diagnostics.Add(new { cueId, sceneId = duplicate.SceneId, sourceFile = normalizedPath, originalCueText = duplicate.CueText, rewrittenCueText, wrapLengthBefore = MeasureSubtitleWrapLength(duplicate.CueText), wrapLengthAfter = MeasureSubtitleWrapLength(rewrittenCueText), cueRewriteWithinWrapLimit, duplicateCueRewriteAttemptCount = cueRewriteAttemptCount, candidateRejectedByWrapping = cueRewriteWrappingRejectCount, candidateAccepted = cueRewriteAcceptedByWrapping, finalWrappedLineCount = finalWrappedLines.Count, finalWrappedCharCount = finalWrappedLines.Count == 0 ? 0 : finalWrappedLines.Max(line => line.Length), cueRewriteAppliedBeforeFileWrite = true, cueRewriteAppliedAfterFileWrite = false, narrationFileUpdatedAfterCueRewrite = true });
             }
         }
 
@@ -4691,7 +4692,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 occupied.Remove(normalizedOriginalCueText);
                 syncBySceneId.TryGetValue(block.SceneId, out var syncItem);
                 durationBySceneId.TryGetValue(block.SceneId, out var durationItem);
-                var rewrittenCueText = BuildHindiUniqueSubtitleCueText(originalCueText, block.SceneId, syncItem, durationItem, occupied, "SRT duplicate rewrite", format, block.Number, duplicateCountBefore, block.SourceNarrationText);
+                var rewrittenCueText = BuildHindiUniqueSubtitleCueText(originalCueText, block.SceneId, syncItem, durationItem, occupied, "SRT duplicate rewrite", format, block.Number, duplicateCountBefore, options, out var cueRewriteAttemptCount, out var cueRewriteWrappingRejectCount, out var cueRewriteAcceptedByWrapping, block.SourceNarrationText);
                 var normalizedRewrite = NormalizeNarrationForDuplicateCheck(rewrittenCueText);
                 TracePhase14HindiLoop("SRT duplicate rewrite", block.SceneId, $"{format}:{block.SceneId}:cue-{block.Number}", 1, rewrittenCueText, duplicateCountBefore, occupied.Contains(normalizedRewrite) ? 1 : 0);
                 if (string.IsNullOrWhiteSpace(normalizedRewrite) || occupied.Contains(normalizedRewrite))
@@ -4704,6 +4705,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     SourceText = rewrittenCueText,
                     ChunkHash = SubtitleChunkHash(rewrittenCueText)
                 };
+                var cueRewriteWithinWrapLimit = IsValidSubtitleCueCandidate(rewrittenCueText, options, out var finalWrappedLines);
                 diagnostics.Add(new
                 {
                     sceneId = block.SceneId,
@@ -4711,7 +4713,12 @@ public sealed partial class ProductionPipelineExecutionService(
                     rewrittenCueText,
                     wrapLengthBefore = MeasureSubtitleWrapLength(originalCueText),
                     wrapLengthAfter = MeasureSubtitleWrapLength(rewrittenCueText),
-                    cueRewriteWithinWrapLimit = CanWrapSubtitleChunk(rewrittenCueText),
+                    cueRewriteWithinWrapLimit,
+                    duplicateCueRewriteAttemptCount = cueRewriteAttemptCount,
+                    candidateRejectedByWrapping = cueRewriteWrappingRejectCount,
+                    candidateAccepted = cueRewriteAcceptedByWrapping,
+                    finalWrappedLineCount = finalWrappedLines.Count,
+                    finalWrappedCharCount = finalWrappedLines.Count == 0 ? 0 : finalWrappedLines.Max(line => line.Length),
                     cueRewriteSceneId = block.SceneId,
                     cueRewriteFormat = format,
                     cueId = $"{format}:{block.SceneId}:cue-{block.Number}",
@@ -4726,32 +4733,38 @@ public sealed partial class ProductionPipelineExecutionService(
         return diagnostics;
     }
 
-    private static string BuildHindiUniqueSubtitleCueText(string originalCueText, string sceneId, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem, HashSet<string> occupied, string loopName, string format, int cueIndex, int duplicateCountBefore, string? sourceSceneNarration = null)
+    private static string BuildHindiUniqueSubtitleCueText(string originalCueText, string sceneId, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem, HashSet<string> occupied, string loopName, string format, int cueIndex, int duplicateCountBefore, SubtitleTtsOptions options, out int duplicateCueRewriteAttemptCount, out int candidateRejectedByWrapping, out bool candidateAccepted, string? sourceSceneNarration = null)
     {
         var scenePurpose = ResolvePhase14ScenePurpose(sceneId);
         var eventType = ResolveEventTypeFromCueRewriteContext(syncItem, durationItem);
         var family = NormalizePhase14DuplicateCleanupFamily(eventType, eventType, [], [], string.Join(' ', new[] { syncItem?.NarrationText, syncItem?.NarrationBeat, syncItem?.VisualIntent, durationItem?.SceneId, sceneId, sourceSceneNarration, originalCueText }.Where(value => !string.IsNullOrWhiteSpace(value))));
-        var originalLength = NormalizeNarrationWhitespace(originalCueText).Length;
         var attempt = 0;
+        var wrappingRejects = 0;
 
-        foreach (var candidate in BuildShortHindiDuplicateCueAlternates(family, scenePurpose, sceneId))
+        foreach (var candidate in BuildHindiDuplicateCueRewriteCandidates(originalCueText, family, scenePurpose, sceneId))
         {
             attempt++;
-            if (attempt > Phase14HindiCueMaxRewriteAttempts)
-                throw new InvalidOperationException($"Phase 14 Hindi cue duplicate rewrite exceeded {Phase14HindiCueMaxRewriteAttempts} rewrite attempts. loop={loopName}; format={format}; sceneId={sceneId}; cue={cueIndex}; textHash={SubtitleChunkHash(originalCueText)}; duplicateCountBefore={duplicateCountBefore}; duplicateCountAfter=1");
-
             var normalizedCandidate = NormalizeNarrationWhitespace(candidate);
             var normalized = NormalizeNarrationForDuplicateCheck(normalizedCandidate);
             var duplicateCountAfter = occupied.Contains(normalized) ? 1 : 0;
+            var wrappingValid = IsValidSubtitleCueCandidate(normalizedCandidate, options, out _);
+            if (!wrappingValid) wrappingRejects++;
             TracePhase14HindiLoop(loopName, sceneId, $"{format}:{sceneId}:cue-{cueIndex}", attempt, normalizedCandidate, duplicateCountBefore, duplicateCountAfter);
-            if (!string.IsNullOrWhiteSpace(normalized)
-                && normalizedCandidate.Length < originalLength
-                && !occupied.Contains(normalized)
-                && CanWrapSubtitleChunk(normalizedCandidate))
+            if (!string.IsNullOrWhiteSpace(normalized) && !occupied.Contains(normalized) && wrappingValid)
+            {
+                duplicateCueRewriteAttemptCount = attempt;
+                candidateRejectedByWrapping = wrappingRejects;
+                candidateAccepted = true;
                 return normalizedCandidate;
+            }
         }
 
-        throw new InvalidOperationException($"Phase 14 SRT validation failed: Hindi duplicate subtitle cue rewrite exceeded SRT wrapping limits. sceneId={sceneId}; originalCueText={originalCueText}; wrapLengthBefore={MeasureSubtitleWrapLength(originalCueText)}");
+        duplicateCueRewriteAttemptCount = attempt;
+        candidateRejectedByWrapping = wrappingRejects;
+        candidateAccepted = false;
+        var lastResort = BuildLastResortHindiDuplicateCueText(originalCueText, scenePurpose, sceneId, occupied, options, ref duplicateCueRewriteAttemptCount, ref candidateRejectedByWrapping, loopName, format, cueIndex, duplicateCountBefore);
+        candidateAccepted = true;
+        return lastResort;
     }
 
     private static IReadOnlyList<string> BuildShortHindiDuplicateCueAlternates(string family, string scenePurpose, string sceneId)
@@ -4780,8 +4793,67 @@ public sealed partial class ProductionPipelineExecutionService(
             .Append(string.IsNullOrWhiteSpace(compactSceneId) ? string.Empty : $"क्रम {compactSceneId} याद रखें।")
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(Phase14HindiCueMaxRewriteAttempts)
             .ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildHindiDuplicateCueRewriteCandidates(string originalCueText, string family, string scenePurpose, string sceneId)
+    {
+        var normalizedOriginal = NormalizeNarrationWhitespace(originalCueText);
+        var candidates = new List<string>();
+        candidates.AddRange(BuildShortHindiDuplicateCueAlternates(family, scenePurpose, sceneId));
+        foreach (var discriminator in BuildHindiScenePurposeDiscriminators(scenePurpose, sceneId))
+        {
+            candidates.Add($"{normalizedOriginal} {discriminator}");
+            candidates.Add(discriminator);
+        }
+        return candidates
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+            .Select(NormalizeNarrationWhitespace)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildHindiScenePurposeDiscriminators(string scenePurpose, string sceneId)
+    {
+        var compactSceneId = Regex.Replace(sceneId, @"[^0-9A-Za-z]+", "");
+        var purpose = scenePurpose switch
+        {
+            "cause" => "[कारण]",
+            "accurate-sky-guide" => "[मार्गदर्शक]",
+            "final-reminder" => "[अंतिम संदेश]",
+            _ => "[अवलोकन]"
+        };
+        return new[] { purpose, "[अवलोकन]", "[मार्गदर्शक]", string.IsNullOrWhiteSpace(compactSceneId) ? string.Empty : $"[{compactSceneId}]" }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string BuildLastResortHindiDuplicateCueText(string originalCueText, string scenePurpose, string sceneId, HashSet<string> occupied, SubtitleTtsOptions options, ref int duplicateCueRewriteAttemptCount, ref int candidateRejectedByWrapping, string loopName, string format, int cueIndex, int duplicateCountBefore)
+    {
+        var baseText = NormalizeNarrationWhitespace(originalCueText);
+        foreach (var discriminator in BuildHindiScenePurposeDiscriminators(scenePurpose, sceneId))
+        {
+            foreach (var candidate in new[] { $"{baseText} {discriminator}", discriminator })
+            {
+                duplicateCueRewriteAttemptCount++;
+                var normalizedCandidate = NormalizeNarrationWhitespace(candidate);
+                var normalized = NormalizeNarrationForDuplicateCheck(normalizedCandidate);
+                var duplicateCountAfter = occupied.Contains(normalized) ? 1 : 0;
+                var wrappingValid = IsValidSubtitleCueCandidate(normalizedCandidate, options, out _);
+                if (!wrappingValid) candidateRejectedByWrapping++;
+                TracePhase14HindiLoop(loopName, sceneId, $"{format}:{sceneId}:cue-{cueIndex}", duplicateCueRewriteAttemptCount, normalizedCandidate, duplicateCountBefore, duplicateCountAfter);
+                if (!string.IsNullOrWhiteSpace(normalized) && !occupied.Contains(normalized) && wrappingValid)
+                    return normalizedCandidate;
+            }
+        }
+
+        var compactSceneId = Regex.Replace(sceneId, @"[^0-9A-Za-z]+", "");
+        var fallback = string.IsNullOrWhiteSpace(compactSceneId) ? "[अवलोकन]" : $"[{compactSceneId}]";
+        if (IsValidSubtitleCueCandidate(fallback, options, out _) && !occupied.Contains(NormalizeNarrationForDuplicateCheck(fallback)))
+            return fallback;
+
+        throw new InvalidOperationException($"Phase 14 SRT validation failed: Hindi duplicate subtitle cue could not be rewritten within SRT wrapping limits. sceneId={sceneId}; originalCueText={originalCueText}; wrapLengthBefore={MeasureSubtitleWrapLength(originalCueText)}");
     }
 
     private static IReadOnlyList<string> BuildHindiCueContextPhrases(string sceneId, string scenePurpose, string eventType, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem)
@@ -5133,6 +5205,25 @@ public sealed partial class ProductionPipelineExecutionService(
         if (Regex.Split(text, @"\s+").Any(word => word.Length > options.SubtitleMaxCharsPerLine)) return false;
         try { return WrapSubtitleChunk(text, options).Count <= options.SubtitleMaxLines; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    private static bool IsValidSubtitleCueCandidate(string text, SubtitleTtsOptions options, out IReadOnlyList<string> wrappedLines)
+    {
+        wrappedLines = [];
+        if (string.IsNullOrWhiteSpace(text) || CountSpokenWords(text) > options.SubtitleMaxWordsPerCue)
+            return false;
+        try
+        {
+            var lines = WrapSubtitleChunk(text, options);
+            if (lines.Count > options.SubtitleMaxLines || lines.Any(line => line.Length > options.SubtitleMaxCharsPerLine))
+                return false;
+            wrappedLines = lines;
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static SubtitleTtsOptions NormalizePhase14SubtitleTtsOptions(SubtitleTtsOptions? configured)
@@ -5579,7 +5670,6 @@ public sealed partial class ProductionPipelineExecutionService(
         => new FileInfo(firstPath).Length == new FileInfo(secondPath).Length && File.ReadAllBytes(firstPath).SequenceEqual(File.ReadAllBytes(secondPath));
 
     private const int Phase14HindiMaxRewriteAttempts = 10;
-    private const int Phase14HindiCueMaxRewriteAttempts = 3;
     private static string? Phase14LastTraceName;
 
     private static class Phase14ExceptionDiagnosticsState
