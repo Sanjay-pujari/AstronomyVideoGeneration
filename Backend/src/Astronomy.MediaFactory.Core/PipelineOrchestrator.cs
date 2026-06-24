@@ -54,6 +54,10 @@ public sealed class PipelineOrchestrator
     private readonly IAstronomyEventStore? _eventStore;
     private readonly IAIOptimizationPipelineService? _aiOptimizationPipelineService;
     private readonly ISafeAnalyticsExecutor? _safeAnalyticsExecutor;
+    private readonly IFactExpansionService? _factExpansionService;
+    private readonly INarrationIntelligenceService? _narrationIntelligenceService;
+    private readonly IHindiNaturalizationService? _hindiNaturalizationService;
+    private readonly AstronomyV3Options _astronomyV3Options;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -99,7 +103,11 @@ public sealed class PipelineOrchestrator
         IAstronomyEventStore? eventStore = null,
         ICinematicThumbnailService? cinematicThumbnailService = null,
         IAIOptimizationPipelineService? aiOptimizationPipelineService = null,
-        ISafeAnalyticsExecutor? safeAnalyticsExecutor = null)
+        ISafeAnalyticsExecutor? safeAnalyticsExecutor = null,
+        IFactExpansionService? factExpansionService = null,
+        INarrationIntelligenceService? narrationIntelligenceService = null,
+        IHindiNaturalizationService? hindiNaturalizationService = null,
+        IOptions<AstronomyV3Options>? astronomyV3Options = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -145,6 +153,10 @@ public sealed class PipelineOrchestrator
         _eventStore = eventStore;
         _aiOptimizationPipelineService = aiOptimizationPipelineService;
         _safeAnalyticsExecutor = safeAnalyticsExecutor;
+        _factExpansionService = factExpansionService;
+        _narrationIntelligenceService = narrationIntelligenceService;
+        _hindiNaturalizationService = hindiNaturalizationService;
+        _astronomyV3Options = astronomyV3Options?.Value ?? new AstronomyV3Options();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
@@ -568,6 +580,7 @@ public sealed class PipelineOrchestrator
                         SourceOrderUsed: "FinalVisualSceneOrder"));
                 }
 
+                sceneSections = ApplyV31NarrationIntelligence(sceneSections, context);
                 sceneSections = ValidateAndCorrectFullVideoNarrationOrder(sceneSections, _logger);
                 alignedSectionsBySceneId = sceneSections.ToDictionary(section => section.Scene.SceneId, section => section.SectionText, StringComparer.OrdinalIgnoreCase);
 
@@ -2409,6 +2422,59 @@ public sealed class PipelineOrchestrator
     private static string FormatSrtTime(TimeSpan value)
         => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
 
+
+
+    private IReadOnlyList<FullVideoNarrationSection> ApplyV31NarrationIntelligence(IReadOnlyList<FullVideoNarrationSection> sections, AstronomyContext context)
+    {
+        if (!_astronomyV3Options.EnableV31NarrationIntelligence || _factExpansionService is null || _narrationIntelligenceService is null || context.SpecialEvent is null)
+            return sections;
+
+        var family = EventFamilyResolver.Resolve(context.SpecialEvent.EventType, context.SpecialEvent.EventType, context.Events.Select(e => e.ObjectName).ToArray(), Array.Empty<string>(), context.SpecialEvent.EventTitle);
+        if (!AstronomyV31Validation.IsV31Family(family))
+            return sections;
+
+        var astronomyEvent = new AstronomyEvent
+        {
+            EventType = context.SpecialEvent.EventType,
+            Title = context.SpecialEvent.EventTitle,
+            Description = context.SpecialEvent.EventDescription,
+            TargetDate = context.Date,
+            StartUtc = new DateTimeOffset(context.Date, TimeOnly.MinValue, TimeSpan.Zero),
+            EndUtc = new DateTimeOffset(context.Date, TimeOnly.MaxValue, TimeSpan.Zero),
+            LocationName = context.LocationName,
+            Timezone = context.TimeZone,
+            ContentOpportunityScore = context.SpecialEvent.ContentOpportunityScore
+        };
+        var metadata = new EventMetadata(
+            VisibilityWindow: context.Events.FirstOrDefault()?.VisibilityWindow,
+            Direction: context.Events.FirstOrDefault()?.Direction,
+            RecommendedTool: context.Events.FirstOrDefault()?.ObservationTool,
+            ScientificNote: context.SpecialEvent.EventDescription);
+        var facts = _astronomyV3Options.EnableFactExpansion
+            ? _factExpansionService.ExpandFacts(astronomyEvent, family, metadata, context.Localization.ResolvedLanguage)
+            : new FactExpansionResult(context.SpecialEvent.EventDescription, "No rarity detail is available.", "No historical context is available in the metadata.", "No next occurrence is available.", "Use the event metadata for observation guidance.", context.SpecialEvent.EventDescription, []);
+
+        return sections.Select(section =>
+        {
+            var purpose = ResolveScenePurpose(section.Scene);
+            var intelligence = _narrationIntelligenceService.BuildContext(astronomyEvent, family, purpose, facts, new Dictionary<string, string> { ["sceneType"] = section.Scene.SceneType, ["sceneTitle"] = section.Scene.SceneTitle });
+            var enriched = $"{CleanSpokenNarrationText(section.SectionText)} {intelligence.SuggestedSceneFocus}";
+            if (_astronomyV3Options.EnableHindiNaturalization && LocalizationResolver.IsHindi(context.Localization.ResolvedLanguage) && _hindiNaturalizationService is not null)
+                enriched = _hindiNaturalizationService.Naturalize(enriched, purpose, family, metadata, facts);
+            return section with { SectionText = CleanSpokenNarrationText(enriched) };
+        }).ToArray();
+    }
+
+    private static string ResolveScenePurpose(SceneObservationContext scene)
+    {
+        var text = $"{scene.NarrationFocus} {scene.SceneType} {scene.SceneTitle}";
+        if (text.Contains("hook", StringComparison.OrdinalIgnoreCase) || text.Contains("open", StringComparison.OrdinalIgnoreCase)) return "Hook";
+        if (text.Contains("cause", StringComparison.OrdinalIgnoreCase) || text.Contains("explain", StringComparison.OrdinalIgnoreCase)) return "Cause";
+        if (text.Contains("guide", StringComparison.OrdinalIgnoreCase) || text.Contains("view", StringComparison.OrdinalIgnoreCase)) return "Guide";
+        if (text.Contains("fact", StringComparison.OrdinalIgnoreCase)) return "InterestingFact";
+        if (text.Contains("final", StringComparison.OrdinalIgnoreCase) || text.Contains("close", StringComparison.OrdinalIgnoreCase)) return "FinalReminder";
+        return string.IsNullOrWhiteSpace(scene.NarrationFocus) ? "Guide" : scene.NarrationFocus;
+    }
 
     private async Task WriteSceneNarrationArtifactsAsync(
         IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> sceneNarrationEntries,

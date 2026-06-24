@@ -97,6 +97,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IValidateOptions<AzureOpenAiOptions>, AzureOpenAiOptionsValidator>();
 
+        services.AddOptions<AstronomyV3Options>()
+            .Bind(configuration.GetSection(AstronomyV3Options.SectionName))
+            .Validate(options => options.MaxInterestingFactsPerVideo >= 0, "AstronomyV3Options:MaxInterestingFactsPerVideo must be zero or greater.")
+            .ValidateOnStart();
+
         services.AddOptions<AzureSpeechOptions>()
             .Bind(configuration.GetSection(AzureSpeechOptions.SectionName))
             .Configure(options => ApplySpeechSpeedOptions(configuration.GetSection(SpeechOptions.SectionName).Get<SpeechOptions>(), options))
@@ -387,6 +392,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(TimeProvider.System);
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
+        services.AddScoped<IFactExpansionService, FactExpansionService>();
+        services.AddScoped<INarrationIntelligenceService, NarrationIntelligenceService>();
+        services.AddScoped<IHindiNaturalizationService, HindiNaturalizationService>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
         services.AddScoped<IAstronomyEventStore, EfAstronomyEventStore>();
         services.AddScoped<IAstronomyEventScoringService, AstronomyEventScoringService>();
