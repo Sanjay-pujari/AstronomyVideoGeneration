@@ -2518,12 +2518,19 @@ public sealed partial class ProductionPipelineExecutionService(
         TracePhase14Checkpoint("phase14.family.resolved");
         var script = EventStoryComposer.Compose(family, context.ProductionEventIntelligence, context.ExecutionContext);
         TracePhase14Checkpoint("phase14.story.composed");
+        var eventDateText = (context.ProductionEventIntelligence.EventDate ?? context.ProductionEventIntelligence.PeakUtc)?.ToString("d MMMM yyyy", CultureInfo.InvariantCulture);
+        var viewingWindowText = FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal, context.ProductionEventIntelligence.PreferredViewingWindow, context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime);
+        var peakTimeText = FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime, context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal);
+        var timezoneText = ResolveNarrationTimezoneText(peakTimeText, viewingWindowText);
         var expansionContext = new LongSceneNarrationExpansionContext(
             FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.ExecutionContext?.EventType, family),
             FirstNonEmpty(context.ProductionEventIntelligence.ShortTitle, context.Request.ShortTitle, context.ProductionEventIntelligence.Title),
-            FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime, context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal),
+            peakTimeText,
             FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint),
-            FirstNonEmpty(context.ExecutionContext?.ContentStrategy, context.ProductionEventIntelligence.StrategyId, context.Request.ContentStrategy));
+            FirstNonEmpty(context.ExecutionContext?.ContentStrategy, context.ProductionEventIntelligence.StrategyId, context.Request.ContentStrategy),
+            eventDateText,
+            viewingWindowText,
+            timezoneText);
         var shortDrafts = BuildSceneLevelNarrationDrafts(context, "short", script.Sections, family);
         var longDrafts = BuildSceneLevelNarrationDrafts(context, "long", script.Sections, family);
         var shortTexts = new Dictionary<string, string>(LongSceneNarrationExpander.Expand(family, expansionContext, shortDrafts, out var shortExpansionStrategy), StringComparer.OrdinalIgnoreCase);
@@ -2923,6 +2930,14 @@ public sealed partial class ProductionPipelineExecutionService(
             TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.QualityFailed", throwReason);
             throw new InvalidOperationException(throwReason);
         }
+        var hindiRelativeDateHit = new[] { "आज", "आज रात", "कल", "कल रात", "आज शाम", "कल सुबह" }.FirstOrDefault(term => translatedText.Contains(term, StringComparison.OrdinalIgnoreCase));
+        if (hindiRelativeDateHit is not null)
+        {
+            var throwReason = $"Phase 14 Hindi narration quality failed before TTS: relative date term detected: {hindiRelativeDateHit}";
+            TracePhase14DetailedThrow(nameof(ApplyPhase14NarrationTranslationIfNeeded), null, resolvedFamily, eventType, translatedText, leakedTerms, throwReason);
+            TracePhase14Throw("Phase14.ApplyPhase14NarrationTranslationIfNeeded.throw.RelativeDate", throwReason);
+            throw new InvalidOperationException(throwReason);
+        }
         if (diagnostics.ForbiddenNarrationLeakageDetected)
         {
             var throwReason = "Phase 14 Hindi narration translation leaked forbidden event terms: " + string.Join(", ", diagnostics.LeakedTerms);
@@ -3190,7 +3205,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.Equals(family, "Moon", StringComparison.OrdinalIgnoreCase))
             return purpose switch
             {
-                "hook" => isLong ? "पूर्णिमा का चंद्र प्रकाश सर्दियों के आकाश में शांत चमक फैलाता है और रात्रि का दृश्य तुरंत पहचान में आ जाता है।" : "पूर्णिमा की चंद्र चमक आज रात क्षितिज और आकाश को खास बनाती है।",
+                "hook" => isLong ? "पूर्णिमा का चंद्र प्रकाश सर्दियों के आकाश में शांत चमक फैलाता है और रात्रि का दृश्य तुरंत पहचान में आ जाता है।" : "पूर्णिमा की चंद्र चमक निर्धारित तारीख पर क्षितिज और आकाश को खास बनाती है।",
                 "what-is-it" => "वुल्फ मून पूर्णिमा का सांस्कृतिक नाम है, जिसमें चंद्रमा की पूरी चमक लोक परंपराओं और मौसम की यादों से जुड़ती है।",
                 "cause" => "पूर्णिमा तब बनती है जब पृथ्वी से देखने पर चंद्रमा सूर्य के विपरीत दिशा में होता है और उसका प्रकाशित भाग लगभग पूरा दिखता है।",
                 "interesting-fact" => "वुल्फ मून जैसे नाम वैज्ञानिक चरण को लोक परंपराओं, ऋतुओं और सांस्कृतिक नामकरण की कहानी से जोड़ते हैं।",
@@ -3312,6 +3327,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed class DeterministicPhase14FullSceneHindiTranslator : IPhase14NarrationTranslator
     {
+        public const string HindiPresenterInstruction = "You are a professional Hindi astronomy presenter.";
         public bool IsConfigured => true;
 
         public Task<string> TranslateAsync(string sourceText, string sourceLanguage = "en", string targetLanguage = "hi", string eventType = "", string sceneId = "", string scenePurpose = "", IReadOnlyList<string>? primaryObjects = null, IReadOnlyList<string>? secondaryObjects = null)
@@ -3353,13 +3369,13 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             "hook" => "जिज्ञासा की शुरुआत के लिए",
             "what-is-it" => "परिभाषा के रूप में",
-            "cause" => "कारण और प्रक्रिया समझाने के लिए",
+            "cause" => "प्रक्रिया समझाने के लिए",
             "interesting-fact" => "रोचक तथ्य के रूप में",
             "best-time" => "समय की सलाह के लिए",
             "accurate-sky-guide" => "कहाँ देखना है, यह बताने के लिए",
             "what-you-will-see" => "दिखने वाले दृश्य के रूप में",
-            "viewing-tips" => "अवलोकन सलाह के तौर पर",
-            "final-reminder" => "अंतिम याद रखने वाली बात के रूप में",
+            "viewing-tips" => "व्यावहारिक तैयारी के तौर पर",
+            "final-reminder" => "भावनात्मक समापन के रूप में",
             _ => string.Empty
         };
         if (string.IsNullOrWhiteSpace(purposeClause) || ContainsHindiPurposeSignal(text, purpose))
@@ -3399,27 +3415,48 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
+    private static string ExtractHindiDateText(string sourceText)
+    {
+        var match = Regex.Match(sourceText ?? string.Empty, @"\b(\d{1,2})\s+([A-Z][a-z]+)\s+(\d{4})\b");
+        if (!match.Success) return "निर्धारित तारीख";
+        var month = match.Groups[2].Value.ToLowerInvariant() switch
+        {
+            "january" => "जनवरी", "february" => "फ़रवरी", "march" => "मार्च", "april" => "अप्रैल", "may" => "मई", "june" => "जून",
+            "july" => "जुलाई", "august" => "अगस्त", "september" => "सितंबर", "october" => "अक्टूबर", "november" => "नवंबर", "december" => "दिसंबर",
+            _ => match.Groups[2].Value
+        };
+        return $"{match.Groups[1].Value} {month} {match.Groups[3].Value}";
+    }
+
+    private static string ExtractHindiTimeText(string sourceText)
+    {
+        var match = Regex.Match(sourceText ?? string.Empty, @"\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\s*(?:[A-Z]{2,4}|local time)?\b", RegexOptions.IgnoreCase);
+        return match.Success ? match.Value.ToUpperInvariant().Replace("LOCAL TIME", "स्थानीय समय") : "स्थानीय समयानुसार तय समय";
+    }
+
     private static string BuildPurposePreservingHindiSceneTranslation(string family, string sourceText, string scene, string scenePurpose)
     {
         var lower = (sourceText ?? string.Empty).ToLowerInvariant();
         var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+        var hindiDate = ExtractHindiDateText(sourceText);
+        var hindiTime = ExtractHindiTimeText(sourceText);
         if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase) || string.Equals(family, "MeteorShower", StringComparison.OrdinalIgnoreCase))
         {
             var subject = lower.Contains("geminids") ? "जेमिनिड्स उल्का वर्षा" : "उल्का वर्षा";
             return purpose switch
             {
-                "hook" => $"आज रात {subject} जिज्ञासा की शुरुआत करती है: अंधेरे आसमान में अचानक चमकती लकीरें कब निकलेंगी, यही रोमांच है।",
+                "hook" => $"{hindiDate} की रात, {subject} अपने चरम अवलोकन समय पर होगी और अंधेरे आकाश में अचानक चमकती लकीरों की जिज्ञासा जगाएगी।",
                 "what-is-it" => $"{subject} वह समय है जब पृथ्वी मलबे की धारा से गुजरती है और छोटे कण वायुमंडल में चमकदार उल्का लकीर बनाते हैं।",
-                "cause" => $"कारण यह है कि पृथ्वी धूमकेतु या क्षुद्रग्रह से छूटे कणों की धारा काटती है; ये कण जलकर तेज चमक पैदा करते हैं।",
-                "interesting-fact" => $"रोचक तथ्य यह है कि कई उल्काएं रेडिएंट की दिशा से आती लगती हैं, फिर भी उनकी चमक पूरे आकाश में कहीं भी दिख सकती है।",
-                "best-time" => $"सबसे अच्छा समय देर रात से भोर से पहले की अंधेरी खिड़की है, जब रेडिएंट ऊँचा होता है और चांदनी कम बाधा देती है।",
-                "accurate-sky-guide" => $"कहाँ देखें: रेडिएंट की दिशा पहचानें, लेकिन आँखों को पूरे खुले अंधेरे आसमान पर रखें ताकि किसी भी ओर की उल्का छूटे नहीं।",
+                "cause" => $"इस उल्का वर्षा के पीछे पृथ्वी की गति है: हमारा ग्रह धूमकेतु या क्षुद्रग्रह से छूटे कणों की धारा से गुजरता है और वे कण वायुमंडल में जलकर तेज चमक बनाते हैं।",
+                "interesting-fact" => $"इस घटना को और खास बनाने वाली बात यह है कि कई उल्काएं रेडिएंट की दिशा से आती लगती हैं, फिर भी उनकी चमक पूरे आकाश में कहीं भी दिख सकती है।",
+                "best-time" => $"{hindiDate} को अवलोकन की बेहतर खिड़की {hindiTime} के आसपास रहेगी; देर रात से भोर से पहले अंधेरा आकाश उल्काओं को देखने में मदद करेगा।",
+                "accurate-sky-guide" => $"दिशा के लिए रेडिएंट को संदर्भ मानें, लेकिन आँखों को पूरे खुले अंधेरे आसमान पर रखें ताकि किसी भी ओर की उल्का छूटे नहीं।",
                 "what-you-will-see" => $"दिखने वाला दृश्य छोटी और कभी-कभी लंबी चमकती लकीरों का होगा, जो कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार करेंगी।",
-                "viewing-tips" => $"अवलोकन सलाह: नंगी आँखों से देखें, फोन की रोशनी कम रखें, लेटकर आराम से आसमान देखें और कम से कम बीस मिनट धैर्य दें।",
-                "final-reminder" => $"अंतिम याद रखें: {subject} में धैर्य ही सबसे बड़ा उपकरण है, इसलिए अंधेरी जगह पर शांत रहें और अचानक आती चमक का इंतज़ार करें।",
-                _ when lower.Contains("earth") && lower.Contains("comet") => $"कारण यह है कि {subject} तब बनती है जब पृथ्वी छोड़े गए मलबे की धारा से गुजरती है और कण वायुमंडल में जलते हैं।",
+                "viewing-tips" => $"नंगी आँखों से देखें, फोन की रोशनी कम रखें, आराम से लेटकर आकाश देखें और कम से कम बीस मिनट तक धैर्य बनाए रखें।",
+                "final-reminder" => $"यदि मौसम साफ़ रहे, तो {hindiDate} की यह {subject} यादगार अनुभव बन सकती है। अंधेरी जगह पर शांत रहें और अचानक आती चमक का आनंद लें।",
+                _ when lower.Contains("earth") && lower.Contains("comet") => $"{subject} तब बनती है जब पृथ्वी छोड़े गए मलबे की धारा से गुजरती है और कण वायुमंडल में जलते हैं।",
                 _ when lower.Contains("radiant") || scene.Contains("radiant") => $"कहाँ देखें: रेडिएंट दिशा का संकेत देता है, लेकिन {subject} की चमकती उल्काएं पूरे खुले आसमान में कहीं भी निकल सकती हैं।",
-                _ when lower.Contains("moon") || lower.Contains("dark") => $"अवलोकन सलाह: {subject} के लिए चांदनी से दूर अंधेरी जगह चुनें, आँखों को ढलने दें और बड़ा आकाश देखते रहें।",
+                _ when lower.Contains("moon") || lower.Contains("dark") => $"{subject} के लिए चांदनी से दूर अंधेरी जगह चुनें, आँखों को ढलने दें और बड़ा आकाश देखते रहें।",
                 _ when lower.Contains("strongest") || lower.Contains("peak") => $"सबसे अच्छा समय शिखर के आसपास है, जब साफ मौसम और कम रोशनी वाली जगह पर अधिक चमकीली झलकें दिख सकती हैं।",
                 _ => $"{subject} देखने के लिए धैर्य जरूरी है, क्योंकि अचानक आती रोशन लकीरें कुछ सेकंड में आसमान के अलग-अलग हिस्सों को पार कर जाती हैं।"
             };
@@ -3434,11 +3471,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return purpose switch
         {
-            "hook" => "जिज्ञासा की शुरुआत में आज की आकाशीय घटना ध्यान खींचती है और आगे देखने का कारण देती है।",
+            "hook" => $"{hindiDate} को यह आकाशीय घटना ध्यान खींचती है और आगे देखने का कारण देती है।",
             "cause" => "कारण और प्रक्रिया के रूप में यह घटना आकाशीय गति, स्थिति और हमारी दृष्टि से समझ में आती है।",
             "accurate-sky-guide" => "कहाँ देखना है: दिशा, ऊँचाई और खुला क्षितिज तय करके लक्ष्य को आराम से खोजें।",
-            "viewing-tips" => "अवलोकन सलाह: रोशनी कम रखें, आँखों को ढलने दें और उपकरणों से पहले नंगी आँखों से दृश्य पहचानें।",
-            "final-reminder" => "अंतिम याद रखें: शांत होकर देखें, मौसम का ध्यान रखें और इस छोटे आकाशीय अवसर को न चूकें।",
+            "viewing-tips" => "रोशनी कम रखें, आँखों को ढलने दें और उपकरणों से पहले नंगी आँखों से दृश्य पहचानें।",
+            "final-reminder" => $"यदि मौसम साथ दे, तो {hindiDate} का यह छोटा आकाशीय अवसर यादगार हो सकता है। शांत होकर देखें और दृश्य का आनंद लें।",
             _ => "स्रोत वर्णन के अलग संकेतों को जोड़कर आकाशीय घटना का क्रम, स्थान और देखने का तरीका स्पष्ट किया गया है।"
         };
     }
@@ -3447,19 +3484,21 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var lower = sourceText.ToLowerInvariant();
         var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+        var hindiDate = ExtractHindiDateText(sourceText);
+        var hindiTime = ExtractHindiTimeText(sourceText);
         var subject = lower.Contains("jupiter") && lower.Contains("venus") ? "बृहस्पति और शुक्र" : "चमकीले ग्रह";
         return purpose switch
         {
-            "hook" => $"आज शाम {subject} की युति जिज्ञासा जगाती है: दो तेज रोशनियां इतनी पास क्यों दिख रही हैं, यह देखने लायक शुरुआत है।",
+            "hook" => $"{hindiDate} को {subject} की युति आकाश में दो चमकीली रोशनियों को पास-पास दिखाएगी, और यही दृष्टि-रेखा का रहस्य इसे देखने योग्य बनाता है।",
             "cause" => $"{subject} सचमुच पास नहीं आ जाते; पृथ्वी से हमारी दृष्टि-रेखा और उनकी कक्षीय स्थितियां उन्हें एक ही दिशा में दिखाती हैं।",
             "accurate-sky-guide" => $"देखने के लिए सूर्यास्त के बाद पश्चिमी क्षितिज की ओर खुली जगह चुनें और कम ऊंचाई पर दो चमकीले बिंदुओं को ढूंढें।",
-            "best-time" => $"सबसे अच्छा समय शाम ढलने के तुरंत बाद है, जब आसमान गहरा हो रहा हो लेकिन ग्रह अभी क्षितिज के ऊपर साफ दिखते हों।",
+            "best-time" => $"{hindiDate} को बेहतर अवलोकन खिड़की {hindiTime} के आसपास रहेगी, जब आकाश गहरा हो रहा हो लेकिन ग्रह क्षितिज के ऊपर साफ दिखाई दें।",
             "viewing-tips" => $"पहले नंगी आंखों से जोड़ी पहचानें, फिर चाहें तो दूरबीन से देखें; इमारतों, पेड़ों और धुंध से दूर स्थिर जगह चुनें।",
-            "final-reminder" => $"याद रखें, यह सुंदर युति थोड़े समय की है; साफ मौसम मिले तो इसे देखकर ग्रहों की धीमी चाल को महसूस करें।",
+            "final-reminder" => $"यदि {hindiDate} को क्षितिज साफ़ रहे, तो यह युति देखने योग्य है क्योंकि ग्रहों की यह नज़दीकी अधिक देर नहीं टिकेगी। कुछ पल रुककर इस दुर्लभ दृष्टि का आनंद लें।",
             _ when lower.Contains("line-of-sight") || lower.Contains("perspective") || lower.Contains("millions") || lower.Contains("kilometers") => $"{subject} आसमान में पास दिखते हैं, लेकिन असल अंतरिक्ष में वे बहुत दूर हैं; यह युति हमारी दृष्टि-रेखा और पृथ्वी से दिखने वाले कोण का प्रभाव है।",
             _ when lower.Contains("western") || lower.Contains("horizon") || scene.Contains("guide") => $"सूर्यास्त के बाद पश्चिम दिशा में खुला क्षितिज खोजें, क्योंकि {subject} की कम ऊंचाई वाली चमक इमारतों या धुंध से जल्दी छिप सकती है।",
             _ when lower.Contains("binocular") || lower.Contains("telescope") || lower.Contains("eyes") => $"पहले नंगी आंखों से {subject} की स्थिति तय करें, फिर दूरबीन से स्थिर दृश्य लें ताकि युति का आकार साफ और शांत दिखे।",
-            _ when lower.Contains("reminder") || scene.Contains("final") => $"अंतिम याद रखें कि {subject} की युति थोड़े समय के लिए सबसे सुंदर दिखती है, इसलिए साफ पश्चिमी आसमान मिलते ही देखना शुरू करें।",
+            _ when lower.Contains("reminder") || scene.Contains("final") => $"{subject} की युति थोड़े समय के लिए सबसे सुंदर दिखती है; साफ पश्चिमी आसमान मिलते ही कुछ पल रुककर इसे देखें।",
             _ => $"{subject} की यह युति एक दृश्यात्मक मिलन है, जिसमें चमक, दूरी और क्षितिज की स्थिति मिलकर शाम के आसमान को समझने योग्य बनाते हैं।"
         };
     }
@@ -3468,6 +3507,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var lower = sourceText.ToLowerInvariant();
             var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+            var hindiDate = ExtractHindiDateText(sourceText);
+            var hindiTime = ExtractHindiTimeText(sourceText);
             if (lower.Contains("certified") || lower.Contains("filter") || lower.Contains("glasses") || lower.Contains("eyes") || purpose == "viewing-tips")
                 return "सुरक्षित अवलोकन के लिए प्रमाणित सोलर फिल्टर लगाएं और आंशिक चरण में आँखों की सुरक्षा कभी न हटाएं।";
             if (lower.Contains("corona") || purpose == "interesting-fact")
@@ -3491,6 +3532,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var lower = sourceText.ToLowerInvariant();
             var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
+            var hindiDate = ExtractHindiDateText(sourceText);
+            var hindiTime = ExtractHindiTimeText(sourceText);
             if (lower.Contains("wolf") || purpose == "what-is-it")
                 return "वुल्फ मून पूर्णिमा का पारंपरिक नाम है, जो सर्दियों के आकाश, चंद्र प्रकाश और लोक परंपराओं की याद दिलाता है।";
             if (lower.Contains("opposite") || lower.Contains("phase") || lower.Contains("illuminated") || purpose == "cause")
@@ -3498,7 +3541,7 @@ public sealed partial class ProductionPipelineExecutionService(
             if (lower.Contains("name") || lower.Contains("tradition") || lower.Contains("culture") || purpose == "interesting-fact")
                 return "वुल्फ मून जैसे नाम सांस्कृतिक नामकरण की परंपरा हैं, जिनमें ऋतु, लोक स्मृतियाँ और आकाशीय अवलोकन साथ आते हैं।";
             if (lower.Contains("moonrise") || lower.Contains("best") || purpose == "best-time")
-                return "चंद्र उदय के आसपास खुला क्षितिज चुनें, क्योंकि पूर्णिमा की चमक कम ऊंचाई पर नरम रंगों के साथ सबसे सुंदर लग सकती है।";
+                return $"{hindiDate} को {hindiTime} के आसपास खुला क्षितिज चुनें, क्योंकि पूर्णिमा की चमक कम ऊंचाई पर नरम रंगों के साथ सबसे सुंदर लग सकती है।";
             if (lower.Contains("horizon") || lower.Contains("east") || purpose == "accurate-sky-guide")
                 return "पूर्वी क्षितिज की ओर खुली जगह से देखें और चंद्रमा के ऊपर उठते ही उसकी दिशा, ऊंचाई और चमक को पहचानें।";
             if (lower.Contains("brightness") || lower.Contains("color") || lower.Contains("see") || purpose == "what-you-will-see")
@@ -3506,8 +3549,8 @@ public sealed partial class ProductionPipelineExecutionService(
             if (lower.Contains("tip") || lower.Contains("binocular") || purpose == "viewing-tips")
                 return "नंगी आंखों से पहले पूरा आकाश देखें, फिर दूरबीन हो तो चंद्र किनारे, गड्ढों और चमकदार सतह को शांत ढंग से देखें।";
             if (lower.Contains("reminder") || scene.Contains("final") || purpose == "final-reminder")
-                return "पूर्णिमा की शांत चमक के साथ कुछ पल रुकें; सरल आकाशीय अवलोकन भी रात को यादगार बना सकता है।";
-            return "पूर्णिमा की चंद्र चमक, खुला क्षितिज और सर्दियों का आकाश मिलकर आज रात का रात्रि दृश्य खास बनाते हैं।";
+                return $"यदि मौसम साफ़ रहे, तो {hindiDate} की पूर्णिमा कुछ शांत और यादगार पल दे सकती है। कुछ समय निकालिए और चंद्रमा की चमक का आनंद लीजिए।";
+            return $"{hindiDate} की पूर्णिमा में चंद्र चमक, खुला क्षितिज और मौसम का संदर्भ मिलकर रात्रि दृश्य को खास बनाते हैं।";
         }
 
     private static IReadOnlyList<object> BuildScenePurposeTranslationDiagnostics(IReadOnlyDictionary<string, string> sourceSceneTextByKey, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
@@ -3680,7 +3723,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ApplyPlanetConjunctionNarrationV22(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context)
     {
-        var time = NaturalViewingWindow(context.LocalPeakTime);
+        var time = string.IsNullOrWhiteSpace(context.LocalPeakTime) ? NaturalViewingWindow(context.ViewingWindowText) : context.LocalPeakTime!;
+        var eventDate = string.IsNullOrWhiteSpace(context.EventDateText) ? "the exact event date" : context.EventDateText!;
+        var window = string.IsNullOrWhiteSpace(context.ViewingWindowText) ? time : context.ViewingWindowText!;
+        var timezone = string.IsNullOrWhiteSpace(context.TimezoneText) ? "local time" : context.TimezoneText!;
         var direction = NaturalSkyDirection(context.SkyDirectionHint);
         var objectLabel = PlanetConjunctionObjectLabel(context.ShortTitle);
         foreach (var sceneId in texts.Keys.ToArray())
@@ -3688,15 +3734,15 @@ public sealed partial class ProductionPipelineExecutionService(
             var purpose = ResolvePhase14ScenePurpose(sceneId);
             var replacement = purpose switch
             {
-                "hook" => $"Hello, fellow stargazers. Over the next few evenings, {CleanPhase14Title(context.ShortTitle)} offers a quiet chance to watch two bright planets gather in the twilight. At first it looks simple, but the closer we look, the more the scene becomes a story of distance, motion, and perspective. Let’s take a closer look.",
+                "hook" => $"On {eventDate}, {CleanPhase14Title(context.ShortTitle)} will appear as two bright worlds sharing the same area of sky. The sight matters because it turns orbital motion into a clear, brief perspective effect you can watch with your own eyes.",
                 "what-is-it" => "That opening view leads us into a planetary conjunction: not a physical meeting, but a shared direction in our sky.",
                 "cause" => $"Although {objectLabel} appear remarkably close together in our evening sky, they remain separated by hundreds of millions of kilometers in space. Their apparent meeting is created by perspective, as Earth and the two planets briefly align from our point of view.",
                 "interesting-fact" => "From night to night, the changing gap lets you sense the solar system moving, not as a diagram, but as a quiet shift above the horizon.",
-                "best-time" => $"The conjunction reaches its finest appearance during the evenings surrounding {time}. Arriving a little before sunset gives your eyes time to adjust as the sky slowly darkens.",
+                "best-time" => $"The strongest viewing window on {eventDate} is {window}, with the best-timed view around {time} {timezone}. Arrive a little early so your eyes can settle as the sky darkens.",
                 "accurate-sky-guide" => $"About thirty minutes after sunset, turn your attention toward {direction}. There you'll find two bright planets appearing unusually close together above the skyline.",
                 "what-you-will-see" => "By then, one world may look brilliant and sharp while the other appears steadier, with their apparent closeness held only by our line of sight.",
                 "viewing-tips" => "From there, give the view a few quiet minutes, keep phones dim, and let binoculars become a second look rather than the first step.",
-                "final-reminder" => "In a few nights, the planets will drift apart once again. Their brief meeting in our evening sky will end, just as all celestial alignments eventually do. But for those who pause to look up, the memory of seeing two distant worlds share the same patch of sky can remain long after the conjunction itself has passed.",
+                "final-reminder" => $"If the horizon stays clear on {eventDate}, this conjunction is worth observing because the apparent closeness will not last. Pause for a few quiet moments, look toward the sky, and enjoy two distant worlds sharing one view.",
                 _ => texts[sceneId]
             };
             texts[sceneId] = RewriteBannedNarrationPhrases(replacement);
@@ -3959,16 +4005,39 @@ public sealed partial class ProductionPipelineExecutionService(
             var first = Regex.Match(opening.Trim(), @"^\w+").Value;
             if (forbiddenOpening.Contains(first, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Phase 14 EventStoryComposer opening starts with forbidden word: {first}");
-            if (isPlanetConjunction && !Regex.IsMatch(opening, @"^\s*(Hello, fellow stargazers|Greetings, astronomy lovers)\b", RegexOptions.IgnoreCase))
-                throw new InvalidOperationException("Phase 14 PlanetConjunction opening must begin with a documentary-host greeting.");
         }
         if (!isPlanetConjunction && diagnostics is not null && (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned))
             throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");
         ValidateNoNarrationV21BannedPhrases(shortTexts.Values.Concat(longTexts.Values));
+        ValidateNarrationQualityV314(shortTexts, longTexts);
         ValidatePhase14EventStoryNarrationFormat("short", shortTexts);
         ValidatePhase14EventStoryNarrationFormat("long", longTexts);
     }
 
+
+    private static void ValidateNarrationQualityV314(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts)
+    {
+        var combined = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        var relativeDateTerms = new[] { "today", "tonight", "tomorrow", "tomorrow morning", "this evening", "next evening", "yesterday", "आज", "आज रात", "कल", "कल रात", "आज शाम", "कल सुबह" };
+        var relativeHit = relativeDateTerms.FirstOrDefault(term => Regex.IsMatch(combined, term.All(c => c < 128) ? $@"\b{Regex.Escape(term)}\b" : Regex.Escape(term), RegexOptions.IgnoreCase));
+        if (relativeHit is not null)
+            throw new InvalidOperationException($"Phase 14 narration quality validation failed: relative date term detected: {relativeHit}");
+        if (!Regex.IsMatch(longTexts["001-hook"], @"\b\d{1,2}\s+[A-Z][a-z]+\s+\d{4}\b"))
+            throw new InvalidOperationException("Phase 14 narration quality validation failed: Hook must contain an exact event date.");
+        if (!Regex.IsMatch(longTexts["005-best-time"], @"\b(\d{1,2}(:\d{2})?\s*(AM|PM)|morning|evening|night|रात|सुबह|शाम)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(longTexts["005-best-time"], @"\b(window|विंडो|अवलोकन|viewing)\b", RegexOptions.IgnoreCase))
+            throw new InvalidOperationException("Phase 14 narration quality validation failed: BestTime must contain exact time/window guidance.");
+        if (!longTexts.ContainsKey("004-interesting-fact") || !Regex.IsMatch(longTexts["004-interesting-fact"], @"\b(unusual|because|although|name|corona|fact|tradition|दूरी|परंपरा|रोचक|कोरोना)\b", RegexOptions.IgnoreCase))
+            throw new InvalidOperationException("Phase 14 narration quality validation failed: long format requires an interesting, scientific, historical, or rarity fact.");
+        if (Regex.IsMatch(longTexts["009-final-reminder"], @"keep watching for more sky events|enjoy stargazing", RegexOptions.IgnoreCase))
+            throw new InvalidOperationException("Phase 14 narration quality validation failed: FinalReminder is generic.");
+    }
+
+    private static string ResolveNarrationTimezoneText(params string[] values)
+    {
+        var joined = string.Join(" ", values.Where(v => !string.IsNullOrWhiteSpace(v)));
+        var match = Regex.Match(joined, @"\b(?:UTC|GMT|IST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)\b", RegexOptions.IgnoreCase);
+        return match.Success ? match.Value.ToUpperInvariant() : "local time";
+    }
 
     private static void ValidateNoNarrationV21BannedPhrases(IEnumerable<string> texts)
     {
