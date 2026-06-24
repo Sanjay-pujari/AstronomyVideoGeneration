@@ -2232,6 +2232,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ttsMode = phase14SubtitleOptions.TtsMode,
             @short = shortSrtTiming.SrtGenerationDiagnostics,
             @long = longSrtTiming.SrtGenerationDiagnostics,
+            temporarySourceMismatchDiagnostics = longSrtTiming.SourceMismatchDiagnostics,
             srtWriteValidation = new { @short = shortSrtWriteValidation, @long = longSrtWriteValidation }
         }, JsonOptions), cancellationToken);
         files.Add(srtGenerationDiagnosticsPath);
@@ -4660,6 +4661,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (Math.Abs(srtTotal - audioTotal) > 0.1)
             throw new InvalidOperationException($"{format}.srt duration differs from scene duration plan by >0.1 sec; srt={srtTotal}, audio={audioTotal}");
         var audioDriven = durationPlanItems.Take(narrationFiles.Count).Any(item => !string.IsNullOrWhiteSpace(item.AudioPath));
+        var sourceMismatchDiagnostics = BuildTemporaryPhase14SourceMismatchDiagnostics(format, narrationFiles, blocks);
         var timingDiagnostics = new
         {
             srtTimingSource = audioDriven ? "SceneDurationPlanActualMp3Durations" : "DraftSceneDurationPlan",
@@ -4736,7 +4738,39 @@ public sealed partial class ProductionPipelineExecutionService(
             false,
             BuildSrtPreview(srt.ToString()),
             timingDiagnostics);
-        return new NarrationSrtTimingResult(srt.ToString(), diagnostics, srtGenerationDiagnostics);
+        return new NarrationSrtTimingResult(srt.ToString(), diagnostics, srtGenerationDiagnostics, sourceMismatchDiagnostics);
+    }
+
+    private static IReadOnlyList<object> BuildTemporaryPhase14SourceMismatchDiagnostics(string format, IReadOnlyList<string> narrationFiles, IReadOnlyList<SubtitleCueBlock> blocks)
+    {
+        if (!string.Equals(format, "long", StringComparison.OrdinalIgnoreCase))
+            return [];
+
+        var requestedSceneIds = new[]
+        {
+            "004-interesting-fact",
+            "005-best-time"
+        };
+        var diagnostics = new List<object>();
+        foreach (var sceneId in requestedSceneIds)
+        {
+            var narrationFile = narrationFiles.FirstOrDefault(file => string.Equals(SanitizeFileName(Path.GetFileNameWithoutExtension(file)), SanitizeFileName(sceneId), StringComparison.OrdinalIgnoreCase));
+            var narrationFileText = narrationFile is not null && File.Exists(narrationFile)
+                ? File.ReadAllText(narrationFile)
+                : string.Empty;
+            var srtSourceText = NormalizeNarrationWhitespace(string.Join(" ", blocks
+                .Where(block => string.Equals(block.SceneId, sceneId, StringComparison.OrdinalIgnoreCase))
+                .Select(block => block.SourceText)
+                .Where(text => !string.IsNullOrWhiteSpace(text))));
+            diagnostics.Add(new
+            {
+                sceneId,
+                narrationFileText,
+                srtSourceText
+            });
+        }
+
+        return diagnostics;
     }
 
     private static Phase14SrtWriteValidation BuildPhase14SrtWriteValidation(string srtPath, int diagnosticGeneratedCueCount)
@@ -6358,7 +6392,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
     private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace, Phase14SceneDurationPlanResolution SceneDurationPlanResolution);
     private sealed record Phase14SceneDurationPlanResolution(string SceneDurationPlanPath, bool SceneDurationPlanFound, int ShortSceneDurationPlanItemCount, int LongSceneDurationPlanItemCount, bool SceneDurationPlanGeneratedFallback, string SceneDurationPlanGenerationSource, IReadOnlyList<string> MissingDurationSceneIds);
-    private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics, IReadOnlyList<object> SrtGenerationDiagnostics);
+    private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics, IReadOnlyList<object> SrtGenerationDiagnostics, IReadOnlyList<object> SourceMismatchDiagnostics);
     private sealed record Phase14TimelineSrtResult(string Srt, int GeneratedCueCount);
     private sealed record Phase14SrtWriteValidation(int ActualSrtBlockCount, int DiagnosticGeneratedCueCount, bool CountsMatch);
     private sealed record SubtitleGenerationDiagnostics(string Format, int GeneratedSubtitleBlockCount, int DuplicateSubtitleBlockCount, IReadOnlyList<string> DuplicateSubtitleBlockIds, IReadOnlyList<string> DuplicateSubtitleTexts, IReadOnlyDictionary<string, string> SourceSceneIdPerSubtitleBlock, IReadOnlyDictionary<string, string> SubtitleChunkSourceText, IReadOnlyDictionary<string, string> SubtitleChunkHash, IReadOnlyDictionary<string, string> SubtitleTextSource, IReadOnlyDictionary<string, string> SubtitleTextOrigin, IReadOnlyDictionary<string, string> SceneIdOrigin, IReadOnlyDictionary<string, string> GeneratorComponent, IReadOnlyList<object> SubtitleBlocks, IReadOnlyList<SubtitleCueSource> SubtitleCueSources, int NonNarrationSubtitleCueCount, IReadOnlyList<SubtitleCueSource> NonNarrationSubtitleCues, string SrtSourceMode, bool FallbackSubtitleSourcesDisabled, bool EventProductionIntelligenceUsedForSrt, bool VideoAssemblyIntelligenceUsedForSrt, bool DocumentaryNarrationComposerUsedForSrt, string GeneratedSrtPreview, object Timing);
