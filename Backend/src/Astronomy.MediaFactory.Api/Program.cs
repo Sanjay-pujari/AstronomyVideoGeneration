@@ -11332,9 +11332,12 @@ public static IReadOnlyList<AstronomyV31NarrationPreviewScene> BuildScenes(Astro
 
 static string BuildAstronomyV31NarrationLine(AstronomyV31NarrationPreviewRequest request, string scenePurpose)
 {
-    var date = MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate") ?? "the listed event date";
-    var window = MetadataText(request.EventMetadata, "bestTimeWindow", "bestTime", "timeWindow", "peakTime", "time") ?? "the listed viewing window";
-    var direction = MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook") ?? "the open sky";
+    var date = FormatAstronomyV31Date(MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate"), request.Language);
+    var peak = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time"), request.Language);
+    var window = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow"), request.Language);
+    var direction = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook"), request.Language) ?? (IsHindi(request.Language) ? "खुले आकाश" : "the open sky");
+    var timezone = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "timezone", "timeZone", "tz"), request.Language);
+    var city = ResolveAstronomyV31Place(request.RegionId);
     var objects = MetadataText(request.EventMetadata, "primaryObjects", "objects", "planets", "radiant") ?? request.EventName;
     var fact = BuildAstronomyV31EventSpecificFact(request);
     var isHindi = IsHindi(request.Language);
@@ -11342,18 +11345,18 @@ static string BuildAstronomyV31NarrationLine(AstronomyV31NarrationPreviewRequest
 
     if (isHindi)
     {
-        if (p.Contains("hook")) return $"{date} को {request.ShortTitle} दिखाई देगा; {fact} इसलिए यह सिर्फ एक सामान्य आकाश घटना नहीं है.";
-        if (p.Contains("best")) return $"सबसे अच्छा समय {window} है; {direction} की ओर देखें और {objects} को साफ क्षितिज के पास पहचानें.";
+        if (p.Contains("hook")) return $"{date} को {request.ShortTitle} अपने चरम पर पहुंचेगा, इसलिए साफ आसमान में दर्शकों को चमकीली लकीरों वाला दुर्लभ और यादगार दृश्य मिल सकता है.";
+        if (p.Contains("best")) return $"{city} में दर्शकों के लिए सबसे अच्छा समय {date} को {window ?? peak ?? "स्थानीय अवलोकन समय"} से शुरू होता है, और सबसे मजबूत गतिविधि {peak ?? window ?? "स्थानीय चरम समय"} {timezone ?? string.Empty} के आसपास अपेक्षित है. {direction} की ओर देखें और रात गहराने पर आकाश को व्यापक रूप से देखें.";
         if (p.Contains("interesting") || p.Contains("fact")) return fact;
-        if (p.Contains("final") || p.Contains("reminder")) return $"{window} के लिए पहले से तैयारी रखें, मौसम और स्थानीय दृश्यता जांचें, और {request.ShortTitle} को शांत, सुरक्षित तरीके से देखें.";
-        return $"{request.EventName} के इस दृश्य में {objects} पर ध्यान दें; {fact}";
+        if (p.Contains("final") || p.Contains("reminder")) return $"अगर आसमान साफ रहा, तो {request.ShortTitle} इस साल के सबसे यादगार आकाश-दर्शन क्षणों में से एक बन सकता है. कुछ शांत मिनट बाहर बिताइए और रात के आकाश को आपको चौंकाने दीजिए.";
+        return $"{request.EventName} के इस दृश्य में {objects} और {direction} पर ध्यान दें; {fact}";
     }
 
-    if (p.Contains("hook")) return $"On {date}, {request.ShortTitle} is worth your attention because {fact}";
-    if (p.Contains("best")) return $"The best viewing window is {window}; look toward {direction} and use {objects} as your guide in the sky.";
+    if (p.Contains("hook")) return $"On {date}, {request.ShortTitle} will reach its peak, offering one of the year's best chances to see a real sky event unfold from your location.";
+    if (p.Contains("best")) return $"For observers in {city}, the best viewing period begins {FormatAstronomyV31WindowPhrase(window)} on {date}, with the strongest activity expected around {peak ?? window ?? "the local peak time"}{FormatAstronomyV31Timezone(timezone)}. Look from {direction} as the night deepens.";
     if (p.Contains("interesting") || p.Contains("fact")) return fact;
-    if (p.Contains("final") || p.Contains("reminder")) return $"Plan around {window}, check local weather and horizon clearance, and enjoy {request.ShortTitle} with a calm, safe viewing setup.";
-    return $"For this {scenePurpose} scene, focus on {objects}: {fact}";
+    if (p.Contains("final") || p.Contains("reminder")) return $"If skies remain clear, {request.ShortTitle} could become one of the most rewarding skywatching moments of the year. Take a few quiet minutes outside and let the night sky surprise you.";
+    return $"This {scenePurpose} moment stays centered on {request.EventName}, with {objects} visible toward {direction} and timing anchored to {date}.";
 }
 
 static string BuildAstronomyV31EventSpecificFact(AstronomyV31NarrationPreviewRequest request)
@@ -11361,22 +11364,35 @@ static string BuildAstronomyV31EventSpecificFact(AstronomyV31NarrationPreviewReq
     var name = request.EventName.ToLowerInvariant();
     var type = request.EventType.ToLowerInvariant();
     var customFact = MetadataText(request.EventMetadata, "eventSpecificFact", "scientificFact", "fact");
-    if (!string.IsNullOrWhiteSpace(customFact)) return customFact!;
-    if (name.Contains("strawberry moon")) return "the Strawberry Moon name comes from June's seasonal strawberry harvest traditions, not from the Moon turning red.";
-    if (name.Contains("wolf moon")) return "the Wolf Moon is tied to midwinter naming traditions, when wolves were associated with cold January nights.";
-    if (name.Contains("geminid") || type.Contains("meteor")) return name.Contains("perseid") ? "the Perseids come from debris left by comet Swift-Tuttle and often build toward a reliable August peak." : "the Geminids are unusual because their meteors come from asteroid 3200 Phaethon and appear to radiate from Gemini.";
-    if (name.Contains("perseid")) return "the Perseids come from debris left by comet Swift-Tuttle and often build toward a reliable August peak.";
+    if (!string.IsNullOrWhiteSpace(customFact)) return FormatAstronomyV31DatesInText(customFact!, request.Language);
+    if (name.Contains("strawberry moon")) return IsHindi(request.Language) ? "स्ट्रॉबेरी मून का नाम जून की मौसमी स्ट्रॉबेरी फसल परंपराओं से जुड़ा है, चंद्रमा के लाल हो जाने से नहीं." : "The Strawberry Moon name comes from June's seasonal strawberry harvest traditions, not from the Moon turning red.";
+    if (name.Contains("wolf moon")) return IsHindi(request.Language) ? "वुल्फ मून मध्य-शीतकालीन नामकरण परंपराओं से जुड़ा है, जब ठंडी जनवरी रातों के साथ भेड़ियों की आवाज़ जोड़ी जाती थी." : "The Wolf Moon is tied to midwinter naming traditions, when wolves were associated with cold January nights.";
+    if (name.Contains("geminid") || type.Contains("meteor"))
+    {
+        if (name.Contains("perseid")) return IsHindi(request.Language) ? "पर्सिड्स धूमकेतु स्विफ्ट-टटल के छोड़े मलबे से आते हैं और अक्सर अगस्त में भरोसेमंद चरम की ओर बढ़ते हैं." : "The Perseids come from debris left by comet Swift-Tuttle and often build toward a reliable August peak.";
+        return IsHindi(request.Language) ? "अधिकांश प्रमुख उल्का वर्षाओं के विपरीत, जेमिनिड्स पारंपरिक धूमकेतु के बजाय क्षुद्रग्रह 3200 फेथॉन से आते हैं, इसलिए यह वार्षिक प्रदर्शन वैज्ञानिक रूप से असामान्य है." : "Unlike most major meteor showers, the Geminids come from asteroid 3200 Phaethon rather than a traditional comet, which makes this annual display scientifically unusual.";
+    }
+    if (name.Contains("perseid")) return IsHindi(request.Language) ? "पर्सिड्स धूमकेतु स्विफ्ट-टटल के छोड़े मलबे से आते हैं और अक्सर अगस्त में भरोसेमंद चरम की ओर बढ़ते हैं." : "The Perseids come from debris left by comet Swift-Tuttle and often build toward a reliable August peak.";
     if (type.Contains("conjunction") || name.Contains("conjunction"))
     {
         var objects = MetadataText(request.EventMetadata, "primaryObjects", "objects", "planets") ?? request.EventName;
-        return $"{objects} appear close from our line of sight, even though they remain separated by vast distances in space.";
+        return IsHindi(request.Language) ? $"{objects} हमारी दृष्टि-रेखा से पास दिखाई देते हैं, जबकि अंतरिक्ष में वे बहुत बड़ी दूरियों से अलग रहते हैं." : $"{objects} appear close from our line of sight, even though they remain separated by vast distances in space.";
     }
-    return $"the key observing details come from this event's metadata for {request.EventName}, including its timing, target objects, and viewing geometry.";
+    return IsHindi(request.Language) ? $"{request.EventName} की खासियत इसके वास्तविक समय, दिशा और लक्ष्य वस्तुओं से आती है, इसलिए यह दृश्य किसी सामान्य आकाश उल्लेख से अधिक विशिष्ट है." : $"The specific observing story for {request.EventName} comes from its real timing, target objects, and viewing geometry.";
 }
 
 public static AstronomyV31NarrationPreviewValidation ValidatePreview(AstronomyV31NarrationPreviewRequest request, IReadOnlyList<AstronomyV31NarrationPreviewScene> scenes)
 {
-    var sceneResults = scenes.Select(s => new AstronomyV31NarrationSceneValidationResult(s.SceneId, s.ScenePurpose, s.Validation.Passed, s.Validation.Issues)).ToList();
+    var sceneResults = scenes.Select(s =>
+    {
+        var issues = s.Validation.Issues.ToList();
+        if (s.ScenePurpose.Contains("hook", StringComparison.OrdinalIgnoreCase))
+        {
+            var factScene = scenes.FirstOrDefault(x => x.ScenePurpose.Contains("interesting", StringComparison.OrdinalIgnoreCase) || x.ScenePurpose.Contains("fact", StringComparison.OrdinalIgnoreCase));
+            if (factScene is not null && AreAstronomyV31SemanticallyDuplicate(s.Narration, factScene.Narration)) issues.Add("Hook and InterestingFact must not repeat the same factual sentence.");
+        }
+        return new AstronomyV31NarrationSceneValidationResult(s.SceneId, s.ScenePurpose, issues.Count == 0, issues);
+    }).ToList();
     var issues = sceneResults.SelectMany(s => s.Issues.Select(i => $"{s.SceneId}: {i}")).ToList();
     return new AstronomyV31NarrationPreviewValidation(issues.Count == 0, issues, sceneResults);
 }
@@ -11385,18 +11401,49 @@ static AstronomyV31NarrationSceneValidation ValidateAstronomyV31NarrationScene(A
 {
     var issues = new List<string>();
     var lowerPurpose = scenePurpose.ToLowerInvariant();
-    var exactDate = MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate");
-    var exactWindow = MetadataText(request.EventMetadata, "bestTimeWindow", "bestTime", "timeWindow", "peakTime", "time");
+    var exactDateRaw = MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate");
+    var exactDate = FormatAstronomyV31Date(exactDateRaw, request.Language);
+    var exactWindow = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow"), request.Language);
+    var localPeak = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time"), request.Language);
+    var direction = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook"), request.Language);
+    var timezone = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "timezone", "timeZone", "tz"), request.Language);
     if (Regex.IsMatch(narration, "\\b(today|tonight|tomorrow|yesterday|next week|this evening|this month)\\b", RegexOptions.IgnoreCase)) issues.Add("Narration contains a relative date.");
-    var sentences = Regex.Split(narration, @"(?<=[.!?।])\\s+").Select(NormalizeAstronomyV31Sentence).Where(s => s.Length > 0).ToList();
+    if (RawAstronomyV31IsoDateRegex().IsMatch(narration)) issues.Add("Narration contains a raw ISO date.");
+    foreach (var phrase in AstronomyV31PlaceholderPhrases) if (narration.Contains(phrase, StringComparison.OrdinalIgnoreCase)) issues.Add($"Narration contains placeholder phrase: {phrase}.");
+    if (!string.IsNullOrWhiteSpace(narration) && char.IsLower(narration.TrimStart()[0])) issues.Add("Scene narration must start with an uppercase letter or script-appropriate title character.");
+    if (!MentionsAstronomyV31EventSpecificInfo(request, narration)) issues.Add("Scene narration must mention event-specific information.");
+    var sentences = Regex.Split(narration, @"(?<=[.!?।])\s+").Select(NormalizeAstronomyV31Sentence).Where(s => s.Length > 0).ToList();
     if (sentences.Count != sentences.Distinct(StringComparer.OrdinalIgnoreCase).Count()) issues.Add("Narration contains duplicate sentences.");
-    if (lowerPurpose.Contains("hook") && !string.IsNullOrWhiteSpace(exactDate) && !narration.Contains(exactDate, StringComparison.OrdinalIgnoreCase)) issues.Add("Hook must contain the exact event date.");
-    if (lowerPurpose.Contains("best") && !string.IsNullOrWhiteSpace(exactWindow) && !narration.Contains(exactWindow, StringComparison.OrdinalIgnoreCase)) issues.Add("Best-time scene must contain an exact time or window.");
+    if (lowerPurpose.Contains("hook") && !string.IsNullOrWhiteSpace(exactDate) && !narration.Contains(exactDate, StringComparison.OrdinalIgnoreCase)) issues.Add("Hook must contain the exact formatted event date.");
+    if (lowerPurpose.Contains("hook") && narration.Contains("3200 Phaethon", StringComparison.OrdinalIgnoreCase)) issues.Add("Geminids Hook must not mention asteroid 3200 Phaethon; reserve it for InterestingFact.");
+    if (lowerPurpose.Contains("best") && (!ContainsIfKnown(narration, exactDate) || !ContainsIfKnown(narration, localPeak) || !ContainsIfKnown(narration, exactWindow) || !ContainsIfKnown(narration, direction) || !ContainsIfKnown(narration, timezone))) issues.Add("Best-time scene must include actual eventDate, localPeakTime, bestViewingWindowLocal, direction, and timezone metadata when supplied.");
     if ((lowerPurpose.Contains("interesting") || lowerPurpose.Contains("fact")) && IsGenericAstronomyV31Fact(request, narration)) issues.Add("Interesting-fact scene must contain an event-specific fact.");
-    if ((lowerPurpose.Contains("final") || lowerPurpose.Contains("reminder")) && !SoundsLikeAstronomyV31Closing(narration, request.Language)) issues.Add("Final-reminder scene must sound like a professional closing.");
+    if ((lowerPurpose.Contains("interesting") || lowerPurpose.Contains("fact")) && request.EventName.Contains("Geminid", StringComparison.OrdinalIgnoreCase) && !narration.Contains("3200", StringComparison.OrdinalIgnoreCase)) issues.Add("Geminids InterestingFact must mention asteroid 3200 Phaethon.");
+    if ((lowerPurpose.Contains("final") || lowerPurpose.Contains("reminder")) && !SoundsLikeAstronomyV31Closing(narration, request.Language)) issues.Add("Final-reminder scene must sound like a professional presenter closing, not a procedural checklist.");
     if (IsHindi(request.Language) && ContainsLiteralHindiTranslationSmell(narration)) issues.Add("Hindi narration should be natural, not a literal translation.");
     return new AstronomyV31NarrationSceneValidation(issues.Count == 0, issues);
 }
+
+static readonly string[] AstronomyV31PlaceholderPhrases = ["listed viewing window", "use ... as your guide", "worth your attention because", "professional observing reminder", "exact window", "local viewing window", "as your guide in the sky"];
+
+static bool ContainsIfKnown(string narration, string? value) => string.IsNullOrWhiteSpace(value) || narration.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+static bool MentionsAstronomyV31EventSpecificInfo(AstronomyV31NarrationPreviewRequest request, string narration)
+    => narration.Contains(request.EventName, StringComparison.OrdinalIgnoreCase)
+       || narration.Contains(request.ShortTitle, StringComparison.OrdinalIgnoreCase)
+       || (request.EventMetadata.Select(kvp => kvp.Value?.ToString()).Where(v => !string.IsNullOrWhiteSpace(v)).Any(v => narration.Contains(FormatAstronomyV31DatesInText(v!, request.Language), StringComparison.OrdinalIgnoreCase) || narration.Contains(HumanizeAstronomyV31Metadata(v, request.Language) ?? v!, StringComparison.OrdinalIgnoreCase)));
+
+static bool AreAstronomyV31SemanticallyDuplicate(string left, string right)
+{
+    var leftTokens = AstronomyV31MeaningTokens(left).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var rightTokens = AstronomyV31MeaningTokens(right).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    if (leftTokens.Count == 0 || rightTokens.Count == 0) return false;
+    var overlap = leftTokens.Intersect(rightTokens, StringComparer.OrdinalIgnoreCase).Count();
+    return overlap / (double)Math.Min(leftTokens.Count, rightTokens.Count) >= 0.72;
+}
+
+static IEnumerable<string> AstronomyV31MeaningTokens(string text)
+    => Regex.Matches(text ?? string.Empty, @"[A-Za-z0-9]{4,}").Select(m => m.Value.ToLowerInvariant()).Where(t => !new[] { "this", "that", "with", "from", "will", "because", "around", "expected", "event", "sky" }.Contains(t));
 
 static bool IsGenericAstronomyV31Fact(AstronomyV31NarrationPreviewRequest request, string narration)
     => !narration.Contains("strawberry", StringComparison.OrdinalIgnoreCase)
@@ -11410,9 +11457,10 @@ static bool IsGenericAstronomyV31Fact(AstronomyV31NarrationPreviewRequest reques
 
 static bool SoundsLikeAstronomyV31Closing(string narration, string language)
     => IsHindi(language)
-        ? narration.Contains("तैयारी", StringComparison.OrdinalIgnoreCase) && narration.Contains("सुरक्षित", StringComparison.OrdinalIgnoreCase)
-        : (narration.Contains("Plan", StringComparison.OrdinalIgnoreCase) || narration.Contains("check", StringComparison.OrdinalIgnoreCase))
-          && (narration.Contains("safe", StringComparison.OrdinalIgnoreCase) || narration.Contains("enjoy", StringComparison.OrdinalIgnoreCase));
+        ? (narration.Contains("आसमान", StringComparison.OrdinalIgnoreCase) || narration.Contains("आकाश", StringComparison.OrdinalIgnoreCase)) && (narration.Contains("चौंकाने", StringComparison.OrdinalIgnoreCase) || narration.Contains("यादगार", StringComparison.OrdinalIgnoreCase))
+        : (narration.Contains("skies remain clear", StringComparison.OrdinalIgnoreCase) || narration.Contains("night sky", StringComparison.OrdinalIgnoreCase))
+          && (narration.Contains("rewarding", StringComparison.OrdinalIgnoreCase) || narration.Contains("surprise", StringComparison.OrdinalIgnoreCase))
+          && !Regex.IsMatch(narration, @"\b(plan around|check local|setup|reminder|procedure|checklist)\b", RegexOptions.IgnoreCase);
 
 static bool ContainsLiteralHindiTranslationSmell(string narration)
     => narration.Contains("सबसे अच्छा देखने की खिड़की", StringComparison.OrdinalIgnoreCase)
@@ -11437,6 +11485,59 @@ static bool IsHindi(string language)
     => language.Equals("hi", StringComparison.OrdinalIgnoreCase)
        || language.Equals("hi-IN", StringComparison.OrdinalIgnoreCase)
        || language.Contains("Hindi", StringComparison.OrdinalIgnoreCase);
+
+
+static string FormatAstronomyV31Date(string? value, string language)
+{
+    if (string.IsNullOrWhiteSpace(value)) return IsHindi(language) ? "निर्धारित घटना तिथि" : "the supplied event date";
+    var clean = value.Trim();
+    if (DateTimeOffset.TryParse(clean, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
+        return IsHindi(language) ? $"{dto.Day} {HindiMonthName(dto.Month)} {dto.Year}" : dto.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+    if (DateTime.TryParse(clean, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+        return IsHindi(language) ? $"{dt.Day} {HindiMonthName(dt.Month)} {dt.Year}" : dt.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+    return FormatAstronomyV31DatesInText(clean, language);
+}
+
+static string FormatAstronomyV31DatesInText(string value, string language)
+    => RawAstronomyV31IsoDateRegex().Replace(value, m => FormatAstronomyV31Date(m.Value, language));
+
+static string? HumanizeAstronomyV31Metadata(string? value, string language)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    return FormatAstronomyV31DatesInText(value.Trim(), language)
+        .Replace("00:00", "midnight", StringComparison.OrdinalIgnoreCase)
+        .Replace("22:00", "10 PM", StringComparison.OrdinalIgnoreCase)
+        .Replace("23:30", "11:30 PM", StringComparison.OrdinalIgnoreCase);
+}
+
+static string FormatAstronomyV31WindowPhrase(string? window)
+{
+    if (string.IsNullOrWhiteSpace(window)) return "during the supplied viewing window";
+    var trimmed = window.Trim();
+    if (Regex.IsMatch(trimmed, "^(after|before|around|between|from)\\b", RegexOptions.IgnoreCase)) return trimmed;
+    if (trimmed.Contains('–') || trimmed.Contains('-')) return $"during {trimmed}";
+    return $"after {trimmed}";
+}
+
+static string FormatAstronomyV31Timezone(string? timezone)
+    => string.IsNullOrWhiteSpace(timezone) ? string.Empty : $" {timezone.Trim().Trim('(', ')')}";
+
+static string ResolveAstronomyV31Place(string regionId)
+{
+    var parts = Regex.Split(regionId ?? string.Empty, "[-_]").Where(p => p.Length > 0).ToArray();
+    if (parts.Length == 0) return "your region";
+    var last = parts[^1].ToLowerInvariant();
+    return last.Equals("udaipur", StringComparison.OrdinalIgnoreCase) ? "Udaipur" : CultureInfo.InvariantCulture.TextInfo.ToTitleCase(last);
+}
+
+static string HindiMonthName(int month) => month switch
+{
+    1 => "जनवरी", 2 => "फ़रवरी", 3 => "मार्च", 4 => "अप्रैल", 5 => "मई", 6 => "जून",
+    7 => "जुलाई", 8 => "अगस्त", 9 => "सितंबर", 10 => "अक्टूबर", 11 => "नवंबर", 12 => "दिसंबर",
+    _ => string.Empty
+};
+
+static Regex RawAstronomyV31IsoDateRegex() => new(@"\b\d{4}-\d{2}-\d{2}\b", RegexOptions.Compiled);
 
 static string SanitizeAstronomyV31Id(string value)
 {
