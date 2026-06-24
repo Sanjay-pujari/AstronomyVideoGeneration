@@ -88,11 +88,14 @@ internal static partial class EventStoryComposer
     private static DateTimeOffset? ResolveEventDate(ProductionEventIntelligence? i) => i?.EventDate ?? i?.PeakUtc;
     private static string BuildInterestingFact(string family, string eventName, ProductionEventIntelligence? i, string contextFact)
     {
+        var geminidsFact = "The Geminids are unusual because they originate from asteroid 3200 Phaethon rather than a typical comet.";
         var requiredFact = i?.RequiredNarrationFacts?.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f));
+        if (IsGeminids(eventName, i) && !ContainsGeminidsPhaethonFact(requiredFact) && !ContainsGeminidsPhaethonFact(i?.ScientificContext)) return geminidsFact;
         if (!string.IsNullOrWhiteSpace(requiredFact)) return Clean(requiredFact);
         if (!string.IsNullOrWhiteSpace(i?.ScientificContext)) return Clean(i.ScientificContext);
         return family switch
         {
+            "Meteor" when IsGeminids(eventName, i) => geminidsFact,
             "Meteor" => $"{eventName} is unusual because its meteors can come from debris linked to an asteroid-like parent body rather than only a typical comet.",
             "Moon" => $"{eventName} gets its name from seasonal traditions rather than from a change in the Moon's color.",
             "Eclipse" => "During totality, the Sun's corona can become visible, revealing plasma extending far beyond the solar surface.",
@@ -100,6 +103,18 @@ internal static partial class EventStoryComposer
             _ => contextFact
         };
     }
+    private static bool IsGeminids(string eventName, ProductionEventIntelligence? i)
+    {
+        var haystack = string.Join(" ", eventName, i?.Title, i?.ShortTitle, i?.EventType, string.Join(" ", i?.PrimaryObjects ?? []), string.Join(" ", i?.SecondaryObjects ?? []));
+        return haystack.Contains("Geminids", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsGeminidsPhaethonFact(string? text)
+        => !string.IsNullOrWhiteSpace(text)
+            && text.Contains("Geminids", StringComparison.OrdinalIgnoreCase)
+            && text.Contains("3200 Phaethon", StringComparison.OrdinalIgnoreCase)
+            && text.Contains("comet", StringComparison.OrdinalIgnoreCase);
+
     private static string ResolveTimezoneText(params string[] values)
     {
         var joined = string.Join(" ", values.Where(v => !string.IsNullOrWhiteSpace(v)));
@@ -259,6 +274,8 @@ internal static class LongSceneNarrationExpander
             ("NamedFullMoon", "viewing-tips") => "Choose an open horizon and give your eyes a few minutes to settle into the night.",
             ("NamedFullMoon", "final-reminder") => $"If skies remain clear on {eventDate}, {title} is familiar enough to feel close and meaningful enough to remember. Step outside for a few quiet minutes and enjoy the moonlight.",
             ("MeteorShower", "hook") => $"On {eventDate}, {title} reaches its strongest viewing period, offering one of the most rewarding chances to watch bright meteors cross the night sky.",
+            ("MeteorShower", "interesting-fact") when IsGeminids(title, context) => "The Geminids are unusual because they originate from asteroid 3200 Phaethon rather than a typical comet.",
+            ("MeteorShower", "interesting-fact") => $"{title} is unusual because its meteors can come from debris linked to an asteroid-like parent body rather than only a typical comet.",
             ("MeteorShower", "best-time") => $"The best viewing window on {eventDate} is {window}, with peak activity expected around {time} {timezone}.",
             ("MeteorShower", "viewing-tips") => "Lie back, avoid bright screens, and scan a wide area of the night sky.",
             ("PlanetConjunction", "hook") => $"On {eventDate}, {title} will appear as two bright worlds sharing the same area of sky, a perspective effect that is brief and worth catching.",
@@ -284,6 +301,12 @@ internal static class LongSceneNarrationExpander
             (_, "final-reminder") => $"If conditions cooperate on {eventDate}, {title} is brief enough to miss and memorable enough to plan for. Take a moment outside and let the sky reward your attention.",
             _ => $"{title} deserves a distinct note for this part of the story."
         };
+    }
+
+    private static bool IsGeminids(string title, LongSceneNarrationExpansionContext context)
+    {
+        var haystack = string.Join(" ", title, context.ShortTitle, context.EventType, context.ContentStrategy);
+        return haystack.Contains("Geminids", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolveTone(string eventType, string family)

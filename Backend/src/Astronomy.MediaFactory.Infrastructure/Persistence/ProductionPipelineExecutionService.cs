@@ -3952,7 +3952,7 @@ public sealed partial class ProductionPipelineExecutionService(
             "hook" => sections.ColdOpen,
             "what-is-it" => sections.Hook,
             "cause" => BuildEventFamilyCauseNarration(family),
-            "interesting-fact" => family == "Eclipse" ? "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona." : $"{sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.",
+            "interesting-fact" => BuildInterestingFactSceneSourceText(sections, family),
             "best-time" => sections.ViewingGuide,
             "accurate-sky-guide" => BuildNaturalSkyGuide(family),
             "what-you-will-see" => sections.MainStory,
@@ -3960,6 +3960,17 @@ public sealed partial class ProductionPipelineExecutionService(
             "final-reminder" => sections.EmotionalClosing,
             _ => sections.MainStory
         };
+
+    private static string BuildInterestingFactSceneSourceText(DocumentaryNarrationSections sections, string family)
+    {
+        if (string.Equals(family, "Eclipse", StringComparison.OrdinalIgnoreCase))
+            return "Because the Moon and Sun appear almost the same size from Earth, the Moon can briefly cover the solar disc and reveal the glowing corona.";
+
+        if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase) && sections.Context.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
+            return $"The Geminids are unusual because they originate from asteroid 3200 Phaethon rather than a typical comet. {sections.Context}";
+
+        return $"{sections.Context} That alignment turns ordinary looking space into a rare geometry lesson written in light.";
+    }
 
     private static object BuildPhase14StoryArc() => new
     {
@@ -4026,11 +4037,14 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Phase 14 narration quality validation failed: Hook must contain an exact event date.");
         if (!Regex.IsMatch(longTexts["005-best-time"], @"\b(\d{1,2}(:\d{2})?\s*(AM|PM)|morning|evening|night|रात|सुबह|शाम)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(longTexts["005-best-time"], @"\b(window|विंडो|अवलोकन|viewing)\b", RegexOptions.IgnoreCase))
             throw new InvalidOperationException("Phase 14 narration quality validation failed: BestTime must contain exact time/window guidance.");
-        if (!longTexts.ContainsKey("004-interesting-fact") || !Regex.IsMatch(longTexts["004-interesting-fact"], @"\b(unusual|because|although|name|corona|fact|tradition|दूरी|परंपरा|रोचक|कोरोना)\b", RegexOptions.IgnoreCase))
-            throw new InvalidOperationException("Phase 14 narration quality validation failed: long format requires an interesting, scientific, historical, or rarity fact.");
+        if (!longTexts.TryGetValue("004-interesting-fact", out var interestingFactScene) || !ContainsInterestingFactAnchor(interestingFactScene))
+            throw new InvalidOperationException("Phase 14 narration quality validation failed: long format 004-interesting-fact requires an interesting, scientific, historical, or rarity fact anchor.");
         if (Regex.IsMatch(longTexts["009-final-reminder"], @"keep watching for more sky events|enjoy stargazing", RegexOptions.IgnoreCase))
             throw new InvalidOperationException("Phase 14 narration quality validation failed: FinalReminder is generic.");
     }
+
+    private static bool ContainsInterestingFactAnchor(string text)
+        => Regex.IsMatch(text ?? string.Empty, @"\b(unusual|because|although|originate|originates|asteroid|comet|Phaethon|3200|name|corona|fact|tradition|दूरी|परंपरा|रोचक|कोरोना)\b", RegexOptions.IgnoreCase);
 
     private static string ResolveNarrationTimezoneText(params string[] values)
     {
