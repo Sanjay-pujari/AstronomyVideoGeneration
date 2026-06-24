@@ -26,7 +26,7 @@ internal static partial class SceneNarrationDuplicateValidator
     public static bool HasDuplicateNarration(string? text)
         => FindDuplicateKeys(text).Count > 0;
 
-    private static string RemoveDuplicates(string? text)
+    public static string RemoveDuplicates(string? text)
     {
         var sentences = SplitSentences(text).ToArray();
         if (sentences.Length <= 1) return Clean(text);
@@ -64,7 +64,7 @@ internal static partial class SceneNarrationDuplicateValidator
         return duplicates;
     }
 
-    private static IEnumerable<string> SplitSentences(string? text)
+    public static IEnumerable<string> SplitSentences(string? text)
     {
         var source = Clean(text).Replace('\n', ' ');
         if (string.IsNullOrWhiteSpace(source)) yield break;
