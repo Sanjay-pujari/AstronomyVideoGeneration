@@ -580,7 +580,7 @@ public sealed class PipelineOrchestrator
                         SourceOrderUsed: "FinalVisualSceneOrder"));
                 }
 
-                sceneSections = ApplyV31NarrationIntelligence(sceneSections, context);
+                sceneSections = ApplyV31NarrationIntelligence(sceneSections, context).ToList();
                 sceneSections = ValidateAndCorrectFullVideoNarrationOrder(sceneSections, _logger);
                 alignedSectionsBySceneId = sceneSections.ToDictionary(section => section.Scene.SceneId, section => section.SectionText, StringComparer.OrdinalIgnoreCase);
 
