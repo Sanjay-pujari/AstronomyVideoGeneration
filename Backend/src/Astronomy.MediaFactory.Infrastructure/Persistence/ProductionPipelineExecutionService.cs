@@ -2033,6 +2033,9 @@ public sealed partial class ProductionPipelineExecutionService(
                     sourceToTargetMapping = BuildPhase14SourceToTargetMapping(documentaryNarration.ShortItems.Keys, documentaryNarration.LongItems.Keys),
                     v31NarrationKeysUsed = BuildV31NarrationKeysUsed(shortItems, longItems),
                     narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray(),
+                    phase14InternalSrtPath = new { @short = NormalizePath(Path.Combine(planRoot, "narration-v31", "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), @long = NormalizePath(Path.Combine(planRoot, "narration-v31", "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")) },
+                    phase14CanonicalSrtPath = new { @short = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), @long = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")) },
+                    canonicalSrtCopied = true,
                     NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
                     NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
                     SubtitleValidationInputPath = NormalizePath(narrationOutput.SelectedNarrationRoot)
@@ -2095,6 +2098,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 selectedNarrationLanguage = ResolvePipelineLanguage(context.Request.Language),
                 selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, ResolvePipelineLanguage(context.Request.Language))),
                 selectedSrtPath = new { @short = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), @long = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")) },
+                phase14InternalSrtPath = new { @short = NormalizePath(Path.Combine(planRoot, "narration-v31", "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), @long = NormalizePath(Path.Combine(planRoot, "narration-v31", "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")) },
+                phase14CanonicalSrtPath = new { @short = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")), @long = NormalizePath(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")) },
+                canonicalSrtCopied = true,
                 selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", ResolvePipelineLanguage(context.Request.Language))),
                 selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", ResolvePipelineLanguage(context.Request.Language))),
                 languageScopedArtifactsUsed = true,
@@ -2256,11 +2262,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var selectedNarrationRoot = Path.Combine(narrationRoot, language);
         var shortRoot = Path.Combine(selectedNarrationRoot, "short");
         var longRoot = Path.Combine(selectedNarrationRoot, "long");
-        var subtitlesRoot = Path.Combine(narrationRoot, "subtitles", language);
+        var canonicalSubtitlesRoot = Path.Combine(narrationRoot, "subtitles", language);
+        var internalSubtitlesRoot = Path.Combine(planRoot, "narration-v31", "subtitles", language);
         DeleteTargetNarrationFolders(narrationRoot, language);
         Directory.CreateDirectory(shortRoot);
         Directory.CreateDirectory(longRoot);
-        Directory.CreateDirectory(subtitlesRoot);
+        Directory.CreateDirectory(canonicalSubtitlesRoot);
+        Directory.CreateDirectory(internalSubtitlesRoot);
 
         var files = new List<string>();
         var manifestItems = new List<object>();
@@ -2278,8 +2286,10 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"V3.1 narration validation failed before SRT: narrationFileWriteCount must equal expected scene count. expected={expectedNarrationFileWriteCount}; actual={narrationFileWriteDiagnostics.NarrationFileWriteCount}.");
         ValidateV31NarrationBeforeSrt(shortRoot, longRoot, shortItems, longNarrationV3Items);
 
-        var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
-        var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
+        var internalShortSrtPath = Path.Combine(internalSubtitlesRoot, "short.srt");
+        var internalLongSrtPath = Path.Combine(internalSubtitlesRoot, "long.srt");
+        var shortSrtPath = Path.Combine(canonicalSubtitlesRoot, "short.srt");
+        var longSrtPath = Path.Combine(canonicalSubtitlesRoot, "long.srt");
         var srtGenerationCallCount = 1;
         var srtValidationCallCount = 1;
         var sceneDurationPlanResolution = EnsurePhase14SceneDurationPlan(planRoot, shortNarrationFiles, longNarrationFiles, shortItems, longNarrationV3Items);
@@ -2289,8 +2299,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "short", shortNarrationFiles, shortItems, phase14SubtitleOptions);
         var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "long", longNarrationFiles, longNarrationV3Items, phase14SubtitleOptions);
         ValidateSceneNarrationFileOnlyCueSources(shortSrtTiming.Diagnostics, longSrtTiming.Diagnostics);
-        await File.WriteAllTextAsync(shortSrtPath, shortSrtTiming.Srt, cancellationToken);
-        await File.WriteAllTextAsync(longSrtPath, longSrtTiming.Srt, cancellationToken);
+        await File.WriteAllTextAsync(internalShortSrtPath, shortSrtTiming.Srt, cancellationToken);
+        await File.WriteAllTextAsync(internalLongSrtPath, longSrtTiming.Srt, cancellationToken);
+        File.Copy(internalShortSrtPath, shortSrtPath, overwrite: true);
+        File.Copy(internalLongSrtPath, longSrtPath, overwrite: true);
+        var canonicalSrtCopied = File.Exists(shortSrtPath) && File.Exists(longSrtPath);
         var shortSrtWriteValidation = BuildPhase14SrtWriteValidation(shortSrtPath, shortSrtTiming.Diagnostics.GeneratedSubtitleBlockCount);
         var longSrtWriteValidation = BuildPhase14SrtWriteValidation(longSrtPath, longSrtTiming.Diagnostics.GeneratedSubtitleBlockCount);
         if (!shortSrtWriteValidation.CountsMatch || !longSrtWriteValidation.CountsMatch)
@@ -2305,11 +2318,16 @@ public sealed partial class ProductionPipelineExecutionService(
             @short = shortSrtTiming.SrtGenerationDiagnostics,
             @long = longSrtTiming.SrtGenerationDiagnostics,
             srtWriteValidation = new { @short = shortSrtWriteValidation, @long = longSrtWriteValidation },
+            phase14InternalSrtPath = new { @short = NormalizePath(internalShortSrtPath), @long = NormalizePath(internalLongSrtPath) },
+            phase14CanonicalSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            canonicalSrtCopied,
             NarrationReadPath = NormalizePath(selectedNarrationRoot),
             NarrationWritePath = NormalizePath(selectedNarrationRoot),
             SubtitleValidationInputPath = NormalizePath(selectedNarrationRoot)
         }, JsonOptions), cancellationToken);
         files.Add(srtGenerationDiagnosticsPath);
+        files.Add(internalShortSrtPath);
+        files.Add(internalLongSrtPath);
         var srtWrittenUtc = DateTimeOffset.UtcNow;
         files.Add(shortSrtPath);
         files.Add(longSrtPath);
@@ -2333,6 +2351,9 @@ public sealed partial class ProductionPipelineExecutionService(
             NarrationWritePath = NormalizePath(selectedNarrationRoot),
             SubtitleValidationInputPath = NormalizePath(selectedNarrationRoot),
             selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, language)),
+            phase14InternalSrtPath = new { @short = NormalizePath(internalShortSrtPath), @long = NormalizePath(internalLongSrtPath) },
+            phase14CanonicalSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            canonicalSrtCopied,
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", language)),
             selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", language)),
@@ -6470,6 +6491,9 @@ public sealed partial class ProductionPipelineExecutionService(
             requestedLanguage = language,
             selectedNarrationLanguage = language,
             selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, language)),
+            phase14InternalSrtPath = new { @short = NormalizePath(Path.Combine(planRoot, "narration-v31", "subtitles", language, "short.srt")), @long = NormalizePath(Path.Combine(planRoot, "narration-v31", "subtitles", language, "long.srt")) },
+            phase14CanonicalSrtPath = new { @short = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")), @long = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")) },
+            canonicalSrtCopied = File.Exists(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")) && File.Exists(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")),
             selectedSrtPath = new { @short = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "short.srt")), @long = NormalizePath(Path.Combine(planRoot, "narration", "subtitles", language, "long.srt")) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", language)),
             selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", language)),
@@ -6731,6 +6755,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var selectedShortSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");
         var selectedLongSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "long");
+        var canonicalSrtExistsBeforePhase15 = File.Exists(selectedShortSrt) && File.Exists(selectedLongSrt);
         logger.LogInformation("Phase 15 SRT existence before validation: Exists(short.srt)={ShortSrtExists}; Exists(long.srt)={LongSrtExists}; shortSrtPath={ShortSrtPath}; longSrtPath={LongSrtPath}", File.Exists(selectedShortSrt), File.Exists(selectedLongSrt), NormalizePath(selectedShortSrt), NormalizePath(selectedLongSrt));
         if (!File.Exists(selectedShortSrt)) errors.Add($"short.srt missing: {NormalizePath(selectedShortSrt)}");
         if (!File.Exists(selectedLongSrt)) errors.Add($"long.srt missing: {NormalizePath(selectedLongSrt)}");
@@ -6942,9 +6967,9 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
         outputs.Add(ttsModeDiagnosticsPath);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-15-real-tts-v2-diagnostics.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, phase15SelectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, canonicalSrtExistsBeforePhase15, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), diagnostics, validationPassed, errors }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-15-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 15, phaseName = "Real TTS V2", requestedLanguage, selectedNarrationLanguage = requestedLanguage, selectedTtsTimelinePath = NormalizePath(ttsTimelinePath), selectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, phase15SelectedSrtPath = new { @short = NormalizePath(selectedShortSrt), @long = NormalizePath(selectedLongSrt) }, canonicalSrtExistsBeforePhase15, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)), languageScopedArtifactsUsed = true, phase15Version = "RealTtsV2", inputSource = "SRT", selectedShortSrt = NormalizePath(selectedShortSrt), selectedLongSrt = NormalizePath(selectedLongSrt), status = validationPassed ? "Succeeded" : "Failed", validationPassed, diagnostics, errors }, JsonOptions), cancellationToken);
         outputs.Add(diagnosticsPath);
         outputs.Add(validationPath);
         if (!validationPassed) throw new InvalidOperationException("Phase 15 Real TTS V2 failed: " + string.Join(" | ", errors));
@@ -6954,11 +6979,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolvePhase15SrtPath(string planRoot, string language, string format)
     {
         var resolvedLanguage = ResolvePipelineLanguage(language);
-        var languageScoped = Path.Combine(planRoot, "narration", "subtitles", resolvedLanguage, $"{format}.srt");
-        if (File.Exists(languageScoped)) return languageScoped;
-
-        var legacyUnscoped = Path.Combine(planRoot, "narration", "subtitles", $"{format}.srt");
-        return File.Exists(legacyUnscoped) ? legacyUnscoped : languageScoped;
+        return Path.Combine(planRoot, "narration", "subtitles", resolvedLanguage, $"{format}.srt");
     }
 
     private async Task<string> CreateHindiPhase15AdaptationAsync(string planRoot, string format, CancellationToken cancellationToken)
