@@ -39,6 +39,7 @@ public sealed class NarrationTimeFormatter
         var text = CleanForbiddenLabels(string.IsNullOrWhiteSpace(value) ? (IsHindi(language) ? "रात में" : "at night") : value.Trim());
         text = Regex.Replace(text, @"\b\d{4}-\d{2}-\d{2}\b", m => new NarrationTimeFormatter().FormatEventDate(m.Value, language));
         text = Regex.Replace(text, @"\s*\+\d{2}:\d{2}\b", string.Empty);
+        text = Regex.Replace(text, @"(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\s+|(?:\b\d{4}-\d{2}-\d{2}\s+))?00:00\s*[–-]\s*05:00\s*IST\b", "from midnight to 5:00 AM IST", RegexOptions.IgnoreCase);
         if (!IsHindi(language)) return text.Replace("midnight", "midnight", StringComparison.OrdinalIgnoreCase);
         text = Regex.Replace(text, @"from\s+midnight\s+to\s+5(?::00)?\s*AM\s*IST", "रात 12 बजे से सुबह 5 बजे तक (भारतीय समय)", RegexOptions.IgnoreCase);
         text = text.Replace("midnight", "रात 12 बजे", StringComparison.OrdinalIgnoreCase)
