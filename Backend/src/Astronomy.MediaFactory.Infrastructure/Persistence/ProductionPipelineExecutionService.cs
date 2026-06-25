@@ -6946,11 +6946,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string ResolvePhase15SrtPath(string planRoot, string language, string format)
     {
-        var localized = Path.Combine(planRoot, "narration", "subtitles", language, $"{format}.srt");
-        if (File.Exists(localized)) return localized;
-        return language == "en"
-            ? Path.Combine(planRoot, "narration", "subtitles", $"{format}.srt")
-            : localized;
+        var resolvedLanguage = ResolvePipelineLanguage(language);
+        var languageScoped = Path.Combine(planRoot, "narration", "subtitles", resolvedLanguage, $"{format}.srt");
+        if (File.Exists(languageScoped)) return languageScoped;
+
+        var legacyUnscoped = Path.Combine(planRoot, "narration", "subtitles", $"{format}.srt");
+        return File.Exists(legacyUnscoped) ? legacyUnscoped : languageScoped;
     }
 
     private async Task<string> CreateHindiPhase15AdaptationAsync(string planRoot, string format, CancellationToken cancellationToken)
