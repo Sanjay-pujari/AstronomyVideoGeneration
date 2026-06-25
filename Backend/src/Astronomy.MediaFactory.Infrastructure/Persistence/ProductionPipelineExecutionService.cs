@@ -792,7 +792,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var required = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json" }.Select(f => Path.Combine(root, f)).ToList();
         var expectedImages = format.Equals("short", StringComparison.OrdinalIgnoreCase)
             ? new[] { "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" }
-            : new[] { "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tips.png", "009-final-reminder.png" };
+            : new[] { "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tip.png", "009-final-reminder.png" };
         required.AddRange(expectedImages.Select(f => Path.Combine(root, f)));
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: missing {string.Join(", ", missing)}");
@@ -1977,28 +1977,13 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var shortRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
         var longRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
-        var shortNarrationCandidates = new[]
-        {
-            Path.Combine(planRoot, "narration-engine", "short", "question-driven-narration-v2.json"),
-            Path.Combine(planRoot, "narration-engine", "question-driven-narration-v2.json"),
-            Path.Combine(planRoot, "question-engine", "question-driven-narration-v2.json")
-        };
-        var longNarrationCandidates = new[]
-        {
-            Path.Combine(planRoot, "narration-engine", "long", "question-driven-narration-v2.json"),
-            Path.Combine(planRoot, "narration-engine", "question-driven-narration-v2.json"),
-            Path.Combine(planRoot, "question-engine", "question-driven-narration-v2.json")
-        };
-
         Phase14DocumentaryNarration? documentaryNarration = null;
         Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics = null;
 
         try
         {
-            var shortNarration = SelectExisting(shortNarrationCandidates, checkedPaths, "short narration V2 source", missingFiles);
-            var longNarration = SelectExisting(longNarrationCandidates, checkedPaths, "long narration V2 source", missingFiles);
-            var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, shortNarration, 5, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
-            var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, longNarration, 9, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
+            var shortItems = await BuildSceneAudioSyncItemsAsync(context, "short", shortRoot, 5, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
+            var longItems = await BuildSceneAudioSyncItemsAsync(context, "long", longRoot, 9, checkedPaths, missingFiles, strategyByScene, matchedPairs, unmatchedNarrationSections, unmatchedScenes, narrationDiagnostics, cancellationToken);
 
             try
             {
@@ -3903,7 +3888,7 @@ public sealed partial class ProductionPipelineExecutionService(
             return ["001-hook", "002-what-is-it", "003-cause", "004-viewing-tip", "005-final-reminder"];
         return string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
             ? ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]
-            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
+            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tip", "009-final-reminder"];
     }
 
     private static string ResolvePhase14ScenePurpose(string sceneId)
@@ -3916,7 +3901,7 @@ public sealed partial class ProductionPipelineExecutionService(
             "005-best-time" => "best-time",
             "006-accurate-sky-guide" or "003-accurate-sky-guide" => "accurate-sky-guide",
             "007-what-you-will-see" => "what-you-will-see",
-            "008-viewing-tips" or "004-viewing-tip" => "viewing-tips",
+            "008-viewing-tip" or "004-viewing-tip" => "viewing-tips",
             "009-final-reminder" or "005-final-reminder" => "final-reminder",
             _ => "what-you-will-see"
         };
@@ -5977,7 +5962,7 @@ public sealed partial class ProductionPipelineExecutionService(
         throw new InvalidOperationException($"Phase 14 missing {label}; checked: {string.Join(", ", candidates.Select(NormalizePath))}. V1 narration fallback is not allowed.");
     }
 
-    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, string narrationPath, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, List<Phase14MatchedPair> matchedPairs, List<string> unmatchedNarrationSections, List<string> unmatchedScenes, List<NarrationSceneDiagnostic> narrationDiagnostics, CancellationToken ct)
+    private static async Task<IReadOnlyList<SceneAudioSyncItem>> BuildSceneAudioSyncItemsAsync(ProductionPhaseContext context, string format, string sceneRoot, int expectedCount, List<string> checkedPaths, List<string> missingFiles, List<object> strategies, List<Phase14MatchedPair> matchedPairs, List<string> unmatchedNarrationSections, List<string> unmatchedScenes, List<NarrationSceneDiagnostic> narrationDiagnostics, CancellationToken ct)
     {
         if (!Directory.Exists(sceneRoot)) missingFiles.Add($"{format} scene-assets-v3 root missing: {NormalizePath(sceneRoot)}");
         var timelinePath = Path.Combine(sceneRoot, "visual-timeline-v3.json");
@@ -5999,16 +5984,12 @@ public sealed partial class ProductionPipelineExecutionService(
             .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
             .GroupBy(item => item.SceneId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var narrationBeats = ExtractNarrationBeats(narrationPath);
-        AddNarrationDiagnostics(narrationDiagnostics, narrationBeats);
-        var narrationBeatArray = narrationBeats.ToArray();
-        var sectionMap = GetPhase14SectionSceneMap(format);
-        var usedNarration = new HashSet<int>();
+        var canonicalSceneIds = GetPhase14SceneIds(format);
         var items = new List<SceneAudioSyncItem>();
         for (var i = 0; i < expectedCount; i++)
         {
             var metadataEntry = metadataScenes.ElementAtOrDefault(i);
-            var sceneId = GetString(metadataEntry, "sceneId") ?? GetString(timelineBeats.ElementAtOrDefault(i), "sceneId") ?? $"{i + 1:000}";
+            var sceneId = canonicalSceneIds.ElementAtOrDefault(i) ?? GetString(metadataEntry, "sceneId") ?? GetString(timelineBeats.ElementAtOrDefault(i), "sceneId") ?? $"{i + 1:000}";
             if (scenesById.TryGetValue(sceneId, out var selectedScene))
                 metadataEntry = selectedScene.Node;
 
@@ -6018,29 +5999,11 @@ public sealed partial class ProductionPipelineExecutionService(
             var manifest = manifestScenes.FirstOrDefault(n => string.Equals(GetString(n, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase)) ?? manifestScenes.ElementAtOrDefault(i);
             var visualIntent = GetString(metadata, "visualIntent") ?? GetString(beat, "visualIntent") ?? "";
             var renderMode = GetString(metadata, "renderMode") ?? GetString(beat, "renderMode") ?? GetString(manifest, "renderMode") ?? "";
-            var sceneNarrationBeat = FirstNonEmpty(GetString(metadata, "narrationBeat"), GetString(beat, "narrationBeat"));
-            var narration = string.IsNullOrWhiteSpace(sceneNarrationBeat)
-                ? BestSectionSemanticNarrationFallback(narrationBeats, visualIntent, renderMode, string.Empty)
-                : null;
-            var narrationText = !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? sceneNarrationBeat : narration?.Text ?? string.Empty;
-            var strategy = !string.IsNullOrWhiteSpace(sceneNarrationBeat) ? "SceneTimelineNarrationBeat" : narration is null ? "Unmatched" : "NarrationV2SupportingFallback";
+            var narrationText = string.Empty;
+            var strategy = "NarrationGenerationServiceV31";
             var imagePath = GetString(manifest, "imagePath") ?? Path.Combine(sceneRoot, sceneId + ".png");
-            if (string.IsNullOrWhiteSpace(narrationText))
-            {
-                unmatchedScenes.Add($"{format}:{sceneId}");
-            }
-            else
-            {
-                if (narration is not null)
-                {
-                    var narrationIndex = Array.IndexOf(narrationBeatArray, narration);
-                    if (narrationIndex >= 0) usedNarration.Add(narrationIndex);
-                }
-                var mappedSceneId = narration is null ? sceneId : ResolveMappedSceneId(sectionMap, narration.Section);
-                if (string.IsNullOrWhiteSpace(mappedSceneId)) mappedSceneId = sceneId;
-                matchedPairs.Add(new Phase14MatchedPair(format, narration?.Section ?? "", narration?.ScenePurpose ?? "", mappedSceneId, sceneId, strategy));
-            }
-            strategies.Add(new { format, sceneId, beatNo, section = narration?.Section ?? "", strategy });
+            matchedPairs.Add(new Phase14MatchedPair(format, ResolvePhase14ScenePurpose(sceneId), ResolvePhase14ScenePurpose(sceneId), sceneId, sceneId, strategy));
+            strategies.Add(new { format, sceneId, beatNo, section = ResolvePhase14ScenePurpose(sceneId), strategy });
             items.Add(new SceneAudioSyncItem(
                 format,
                 beatNo,
@@ -6053,7 +6016,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 GetInt(metadata, "estimatedDurationSec") ?? GetInt(beat, "expectedDurationSec") ?? 5,
                 "cut",
                 ResolveMotionProfile(sceneId, GetString(metadata, "recommendedMotion")),
-                string.IsNullOrWhiteSpace(narrationText) ? "Unmatched" : "Matched",
+                "Matched",
                 strategy));
         }
 
@@ -6100,20 +6063,23 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
             ? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Hook"] = ["001-hook"],
-                ["Explanation"] = ["002-cause"],
-                ["ViewingAdvice"] = ["003-accurate-sky-guide"],
-                ["Reward"] = ["004-viewing-tip"],
-                ["CTA"] = ["005-final-reminder"]
+                ["001-hook"] = ["001-hook"],
+                ["002-what-is-it"] = ["002-what-is-it"],
+                ["003-cause"] = ["003-cause"],
+                ["004-viewing-tip"] = ["004-viewing-tip"],
+                ["005-final-reminder"] = ["005-final-reminder"]
             }
             : new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Hook"] = ["001-hook"],
-                ["Explanation"] = ["003-cause"],
-                ["ViewingAdvice"] = ["006-accurate-sky-guide"],
-                ["Reward"] = ["005-best-time", "008-viewing-tips"],
-                ["Curiosity"] = ["002-what-is-it", "004-interesting-fact", "007-what-you-will-see"],
-                ["CTA"] = ["006-accurate-sky-guide", "009-final-reminder"]
+                ["001-hook"] = ["001-hook"],
+                ["002-what-is-it"] = ["002-what-is-it"],
+                ["003-cause"] = ["003-cause"],
+                ["004-interesting-fact"] = ["004-interesting-fact"],
+                ["005-best-time"] = ["005-best-time"],
+                ["006-accurate-sky-guide"] = ["006-accurate-sky-guide"],
+                ["007-what-you-will-see"] = ["007-what-you-will-see"],
+                ["008-viewing-tip"] = ["008-viewing-tip"],
+                ["009-final-reminder"] = ["009-final-reminder"]
             };
 
     private static string ResolveMappedSceneId(IReadOnlyDictionary<string, string[]> sectionMap, string section)
@@ -8123,7 +8089,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateVideoNarrationAsync(ProductionPhaseContext context, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var outputs = new List<string>();
-        outputs.Add(await WritePhase15PlusPathReadinessDiagnosticsAsync(context, 15, [Path.Combine(context.OutputRoot, "sync", "scene-audio-sync.json"), Path.Combine(context.OutputRoot, "scene-assets-v3", "short"), Path.Combine(context.OutputRoot, "scene-assets-v3", "long"), Path.Combine(context.OutputRoot, "question-engine", "question-driven-narration-v2.json")], cancellationToken));
+        outputs.Add(await WritePhase15PlusPathReadinessDiagnosticsAsync(context, 15, [Path.Combine(context.OutputRoot, "sync", "scene-audio-sync.json"), Path.Combine(context.OutputRoot, "scene-assets-v3", "short"), Path.Combine(context.OutputRoot, "scene-assets-v3", "long"), Path.Combine(context.OutputRoot, "narration", ResolvePipelineLanguage(context.Request.Language))], cancellationToken));
         var intelligenceRequest = BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Intelligence" : "LongFormIntelligence");
         var scriptRequest = BuildVideoRequest(context, profile, profile == ScenePresentationProfile.ShortForm ? "Script" : "LongFormScript");
         if (profile == ScenePresentationProfile.LongForm)
@@ -10858,7 +10824,7 @@ public sealed partial class ProductionPipelineExecutionService(
             Path.Combine(context.OutputRoot, "scene-assets-v3", "short"),
             Path.Combine(context.OutputRoot, "scene-assets-v3", "long"),
             Path.Combine(context.OutputRoot, "scene-assets-v3"),
-            Path.Combine(context.OutputRoot, "question-engine", "question-driven-narration-v2.json")
+            Path.Combine(context.OutputRoot, "narration", ResolvePipelineLanguage(context.Request.Language))
         };
         var oldPaths = new[]
         {
@@ -11579,7 +11545,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> BuildSceneAssetsV3Missing(string root, string format)
     {
-        var expected = format == "short" ? new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" } : new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tips.png", "009-final-reminder.png" };
+        var expected = format == "short" ? new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" } : new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tip.png", "009-final-reminder.png" };
         return expected.Select(f => Path.Combine(root, f)).Where(p => !File.Exists(p)).Select(NormalizePath).ToArray();
     }
 

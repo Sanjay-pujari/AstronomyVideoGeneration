@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 
@@ -7,8 +6,8 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class NarrationV31Composer : INarrationV31Composer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private static readonly string[] Sections = ["Hook", "Curiosity", "Explanation", "ViewingAdvice", "Reward", "CTA"];
+    private static readonly string[] ShortSceneIds = ["001-hook", "002-what-is-it", "003-cause", "004-viewing-tip", "005-final-reminder"];
+    private static readonly string[] LongSceneIds = ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tip", "009-final-reminder"];
     private static readonly string[] AuthoringPhrases = ["open with", "explain", "describe", "focus on", "json", "metadata", "source answer"];
     private static readonly IReadOnlyDictionary<string, string> HindiTerms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -57,14 +56,12 @@ public sealed class NarrationV31Composer : INarrationV31Composer
 
     private static QuestionDrivenNarrationSceneDto[] BuildScenes(string eventId, string regionId, string language, string title, string eventType, string window, string direction, bool shortForm)
     {
-        var count = shortForm ? 5 : 9;
-        return Enumerable.Range(0, count).Select(i =>
+        var sceneIds = shortForm ? ShortSceneIds : LongSceneIds;
+        return sceneIds.Select((sceneId, i) =>
         {
-            var section = shortForm
-                ? (i switch { 0 => "Hook", 1 => "Explanation", 2 => "ViewingAdvice", 3 => "Reward", _ => "CTA" })
-                : (i switch { 0 => "Hook", 1 => "Curiosity", 2 => "Explanation", 3 => "Curiosity", 4 => "Reward", 5 => "ViewingAdvice", 6 => "ViewingAdvice", 7 => "Reward", _ => "CTA" });
-            var text = ComposeText(language, section, title, eventType, window, direction, i, shortForm);
-            return new QuestionDrivenNarrationSceneDto(i + 1, section, section, $"What should viewers know about {title}?", Caption(text), string.Empty, "V3.1 narration composer", text, EstimateSeconds(text, language), "Warm documentary host", Caption(text), section, section);
+            var text = ComposeText(language, sceneId, title, eventType, window, direction, i, shortForm);
+            var purpose = ScenePurpose(sceneId);
+            return new QuestionDrivenNarrationSceneDto(i + 1, sceneId, purpose, $"What should viewers know about {title}?", Caption(text), string.Empty, "NarrationGenerationServiceV31", text, EstimateSeconds(text, language), "Warm documentary host", Caption(text), sceneId, purpose);
         }).ToArray();
     }
 
@@ -75,38 +72,64 @@ public sealed class NarrationV31Composer : INarrationV31Composer
             title = ApplyHindiTerms(title); eventType = ApplyHindiTerms(eventType); direction = ApplyHindiObservationTerms(ApplyHindiTerms(direction));
             return section switch
             {
-                "Hook" => $"आज रात {title} आकाश में एक शांत लेकिन यादगार दृश्य बना रहा है।",
-                "Curiosity" => $"यह {eventType} खास है, क्योंकि इसकी सुंदरता दूरी में नहीं बल्कि हमारी नज़र की दिशा में छिपी है।",
-                "Explanation" => $"जब पृथ्वी से देखने की रेखा सही बनती है, तो अलग-अलग पिंड हमें एक ही कहानी का हिस्सा लगते हैं।",
-                "ViewingAdvice" => $"सबसे अच्छा समय {window} है; {direction} की ओर देखें और आंखों को अंधेरे में ढलने दें।",
-                "Reward" => $"धीरे-धीरे देखने पर चमक, रंग और स्थिति का बदलाव इस दृश्य को और जीवंत बना देता है।",
+                "001-hook" => $"आज रात {title} आकाश में एक शांत लेकिन यादगार दृश्य बना रहा है।",
+                "002-what-is-it" => $"यह {eventType} पृथ्वी से दिखने वाला वास्तविक आकाशीय पल है।",
+                "003-cause" => $"जब पृथ्वी से देखने की रेखा सही बनती है, तो अलग-अलग पिंड हमें एक ही कहानी का हिस्सा लगते हैं।",
+                "004-interesting-fact" => $"इसकी सुंदरता दूरी में नहीं बल्कि हमारी नज़र की दिशा और समय में छिपी है।",
+                "004-viewing-tip" => $"फोन की तेज रोशनी से बचें और कुछ मिनट शांत होकर आकाश देखें।",
+                "005-best-time" => $"सबसे अच्छा समय {window} है, जब आकाश का अंतर साफ दिखता है।",
+                "006-accurate-sky-guide" => $"{direction} की ओर देखें और आंखों को अंधेरे में ढलने दें।",
+                "007-what-you-will-see" => $"धीरे-धीरे देखने पर चमक, रंग और स्थिति का बदलाव यह दृश्य जीवंत बना देता है।",
+                "008-viewing-tip" => $"फोन की तेज रोशनी से बचें और कुछ मिनट शांत होकर आकाश देखें।",
                 _ => $"अगर मौसम साफ है, यह आकाश गाइड सेव करें और अगली खगोलीय घटना के लिए जुड़े रहें।"
-            } + (shortForm ? string.Empty : $" यह दृश्य {index + 1} कहानी को पिछले पल से आगे ले जाता है।");
+            } + (shortForm ? string.Empty : $" यह दृश्य कहानी को पिछले पल से आगे ले जाता है।");
         }
         return section switch
         {
-            "Hook" => $"Tonight, {title} gives the sky a clear story to follow rather than just another date on a calendar.",
-            "Curiosity" => $"What makes this {eventType} interesting is the way perspective turns separate objects into one shared scene.",
-            "Explanation" => $"From Earth, the line of sight changes quickly, so the event is about timing, geometry, and patience.",
-            "ViewingAdvice" => $"For the best chance, watch around {window}, face {direction}, and give your eyes time to adjust.",
-            "Reward" => $"The reward is a calm view that slowly reveals brightness, spacing, and motion as the minutes pass.",
+            "001-hook" => $"Tonight, {title} gives the sky a clear story to follow rather than just another date on a calendar.",
+            "002-what-is-it" => $"This {eventType} is a real sky alignment or observing moment, visible because Earth gives us the right point of view.",
+            "003-cause" => $"From Earth, the line of sight changes quickly, so the event is about timing, geometry, and patience.",
+            "004-interesting-fact" => $"What makes this {eventType} interesting is the way perspective turns separate objects into one shared scene.",
+            "004-viewing-tip" => $"Keep bright phone screens away, stand still for a few minutes, and let the scene sharpen naturally.",
+            "005-best-time" => $"The best time to look is around {window}, when the sky is dark enough for the contrast to stand out.",
+            "006-accurate-sky-guide" => $"Use {direction} as your guide, then scan slowly and let your eyes adjust before using binoculars.",
+            "007-what-you-will-see" => $"You should notice brightness, spacing, and motion changing subtly as the minutes pass.",
+            "008-viewing-tip" => $"For the best chance, watch around {window}, face {direction}, and give your eyes time to adjust.",
             _ => $"If your sky is clear, save this guide, step outside at the right time, and follow for more astronomy events."
-        } + (shortForm ? string.Empty : $" This beat {index + 1} keeps the narration connected to the visual scene.");
+        } + (shortForm ? string.Empty : $" This scene keeps the narration connected to the visual moment.");
     }
+
+
+    private static string ScenePurpose(string sceneId) => sceneId switch
+    {
+        "001-hook" => "hook",
+        "002-what-is-it" => "what-is-it",
+        "003-cause" => "cause",
+        "004-interesting-fact" => "interesting-fact",
+        "004-viewing-tip" => "viewing-tip",
+        "005-best-time" => "best-time",
+        "006-accurate-sky-guide" => "accurate-sky-guide",
+        "007-what-you-will-see" => "what-you-will-see",
+        "008-viewing-tip" => "viewing-tip",
+        "009-final-reminder" => "final-reminder",
+        _ => sceneId
+    };
 
     private static QuestionDrivenNarrationDto BuildDto(string eventId, string regionId, string language, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
         => new(eventId, regionId, language, scenes, scenes.Sum(s => s.EstimatedDurationSeconds), DateTimeOffset.UtcNow, "V3.1", new QuestionDrivenNarrationDiagnosticsDto(true, true, true, true, true, "V3.1", 90, DynamicNarrationGenerated: true, HardcodedTemplateUsed: false, SourceEventFactsUsed: scenes.Select(s => s.NarrationText).ToArray(), ScenePurposeUsed: scenes.Select(s => s.ScenePurpose).ToArray()));
 
     private static async Task<IReadOnlyList<string>> WriteAsync(string root, string format, QuestionDrivenNarrationDto dto, CancellationToken ct)
     {
-        var dir = Path.Combine(root, "narration-engine", format);
+        var dir = Path.Combine(root, "narration-v31", format);
         Directory.CreateDirectory(dir);
-        var narration = Path.Combine(dir, "question-driven-narration-v2.json");
-        var review = Path.Combine(dir, "question-driven-narration-review-v2.json");
-        await File.WriteAllTextAsync(narration, JsonSerializer.Serialize(dto, JsonOptions), ct);
-        var quality = Validate(dto.Scenes, dto.Language);
-        await File.WriteAllTextAsync(review, JsonSerializer.Serialize(new QuestionDrivenNarrationReviewDto(dto.EventId, dto.RegionId, dto.Language, quality.IsValid, dto.Scenes.Count, dto.TotalEstimatedDurationSeconds, quality.Errors.Select(e => new QuestionDrivenNarrationReviewCheckDto("V3.1 quality", false, e)).DefaultIfEmpty(new QuestionDrivenNarrationReviewCheckDto("V3.1 quality", true, "Narration passed V3.1 quality validation.")).ToArray(), quality.Warnings, DateTimeOffset.UtcNow, true, false, true, 0, "V3.1", dto.Diagnostics), JsonOptions), ct);
-        return [narration.Replace('\\', '/'), review.Replace('\\', '/')];
+        var files = new List<string>();
+        foreach (var scene in dto.Scenes)
+        {
+            var path = Path.Combine(dir, scene.Section + ".txt");
+            await File.WriteAllTextAsync(path, scene.NarrationText, ct);
+            files.Add(path.Replace('\\', '/'));
+        }
+        return files;
     }
 
     private static NarrationV31QualityReport Validate(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, string language)
