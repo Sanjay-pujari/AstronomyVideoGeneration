@@ -104,6 +104,10 @@ public sealed record QuestionDrivenNarrationDiagnosticsDto(
     IReadOnlyList<string>? ScenePurposeUsed = null,
     IReadOnlyDictionary<string, string>? ScenePurposeToNarrationSection = null,
     IReadOnlyDictionary<string, int>? NarrationSectionAppearanceCounts = null,
+    IReadOnlyList<string>? V31NarrationKeysUsed = null,
+    IReadOnlyList<string>? V31ScenePurposeLookupKeysUsed = null,
+    IReadOnlyDictionary<string, string>? V31FormatScenePurposeToSceneId = null,
+    IReadOnlyDictionary<string, string>? V31FormatSceneIdToScenePurpose = null,
     int AiRewriteAttemptCount = 0,
     bool FallbackStaticTextUsed = false);
 

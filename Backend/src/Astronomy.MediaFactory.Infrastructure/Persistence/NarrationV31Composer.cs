@@ -52,7 +52,7 @@ public sealed class NarrationV31Composer : INarrationV31Composer
 
         var shortScenes = BuildScenes(eventId, regionId, language, title, eventType, window, direction, shortForm: true);
         var longScenes = BuildScenes(eventId, regionId, language, title, eventType, window, direction, shortForm: false);
-        var quality = Validate(longScenes, language);
+        var quality = Validate(shortScenes, longScenes, language);
         var warnings = quality.Warnings.ToList();
         var files = new List<string>();
 
@@ -137,7 +137,12 @@ public sealed class NarrationV31Composer : INarrationV31Composer
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
         var mapping = scenes
             .ToDictionary(s => s.Section, s => s.ScenePurpose, StringComparer.OrdinalIgnoreCase);
-        return new(eventId, regionId, language, scenes, scenes.Sum(s => s.EstimatedDurationSeconds), DateTimeOffset.UtcNow, "V3.1", new QuestionDrivenNarrationDiagnosticsDto(true, true, true, true, true, "V3.1", 90, DynamicNarrationGenerated: true, HardcodedTemplateUsed: false, SourceEventFactsUsed: scenes.Select(s => s.NarrationText).ToArray(), ScenePurposeUsed: scenes.Select(s => s.ScenePurpose).ToArray(), ScenePurposeToNarrationSection: mapping, NarrationSectionAppearanceCounts: sectionCounts));
+        var format = scenes.Count == ShortSceneIds.Length ? "short" : "long";
+        var keyedMapping = scenes
+            .ToDictionary(s => $"{format}:{s.Section}", s => s.ScenePurpose, StringComparer.OrdinalIgnoreCase);
+        var scopedPurposeMapping = scenes
+            .ToDictionary(s => $"{format}/{s.ScenePurpose}", s => s.Section, StringComparer.OrdinalIgnoreCase);
+        return new(eventId, regionId, language, scenes, scenes.Sum(s => s.EstimatedDurationSeconds), DateTimeOffset.UtcNow, "V3.1", new QuestionDrivenNarrationDiagnosticsDto(true, true, true, true, true, "V3.1", 90, DynamicNarrationGenerated: true, HardcodedTemplateUsed: false, SourceEventFactsUsed: scenes.Select(s => s.NarrationText).ToArray(), ScenePurposeUsed: scenes.Select(s => s.ScenePurpose).ToArray(), ScenePurposeToNarrationSection: mapping, NarrationSectionAppearanceCounts: sectionCounts, V31NarrationKeysUsed: scenes.Select(s => $"{format}:{s.Section}").ToArray(), V31ScenePurposeLookupKeysUsed: scopedPurposeMapping.Keys.ToArray(), V31FormatScenePurposeToSceneId: scopedPurposeMapping, V31FormatSceneIdToScenePurpose: keyedMapping));
     }
 
     private static async Task<IReadOnlyList<string>> WriteAsync(string root, string format, QuestionDrivenNarrationDto dto, CancellationToken ct)
@@ -156,31 +161,37 @@ public sealed class NarrationV31Composer : INarrationV31Composer
         return files;
     }
 
-    private static NarrationV31QualityReport Validate(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, string language)
+    private static NarrationV31QualityReport Validate(IReadOnlyList<QuestionDrivenNarrationSceneDto> shortScenes, IReadOnlyList<QuestionDrivenNarrationSceneDto> longScenes, string language)
     {
         var errors = new List<string>(); var warnings = new List<string>();
-        var noDup = scenes.Select(s => Normalize(s.NarrationText)).Where(s => s.Length > 0).GroupBy(s => s).All(g => g.Count() == 1);
-        var noInstructions = !scenes.Any(s => AuthoringPhrases.Any(p => s.NarrationText.Contains(p, StringComparison.OrdinalIgnoreCase)));
-        var counts = scenes.Count is 5 or 9 or 14;
-        var localizedTime = language != "hi" || scenes.Any(s => Regex.IsMatch(s.NarrationText, "[०-९]|सुबह|शाम|रात|दोपहर|बजे"));
-        var hindiTerms = language != "hi" || scenes.Any(s => s.NarrationText.Any(c => c >= '\u0900' && c <= '\u097F'));
-        if (!counts) errors.Add("Narration must contain 5 short scenes, 9 long scenes, or combined 14 scenes.");
+        var scenes = shortScenes.Select(s => new { Format = "short", Scene = s }).Concat(longScenes.Select(s => new { Format = "long", Scene = s })).ToArray();
+        var noDup = scenes.Select(s => Normalize(s.Scene.NarrationText)).Where(s => s.Length > 0).GroupBy(s => s).All(g => g.Count() == 1);
+        var noInstructions = !scenes.Any(s => AuthoringPhrases.Any(p => s.Scene.NarrationText.Contains(p, StringComparison.OrdinalIgnoreCase)));
+        var counts = shortScenes.Count == ShortSceneIds.Length && longScenes.Count == LongSceneIds.Length;
+        var localizedTime = language != "hi" || scenes.Any(s => Regex.IsMatch(s.Scene.NarrationText, "[०-९]|सुबह|शाम|रात|दोपहर|बजे"));
+        var hindiTerms = language != "hi" || scenes.Any(s => s.Scene.NarrationText.Any(c => c >= '\u0900' && c <= '\u097F'));
+        if (!counts) errors.Add($"Narration must contain {ShortSceneIds.Length} short scenes and {LongSceneIds.Length} long scenes.");
         if (!noDup) errors.Add("Duplicate narration text detected.");
         if (!noInstructions) errors.Add("Authoring instruction text detected.");
-        var longScenes = scenes.Where(s => ScenePurposeToNarrationSection.ContainsKey(s.Section)).ToArray();
-        var duplicateSections = longScenes
-            .GroupBy(s => s.ScenePurpose, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Select(s => s.Section).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
-            .Select(g => $"{g.Key}: {string.Join(", ", g.Select(s => s.Section).Distinct(StringComparer.OrdinalIgnoreCase))}")
+        foreach (var group in scenes.GroupBy(s => s.Format, StringComparer.OrdinalIgnoreCase))
+        {
+            var duplicateSceneIds = group
+                .GroupBy(s => s.Scene.Section, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .Select(g => $"{group.Key}:{g.Key}")
+                .ToArray();
+            if (duplicateSceneIds.Length > 0) errors.Add("V3.1 narration scene IDs must be unique within each format: " + string.Join(", ", duplicateSceneIds) + ".");
+        }
+        var duplicateCompositeKeys = scenes
+            .GroupBy(s => $"{s.Format}:{s.Scene.Section}", StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
             .ToArray();
-        var requiredSections = ScenePurposeToNarrationSection.Values.ToArray();
-        var sectionCounts = requiredSections
-            .ToDictionary(section => section, section => longScenes.Count(s => string.Equals(s.ScenePurpose, section, StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase);
-        var missingOrRepeatedSections = sectionCounts.Where(kv => kv.Value != 1).Select(kv => $"{kv.Key}={kv.Value}").ToArray();
-        if (duplicateSections.Length > 0) errors.Add("V3.1 scenePurposeToNarrationSection must be one-to-one; duplicate narration sections: " + string.Join(" | ", duplicateSections) + ".");
-        if (missingOrRepeatedSections.Length > 0) errors.Add("V3.1 scenePurposeToNarrationSection must contain every required narration section exactly once: " + string.Join(" | ", missingOrRepeatedSections) + ".");
+        if (duplicateCompositeKeys.Length > 0) errors.Add("V3.1 narration keys must be unique by format and sceneId: " + string.Join(", ", duplicateCompositeKeys) + ".");
+        if (!ShortSceneIds.All(id => shortScenes.Any(s => string.Equals(s.Section, id, StringComparison.OrdinalIgnoreCase)))) errors.Add("V3.1 short narration is missing required scene IDs.");
+        if (!LongSceneIds.All(id => longScenes.Any(s => string.Equals(s.Section, id, StringComparison.OrdinalIgnoreCase)))) errors.Add("V3.1 long narration is missing required scene IDs.");
         if (!localizedTime) errors.Add("Hindi narration must use localized time formatting.");
-        if (language == "hi" && scenes.Any(s => Regex.IsMatch(s.NarrationText, @"\b(Jupiter and Venus|early evening|before sunrise|after sunset|eastern horizon|PM|AM)\b|\s+to\s+|\b(eastern|western|northern|southern)\s+(?:horizon|sky)\b|\b(?:toward|overhead|open sky)\b", RegexOptions.IgnoreCase)))
+        if (language == "hi" && scenes.Any(s => Regex.IsMatch(s.Scene.NarrationText, @"\b(Jupiter and Venus|early evening|before sunrise|after sunset|eastern horizon|PM|AM)\b|\s+to\s+|\b(eastern|western|northern|southern)\s+(?:horizon|sky)\b|\b(?:toward|overhead|open sky)\b", RegexOptions.IgnoreCase)))
             errors.Add("Hindi narration contains raw English direction or timing phrasing.");
         return new(counts && noDup && noInstructions && localizedTime && hindiTerms && errors.Count == 0, counts, noDup, noInstructions, localizedTime, hindiTerms, errors, warnings);
     }
