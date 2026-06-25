@@ -9,6 +9,55 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class ProductionPipelineExecutionServiceTests
 {
+
+    [Fact]
+    public void ResolvePhase15SrtPath_PrefersLanguageScopedSrtOverLegacyUnscopedPath()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-srt-path-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var scopedRoot = Path.Combine(planRoot, "narration", "subtitles", "en");
+            var legacyRoot = Path.Combine(planRoot, "narration", "subtitles");
+            Directory.CreateDirectory(scopedRoot);
+            File.WriteAllText(Path.Combine(scopedRoot, "short.srt"), "scoped");
+            File.WriteAllText(Path.Combine(legacyRoot, "short.srt"), "legacy");
+
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15SrtPath", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var result = (string)method!.Invoke(null, new object?[] { planRoot, "en", "short" })!;
+
+            Assert.Equal(Path.Combine(planRoot, "narration", "subtitles", "en", "short.srt"), result);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
+    [Fact]
+    public void ResolvePhase15SrtPath_FallsBackToLegacyUnscopedOnlyWhenLanguageScopedMissing()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), "phase15-srt-path-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var legacyRoot = Path.Combine(planRoot, "narration", "subtitles");
+            Directory.CreateDirectory(legacyRoot);
+            File.WriteAllText(Path.Combine(legacyRoot, "long.srt"), "legacy");
+
+            var method = typeof(ProductionPipelineExecutionService).GetMethod("ResolvePhase15SrtPath", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var result = (string)method!.Invoke(null, new object?[] { planRoot, "en", "long" })!;
+
+            Assert.Equal(Path.Combine(planRoot, "narration", "subtitles", "long.srt"), result);
+        }
+        finally
+        {
+            if (Directory.Exists(planRoot)) Directory.Delete(planRoot, true);
+        }
+    }
+
     [Fact]
     public void FirstNonEmpty_ReturnsEmptyString_WhenAllCandidatesAreMissing()
     {
