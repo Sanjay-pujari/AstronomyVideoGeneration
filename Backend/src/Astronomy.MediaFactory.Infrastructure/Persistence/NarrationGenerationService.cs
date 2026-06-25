@@ -153,7 +153,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (Regex.IsMatch(text, @"\bUTC\b", RegexOptions.IgnoreCase)) errors.Add("UTC timestamp appears.");
         if (Regex.IsMatch(text, @"peaks\s+2026|minimum angular separation|consolidated from", RegexOptions.IgnoreCase)) errors.Add("Raw production metadata phrase appears.");
         if (Regex.IsMatch(text, @"\b[A-Z]{2}-[A-Z]{2}-[A-Z0-9-]+\b")) errors.Add("Raw region code appears.");
-        if (!string.IsNullOrWhiteSpace(rawShortTitle) && !string.Equals(rawShortTitle, context.ShortDisplayTitle, StringComparison.OrdinalIgnoreCase) && text.Contains(rawShortTitle, StringComparison.OrdinalIgnoreCase)) errors.Add("Raw short title appears.");
+        if (!string.IsNullOrWhiteSpace(rawShortTitle) && !string.Equals(rawShortTitle, context.ShortDisplayTitle, StringComparison.OrdinalIgnoreCase) && ContainsUnapprovedRawShortTitle(text, rawShortTitle, context)) errors.Add("Raw short title appears.");
         if (!string.IsNullOrWhiteSpace(eventName) && !string.Equals(eventName, context.DisplayTitle, StringComparison.OrdinalIgnoreCase) && text.Contains(eventName, StringComparison.OrdinalIgnoreCase)) errors.Add("Raw internal event title appears.");
         if (Regex.IsMatch(text, @"[+-]\d{2}:\d{2}")) errors.Add("Timezone offset appears.");
         if (Regex.IsMatch(text, "placeholder|listed viewing window|local viewing window|during December", RegexOptions.IgnoreCase)) errors.Add("Placeholder or forbidden phrase appears.");
@@ -175,6 +175,39 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         return new(errors.Count == 0, errors, warnings);
     }
 
+    private static bool ContainsUnapprovedRawShortTitle(string text, string rawShortTitle, NarrationContext context)
+    {
+        var remaining = text;
+        foreach (var approved in ApprovedShortTitlePhrases(rawShortTitle, context).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(value => value.Length))
+        {
+            remaining = Regex.Replace(remaining, Regex.Escape(approved), string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        return remaining.Contains(rawShortTitle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> ApprovedShortTitlePhrases(string rawShortTitle, NarrationContext context)
+    {
+        yield return context.DisplayTitle;
+        yield return context.ShortDisplayTitle;
+
+        if (context.Family == "MeteorShower")
+        {
+            var clean = Regex.Replace(rawShortTitle.Trim(), @"\s+(?:meteor\s+shower|peak)$", string.Empty, RegexOptions.IgnoreCase).Trim();
+            if (!string.IsNullOrWhiteSpace(clean))
+            {
+                yield return $"the {clean} meteor shower";
+                yield return $"the {clean}";
+                yield return $"{clean} meteors";
+            }
+
+            if (clean.Equals("Geminids", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "जेमिनिड्स";
+                yield return "जेमिनिड्स (Geminids)";
+            }
+        }
+    }
 
     private static string EventDisplayName(string name, string type)
     {
