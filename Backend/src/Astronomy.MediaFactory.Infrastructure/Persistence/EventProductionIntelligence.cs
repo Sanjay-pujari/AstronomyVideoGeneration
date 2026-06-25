@@ -298,55 +298,15 @@ public abstract class MediaEventStrategyBase : IMediaEventStrategy
 
     protected static string ViewingTime(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
         => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)
-            ? FormatViewingWindowForSpeech(intelligence.BestViewingWindowLocal!, context.TimeZoneAbbreviation)
+            ? NarrationTimeFormatter.FormatViewingWindow(intelligence.BestViewingWindowLocal!, context.TimeZoneAbbreviation)
             : !string.IsNullOrWhiteSpace(intelligence.LocalPeakTime)
-                ? FormatLocalPeakTimeForSpeech(intelligence.LocalPeakTime!, context.TimeZoneAbbreviation)
+                ? $"around {NarrationTimeFormatter.FormatPeakTime(intelligence.LocalPeakTime!, context.TimeZoneAbbreviation)}"
                 : $"around {context.LocalPeakTime:h:mm tt} {context.TimeZoneAbbreviation}";
 
     protected static string ViewingWindowOnly(ProductionEventIntelligence intelligence, QuestionAnswerSetBuildContext context)
         => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal)
-            ? FormatViewingWindowForSpeech(intelligence.BestViewingWindowLocal!, context.TimeZoneAbbreviation)
+            ? NarrationTimeFormatter.FormatViewingWindow(intelligence.BestViewingWindowLocal!, context.TimeZoneAbbreviation)
             : "from midnight to 5:00 AM " + context.TimeZoneAbbreviation;
-
-    protected static string FormatViewingWindowForSpeech(string value, string fallbackTimeZone)
-    {
-        var cleaned = Clean(value);
-        var match = Regex.Match(cleaned, @"^(?<date>\d{4}-\d{2}-\d{2})\s+(?<start>\d{1,2}:\d{2})\s*[–-]\s*(?<end>\d{1,2}:\d{2})\s*(?<tz>[A-Z]{2,5})?$", RegexOptions.IgnoreCase);
-        if (!match.Success || !DateTime.TryParseExact(match.Groups["date"].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
-            return RemoveTechnicalTimeArtifacts(cleaned);
-
-        var timeZone = !string.IsNullOrWhiteSpace(match.Groups["tz"].Value) ? match.Groups["tz"].Value.ToUpperInvariant() : fallbackTimeZone;
-        return $"from {FormatClockForSpeech(match.Groups["start"].Value)} to {FormatClockForSpeech(match.Groups["end"].Value)} {timeZone} on {date:MMMM d, yyyy}";
-    }
-
-    protected static string FormatLocalPeakTimeForSpeech(string value, string fallbackTimeZone)
-    {
-        var cleaned = Clean(value);
-        var match = Regex.Match(cleaned, @"^(?<date>\d{4}-\d{2}-\d{2})\s+(?<time>\d{1,2}:\d{2})(?:\s+(?<offset>[+-]\d{2}:\d{2}))?(?:\s+(?<tz>[A-Z]{2,5}))?$", RegexOptions.IgnoreCase);
-        if (!match.Success || !DateTime.TryParseExact(match.Groups["date"].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
-            return RemoveTechnicalTimeArtifacts(cleaned);
-
-        var timeZone = !string.IsNullOrWhiteSpace(match.Groups["tz"].Value) ? match.Groups["tz"].Value.ToUpperInvariant() : fallbackTimeZone;
-        return $"around {FormatClockForSpeech(match.Groups["time"].Value)} {timeZone} on {date:MMMM d, yyyy}";
-    }
-
-    private static string FormatClockForSpeech(string value)
-    {
-        if (!TimeOnly.TryParseExact(value, "H:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time)
-            && !TimeOnly.TryParseExact(value, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time))
-            return value;
-        if (time.Hour == 0 && time.Minute == 0) return "midnight";
-        if (time.Hour == 12 && time.Minute == 0) return "noon";
-        return DateTime.Today.Add(time.ToTimeSpan()).ToString(time.Minute == 0 ? "h:mm tt" : "h:mm tt", CultureInfo.InvariantCulture);
-    }
-
-    private static string RemoveTechnicalTimeArtifacts(string value)
-    {
-        var cleaned = Regex.Replace(value, @"\b\d{4}-\d{2}-\d{2}\b", string.Empty);
-        cleaned = Regex.Replace(cleaned, @"(?<!\w)[+-]\d{2}:\d{2}(?!\w)", string.Empty);
-        cleaned = Regex.Replace(cleaned, @"\b(?:listed|local) viewing window\b", "recommended viewing window", RegexOptions.IgnoreCase);
-        return Clean(cleaned.Trim(' ', ',', '-', '–', '—'));
-    }
 
     protected static string Direction(ProductionEventIntelligence intelligence)
         => !string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint) ? intelligence.SkyDirectionHint! : "the clearest open sky";
@@ -464,31 +424,19 @@ public sealed class MeteorShowerStrategy : MediaEventStrategyBase
             ? $"{moonInterference.ToLowerInvariant()} moon interference at about {Math.Round(intelligence.MoonIlluminationPercent.Value):0}% illumination"
             : $"{moonInterference.ToLowerInvariant()} moon interference";
         var reminder = FormatMeteorReminderNight(bestWindow, context.LocalPeakTime);
+        var directionText = NarrationTimeFormatter.FormatDirection(direction);
+        if (!directionText.Contains("after", StringComparison.OrdinalIgnoreCase)) directionText += " after 10 PM";
         return CreateSet(intelligence, context,
         [
             Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", $"{showerName} peaks as Earth crosses space debris, producing bright meteor streaks.", 1),
             Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction}; {(!string.IsNullOrWhiteSpace(intelligence.ReferenceObject) ? intelligence.ReferenceObject : "meteors can appear anywhere across the dark sky")}.", 2),
-            Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"For observers in {context.LocationName}, the recommended viewing window runs {recommendedWindow}. Find a dark, open location and look {FormatMeteorDirectionForSpeech(direction)} after 10 PM as the radiant climbs higher.", 3),
+            Answer(AstronomyQuestionTypes.When, "When is the best time to watch?", "Best viewing time", $"For observers in {context.LocationName}, the recommended viewing window runs {recommendedWindow}. Look {directionText} as the night deepens.", 3),
             Answer(AstronomyQuestionTypes.How, "How do I watch it?", "How to observe", "No telescope is needed; avoid city lights, lie back, and give your eyes 20 minutes to adjust.", 4),
             Answer(AstronomyQuestionTypes.Why, "Why is this event special?", "Why it matters", $"{showerName} is one of the strongest annual meteor showers, with {moonPhrase} improving viewing quality.", 5),
             Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Set a reminder", $"Set a reminder for {reminder}, check weather, and pick a dark open location.", 6)
         ]);
     }
 
-
-    private static string FormatMeteorDirectionForSpeech(string direction)
-    {
-        var cleaned = Clean(direction).ToLowerInvariant();
-        if (cleaned.Contains("east") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the eastern sky toward overhead";
-        if (cleaned.Contains("north") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the northern sky toward overhead";
-        if (cleaned.Contains("south") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the southern sky toward overhead";
-        if (cleaned.Contains("west") && cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "from the western sky toward overhead";
-        if (cleaned.Contains("east")) return "toward the eastern sky";
-        if (cleaned.Contains("west")) return "toward the western sky";
-        if (cleaned.Contains("north")) return "toward the northern sky";
-        if (cleaned.Contains("south")) return "toward the southern sky";
-        return "across the darkest open sky";
-    }
 
     private static string FormatMeteorReminderNight(string bestWindow, DateTimeOffset localPeak)
     {
@@ -845,11 +793,43 @@ public sealed class ProductionPipelineQualityValidator(IEventSceneValidationStra
         if (!HasBestViewingWindowEvidence(intelligence, text)) errors.Add("Output does not use bestViewingWindowLocal.");
         foreach (var stale in new[] { "Golden Pilot", "golden pilot" })
             if (ContainsToken(text, stale)) errors.Add($"Output contains stale Golden Pilot term '{stale}'.");
+        ValidateNarrationTimeMetadataFormatting(ReadNarrationFormattingValidationText(root), errors);
         if (strategyDefinition is null)
         {
             var outputText = ReadOutputBearingValidationText(root);
             foreach (var forbidden in intelligence.ForbiddenTerms.Concat(intelligence.ForbiddenObjectNames ?? []).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase))
                 if (ContainsToken(outputText, forbidden)) errors.Add($"Output contains forbidden unrelated term '{forbidden}'.");
+        }
+    }
+
+    private static string ReadNarrationFormattingValidationText(string root)
+    {
+        if (!Directory.Exists(root)) return string.Empty;
+        var values = new List<string> { ReadOutputBearingValidationText(root) };
+        foreach (var child in new[] { "question-engine", "narration", "video-assembly" }.Select(name => Path.Combine(root, name)).Where(Directory.Exists))
+        {
+            values.AddRange(Directory.EnumerateFiles(child, "*.*", SearchOption.AllDirectories)
+                .Where(path => new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".json", ".txt", ".md" }.Contains(Path.GetExtension(path)))
+                .Where(IsCurrentProductionTextSource)
+                .Take(100)
+                .Select(File.ReadAllText));
+        }
+        return string.Join('\n', values);
+    }
+
+    private static void ValidateNarrationTimeMetadataFormatting(string text, List<string> errors)
+    {
+        if (Regex.IsMatch(text, @"\d{4}-\d{2}-\d{2}")) errors.Add("Narration contains raw yyyy-mm-dd metadata.");
+        if (Regex.IsMatch(text, @"(?<!\w)[+-]\d{2}:\d{2}(?!\w)")) errors.Add("Narration contains a raw timezone offset.");
+        foreach (var phrase in new[] { "during December", "listed viewing window", "local viewing window", "around December" })
+            if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) errors.Add($"Narration contains forbidden phrase '{phrase}'.");
+        foreach (Match match in Regex.Matches(text, @"(?<date>(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})", RegexOptions.IgnoreCase))
+        {
+            if (Regex.Matches(text, Regex.Escape(match.Groups["date"].Value), RegexOptions.IgnoreCase).Count > 1)
+            {
+                errors.Add($"BestTime narration repeats date phrase '{match.Groups["date"].Value}'.");
+                break;
+            }
         }
     }
 
