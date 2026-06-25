@@ -2056,6 +2056,51 @@ Second display cue.
     }
 
 
+
+    [Fact]
+    public void OverwriteCleanup_Phase15Only_PreservesNarrationSubtitlesAndDeletesOnlyTts()
+    {
+        var baseContext = CreateContext("MeteorShower", ["TtsTimeline"]);
+        var deleted = new List<string>();
+        var deletedDirectories = new List<string>();
+        var skippedDirectories = new List<string>();
+        var context = baseContext with
+        {
+            StartPhaseNo = 15,
+            EndPhaseNo = 15,
+            OverwriteExisting = true,
+            DeletedFilesDueToOverwrite = deleted,
+            DeletedDirectoriesDueToOverwrite = deletedDirectories,
+            SkippedDirectoriesDueToOverwrite = skippedDirectories,
+            PipelineRequest = baseContext.PipelineRequest with { StartPhaseNo = 15, EndPhaseNo = 15, OverwriteExisting = true }
+        };
+
+        var subtitleRoot = Path.Combine(context.ExecutionContext.NarrationRoot!, "subtitles", "en");
+        var ttsEnRoot = Path.Combine(context.ExecutionContext.TtsRoot!, "en");
+        var ttsHiRoot = Path.Combine(context.ExecutionContext.TtsRoot!, "hi");
+        Directory.CreateDirectory(subtitleRoot);
+        Directory.CreateDirectory(ttsEnRoot);
+        Directory.CreateDirectory(ttsHiRoot);
+        File.WriteAllText(Path.Combine(subtitleRoot, "short.srt"), "1");
+        File.WriteAllText(Path.Combine(subtitleRoot, "long.srt"), "1");
+        File.WriteAllText(Path.Combine(context.ExecutionContext.NarrationRoot!, "narration.txt"), "phase 14 narration");
+        File.WriteAllText(Path.Combine(ttsEnRoot, "short.mp3"), "tts");
+        File.WriteAllText(Path.Combine(ttsHiRoot, "short.mp3"), "tts");
+
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ClearPhaseRangeOutputsForOverwrite", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        method!.Invoke(null, [context]);
+
+        Assert.True(File.Exists(Path.Combine(subtitleRoot, "short.srt")));
+        Assert.True(File.Exists(Path.Combine(subtitleRoot, "long.srt")));
+        Assert.True(File.Exists(Path.Combine(context.ExecutionContext.NarrationRoot!, "narration.txt")));
+        Assert.False(Directory.Exists(context.ExecutionContext.TtsRoot!));
+        Assert.DoesNotContain(deletedDirectories, path => path.Contains(Path.Combine("narration", "subtitles"), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(deletedDirectories, path => path.EndsWith("tts", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(skippedDirectories, path => path.EndsWith("narration", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(skippedDirectories, path => path.Contains(Path.Combine("narration", "subtitles"), StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void PlanetConjunctionNarrationV22_HumanizesBestTimeAndSkyGuideFragments()
     {

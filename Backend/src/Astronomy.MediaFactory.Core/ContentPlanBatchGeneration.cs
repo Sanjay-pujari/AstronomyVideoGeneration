@@ -360,7 +360,9 @@ public sealed record ProductionPhaseContext(
     int EndPhaseNo,
     bool RetryFailedOnly,
     ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
-    IReadOnlyList<string>? DeletedFilesDueToOverwrite = null);
+    IReadOnlyList<string>? DeletedFilesDueToOverwrite = null,
+    IReadOnlyList<string>? DeletedDirectoriesDueToOverwrite = null,
+    IReadOnlyList<string>? SkippedDirectoriesDueToOverwrite = null);
 
 public sealed record ProductionPhaseResult(
     int PhaseNo,
