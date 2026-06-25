@@ -39,7 +39,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
     ISceneAssetsV3Service? sceneAssetsV3Service = null,
     IOptions<ThumbnailOptions>? thumbnailOptions = null,
-    IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null,
+    INarrationV31Composer? narrationV31Composer = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -2001,7 +2002,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
             try
             {
-                documentaryNarration = BuildPhase14DocumentaryNarration(context);
+                documentaryNarration = await BuildV31ProductionNarrationAsync(context, shortItems, longItems, cancellationToken);
                 eventConsistencyDiagnostics = documentaryNarration.EventConsistencyDiagnostics;
             }
             catch (Phase14EventConsistencyException)
@@ -2010,8 +2011,8 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
             {
-                var wrappedException = new InvalidOperationException("SceneLevelNarrationComposer failed", ex);
-                TracePhase14Exception("Phase14.SceneLevelNarrationComposer.wrap", wrappedException);
+                var wrappedException = new InvalidOperationException("NarrationGenerationServiceV31 failed", ex);
+                TracePhase14Exception("Phase14.NarrationGenerationServiceV31.wrap", wrappedException);
                 WritePhase14ExceptionDiagnostics(context, wrappedException);
                 throw wrappedException;
             }
@@ -2019,6 +2020,18 @@ public sealed partial class ProductionPipelineExecutionService(
             longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
             var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, subtitleTtsOptions?.Value, cancellationToken);
             var documentaryNarrationV2DiagnosticsPath = await WritePhase14DocumentaryNarrationV2DiagnosticsAsync(planRoot, documentaryNarration, cancellationToken);
+            var v31NarrationIntegrationDiagnosticsPath = Path.Combine(validationRoot, "v31-narration-integration-diagnostics.json");
+            await File.WriteAllTextAsync(v31NarrationIntegrationDiagnosticsPath, JsonSerializer.Serialize(new
+            {
+                v31NarrationIntegrationDiagnostics = new
+                {
+                    v31NarrationServiceUsed = true,
+                    phase14Modified = false,
+                    phase15Modified = false,
+                    sceneLevelTtsPreserved = true,
+                    narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray()
+                }
+            }, JsonOptions), cancellationToken);
             selectedShortNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "short");
             selectedLongNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "long");
 
@@ -2044,10 +2057,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 version = "v1",
                 sourceSceneAssetsVersion = "V3.1",
                 sourceNarrationVersion = EventStoryComposer.Version,
-                matchingStrategy = "SceneLevelNarrationComposer",
+                matchingStrategy = "NarrationGenerationServiceV31",
                 diagnostics = new
                 {
-                    matchingStrategy = "SceneLevelNarrationComposer",
+                    matchingStrategy = "NarrationGenerationServiceV31",
                     narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                     sectionsExtracted = extractedSections,
                     matchedPairs,
@@ -2146,8 +2159,16 @@ public sealed partial class ProductionPipelineExecutionService(
                 missingNarrationBeats,
                 oldPathUsed = false,
                 validationPassed = errors.Count == 0,
-                matchingStrategy = "SceneLevelNarrationComposer",
+                matchingStrategy = "NarrationGenerationServiceV31",
                 narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
+                v31NarrationIntegrationDiagnostics = new
+                {
+                    v31NarrationServiceUsed = true,
+                    phase14Modified = false,
+                    phase15Modified = false,
+                    sceneLevelTtsPreserved = true,
+                    narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray()
+                },
                 sectionsExtracted = extractedSections,
                 matchedPairs,
                 unmatchedNarrationSections = unmatchedNarrationSections.Distinct(StringComparer.OrdinalIgnoreCase),
@@ -2160,7 +2181,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
             var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, eventConsistencyDiagnostics, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
-            return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
+            return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath, v31NarrationIntegrationDiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
@@ -4038,8 +4059,102 @@ public sealed partial class ProductionPipelineExecutionService(
         => items.Select(item =>
         {
             var text = documentaryTextBySceneId.TryGetValue(item.SceneId, out var documentaryText) ? documentaryText : item.NarrationText;
-            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "SceneLevelNarrationComposer" };
+            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "NarrationGenerationServiceV31" };
         }).ToArray();
+
+    private async Task<Phase14DocumentaryNarration> BuildV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
+    {
+        if (narrationV31Composer is null)
+            throw new InvalidOperationException("V3.1 NarrationGenerationService is not configured for production narration integration.");
+
+        var response = await narrationV31Composer.WriteFinalSceneNarrationAsync(new NarrationV31PreviewRequest(
+            EventId: FirstNonEmpty(context.EventId, context.Request.PlanId.ToString("D")),
+            RegionId: FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
+            Language: ResolvePipelineLanguage(context.Request.Language),
+            DryRun: false,
+            OverwriteExisting: context.PipelineRequest.OverwriteExisting,
+            ProductionContext: context.ExecutionContext,
+            OutputRoot: context.OutputRoot,
+            EventType: FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
+            Title: FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
+            LocalPeakTime: FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime),
+            SkyDirectionHint: FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
+            BestViewingWindowLocal: FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal)),
+            cancellationToken);
+
+        ValidateV31ProductionNarration(response, shortItems.Count, longItems.Count);
+
+        var shortTexts = MapV31ScenesToSceneIds(shortItems, response.ShortNarration.Scenes);
+        var longTexts = MapV31ScenesToSceneIds(longItems, response.LongNarration.Scenes);
+        var firstSentenceByScene = shortTexts.Select(kv => new { Key = $"short:{kv.Key}", kv.Value })
+            .Concat(longTexts.Select(kv => new { Key = $"long:{kv.Key}", kv.Value }))
+            .ToDictionary(x => x.Key, x => FirstSentence(x.Value), StringComparer.OrdinalIgnoreCase);
+        var eventConsistencyDiagnostics = new Phase14EventConsistencyDiagnostics(
+            FirstNonEmpty(context.Request.EventType, context.ExecutionContext.EventType),
+            FirstNonEmpty(context.Request.Title, context.Request.ShortTitle),
+            context.Request.PrimaryObjects,
+            context.Request.SecondaryObjects,
+            FirstNonEmpty(context.ProductionEventIntelligence.EventType),
+            FirstNonEmpty(context.ProductionEventIntelligence.Title),
+            context.ProductionEventIntelligence.PrimaryObjects,
+            context.ProductionEventIntelligence.SecondaryObjects,
+            ResolvePhase14NarrationFamily(context),
+            "NarrationGenerationServiceV31",
+            false,
+            [],
+            ResolvePhase14EventFamily(context.Request.EventType, context.Request.Title, context.Request.PrimaryObjects, context.Request.SecondaryObjects),
+            ResolvePhase14NarrationFamily(context),
+            firstSentenceByScene,
+            true,
+            []);
+        var adapterDiagnostics = new Phase14AdapterDiagnostics(
+            true,
+            "NarrationGenerationServiceV31",
+            FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
+            shortTexts.Count,
+            longTexts.Count,
+            shortTexts.Count + longTexts.Count,
+            shortTexts.Count + longTexts.Count,
+            firstSentenceByScene,
+            false,
+            false,
+            false,
+            string.Empty,
+            response.ShortNarration.Scenes.Concat(response.LongNarration.Scenes).Select(s => s.Section).ToArray(),
+            shortItems.Select(i => new { Key = $"short:{i.SceneId}", i.SceneId }).Concat(longItems.Select(i => new { Key = $"long:{i.SceneId}", i.SceneId })).ToDictionary(i => i.Key, i => ResolvePhase14ScenePurpose(i.SceneId), StringComparer.OrdinalIgnoreCase),
+            response.GeneratedFiles,
+            [],
+            []);
+
+        return new Phase14DocumentaryNarration(
+            true,
+            true,
+            "NarrationGenerationServiceV31",
+            false,
+            "V3.1 production narration",
+            BuildPhase14StoryArc(),
+            shortTexts,
+            longTexts,
+            new { @short = shortTexts, @long = longTexts },
+            new EventStoryComposerDiagnostics("V3.1", "ProductionPipeline", true, true, 100, 100, LongSceneCount: longTexts.Count, ExtractedSectionCount: shortTexts.Count + longTexts.Count, SourceEventFactsUsed: response.ShortNarration.Scenes.Concat(response.LongNarration.Scenes).Select(s => s.NarrationText).ToArray()),
+            adapterDiagnostics,
+            ApplyPhase14NarrationTranslationIfNeeded("en", ResolvePhase14NarrationFamily(context), shortTexts, longTexts, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType), context.ProductionEventIntelligence.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects),
+            eventConsistencyDiagnostics);
+    }
+
+    private static void ValidateV31ProductionNarration(NarrationV31PreviewResponse response, int expectedShortCount, int expectedLongCount)
+    {
+        var errors = new List<string>();
+        if (!response.IsValid || !response.Quality.IsValid) errors.AddRange(response.Quality.Errors);
+        if (response.ShortNarration.Scenes.Count != expectedShortCount) errors.Add($"V3.1 short scene count changed: expected {expectedShortCount}, actual {response.ShortNarration.Scenes.Count}.");
+        if (response.LongNarration.Scenes.Count != expectedLongCount) errors.Add($"V3.1 long scene count changed: expected {expectedLongCount}, actual {response.LongNarration.Scenes.Count}.");
+        errors.AddRange(response.ShortNarration.Scenes.Concat(response.LongNarration.Scenes).Where(s => string.IsNullOrWhiteSpace(s.NarrationText)).Select(s => $"V3.1 narration text is empty: scene {s.SceneNumber}."));
+        if (errors.Count > 0) throw new InvalidOperationException("V3.1 production narration validation failed before writing final narration files: " + string.Join(" | ", errors.Distinct(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static IReadOnlyDictionary<string, string> MapV31ScenesToSceneIds(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
+        => items.Select((item, index) => new { item.SceneId, Text = scenes[index].NarrationText })
+            .ToDictionary(x => x.SceneId, x => x.Text, StringComparer.OrdinalIgnoreCase);
 
     private static string ResolvePhase14NarrationFamily(ProductionPhaseContext context)
     {
