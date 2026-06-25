@@ -50,7 +50,18 @@ public sealed record NarrationPreviewResponse(
     string? Format,
     IReadOnlyList<NarrationPreviewScene> Scenes,
     NarrationValidationResult OverallValidation,
-    NarrationFormattingDiagnostics FormattingDiagnostics);
+    NarrationFormattingDiagnostics FormattingDiagnostics,
+    string? ShortTitle = null,
+    NarrationPlanHydrationDiagnostics? PlanHydrationDiagnostics = null);
+
+public sealed record NarrationPlanHydrationDiagnostics(
+    string PlanId,
+    bool PlanLoaded,
+    bool EventIntelligenceLoaded,
+    bool FallbackUsed,
+    string? ResolvedEventType,
+    string? ResolvedEventName,
+    string? ResolvedRegionId);
 
 public sealed record NarrationPreviewScene(
     string SceneId,
