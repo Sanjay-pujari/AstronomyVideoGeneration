@@ -21,16 +21,24 @@ public sealed class NarrationTimeFormatter
     {
         var text = string.IsNullOrWhiteSpace(value) ? (IsHindi(language) ? "खुले आकाश की ओर" : "toward the open sky") : value.Trim();
         if (!IsHindi(language)) return CleanForbiddenLabels(text);
-        text = CleanForbiddenLabels(text).ToLowerInvariant();
-        text = text.Replace("from eastern sky toward overhead", "पूर्वी आकाश से सिर के ऊपर तक", StringComparison.OrdinalIgnoreCase)
-            .Replace("eastern sky", "पूर्वी आकाश", StringComparison.OrdinalIgnoreCase)
-            .Replace("western sky", "पश्चिमी आकाश", StringComparison.OrdinalIgnoreCase)
-            .Replace("toward overhead", "सिर के ऊपर तक", StringComparison.OrdinalIgnoreCase)
-            .Replace("overhead", "सिर के ऊपर", StringComparison.OrdinalIgnoreCase)
-            .Replace("east", "पूर्व", StringComparison.OrdinalIgnoreCase)
-            .Replace("west", "पश्चिम", StringComparison.OrdinalIgnoreCase)
-            .Replace("south", "दक्षिण", StringComparison.OrdinalIgnoreCase)
-            .Replace("north", "उत्तर", StringComparison.OrdinalIgnoreCase);
+        text = CleanForbiddenLabels(text);
+        if (Regex.IsMatch(text, @"^east\s+to\s+overhead\s+after\s+10\s*PM$", RegexOptions.IgnoreCase))
+            return "रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक";
+
+        text = Regex.Replace(text, @"\bafter\s+10\s*PM\b", "रात 10 बजे के बाद", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bbefore\s+sunrise\b", "सूर्योदय से पहले", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bfrom\s+eastern\s+sky\s+toward\s+overhead\b", "पूर्वी आकाश से सिर के ऊपर तक", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\beast(?:ern)?\s+sky\s+to\s+overhead\b", "पूर्वी आकाश से सिर के ऊपर तक", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\beast\s+to\s+overhead\b", "पूर्वी आकाश से सिर के ऊपर तक", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\beastern\s+sky\b", "पूर्वी आकाश", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bwestern\s+sky\b", "पश्चिमी आकाश", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\btoward\s+overhead\b", "सिर के ऊपर तक", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\boverhead\b", "सिर के ऊपर", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\beast\b", "पूर्व", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bwest\b", "पश्चिम", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bsouth\b", "दक्षिण", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bnorth\b", "उत्तर", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\s+", " ").Trim();
         return text;
     }
 
@@ -41,9 +49,9 @@ public sealed class NarrationTimeFormatter
         text = Regex.Replace(text, @"\s*\+\d{2}:\d{2}\b", string.Empty);
         text = Regex.Replace(text, @"(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\s+|(?:\b\d{4}-\d{2}-\d{2}\s+))?00:00\s*[–-]\s*05:00\s*IST\b", "from midnight to 5:00 AM IST", RegexOptions.IgnoreCase);
         if (!IsHindi(language)) return text.Replace("midnight", "midnight", StringComparison.OrdinalIgnoreCase);
-        text = Regex.Replace(text, @"from\s+midnight\s+to\s+5(?::00)?\s*AM\s*IST", "रात 12 बजे से सुबह 5 बजे तक (भारतीय समय)", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"from\s+midnight\s+to\s+5(?::00)?\s*AM\s*IST", "रात 12 बजे से सुबह 5 बजे तक", RegexOptions.IgnoreCase);
         text = text.Replace("midnight", "रात 12 बजे", StringComparison.OrdinalIgnoreCase)
-            .Replace("IST", "भारतीय समय", StringComparison.OrdinalIgnoreCase)
+            .Replace("IST", "", StringComparison.OrdinalIgnoreCase)
             .Replace("from", "", StringComparison.OrdinalIgnoreCase)
             .Replace("to", "से", StringComparison.OrdinalIgnoreCase);
         text = Regex.Replace(text, @"\b(\d{1,2})(?::00)?\s*AM\b", m => $"सुबह {m.Groups[1].Value} बजे", RegexOptions.IgnoreCase);
