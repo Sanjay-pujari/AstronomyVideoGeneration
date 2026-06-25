@@ -2014,6 +2014,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     phase14Modified = false,
                     phase15Modified = false,
                     sceneLevelTtsPreserved = true,
+                    v31NarrationKeysUsed = BuildV31NarrationKeysUsed(shortItems, longItems),
                     narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray(),
                     NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
                     NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
@@ -2158,6 +2159,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     phase14Modified = false,
                     phase15Modified = false,
                     sceneLevelTtsPreserved = true,
+                    v31NarrationKeysUsed = BuildV31NarrationKeysUsed(shortItems, longItems),
                     narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray(),
                     NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
                     NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
@@ -2187,9 +2189,8 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private static void DeleteTargetNarrationFolders(string narrationRoot)
+    private static void DeleteTargetNarrationFolders(string narrationRoot, string language)
     {
-        foreach (var language in new[] { "en", "hi" })
         foreach (var format in new[] { "short", "long" })
         {
             var dir = Path.Combine(narrationRoot, language, format);
@@ -2213,10 +2214,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var extra = actual.Where(file => !expected.Contains(file)).ToArray();
         var missing = expected.Where(file => !actual.Contains(file, StringComparer.OrdinalIgnoreCase)).ToArray();
         var unexpectedSceneIds = items.Select(i => i.SceneId).Where(sceneId => !expectedSceneIds.Contains(sceneId, StringComparer.OrdinalIgnoreCase)).ToArray();
-        var duplicatePurposeMappings = items
-            .GroupBy(item => ResolvePhase14ScenePurpose(item.SceneId), StringComparer.OrdinalIgnoreCase)
+        var duplicateSceneIds = items
+            .GroupBy(item => item.SceneId, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
-            .Select(group => $"{group.Key}: {string.Join(",", group.Select(item => item.SceneId))}")
+            .Select(group => $"{format}:{group.Key}")
             .ToArray();
         var invalidFirstSentences = items
             .Select(item => new { item.SceneId, First = FirstSentence(item.NarrationText ?? string.Empty) })
@@ -2227,7 +2228,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (extra.Length > 0) errors.Add($"extra {format} narration files exist: {string.Join(", ", extra)}");
         if (missing.Length > 0) errors.Add($"missing {format} narration files: {string.Join(", ", missing)}");
         if (unexpectedSceneIds.Length > 0) errors.Add($"unexpected {format} scene ids: {string.Join(", ", unexpectedSceneIds)}");
-        if (duplicatePurposeMappings.Length > 0) errors.Add($"duplicate {format} scene purpose mapping exists: {string.Join(" | ", duplicatePurposeMappings)}");
+        if (duplicateSceneIds.Length > 0) errors.Add($"duplicate {format} scene ids: {string.Join(", ", duplicateSceneIds)}");
         if (invalidFirstSentences.Length > 0) errors.Add($"invalid {format} first sentence before SRT: {string.Join(" | ", invalidFirstSentences)}");
         if (errors.Count > 0) throw new InvalidOperationException("V3.1 narration validation failed before SRT: " + string.Join(" | ", errors));
     }
@@ -2239,7 +2240,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortRoot = Path.Combine(selectedNarrationRoot, "short");
         var longRoot = Path.Combine(selectedNarrationRoot, "long");
         var subtitlesRoot = Path.Combine(narrationRoot, "subtitles", language);
-        DeleteTargetNarrationFolders(narrationRoot);
+        DeleteTargetNarrationFolders(narrationRoot, language);
         Directory.CreateDirectory(shortRoot);
         Directory.CreateDirectory(longRoot);
         Directory.CreateDirectory(subtitlesRoot);
@@ -2314,6 +2315,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", language)),
             selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", language)),
             languageScopedArtifactsUsed = true,
+            v31NarrationKeysUsed = BuildV31NarrationKeysUsed(shortItems, longNarrationV3Items),
             longNarrationVersion = "V3",
             cleanupApplied = true,
             cleanedNarrationFiles = cleanedNarrationFiles.Select(NormalizePath),
@@ -4125,6 +4127,11 @@ public sealed partial class ProductionPipelineExecutionService(
             ? ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]
             : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
 
+    private static string[] BuildV31NarrationKeysUsed(IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems)
+        => shortItems.Select(item => $"short:{NormalizeV31NarrationSceneId(item.SceneId)}")
+            .Concat(longItems.Select(item => $"long:{NormalizeV31NarrationSceneId(item.SceneId)}"))
+            .ToArray();
+
     private static string NormalizeV31NarrationSceneId(string sceneId)
         => string.Equals(sceneId, "008-viewing-tip", StringComparison.OrdinalIgnoreCase) ? "008-viewing-tips" : sceneId;
 
@@ -4214,9 +4221,17 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!response.IsValid || !response.Quality.IsValid) errors.AddRange(response.Quality.Errors);
         if (response.ShortNarration.Scenes.Count != expectedShortCount) errors.Add($"V3.1 short scene count changed: expected {expectedShortCount}, actual {response.ShortNarration.Scenes.Count}.");
         if (response.LongNarration.Scenes.Count != expectedLongCount) errors.Add($"V3.1 long scene count changed: expected {expectedLongCount}, actual {response.LongNarration.Scenes.Count}.");
+        errors.AddRange(FindDuplicateV31SceneKeys("short", response.ShortNarration.Scenes));
+        errors.AddRange(FindDuplicateV31SceneKeys("long", response.LongNarration.Scenes));
         errors.AddRange(response.ShortNarration.Scenes.Concat(response.LongNarration.Scenes).Where(s => string.IsNullOrWhiteSpace(s.NarrationText)).Select(s => $"V3.1 narration text is empty: scene {s.SceneNumber}."));
         if (errors.Count > 0) throw new InvalidOperationException("V3.1 production narration validation failed before writing final narration files: " + string.Join(" | ", errors.Distinct(StringComparer.OrdinalIgnoreCase)));
     }
+
+    private static IReadOnlyList<string> FindDuplicateV31SceneKeys(string format, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
+        => scenes.GroupBy(scene => $"{format}:{NormalizeV31NarrationSceneId(scene.Section)}", StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => $"V3.1 duplicate narration key: {group.Key}.")
+            .ToArray();
 
     private static Dictionary<string, string> MapV31ScenesToSceneIds(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
         => scenes.ToDictionary(scene => NormalizeV31NarrationSceneId(scene.Section), scene => scene.NarrationText, StringComparer.OrdinalIgnoreCase);
