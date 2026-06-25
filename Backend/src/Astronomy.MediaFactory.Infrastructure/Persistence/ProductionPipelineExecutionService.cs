@@ -4243,7 +4243,7 @@ public sealed partial class ProductionPipelineExecutionService(
             includePlanId ? context.Request.PlanId.ToString("D") : null,
             FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
             FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
-            FirstNonEmpty(context.Request.ShortTitle, context.ProductionEventIntelligence.Summary),
+            FirstNonEmpty(context.Request.ShortTitle, context.ProductionEventIntelligence.ShortTitle, context.ProductionEventIntelligence.Title),
             language,
             FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
             context.Request.PlannedFormat,
