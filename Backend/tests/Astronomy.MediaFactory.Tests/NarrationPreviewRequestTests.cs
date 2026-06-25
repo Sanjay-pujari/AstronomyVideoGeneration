@@ -137,8 +137,13 @@ public sealed class NarrationPreviewPlanHydrationTests
         Assert.Equal("IN-RJ-UDAIPUR", response.RegionId);
         Assert.Equal("December 14, 2026", response.FormattingDiagnostics.EventDate);
         Assert.Equal("December 14, 2026 11:30", response.FormattingDiagnostics.PeakTime);
-        Assert.Equal("December 14, 2026 00:00–05:00 IST", response.FormattingDiagnostics.ViewingWindow);
+        Assert.Equal("from midnight to 5:00 AM IST", response.FormattingDiagnostics.ViewingWindow);
         Assert.Equal("East to overhead after 10 PM", response.FormattingDiagnostics.Direction);
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration == "On December 14, 2026, the Geminids meteor shower will reach its peak, offering one of the year's best chances to see bright meteors streak across the night sky.");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "InterestingFact" && scene.Narration == "Unlike most major meteor showers, the Geminids come from asteroid 3200 Phaethon rather than a traditional comet, which makes this annual display scientifically unusual.");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "BestTime" && scene.Narration == "For observers in Udaipur, the recommended viewing window runs from midnight to 5:00 AM IST on December 14, 2026. Look from the eastern sky toward overhead after 10 PM as the night deepens.");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "FinalReminder" && scene.Narration == "If skies remain clear, Geminids could become one of the most rewarding skywatching moments of the year. Take a few quiet minutes outside and let the night sky surprise you.");
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
         Assert.NotNull(response.PlanHydrationDiagnostics);
         Assert.True(response.PlanHydrationDiagnostics.PlanLoaded);
         Assert.True(response.PlanHydrationDiagnostics.EventIntelligenceLoaded);

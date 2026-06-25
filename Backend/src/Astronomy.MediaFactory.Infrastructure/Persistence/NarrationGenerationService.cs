@@ -66,15 +66,18 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         var fact = EventFact(eventType, eventName, language);
         var scenes = new[]
         {
-            Scene("hook", "Hook", Hook(eventName, eventType, date, fact, language)),
+            Scene("hook", "Hook", Hook(eventName, eventType, date, language)),
             Scene("interesting-fact", "InterestingFact", InterestingFact(eventName, fact, language)),
-            Scene("best-time", "BestTime", BestTime(eventName, window, peak, direction, language)),
-            Scene("final-reminder", "FinalReminder", FinalReminder(eventName, language))
+            Scene("best-time", "BestTime", BestTime(regionId, date, window, direction, language)),
+            Scene("final-reminder", "FinalReminder", FinalReminder(eventName, eventType, language))
         };
         var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, eventName, language) }).ToArray();
         var errors = validated.SelectMany(s => s.Validation.Errors).ToList();
         var warnings = validated.SelectMany(s => s.Validation.Warnings).ToList();
         if (validated.Select(s => NormalizeSentence(s.Narration)).GroupBy(s => s).Any(g => g.Count() > 1)) errors.Add("Duplicate sentence appears in narration.");
+        var hookText = validated.FirstOrDefault(s => s.ScenePurpose == "Hook")?.Narration ?? string.Empty;
+        var factText = validated.FirstOrDefault(s => s.ScenePurpose == "InterestingFact")?.Narration ?? string.Empty;
+        if (ShareSameFactPhrase(hookText, factText)) errors.Add("Hook and InterestingFact share the same fact phrase.");
         var overall = new NarrationValidationResult(errors.Count == 0, errors, warnings);
         var diagnostics = new NarrationFormattingDiagnostics(date, peak, window, direction,
             ["FormatEventDate(language)", "FormatPeakTime(language)", "FormatViewingWindow(language)", "FormatDirection(language)", "No SRT/TTS/video/Phase14 execution"], []);
@@ -85,26 +88,28 @@ public sealed class NarrationGenerationService : INarrationGenerationService
 
     private static string Clean(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 
-    private static string Hook(string name, string type, string date, string fact, string lang) => IsHindi(lang)
-        ? $"{date} को {HindiName(name)} देखने लायक है, क्योंकि {HindiFact(name, fact)}—और यही छोटी-सी बात इसे आसमान में खोजने की जिज्ञासा जगाती है।"
-        : $"On {date}, {name} matters because {fact}, and that gives you a real reason to step outside and look up.";
+    private static string Hook(string name, string type, string date, string lang) => IsHindi(lang)
+        ? $"{date} को {HindiName(name)} अपने चरम पर होगा, इसलिए साफ आसमान में इसे देखने का यह अच्छा मौका है।"
+        : $"On {date}, {EventDisplayName(name, type)} will reach its peak, offering one of the year's best chances to see {ViewerBenefit(type, name)}.";
 
     private static string InterestingFact(string name, string fact, string lang) => IsHindi(lang)
-        ? $"रोचक तथ्य यह है कि {HindiFact(name, fact)}"
-        : $"Interesting fact: {fact}.";
+        ? $"{HindiFact(name, fact)}।"
+        : name.Contains("Geminid", StringComparison.OrdinalIgnoreCase)
+            ? $"Unlike most major meteor showers, {fact}, which makes this annual display scientifically unusual."
+            : $"A useful scientific detail: {fact}.";
 
-    private static string BestTime(string name, string window, string peak, string direction, string lang) => IsHindi(lang)
-        ? $"सबसे अच्छा समय {window} है; {direction} देखें, और रोशनी से दूर थोड़ी देर आंखों को अंधेरे में ढलने दें।"
-        : $"Best time: watch {window}; use {peak} as your peak-time cue, face {direction}, and give your eyes time to adjust.";
+    private static string BestTime(string regionId, string date, string window, string direction, string lang) => IsHindi(lang)
+        ? $"{HindiRegion(regionId)} में देखने का सुझाया समय {window} है। रात गहराने पर {direction} देखें।"
+        : $"For observers in {RegionName(regionId)}, the recommended viewing window runs {window} on {date}. Look from the {NormalizeDirectionForSentence(direction)} as the night deepens.";
 
-    private static string FinalReminder(string name, string lang) => IsHindi(lang)
-        ? $"अगर आसमान साफ हो, तो यह समय याद रखें, परिवार के साथ बाहर निकलें, और अगली खगोलीय झलक के लिए तैयार रहें।"
-        : $"If your sky is clear, save this reminder, share the moment with family, and come back for the next sky event.";
+    private static string FinalReminder(string name, string type, string lang) => IsHindi(lang)
+        ? $"अगर आसमान साफ रहे, तो {HindiName(name)} साल के यादगार आकाश-दृश्यों में से एक बन सकता है। कुछ शांत मिनट बाहर बिताइए और रात के आसमान को आपको चौंकाने दीजिए।"
+        : $"If skies remain clear, {EventShortName(name)} could become one of the most rewarding skywatching moments of the year. Take a few quiet minutes outside and let the night sky surprise you.";
 
     private static string EventFact(string type, string name, string lang)
     {
         var n = name.ToLowerInvariant(); var t = type.ToLowerInvariant();
-        if (n.Contains("geminid")) return "the Geminids come from debris linked to asteroid 3200 Phaethon, not a typical comet";
+        if (n.Contains("geminid")) return "the Geminids come from asteroid 3200 Phaethon rather than a traditional comet";
         if (n.Contains("perseid")) return "the Perseids are fed by debris from comet Swift-Tuttle";
         if (n.Contains("strawberry")) return "the Strawberry Moon name comes from June seasonal traditions around ripening strawberries";
         if (n.Contains("wolf")) return "the Wolf Moon name is tied to winter traditions and the sound of wolves in the cold season";
@@ -124,12 +129,59 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (Regex.IsMatch(text, "placeholder|listed viewing window|local viewing window|during December", RegexOptions.IgnoreCase)) errors.Add("Placeholder or forbidden phrase appears.");
         if (text.Length > 0 && char.IsLower(text[0])) errors.Add("Scene narration starts with lowercase letter.");
         if (purpose == "Hook" && !Regex.IsMatch(text, @"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|जनवरी|फ़रवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\b")) errors.Add("Hook lacks exact date.");
+        if (Regex.IsMatch(text, @"^\s*(Interesting fact|Best time):", RegexOptions.IgnoreCase)) errors.Add("Scene starts with a forbidden label.");
+        if (Regex.IsMatch(text, @"\b" + Regex.Escape(eventName) + @"\s+matters because", RegexOptions.IgnoreCase)) errors.Add("Scene uses awkward full event title phrasing.");
         if (purpose == "BestTime" && (Regex.IsMatch(text, @"\b(metadata|window unavailable|not available)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(text, @"\b(AM|PM|midnight|सुबह|शाम|रात|बजे)\b"))) errors.Add("BestTime lacks real formatted window.");
+        if (purpose == "BestTime" && Regex.IsMatch(text, @"\b\d{1,2}:\d{2}\s*[–-]\s*\d{1,2}:\d{2}\b")) errors.Add("BestTime contains raw numeric time range.");
+        if (purpose == "BestTime" && Regex.IsMatch(text, @"use\s+.+?\s+as your peak-time cue", RegexOptions.IgnoreCase)) errors.Add("BestTime contains peak-time cue phrasing.");
+        if (purpose == "FinalReminder" && text.Contains("come back for the next sky event", StringComparison.OrdinalIgnoreCase)) errors.Add("FinalReminder is generic.");
         if (purpose == "InterestingFact" && !ContainsSpecificFact(text, eventName)) errors.Add("InterestingFact lacks event-specific fact.");
         if (IsHindi(language) && Regex.IsMatch(text, @"\b(December|from|midnight|eastern|sky|toward|overhead|viewing|window|meteor shower|comet|asteroid|typical|traditions|winter|family)\b", RegexOptions.IgnoreCase)) errors.Add("Hindi contains English leakage outside approved proper nouns.");
         return new(errors.Count == 0, errors, warnings);
     }
 
+
+    private static string EventDisplayName(string name, string type)
+    {
+        var shortName = EventShortName(name);
+        if (type.Contains("meteor", StringComparison.OrdinalIgnoreCase) || name.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return $"the {shortName} meteor shower";
+        return name;
+    }
+
+    private static string EventShortName(string name)
+    {
+        var cleaned = Regex.Replace(name ?? string.Empty, @"\s+(Meteor\s+Shower\s+Peak|Meteor\s+Shower|Peak)$", string.Empty, RegexOptions.IgnoreCase).Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? "this sky event" : cleaned;
+    }
+
+    private static string ViewerBenefit(string type, string name)
+    {
+        if (type.Contains("meteor", StringComparison.OrdinalIgnoreCase) || name.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "bright meteors streak across the night sky";
+        if (type.Contains("moon", StringComparison.OrdinalIgnoreCase) || name.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "the Moon at its most photogenic";
+        return "a memorable skywatching view";
+    }
+
+    private static string RegionName(string regionId)
+    {
+        if (regionId.Contains("UDAIPUR", StringComparison.OrdinalIgnoreCase)) return "Udaipur";
+        return string.IsNullOrWhiteSpace(regionId) ? "your location" : regionId;
+    }
+
+    private static string HindiRegion(string regionId) => RegionName(regionId) == "Udaipur" ? "उदयपुर" : "आपके स्थान";
+
+    private static string NormalizeDirectionForSentence(string direction)
+    {
+        var text = direction.Trim();
+        text = Regex.Replace(text, @"^east\s+to\s+overhead\s+after\s+10\s*PM$", "eastern sky toward overhead after 10 PM", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"^from\s+", string.Empty, RegexOptions.IgnoreCase);
+        return text;
+    }
+
+    private static bool ShareSameFactPhrase(string hook, string fact)
+    {
+        var factPhrases = new[] { "3200 Phaethon", "Swift-Tuttle", "debris", "traditional comet", "typical comet", "brightest planets", "seasonal traditions" };
+        return factPhrases.Any(phrase => hook.Contains(phrase, StringComparison.OrdinalIgnoreCase) && fact.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+    }
     private static bool ContainsSpecificFact(string text, string eventName) => text.Contains("3200 Phaethon", StringComparison.OrdinalIgnoreCase) || text.Contains("Swift-Tuttle", StringComparison.OrdinalIgnoreCase) || text.Contains("strawberr", StringComparison.OrdinalIgnoreCase) || text.Contains("wolf", StringComparison.OrdinalIgnoreCase) || text.Contains("brightest planets", StringComparison.OrdinalIgnoreCase) || text.Contains("रंग", StringComparison.OrdinalIgnoreCase) || text.Contains("मौसमी", StringComparison.OrdinalIgnoreCase);
     private static string HindiName(string name) => name.Contains("Geminid", StringComparison.OrdinalIgnoreCase) ? "जेमिनिड्स (Geminids)" : name.Contains("Perseid", StringComparison.OrdinalIgnoreCase) ? "पर्सिड्स (Perseids)" : name.Replace("Moon", "मून", StringComparison.OrdinalIgnoreCase).Replace("Conjunction", "संयोग", StringComparison.OrdinalIgnoreCase);
     private static string HindiFact(string name, string fact)
