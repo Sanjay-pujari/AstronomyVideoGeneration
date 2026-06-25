@@ -1045,6 +1045,56 @@ Second display cue.
         Assert.True((int)diagnosticsType.GetProperty("ScientificAccuracyScore")!.GetValue(diagnostics)! >= 95);
     }
 
+
+    [Theory]
+    [InlineData("Geminids Meteor Shower", "en", "MeteorShower")]
+    [InlineData("Geminids Meteor Shower", "hi", "MeteorShower")]
+    [InlineData("Jupiter Venus Conjunction", "en", "PlanetConjunction")]
+    [InlineData("Jupiter Venus Conjunction", "hi", "PlanetConjunction")]
+    [InlineData("Named Full Moon", "en", "NamedFullMoon")]
+    [InlineData("Solar Eclipse", "hi", "SolarEclipse")]
+    public void Phase14V31Adapter_ExpandsNormalizedScenesIntoUniquePurposeSpecificNarration(string title, string language, string family)
+    {
+        var source = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Hook"] = $"Hook for {title}.",
+            ["InterestingFact"] = $"Interesting fact for {title}.",
+            ["BestTime"] = language == "hi" ? $"{title} देखने का सबसे अच्छा समय स्थानीय शाम की खिड़की है।" : $"The best viewing window for {title} is the local evening window.",
+            ["FinalReminder"] = $"Final reminder for {title}."
+        };
+        var shortItems = CreateSceneAudioSyncItems("short", ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]);
+        var longItems = CreateSceneAudioSyncItems("long", ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tip", "009-final-reminder"]);
+        var adaptMethod = typeof(ProductionPipelineExecutionService).GetMethod("AdaptNarrationGenerationScenes", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var validateMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidateAdaptedV31ProductionNarration", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var shortTexts = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(adaptMethod.Invoke(null, [shortItems, source, family, language, false]));
+        var longTexts = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(adaptMethod.Invoke(null, [longItems, source, family, language, true]));
+
+        validateMethod.Invoke(null, [shortTexts, longTexts, 5, 9]);
+        Assert.Equal(["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"], shortTexts.Keys.ToArray());
+        Assert.Equal(["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"], longTexts.Keys.ToArray());
+        Assert.Equal(5, shortTexts.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(9, longTexts.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(source["BestTime"], longTexts["005-best-time"]);
+        Assert.DoesNotContain(source["BestTime"], longTexts["006-accurate-sky-guide"], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Use the timing and direction cue", string.Join(" ", shortTexts.Values.Concat(longTexts.Values)), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("viewing window cue", string.Join(" ", shortTexts.Values.Concat(longTexts.Values)), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("source scene", string.Join(" ", shortTexts.Values.Concat(longTexts.Values)), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("metadata", string.Join(" ", shortTexts.Values.Concat(longTexts.Values)), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Array CreateSceneAudioSyncItems(string format, IReadOnlyList<string> sceneIds)
+    {
+        var itemType = typeof(ProductionPipelineExecutionService).GetNestedType("SceneAudioSyncItem", BindingFlags.NonPublic)!;
+        var items = Array.CreateInstance(itemType, sceneIds.Count);
+        for (var i = 0; i < sceneIds.Count; i++)
+        {
+            var item = Activator.CreateInstance(itemType, [format, i + 1, sceneIds[i], $"{sceneIds[i]}.png", string.Empty, string.Empty, string.Empty, string.Empty, 5, string.Empty, string.Empty, string.Empty, string.Empty])!;
+            items.SetValue(item, i);
+        }
+        return items;
+    }
+
     [Fact]
     public void Phase14EventConsistencyGuard_FailsMeteorNarrationWithPlanetConjunctionLeakage()
     {

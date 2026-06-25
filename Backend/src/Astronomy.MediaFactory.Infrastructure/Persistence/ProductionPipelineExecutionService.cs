@@ -4269,21 +4269,22 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static Dictionary<string, string> AdaptNarrationGenerationScenes(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyDictionary<string, string> source, string family, string language, bool isLong)
-        => items.ToDictionary(i => NormalizeV31NarrationSceneId(i.SceneId), i => AdaptNarrationGenerationScene(i.SceneId, source, family, language), StringComparer.OrdinalIgnoreCase);
+        => items.ToDictionary(i => NormalizeV31NarrationSceneId(i.SceneId), i => AdaptNarrationGenerationScene(i.SceneId, source, family, language, isLong), StringComparer.OrdinalIgnoreCase);
 
-    private static string AdaptNarrationGenerationScene(string sceneId, IReadOnlyDictionary<string, string> source, string family, string language)
+    private static string AdaptNarrationGenerationScene(string sceneId, IReadOnlyDictionary<string, string> source, string family, string language, bool isLong)
     {
         string S(string purpose) => source.TryGetValue(purpose, out var text) ? text : string.Empty;
-        return NormalizeV31NarrationSceneId(sceneId) switch
+        var normalizedSceneId = NormalizeV31NarrationSceneId(sceneId);
+        return normalizedSceneId switch
         {
             "001-hook" => S("Hook"),
             "002-what-is-it" => Phase14FamilyDefinition(family, language),
             "002-cause" or "003-cause" => Phase14FamilyCause(family, language),
             "004-interesting-fact" => S("InterestingFact"),
             "005-best-time" => S("BestTime"),
-            "003-accurate-sky-guide" or "006-accurate-sky-guide" => Phase14DirectionGuide(S("BestTime"), language),
+            "003-accurate-sky-guide" or "006-accurate-sky-guide" => Phase14DirectionGuide(family, language),
             "007-what-you-will-see" => Phase14FamilyVisual(family, language),
-            "004-viewing-tip" or "008-viewing-tips" => Phase14FamilyViewingTip(family, language),
+            "004-viewing-tip" or "008-viewing-tips" => Phase14FamilyViewingTip(family, language, isLong),
             "005-final-reminder" or "009-final-reminder" => S("FinalReminder"),
             _ => S("InterestingFact")
         };
@@ -4337,25 +4338,37 @@ public sealed partial class ProductionPipelineExecutionService(
         _ => "Under clear conditions, you will see the main sky feature change gradually."
     };
 
-    private static string Phase14FamilyViewingTip(string family, string language) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
+    private static string Phase14FamilyViewingTip(string family, string language, bool isLong) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
     {
-        "SolarEclipse" => "सूर्य को केवल प्रमाणित सौर चश्मे या सुरक्षित फ़िल्टर से ही देखें।",
-        "MeteorShower" => "शहर की रोशनी से दूर जाएँ, आँखों को अंधेरे में ढलने दें, और धैर्य रखें।",
-        "PlanetConjunction" => "इमारतों और पेड़ों से खुला किनारा चुनें ताकि ग्रह जल्दी न छिपें।",
-        "NamedFullMoon" => "चंद्रोदय से पहले जगह चुन लें और स्थिर कैमरा या दूरबीन तैयार रखें।",
-        _ => "साफ मौसम, सुरक्षित जगह और बिना बाधा वाला दृश्य चुनें।"
+        "SolarEclipse" => isLong ? "अपने चश्मे की ISO सुरक्षा जाँचें और कैमरा, दूरबीन या टेलिस्कोप पर भी सही सौर फ़िल्टर लगाएँ।" : "सूर्य को केवल प्रमाणित सौर चश्मे या सुरक्षित फ़िल्टर से ही देखें।",
+        "MeteorShower" => isLong ? "गरम कपड़े, आरामदायक कुर्सी और लाल रोशनी वाली टॉर्च रखें ताकि आपकी रात की दृष्टि बनी रहे।" : "शहर की रोशनी से दूर जाएँ, आँखों को अंधेरे में ढलने दें, और धैर्य रखें।",
+        "PlanetConjunction" => isLong ? "सूर्यास्त के बाद जल्दी तैयार रहें, क्योंकि क्षितिज के पास ग्रह कम ऊँचाई पर जल्दी धुंधले हो सकते हैं।" : "इमारतों और पेड़ों से खुला किनारा चुनें ताकि ग्रह जल्दी न छिपें।",
+        "NamedFullMoon" => isLong ? "चंद्रोदय से पहले स्थान चुनें, क्षितिज खुला रखें, और स्थिर कैमरा या दूरबीन तैयार रखें।" : "चंद्रोदय से पहले जगह चुन लें और स्थिर कैमरा या दूरबीन तैयार रखें।",
+        _ => isLong ? "मौसम पहले जाँचें, सुरक्षित स्थान चुनें, और क्षितिज या मुख्य दिशा को खुला रखें।" : "साफ मौसम, सुरक्षित जगह और बिना बाधा वाला दृश्य चुनें।"
     } : NormalizePhase14Family(family) switch
     {
-        "SolarEclipse" => "Use certified eclipse glasses or a proper solar filter whenever you look at the Sun.",
-        "MeteorShower" => "Get away from city lights, let your eyes adjust, and give the sky patient time.",
-        "PlanetConjunction" => "Choose a clear edge of the view so buildings or trees do not hide the planets.",
-        "NamedFullMoon" => "Pick your spot before moonrise and keep a steady camera or binoculars ready.",
-        _ => "Choose clear weather, a safe location, and an unobstructed view."
+        "SolarEclipse" => isLong ? "Check the ISO safety rating on your eclipse glasses, and add proper solar filters to cameras, binoculars, or telescopes." : "Use certified eclipse glasses or a proper solar filter whenever you look at the Sun.",
+        "MeteorShower" => isLong ? "Bring warm layers, a reclining chair, and a red flashlight so your night vision stays protected." : "Get away from city lights, let your eyes adjust, and give the sky patient time.",
+        "PlanetConjunction" => isLong ? "Be ready soon after sunset, because low planets can fade quickly behind haze, buildings, or trees." : "Choose a clear edge of the view so buildings or trees do not hide the planets.",
+        "NamedFullMoon" => isLong ? "Choose your spot before moonrise, keep the horizon open, and steady your camera or binoculars." : "Pick your spot before moonrise and keep a steady camera or binoculars ready.",
+        _ => isLong ? "Check the weather first, choose a safe place, and keep the horizon or main viewing direction open." : "Choose clear weather, a safe location, and an unobstructed view."
     };
 
-    private static string Phase14DirectionGuide(string bestTime, string language) => IsHindiLanguage(language)
-        ? $"समय और दिशा के लिए यही मुख्य संकेत रखें: {bestTime}"
-        : $"Use the timing and direction cue from the viewing window: {bestTime}";
+    private static string Phase14DirectionGuide(string family, string language) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "आकाश के सबसे अंधेरे खुले हिस्से की ओर देखें; उल्काएँ रेडिएंट के पास से निकल सकती हैं, पर पूरे आकाश में फैलती हैं।",
+        "PlanetConjunction" => "सूर्यास्त के बाद पश्चिमी क्षितिज को खुला रखें और दो सबसे चमकीले ग्रहों को पास-पास खोजें।",
+        "NamedFullMoon" => "चंद्रोदय की दिशा में खुला पूर्वी क्षितिज चुनें, फिर चंद्रमा के ऊपर चढ़ने तक दृश्य का पीछा करें।",
+        "SolarEclipse" => "अपने स्थान के ग्रहण पथ की पुष्टि करें और सुरक्षित फ़िल्टर से सूर्य को साफ, खुले आकाश में खोजें।",
+        _ => "मुख्य दिशा पहले पहचानें, क्षितिज खुला रखें, और स्थानीय आकाश मानचित्र से स्थान की पुष्टि करें।"
+    } : NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "Face the darkest open part of the sky; meteors may trace back toward the radiant, but they can appear anywhere overhead.",
+        "PlanetConjunction" => "After sunset, keep the western horizon open and look for the two brightest planets sitting close together.",
+        "NamedFullMoon" => "Choose an open eastern horizon at moonrise, then follow the Moon upward as it clears trees and buildings.",
+        "SolarEclipse" => "Confirm your place on the eclipse path and locate the Sun through safe filters in a clear, open sky.",
+        _ => "Identify the main sky direction first, keep the horizon open, and confirm the target with a local sky map."
+    };
 
     private static string NormalizePhase14Family(string family)
     {
@@ -4373,7 +4386,8 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             ["Hook"] = shortIds.Concat(longIds).Where(id => id.EndsWith("hook", StringComparison.OrdinalIgnoreCase)).ToArray(),
             ["InterestingFact"] = longIds.Where(id => id.Contains("interesting-fact", StringComparison.OrdinalIgnoreCase)).ToArray(),
-            ["BestTime"] = longIds.Where(id => id.Contains("best-time", StringComparison.OrdinalIgnoreCase)).Concat(shortIds.Concat(longIds).Where(id => id.Contains("accurate-sky-guide", StringComparison.OrdinalIgnoreCase))).ToArray(),
+            ["BestTime"] = longIds.Where(id => id.Contains("best-time", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            ["AccurateSkyGuide"] = shortIds.Concat(longIds).Where(id => id.Contains("accurate-sky-guide", StringComparison.OrdinalIgnoreCase)).ToArray(),
             ["FinalReminder"] = shortIds.Concat(longIds).Where(id => id.Contains("final-reminder", StringComparison.OrdinalIgnoreCase)).ToArray(),
             ["FamilyHelperText"] = shortIds.Concat(longIds).Where(id => id.Contains("cause", StringComparison.OrdinalIgnoreCase) || id.Contains("what-is-it", StringComparison.OrdinalIgnoreCase) || id.Contains("what-you-will-see", StringComparison.OrdinalIgnoreCase) || id.Contains("viewing-tip", StringComparison.OrdinalIgnoreCase)).ToArray()
         };
@@ -4386,7 +4400,33 @@ public sealed partial class ProductionPipelineExecutionService(
         errors.AddRange(shortTexts.Concat(longTexts).Where(kv => string.IsNullOrWhiteSpace(kv.Value)).Select(kv => $"Adapted narration text is empty: scene {kv.Key}."));
         errors.AddRange(shortTexts.GroupBy(kv => NormalizeNarrationForDuplicateDetection(kv.Value)).Where(g => g.Count() > 1).Select(g => "Duplicate adapted short narration text."));
         errors.AddRange(longTexts.GroupBy(kv => NormalizeNarrationForDuplicateDetection(kv.Value)).Where(g => g.Count() > 1).Select(g => "Duplicate adapted long narration text."));
+        errors.AddRange(longTexts.GroupBy(kv => NormalizeNarrationForDuplicateDetection(FirstSentence(kv.Value))).Where(g => g.Count() > 1).Select(g => "Duplicate adapted long first sentence."));
+        foreach (var pair in longTexts.Zip(longTexts.Skip(1), (left, right) => new { Left = left, Right = right }))
+        {
+            var similarity = NarrationTextSimilarity(pair.Left.Value, pair.Right.Value);
+            if (similarity >= 0.82) errors.Add($"Adjacent adapted long narration is too similar: {pair.Left.Key} and {pair.Right.Key} similarity={similarity:0.00}.");
+        }
+        if (longTexts.TryGetValue("005-best-time", out var bestTime) && longTexts.TryGetValue("006-accurate-sky-guide", out var skyGuide))
+        {
+            var similarity = NarrationTextSimilarity(bestTime, skyGuide);
+            if (similarity >= 0.50) errors.Add($"Best-time and accurate-sky-guide narration must be distinct. similarity={similarity:0.00}.");
+        }
+        var forbiddenPhrases = new[] { "Use the timing and direction cue", "viewing window cue", "source scene", "adapter", "metadata" };
+        errors.AddRange(shortTexts.Concat(longTexts)
+            .SelectMany(kv => forbiddenPhrases.Where(phrase => kv.Value.Contains(phrase, StringComparison.OrdinalIgnoreCase)).Select(phrase => $"Forbidden internal phrase '{phrase}' in scene {kv.Key}.")));
         if (errors.Count > 0) throw new InvalidOperationException("Adapted V3.1 production narration validation failed before writing final narration files: " + string.Join(" | ", errors.Distinct(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static double NarrationTextSimilarity(string left, string right)
+    {
+        var leftTokens = Regex.Matches(NormalizeNarrationForDuplicateDetection(left), @"[\p{L}\p{N}]+")
+            .Select(m => m.Value).Where(t => t.Length > 2).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rightTokens = Regex.Matches(NormalizeNarrationForDuplicateDetection(right), @"[\p{L}\p{N}]+")
+            .Select(m => m.Value).Where(t => t.Length > 2).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (leftTokens.Count == 0 || rightTokens.Count == 0) return 0;
+        var intersection = leftTokens.Intersect(rightTokens, StringComparer.OrdinalIgnoreCase).Count();
+        var union = leftTokens.Union(rightTokens, StringComparer.OrdinalIgnoreCase).Count();
+        return union == 0 ? 0 : (double)intersection / union;
     }
 
     private static string NormalizeNarrationForDuplicateDetection(string text) => Regex.Replace(text.Trim(), @"\s+", " ").ToLowerInvariant();
@@ -6463,7 +6503,7 @@ public sealed partial class ProductionPipelineExecutionService(
             expectedFamily = eventConsistencyDiagnostics?.ExpectedFamily,
             actualFamily = eventConsistencyDiagnostics?.ActualFamily,
             eventConsistencyFirstSentenceByScene = eventConsistencyDiagnostics?.FirstSentenceByScene,
-            adapterUsed = false,
+            adapterUsed = adapterDiagnostics?.AdapterUsed ?? true,
             adapterName = "NarrationGenerationServiceV31",
             eventType = adapterDiagnostics?.EventType,
             shortSceneCount = adapterDiagnostics?.ShortSceneCount,
