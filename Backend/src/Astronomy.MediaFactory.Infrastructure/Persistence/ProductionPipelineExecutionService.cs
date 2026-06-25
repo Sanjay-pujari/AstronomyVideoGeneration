@@ -4152,7 +4152,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (errors.Count > 0) throw new InvalidOperationException("V3.1 production narration validation failed before writing final narration files: " + string.Join(" | ", errors.Distinct(StringComparer.OrdinalIgnoreCase)));
     }
 
-    private static IReadOnlyDictionary<string, string> MapV31ScenesToSceneIds(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
+    private static Dictionary<string, string> MapV31ScenesToSceneIds(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
         => items.Select((item, index) => new { item.SceneId, Text = scenes[index].NarrationText })
             .ToDictionary(x => x.SceneId, x => x.Text, StringComparer.OrdinalIgnoreCase);
 
