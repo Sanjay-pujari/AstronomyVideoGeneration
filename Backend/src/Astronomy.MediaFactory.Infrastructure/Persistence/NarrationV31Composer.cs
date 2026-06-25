@@ -120,7 +120,8 @@ public sealed class NarrationV31Composer : INarrationV31Composer
 
     private static async Task<IReadOnlyList<string>> WriteAsync(string root, string format, QuestionDrivenNarrationDto dto, CancellationToken ct)
     {
-        var dir = Path.Combine(root, "narration-v31", format);
+        var language = NormalizeLanguage(dto.Language);
+        var dir = Path.Combine(root, "narration", language, format);
         Directory.CreateDirectory(dir);
         var files = new List<string>();
         foreach (var scene in dto.Scenes)
