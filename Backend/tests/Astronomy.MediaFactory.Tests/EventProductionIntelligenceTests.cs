@@ -1125,6 +1125,40 @@ Saturn, Mars, Jupiter, and Venus share the western sky.
     }
 
     [Fact]
+    public async Task QualityValidation_FailsWhenBestTimeNarrationContainsRawMetadata()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "astro-validation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "question-engine"));
+        await File.WriteAllTextAsync(Path.Combine(root, "question-engine", "answers.txt"), "Geminids Meteor Shower Peak bestViewingWindowLocal BestTime during December 14, 2026 midnight–05:00 IST 2026-12-14 11:30 +05:30 listed viewing window local viewing window around December. December 14, 2026 and December 14, 2026.");
+        var intelligence = new ProductionEventIntelligence(
+            "Astronomy", "MeteorShower", "Geminids Meteor Shower Peak", "Geminids",
+            DateTimeOffset.Parse("2026-12-14T00:00:00Z"), DateTimeOffset.Parse("2026-12-14T06:00:00Z"),
+            "2026-12-14 11:30 +05:30", "2026-12-14 00:00–05:00 IST", "east to overhead", "India",
+            ["Geminids"], [], null, "Low", 10m, "Geminids Meteor Shower Peak", [], [], [], [], []);
+        var validator = new ProductionPipelineQualityValidator(new EventSceneValidationStrategyResolver([new MeteorShowerSceneValidationStrategy(), new GenericEventSceneValidationStrategy()]));
+
+        var result = await validator.ValidateBeforeVideoAssemblyAsync(intelligence, root, CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("yyyy-mm-dd", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, e => e.Contains("timezone offset", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, e => e.Contains("during December", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, e => e.Contains("listed viewing window", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, e => e.Contains("local viewing window", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, e => e.Contains("repeats date phrase", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, e => e.Contains("around December", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NarrationTimeFormatter_HumanizesRawMetadataForNarrationPreview()
+    {
+        Assert.Equal("December 14, 2026", NarrationTimeFormatter.FormatEventDate("2026-12-14"));
+        Assert.Equal("11:30 AM IST", NarrationTimeFormatter.FormatPeakTime("2026-12-14 11:30 +05:30", "IST"));
+        Assert.Equal("from midnight to 5:00 AM IST on December 14, 2026", NarrationTimeFormatter.FormatViewingWindow("2026-12-14 00:00–05:00 IST", "IST"));
+        Assert.Equal("from the eastern sky toward overhead after 10 PM", NarrationTimeFormatter.FormatDirection("East to overhead after 10 PM"));
+    }
+
+    [Fact]
     public void MeteorQuestionAnswerSet_FormatsBestTimeAsNaturalPresenterParagraph()
     {
         var intelligence = new ProductionEventIntelligence(
@@ -1146,7 +1180,7 @@ Saturn, Mars, Jupiter, and Venus share the western sky.
         var answerSet = new MeteorShowerStrategy().BuildQuestionAnswerSet(intelligence, context);
         var bestTime = answerSet.Answers.Single(answer => answer.Type == AstronomyQuestionTypes.When).Answer;
 
-        Assert.Equal("For observers in Udaipur, the recommended viewing window runs from midnight to 5:00 AM IST on December 14, 2026. Find a dark, open location and look from the eastern sky toward overhead after 10 PM as the radiant climbs higher.", bestTime);
+        Assert.Equal("For observers in Udaipur, the recommended viewing window runs from midnight to 5:00 AM IST on December 14, 2026. Look from the eastern sky toward overhead after 10 PM as the night deepens.", bestTime);
         Assert.DoesNotMatch(@"\b\d{4}-\d{2}-\d{2}\b", bestTime);
         Assert.DoesNotMatch(@"(?<!\w)[+-]\d{2}:\d{2}(?!\w)", bestTime);
         Assert.DoesNotContain("during December", bestTime, StringComparison.OrdinalIgnoreCase);
