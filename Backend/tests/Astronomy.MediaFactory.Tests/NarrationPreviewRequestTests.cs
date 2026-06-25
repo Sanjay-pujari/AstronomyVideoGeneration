@@ -157,6 +157,36 @@ public sealed class NarrationPreviewRequestTests
     }
 
 
+
+    [Fact]
+    public async Task NarrationGenerationAllowsRawShortTitleInsideApprovedMeteorDisplayNames()
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: "MeteorShower",
+            EventName: "Geminids Meteor Shower Peak",
+            ShortTitle: "Geminids",
+            Language: "en",
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(new
+            {
+                eventDate = "2026-12-14",
+                bestViewingWindowLocal = "2026-12-14 00:00–05:00 IST",
+                skyDirectionHint = "East to overhead after 10 PM"
+            }));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+        var narration = string.Join(" ", response.Scenes.Select(scene => scene.Narration));
+
+        Assert.Contains("the Geminids meteor shower", narration, StringComparison.Ordinal);
+        Assert.Contains("the Geminids", narration, StringComparison.Ordinal);
+        Assert.DoesNotContain("Raw short title appears.", response.Validation.Errors);
+        Assert.DoesNotContain("Geminids Meteor Shower Peak", narration, StringComparison.Ordinal);
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+    }
+
     [Fact]
     public async Task NarrationGenerationHindiBestTimeDoesNotPrependDateWhenViewingWindowAlreadyIncludesDate()
     {
