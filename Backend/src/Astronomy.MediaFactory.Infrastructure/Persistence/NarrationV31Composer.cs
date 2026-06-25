@@ -6,15 +6,18 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class NarrationV31Composer : INarrationV31Composer
 {
-    private static readonly string[] ShortSceneIds = ["001-hook", "002-what-is-it", "003-cause", "008-viewing-tips", "009-final-reminder"];
+    private static readonly string[] ShortSceneIds = ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"];
     private static readonly string[] LongSceneIds = ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
     private static readonly string[] AuthoringPhrases = ["open with", "explain", "describe", "focus on", "json", "metadata", "source answer"];
     private static readonly IReadOnlyDictionary<string, string> ScenePurposeToNarrationSection = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["001-hook"] = "hook",
         ["002-what-is-it"] = "what-is-it",
+        ["002-cause"] = "cause",
         ["003-cause"] = "cause",
+        ["003-accurate-sky-guide"] = "accurate-sky-guide",
         ["004-interesting-fact"] = "interesting-fact",
+        ["004-viewing-tip"] = "viewing-tips",
         ["005-best-time"] = "best-time",
         ["006-accurate-sky-guide"] = "accurate-sky-guide",
         ["007-what-you-will-see"] = "what-you-will-see",
@@ -42,8 +45,8 @@ public sealed class NarrationV31Composer : INarrationV31Composer
         var language = NormalizeLanguage(request.Language);
         var eventId = FirstNonEmpty(request.EventId, "preview-event");
         var regionId = FirstNonEmpty(request.RegionId, request.ProductionContext?.RegionId, "global");
-        var title = FirstNonEmpty(request.Title, request.ProductionContext?.ProductionEventIntelligence?.Title, "this sky event");
-        var eventType = FirstNonEmpty(request.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "sky event");
+        var title = HumanizeEventText(FirstNonEmpty(request.Title, request.ProductionContext?.ProductionEventIntelligence?.Title, "this sky event"));
+        var eventType = HumanizeEventText(FirstNonEmpty(request.EventType, request.ProductionContext?.ProductionEventIntelligence?.EventType, "sky event"));
         var window = FormatObservationWindow(FirstNonEmpty(request.BestViewingWindowLocal, request.LocalPeakTime, request.ProductionContext?.ProductionEventIntelligence?.BestViewingWindowLocal, request.ProductionContext?.ProductionEventIntelligence?.LocalPeakTime, "tonight"), language);
         var direction = FirstNonEmpty(request.SkyDirectionHint, request.ProductionContext?.ProductionEventIntelligence?.SkyDirectionHint, "the clearest open sky");
 
@@ -86,29 +89,43 @@ public sealed class NarrationV31Composer : INarrationV31Composer
             {
                 "001-hook" => $"आज रात {title} आकाश में एक शांत लेकिन यादगार दृश्य बना रहा है।",
                 "002-what-is-it" => $"यह {eventType} पृथ्वी से दिखने वाला वास्तविक आकाशीय पल है।",
+                "002-cause" => $"जब पृथ्वी धूल भरे कणों की धारा से गुजरती है, तो उल्काएं रोशनी की छोटी लकीरें बनाती हैं।",
                 "003-cause" => $"जब पृथ्वी से देखने की रेखा सही बनती है, तो अलग-अलग पिंड हमें एक ही कहानी का हिस्सा लगते हैं।",
+                "003-accurate-sky-guide" => $"{direction} की ओर देखें और आंखों को अंधेरे में ढलने दें।",
                 "004-interesting-fact" => $"इसकी सुंदरता दूरी में नहीं बल्कि हमारी नज़र की दिशा और समय में छिपी है।",
                 "005-best-time" => $"सबसे अच्छा समय {window} है, जब आकाश का अंतर साफ दिखता है।",
                 "006-accurate-sky-guide" => $"{direction} की ओर देखें और आंखों को अंधेरे में ढलने दें।",
                 "007-what-you-will-see" => $"धीरे-धीरे देखने पर चमक, रंग और स्थिति का बदलाव यह दृश्य जीवंत बना देता है।",
+                "004-viewing-tip" => $"फोन की तेज रोशनी से बचें और कुछ मिनट शांत होकर आकाश देखें।",
                 "008-viewing-tips" => $"फोन की तेज रोशनी से बचें और कुछ मिनट शांत होकर आकाश देखें।",
                 _ => $"अगर मौसम साफ है, यह आकाश गाइड सेव करें और अगली खगोलीय घटना के लिए जुड़े रहें।"
             } + (shortForm ? string.Empty : $" यह दृश्य कहानी को पिछले पल से आगे ले जाता है।");
         }
         return section switch
         {
-            "001-hook" => $"Tonight, {title} gives the sky a clear story to follow rather than just another date on a calendar.",
-            "002-what-is-it" => $"This {eventType} is a real sky alignment or observing moment, visible because Earth gives us the right point of view.",
+            "001-hook" => $"Look up for {title}, a sky event with a clear story to follow rather than just another date on a calendar.",
+            "002-what-is-it" => $"This {eventType} is a real observing moment, visible because Earth gives us the right point of view.",
+            "002-cause" => $"Meteor showers happen when Earth crosses a stream of dusty particles, and those grains burn into brief streaks of light.",
             "003-cause" => $"From Earth, the line of sight changes quickly, so the event is about timing, geometry, and patience.",
+            "003-accurate-sky-guide" => $"Use {direction} as your guide, then scan slowly and let your eyes adjust before using binoculars.",
             "004-interesting-fact" => $"What makes this {eventType} interesting is the way perspective turns separate objects into one shared scene.",
             "005-best-time" => $"The best time to look is around {window}, when the sky is dark enough for the contrast to stand out.",
             "006-accurate-sky-guide" => $"Use {direction} as your guide, then scan slowly and let your eyes adjust before using binoculars.",
             "007-what-you-will-see" => $"You should notice brightness, spacing, and motion changing subtly as the minutes pass.",
+            "004-viewing-tip" => $"Keep your phone dim, stay comfortable, and give your eyes several quiet minutes to adjust.",
             "008-viewing-tips" => $"For the best chance, watch around {window}, face {direction}, and give your eyes time to adjust.",
             _ => $"If your sky is clear, save this guide, step outside at the right time, and follow for more astronomy events."
         } + (shortForm ? string.Empty : $" This scene keeps the narration connected to the visual moment.");
     }
 
+
+    private static string HumanizeEventText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+        var value = Regex.Replace(text, "(?<=[a-z])(?=[A-Z])", " ").Trim();
+        value = Regex.Replace(value, @"\bMeteorShower\b", "meteor shower", RegexOptions.IgnoreCase);
+        return value;
+    }
 
     private static string ScenePurpose(string sceneId)
         => ScenePurposeToNarrationSection.TryGetValue(sceneId, out var section) ? section : sceneId;
@@ -127,6 +144,7 @@ public sealed class NarrationV31Composer : INarrationV31Composer
     {
         var language = NormalizeLanguage(dto.Language);
         var dir = Path.Combine(root, "narration", language, format);
+        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         Directory.CreateDirectory(dir);
         var files = new List<string>();
         foreach (var scene in dto.Scenes)
