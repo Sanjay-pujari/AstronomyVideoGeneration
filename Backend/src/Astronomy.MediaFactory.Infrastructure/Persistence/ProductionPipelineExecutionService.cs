@@ -40,7 +40,8 @@ public sealed partial class ProductionPipelineExecutionService(
     ISceneAssetsV3Service? sceneAssetsV3Service = null,
     IOptions<ThumbnailOptions>? thumbnailOptions = null,
     IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null,
-    INarrationV31Composer? narrationV31Composer = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    INarrationV31Composer? narrationV31Composer = null,
+    INarrationGenerationService? narrationGenerationService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -2011,9 +2012,19 @@ public sealed partial class ProductionPipelineExecutionService(
                 v31NarrationIntegrationDiagnostics = new
                 {
                     v31NarrationServiceUsed = true,
-                    phase14Modified = false,
+                    narrationSource = documentaryNarration.TextSource,
+                    normalizedNarrationUsed = string.Equals(documentaryNarration.TextSource, "NarrationGenerationService", StringComparison.OrdinalIgnoreCase),
+                    sourceSceneCount = documentaryNarration.AdapterDiagnostics.StorySectionCount,
+                    adaptedShortSceneCount = documentaryNarration.ShortItems.Count,
+                    adaptedLongSceneCount = documentaryNarration.LongItems.Count,
+                    phase14Modified = true,
                     phase15Modified = false,
+                    srtBuilderModified = false,
                     sceneLevelTtsPreserved = true,
+                    selectedLanguage = ResolvePipelineLanguage(context.Request.Language),
+                    dbHydrationUsed = !documentaryNarration.FallbackUsed,
+                    fallbackMetadataUsed = documentaryNarration.FallbackUsed,
+                    sourceToTargetMapping = BuildPhase14SourceToTargetMapping(documentaryNarration.ShortItems.Keys, documentaryNarration.LongItems.Keys),
                     v31NarrationKeysUsed = BuildV31NarrationKeysUsed(shortItems, longItems),
                     narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray(),
                     NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
@@ -4142,82 +4153,266 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<Phase14DocumentaryNarration> BuildV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
     {
-        if (narrationV31Composer is null)
-            throw new InvalidOperationException("V3.1 NarrationGenerationService is not configured for production narration integration.");
+        var language = ResolvePipelineLanguage(context.Request.Language);
+        NarrationPreviewResponse response;
+        var hydrationUsed = false;
+        var fallbackMetadataUsed = false;
+        var generationDiagnostics = new List<string>();
 
-        var response = await narrationV31Composer.PreviewAsync(new NarrationV31PreviewRequest(
-            EventId: FirstNonEmpty(context.EventId, context.Request.PlanId.ToString("D")),
-            RegionId: FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
-            Language: ResolvePipelineLanguage(context.Request.Language),
-            DryRun: false,
-            OverwriteExisting: context.PipelineRequest.OverwriteExisting,
-            ProductionContext: context.ExecutionContext,
-            OutputRoot: context.OutputRoot,
-            EventType: FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
-            Title: FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
-            LocalPeakTime: FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime),
-            SkyDirectionHint: FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
-            BestViewingWindowLocal: FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal)),
-            cancellationToken);
+        if (narrationGenerationService is not null)
+        {
+            var request = BuildPhase14NarrationPreviewRequest(context, includePlanId: true, language);
+            try
+            {
+                response = await narrationGenerationService.GeneratePreviewAsync(request, cancellationToken);
+                hydrationUsed = response.PlanHydrationDiagnostics?.PlanLoaded == true;
+                fallbackMetadataUsed = response.PlanHydrationDiagnostics?.FallbackUsed == true || !hydrationUsed;
+            }
+            catch (Exception ex) when (!string.IsNullOrWhiteSpace(request.PlanId))
+            {
+                generationDiagnostics.Add($"Plan hydration preview failed with {ex.GetType().Name}: {ex.Message}");
+                try
+                {
+                    response = await narrationGenerationService.GeneratePreviewAsync(BuildPhase14NarrationPreviewRequest(context, includePlanId: false, language), cancellationToken);
+                    fallbackMetadataUsed = true;
+                }
+                catch (Exception fallbackEx)
+                {
+                    generationDiagnostics.Add($"Fallback metadata preview failed with {fallbackEx.GetType().Name}: {fallbackEx.Message}");
+                    throw new InvalidOperationException($"NarrationGenerationServiceV31 failed after fallback metadata attempt. Inner exception: {fallbackEx.GetType().Name}: {fallbackEx.Message}", fallbackEx);
+                }
+            }
+        }
+        else if (narrationV31Composer is not null)
+        {
+            var legacy = await narrationV31Composer.PreviewAsync(new NarrationV31PreviewRequest(
+                EventId: FirstNonEmpty(context.EventId, context.Request.PlanId.ToString("D")),
+                RegionId: FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
+                Language: language,
+                DryRun: false,
+                OverwriteExisting: context.PipelineRequest.OverwriteExisting,
+                ProductionContext: context.ExecutionContext,
+                OutputRoot: context.OutputRoot,
+                EventType: FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
+                Title: FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
+                LocalPeakTime: FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime),
+                SkyDirectionHint: FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
+                BestViewingWindowLocal: FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal)), cancellationToken);
+            ValidateV31ProductionNarration(legacy, shortItems.Count, longItems.Count);
+            response = ConvertLegacyV31Preview(legacy, language);
+        }
+        else
+        {
+            throw new InvalidOperationException("NarrationGenerationService is not configured for Phase 14 production narration integration.");
+        }
 
-        ValidateV31ProductionNarration(response, shortItems.Count, longItems.Count);
-
-        var shortTexts = MapV31ScenesToSceneIds(shortItems, response.ShortNarration.Scenes);
-        var longTexts = MapV31ScenesToSceneIds(longItems, response.LongNarration.Scenes);
+        ValidateNarrationGenerationPreview(response);
+        var sourceScenes = response.Scenes.ToDictionary(s => s.ScenePurpose, s => s.Narration, StringComparer.OrdinalIgnoreCase);
+        var family = ResolvePhase14NarrationFamily(context);
+        var shortTexts = AdaptNarrationGenerationScenes(shortItems, sourceScenes, family, language, false);
+        var longTexts = AdaptNarrationGenerationScenes(longItems, sourceScenes, family, language, true);
+        ValidateAdaptedV31ProductionNarration(shortTexts, longTexts, shortItems.Count, longItems.Count);
         var firstSentenceByScene = shortTexts.Select(kv => new { Key = $"short:{kv.Key}", kv.Value })
             .Concat(longTexts.Select(kv => new { Key = $"long:{kv.Key}", kv.Value }))
             .ToDictionary(x => x.Key, x => FirstSentence(x.Value), StringComparer.OrdinalIgnoreCase);
+        var mapping = BuildPhase14SourceToTargetMapping(shortTexts.Keys, longTexts.Keys);
         var eventConsistencyDiagnostics = new Phase14EventConsistencyDiagnostics(
-            FirstNonEmpty(context.Request.EventType, context.ExecutionContext.EventType),
-            FirstNonEmpty(context.Request.Title, context.Request.ShortTitle),
-            context.Request.PrimaryObjects,
-            context.Request.SecondaryObjects,
-            FirstNonEmpty(context.ProductionEventIntelligence.EventType),
-            FirstNonEmpty(context.ProductionEventIntelligence.Title),
-            context.ProductionEventIntelligence.PrimaryObjects,
-            context.ProductionEventIntelligence.SecondaryObjects,
-            ResolvePhase14NarrationFamily(context),
-            "NarrationGenerationServiceV31",
-            false,
-            [],
-            ResolvePhase14EventFamily(context.Request.EventType, context.Request.Title, context.Request.PrimaryObjects, context.Request.SecondaryObjects),
-            ResolvePhase14NarrationFamily(context),
-            firstSentenceByScene,
-            true,
-            []);
-        var adapterDiagnostics = new Phase14AdapterDiagnostics(
-            true,
-            "NarrationGenerationServiceV31",
-            FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
-            shortTexts.Count,
-            longTexts.Count,
-            shortTexts.Count + longTexts.Count,
-            shortTexts.Count + longTexts.Count,
-            firstSentenceByScene,
-            false,
-            false,
-            false,
-            string.Empty,
-            response.ShortNarration.Scenes.Concat(response.LongNarration.Scenes).Select(s => s.Section).ToArray(),
-            shortItems.Select(i => new { Key = $"short:{i.SceneId}", i.SceneId }).Concat(longItems.Select(i => new { Key = $"long:{i.SceneId}", i.SceneId })).ToDictionary(i => i.Key, i => ResolvePhase14ScenePurpose(i.SceneId), StringComparer.OrdinalIgnoreCase),
-            response.GeneratedFiles,
-            [],
-            []);
+            FirstNonEmpty(context.Request.EventType, context.ExecutionContext.EventType), FirstNonEmpty(context.Request.Title, context.Request.ShortTitle), context.Request.PrimaryObjects, context.Request.SecondaryObjects,
+            FirstNonEmpty(context.ProductionEventIntelligence.EventType), FirstNonEmpty(context.ProductionEventIntelligence.Title), context.ProductionEventIntelligence.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects,
+            family, "NarrationGenerationService", false, [], ResolvePhase14EventFamily(context.Request.EventType, context.Request.Title, context.Request.PrimaryObjects, context.Request.SecondaryObjects), family, firstSentenceByScene, true, generationDiagnostics);
+        var adapterDiagnostics = new Phase14AdapterDiagnostics(true, "NarrationGenerationService", FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType), shortTexts.Count, longTexts.Count, response.Scenes.Count, shortTexts.Count + longTexts.Count, firstSentenceByScene, false, false, true, "Adapted four normalized semantic narration scenes to Phase 14 scene contracts.", response.Scenes.Select(s => s.ScenePurpose).ToArray(), shortItems.Select(i => new { Key = $"short:{i.SceneId}", i.SceneId }).Concat(longItems.Select(i => new { Key = $"long:{i.SceneId}", i.SceneId })).ToDictionary(i => i.Key, i => ResolvePhase14ScenePurpose(i.SceneId), StringComparer.OrdinalIgnoreCase), [], [], []) { TranslationDiagnostics = null };
+        var translationDiagnostics = BuildPhase14TranslationDiagnosticsForGeneratedNarration(language, family, shortTexts, longTexts, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType), context.ProductionEventIntelligence.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects);
 
-        return new Phase14DocumentaryNarration(
-            true,
-            true,
-            "NarrationGenerationServiceV31",
-            false,
-            "V3.1 production narration",
-            BuildPhase14StoryArc(),
-            shortTexts,
-            longTexts,
-            new { @short = shortTexts, @long = longTexts },
-            new EventStoryComposerDiagnostics("V3.1", "ProductionPipeline", true, true, 100, 100, LongSceneCount: longTexts.Count, ExtractedSectionCount: shortTexts.Count + longTexts.Count, SourceEventFactsUsed: response.ShortNarration.Scenes.Concat(response.LongNarration.Scenes).Select(s => s.NarrationText).ToArray()),
-            adapterDiagnostics,
-            ApplyPhase14NarrationTranslationIfNeeded("en", ResolvePhase14NarrationFamily(context), shortTexts, longTexts, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType), context.ProductionEventIntelligence.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects),
-            eventConsistencyDiagnostics);
+        return new Phase14DocumentaryNarration(true, true, "NarrationGenerationService", fallbackMetadataUsed, "Normalized production narration adapted to Phase 14", BuildPhase14StoryArc(), shortTexts, longTexts,
+            new { @short = shortTexts, @long = longTexts, v31NarrationIntegrationDiagnostics = new { narrationSource = "NarrationGenerationService", normalizedNarrationUsed = true, sourceSceneCount = response.Scenes.Count, adaptedShortSceneCount = shortTexts.Count, adaptedLongSceneCount = longTexts.Count, sceneLevelTtsPreserved = true, phase14Modified = true, phase15Modified = false, srtBuilderModified = false, sourceToTargetMapping = mapping, selectedLanguage = language, dbHydrationUsed = hydrationUsed, fallbackMetadataUsed, diagnostics = generationDiagnostics } },
+            new EventStoryComposerDiagnostics("V3.1", "ProductionPipeline", true, true, 100, 100, LongSceneCount: longTexts.Count, ExtractedSectionCount: shortTexts.Count + longTexts.Count, SourceEventFactsUsed: response.Scenes.Select(s => s.Narration).ToArray()), adapterDiagnostics, translationDiagnostics, eventConsistencyDiagnostics);
+    }
+
+    private static NarrationPreviewRequest BuildPhase14NarrationPreviewRequest(ProductionPhaseContext context, bool includePlanId, string language)
+    {
+        var metadata = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["eventDate"] = FirstNonEmpty(context.ProductionEventIntelligence.EventDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), context.ProductionEventIntelligence.PeakUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), context.Request.PeakUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), context.Request.StartUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            ["peakTime"] = FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime, context.ProductionEventIntelligence.PeakUtc?.ToString("yyyy-MM-dd HH:mm zzz", CultureInfo.InvariantCulture), context.Request.PeakUtc?.ToString("yyyy-MM-dd HH:mm zzz", CultureInfo.InvariantCulture)),
+            ["localPeakTime"] = FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime),
+            ["bestViewingWindowLocal"] = FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal),
+            ["skyDirectionHint"] = FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
+            ["direction"] = FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint)
+        };
+        return new NarrationPreviewRequest(
+            includePlanId ? context.Request.PlanId.ToString("D") : null,
+            FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
+            FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
+            FirstNonEmpty(context.Request.ShortTitle, context.ProductionEventIntelligence.Summary),
+            language,
+            FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
+            context.Request.PlannedFormat,
+            JsonSerializer.SerializeToElement(metadata, JsonOptions),
+            true);
+    }
+
+    private static NarrationPreviewResponse ConvertLegacyV31Preview(NarrationV31PreviewResponse response, string language)
+        => new(response.EventId, string.Empty, string.Empty, language, response.RegionId, null,
+            response.ShortNarration.Scenes.Take(4).Select(s => new NarrationPreviewScene(s.Section, ResolvePhase14ScenePurpose(s.Section), s.NarrationText, new NarrationValidationResult(true, [], []))).ToArray(),
+            new NarrationValidationResult(response.IsValid, response.Quality.Errors, response.Quality.Warnings),
+            new NarrationFormattingDiagnostics(string.Empty, string.Empty, string.Empty, string.Empty, ["Legacy NarrationV31Composer fallback"], []));
+
+    private static void ValidateNarrationGenerationPreview(NarrationPreviewResponse response)
+    {
+        var errors = new List<string>();
+        if (!response.OverallValidation.IsValid) errors.AddRange(response.OverallValidation.Errors);
+        if (response.Scenes.Count != 4) errors.Add($"NarrationGenerationService source scene count changed: expected 4, actual {response.Scenes.Count}.");
+        foreach (var purpose in new[] { "Hook", "InterestingFact", "BestTime", "FinalReminder" })
+            if (!response.Scenes.Any(s => string.Equals(s.ScenePurpose, purpose, StringComparison.OrdinalIgnoreCase))) errors.Add($"NarrationGenerationService missing source purpose: {purpose}.");
+        errors.AddRange(response.Scenes.Where(s => string.IsNullOrWhiteSpace(s.Narration)).Select(s => $"NarrationGenerationService empty source scene: {s.SceneId}."));
+        if (errors.Count > 0) throw new InvalidOperationException("NarrationGenerationService production narration validation failed: " + string.Join(" | ", errors.Distinct(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static Dictionary<string, string> AdaptNarrationGenerationScenes(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyDictionary<string, string> source, string family, string language, bool isLong)
+        => items.ToDictionary(i => NormalizeV31NarrationSceneId(i.SceneId), i => AdaptNarrationGenerationScene(i.SceneId, source, family, language), StringComparer.OrdinalIgnoreCase);
+
+    private static string AdaptNarrationGenerationScene(string sceneId, IReadOnlyDictionary<string, string> source, string family, string language)
+    {
+        string S(string purpose) => source.TryGetValue(purpose, out var text) ? text : string.Empty;
+        return NormalizeV31NarrationSceneId(sceneId) switch
+        {
+            "001-hook" => S("Hook"),
+            "002-what-is-it" => Phase14FamilyDefinition(family, language),
+            "002-cause" or "003-cause" => Phase14FamilyCause(family, language),
+            "004-interesting-fact" => S("InterestingFact"),
+            "005-best-time" => S("BestTime"),
+            "003-accurate-sky-guide" or "006-accurate-sky-guide" => Phase14DirectionGuide(S("BestTime"), language),
+            "007-what-you-will-see" => Phase14FamilyVisual(family, language),
+            "004-viewing-tip" or "008-viewing-tips" => Phase14FamilyViewingTip(family, language),
+            "005-final-reminder" or "009-final-reminder" => S("FinalReminder"),
+            _ => S("InterestingFact")
+        };
+    }
+
+    private static string Phase14FamilyDefinition(string family, string language) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "उल्का-वर्षा तब दिखती है जब पृथ्वी धूल और कणों की पुरानी धारा से गुजरती है।",
+        "PlanetConjunction" => "ग्रह-युति में दो चमकीले ग्रह हमारे आकाश में पास-पास दिखाई देते हैं।",
+        "NamedFullMoon" => "नामित पूर्णिमा मौसम और लोक-परंपरा से जुड़ा पूरा चंद्रमा है।",
+        "SolarEclipse" => "सूर्य ग्रहण में चंद्रमा सूर्य और पृथ्वी के बीच आकर सूर्य की रोशनी का भाग ढकता है।",
+        _ => "यह आकाशीय घटना समय, दिशा और साफ मौसम पर निर्भर करती है।"
+    } : NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "A meteor shower happens when Earth passes through a stream of old dust and grit left in space.",
+        "PlanetConjunction" => "A conjunction is a line-of-sight pairing where two bright planets appear close together in our sky.",
+        "NamedFullMoon" => "A named full moon is the full lunar phase connected with seasonal skywatching traditions.",
+        "SolarEclipse" => "A solar eclipse happens when the Moon moves between Earth and the Sun and covers part of the Sun's light.",
+        _ => "This astronomy event depends on timing, direction, and clear local skies."
+    };
+
+    private static string Phase14FamilyCause(string family, string language) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "कारण यह है कि छोटे कण वायुमंडल में जलकर तेज लकीरों जैसे चमकते हैं।",
+        "PlanetConjunction" => "कारण वास्तविक टक्कर नहीं, बल्कि पृथ्वी से दिखने वाली ग्रहों की सीध है।",
+        "NamedFullMoon" => "कारण सूर्य, पृथ्वी और चंद्रमा की ऐसी स्थिति है जिसमें चंद्रमा का पूरा प्रकाशित भाग दिखता है।",
+        "SolarEclipse" => "कारण चंद्रमा की छाया है, जो पृथ्वी के कुछ क्षेत्रों पर पड़ती है।",
+        _ => "कारण आकाशीय पिंडों की बदलती स्थिति और देखने की ज्यामिति है।"
+    } : NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "The cause is tiny particles burning in the upper atmosphere as bright streaks of light.",
+        "PlanetConjunction" => "The cause is not a collision, but the viewing geometry that lines the planets up from Earth.",
+        "NamedFullMoon" => "The cause is the Sun, Earth, and Moon lining up so the Moon's fully lit face is visible.",
+        "SolarEclipse" => "The cause is the Moon's shadow crossing parts of Earth during the eclipse path.",
+        _ => "The cause is changing celestial geometry and the observer's location on Earth."
+    };
+
+    private static string Phase14FamilyVisual(string family, string language) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "आप अंधेरे आकाश में अचानक चमकती छोटी-छोटी उल्का-लकीरें देख सकते हैं।",
+        "PlanetConjunction" => "आप दो चमकीले ग्रहों को एक ही हिस्से में पास-पास चमकते देखेंगे।",
+        "NamedFullMoon" => "आप क्षितिज के पास बड़ा और गर्म रंग लिए चंद्रमा देख सकते हैं।",
+        "SolarEclipse" => "सुरक्षित सौर फ़िल्टर से सूर्य का ढका हुआ भाग दिखाई देगा।",
+        _ => "आप साफ मौसम में मुख्य आकाशीय दृश्य को धीरे-धीरे बदलते हुए देखेंगे।"
+    } : NormalizePhase14Family(family) switch
+    {
+        "MeteorShower" => "You may see short, sudden meteor streaks flash across a dark sky.",
+        "PlanetConjunction" => "You will see two bright planets shining close together in the same part of the sky.",
+        "NamedFullMoon" => "You may see a large, warm-toned Moon near the horizon as it rises.",
+        "SolarEclipse" => "With certified solar filters, you will see the Sun partly covered by the Moon.",
+        _ => "Under clear conditions, you will see the main sky feature change gradually."
+    };
+
+    private static string Phase14FamilyViewingTip(string family, string language) => IsHindiLanguage(language) ? NormalizePhase14Family(family) switch
+    {
+        "SolarEclipse" => "सूर्य को केवल प्रमाणित सौर चश्मे या सुरक्षित फ़िल्टर से ही देखें।",
+        "MeteorShower" => "शहर की रोशनी से दूर जाएँ, आँखों को अंधेरे में ढलने दें, और धैर्य रखें।",
+        "PlanetConjunction" => "इमारतों और पेड़ों से खुला किनारा चुनें ताकि ग्रह जल्दी न छिपें।",
+        "NamedFullMoon" => "चंद्रोदय से पहले जगह चुन लें और स्थिर कैमरा या दूरबीन तैयार रखें।",
+        _ => "साफ मौसम, सुरक्षित जगह और बिना बाधा वाला दृश्य चुनें।"
+    } : NormalizePhase14Family(family) switch
+    {
+        "SolarEclipse" => "Use certified eclipse glasses or a proper solar filter whenever you look at the Sun.",
+        "MeteorShower" => "Get away from city lights, let your eyes adjust, and give the sky patient time.",
+        "PlanetConjunction" => "Choose a clear edge of the view so buildings or trees do not hide the planets.",
+        "NamedFullMoon" => "Pick your spot before moonrise and keep a steady camera or binoculars ready.",
+        _ => "Choose clear weather, a safe location, and an unobstructed view."
+    };
+
+    private static string Phase14DirectionGuide(string bestTime, string language) => IsHindiLanguage(language)
+        ? $"समय और दिशा के लिए यही मुख्य संकेत रखें: {bestTime}"
+        : $"Use the timing and direction cue from the viewing window: {bestTime}";
+
+    private static string NormalizePhase14Family(string family)
+    {
+        if (family.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
+        if (family.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || family.Contains("planet", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (family.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
+        if (family.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "SolarEclipse";
+        return "Generic";
+    }
+
+    private static bool IsHindiLanguage(string language) => string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase) || language.StartsWith("hi-", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildPhase14SourceToTargetMapping(IEnumerable<string> shortIds, IEnumerable<string> longIds)
+        => new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Hook"] = shortIds.Concat(longIds).Where(id => id.EndsWith("hook", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            ["InterestingFact"] = longIds.Where(id => id.Contains("interesting-fact", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            ["BestTime"] = longIds.Where(id => id.Contains("best-time", StringComparison.OrdinalIgnoreCase)).Concat(shortIds.Concat(longIds).Where(id => id.Contains("accurate-sky-guide", StringComparison.OrdinalIgnoreCase))).ToArray(),
+            ["FinalReminder"] = shortIds.Concat(longIds).Where(id => id.Contains("final-reminder", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            ["FamilyHelperText"] = shortIds.Concat(longIds).Where(id => id.Contains("cause", StringComparison.OrdinalIgnoreCase) || id.Contains("what-is-it", StringComparison.OrdinalIgnoreCase) || id.Contains("what-you-will-see", StringComparison.OrdinalIgnoreCase) || id.Contains("viewing-tip", StringComparison.OrdinalIgnoreCase)).ToArray()
+        };
+
+    private static void ValidateAdaptedV31ProductionNarration(IReadOnlyDictionary<string, string> shortTexts, IReadOnlyDictionary<string, string> longTexts, int expectedShortCount, int expectedLongCount)
+    {
+        var errors = new List<string>();
+        if (shortTexts.Count != expectedShortCount) errors.Add($"Adapted short scene count changed: expected {expectedShortCount}, actual {shortTexts.Count}.");
+        if (longTexts.Count != expectedLongCount) errors.Add($"Adapted long scene count changed: expected {expectedLongCount}, actual {longTexts.Count}.");
+        errors.AddRange(shortTexts.Concat(longTexts).Where(kv => string.IsNullOrWhiteSpace(kv.Value)).Select(kv => $"Adapted narration text is empty: scene {kv.Key}."));
+        errors.AddRange(shortTexts.GroupBy(kv => NormalizeNarrationForDuplicateDetection(kv.Value)).Where(g => g.Count() > 1).Select(g => "Duplicate adapted short narration text."));
+        errors.AddRange(longTexts.GroupBy(kv => NormalizeNarrationForDuplicateDetection(kv.Value)).Where(g => g.Count() > 1).Select(g => "Duplicate adapted long narration text."));
+        if (errors.Count > 0) throw new InvalidOperationException("Adapted V3.1 production narration validation failed before writing final narration files: " + string.Join(" | ", errors.Distinct(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static string NormalizeNarrationForDuplicateDetection(string text) => Regex.Replace(text.Trim(), @"\s+", " ").ToLowerInvariant();
+
+    private static Phase14TranslationDiagnostics BuildPhase14TranslationDiagnosticsForGeneratedNarration(string requestedLanguage, string family, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts, string eventType, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
+    {
+        if (!IsHindiLanguage(requestedLanguage)) return ApplyPhase14NarrationTranslationIfNeeded("en", family, shortTexts, longTexts, eventType, primaryObjects, secondaryObjects);
+        var sourceText = string.Join(" ", shortTexts.Values.Concat(longTexts.Values));
+        var baseDiagnostics = ApplyPhase14NarrationTranslationIfNeeded("en", family, shortTexts, longTexts, eventType, primaryObjects, secondaryObjects);
+        return baseDiagnostics with
+        {
+            RequestedLanguage = "hi",
+            TranslationMode = "none-source-already-hindi",
+            SourceLanguage = "hi",
+            TranslatedLanguage = "hi",
+            TranslationApplied = false,
+            HindiCharacterCount = CountHindiCharacters(sourceText),
+            EnglishCharacterCount = CountEnglishCharacters(sourceText),
+            OriginalEnglishTextSnippet = string.Empty,
+            SourceEnglishSnippet = string.Empty,
+            SourceEnglishSceneText = string.Empty,
+            TranslatedHindiTextSnippet = Snippet(sourceText),
+            FinalHindiSnippet = Snippet(sourceText),
+            TranslatedHindiSceneText = sourceText,
+            TranslationSucceeded = true
+        };
     }
 
     private static void ValidateV31ProductionNarration(NarrationV31PreviewResponse response, int expectedShortCount, int expectedLongCount)
