@@ -2001,8 +2001,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 WritePhase14ExceptionDiagnostics(context, wrappedException);
                 throw wrappedException;
             }
-            shortItems = ApplyDocumentaryNarrationToSyncItems(shortItems, documentaryNarration.ShortItems);
-            longItems = ApplyDocumentaryNarrationToSyncItems(longItems, documentaryNarration.LongItems);
+            shortItems = ApplyDocumentaryNarrationToSyncItems(NormalizeV31NarrationSceneIds("short", shortItems), documentaryNarration.ShortItems);
+            longItems = ApplyDocumentaryNarrationToSyncItems(NormalizeV31NarrationSceneIds("long", longItems), documentaryNarration.LongItems);
             var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, subtitleTtsOptions?.Value, cancellationToken);
             var documentaryNarrationV2DiagnosticsPath = await WritePhase14DocumentaryNarrationV2DiagnosticsAsync(planRoot, documentaryNarration, cancellationToken);
             var v31NarrationIntegrationDiagnosticsPath = Path.Combine(validationRoot, "v31-narration-integration-diagnostics.json");
@@ -2187,6 +2187,51 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
+    private static void DeleteTargetNarrationFolders(string narrationRoot)
+    {
+        foreach (var language in new[] { "en", "hi" })
+        foreach (var format in new[] { "short", "long" })
+        {
+            var dir = Path.Combine(narrationRoot, language, format);
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static void ValidateV31NarrationBeforeSrt(string shortRoot, string longRoot, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems)
+    {
+        ValidateV31NarrationFolderBeforeSrt("short", shortRoot, shortItems);
+        ValidateV31NarrationFolderBeforeSrt("long", longRoot, longItems);
+    }
+
+    private static void ValidateV31NarrationFolderBeforeSrt(string format, string root, IReadOnlyList<SceneAudioSyncItem> items)
+    {
+        var expectedSceneIds = ExpectedV31NarrationSceneIds(format);
+        var expected = expectedSceneIds.Select(i => $"{SanitizeFileName(i)}.txt").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var actual = Directory.Exists(root)
+            ? Directory.EnumerateFiles(root, "*.txt", SearchOption.TopDirectoryOnly).Select(Path.GetFileName).Where(name => !string.IsNullOrWhiteSpace(name)).Cast<string>().ToArray()
+            : Array.Empty<string>();
+        var extra = actual.Where(file => !expected.Contains(file)).ToArray();
+        var missing = expected.Where(file => !actual.Contains(file, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var unexpectedSceneIds = items.Select(i => i.SceneId).Where(sceneId => !expectedSceneIds.Contains(sceneId, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var duplicatePurposeMappings = items
+            .GroupBy(item => ResolvePhase14ScenePurpose(item.SceneId), StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => $"{group.Key}: {string.Join(",", group.Select(item => item.SceneId))}")
+            .ToArray();
+        var invalidFirstSentences = items
+            .Select(item => new { item.SceneId, First = FirstSentence(item.NarrationText ?? string.Empty) })
+            .Where(item => item.First.StartsWith("Tonight,", StringComparison.OrdinalIgnoreCase) || item.First.Contains("MeteorShower", StringComparison.Ordinal))
+            .Select(item => $"{item.SceneId}: {item.First}")
+            .ToArray();
+        var errors = new List<string>();
+        if (extra.Length > 0) errors.Add($"extra {format} narration files exist: {string.Join(", ", extra)}");
+        if (missing.Length > 0) errors.Add($"missing {format} narration files: {string.Join(", ", missing)}");
+        if (unexpectedSceneIds.Length > 0) errors.Add($"unexpected {format} scene ids: {string.Join(", ", unexpectedSceneIds)}");
+        if (duplicatePurposeMappings.Length > 0) errors.Add($"duplicate {format} scene purpose mapping exists: {string.Join(" | ", duplicatePurposeMappings)}");
+        if (invalidFirstSentences.Length > 0) errors.Add($"invalid {format} first sentence before SRT: {string.Join(" | ", invalidFirstSentences)}");
+        if (errors.Count > 0) throw new InvalidOperationException("V3.1 narration validation failed before SRT: " + string.Join(" | ", errors));
+    }
+
     private static async Task<NarrationOutputLayerResult> WriteNarrationOutputLayerAsync(string planRoot, string language, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, Phase14DocumentaryNarration documentaryNarration, SubtitleTtsOptions? configuredSubtitleTtsOptions, CancellationToken cancellationToken)
     {
         var narrationRoot = Path.Combine(planRoot, "narration");
@@ -2194,6 +2239,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortRoot = Path.Combine(selectedNarrationRoot, "short");
         var longRoot = Path.Combine(selectedNarrationRoot, "long");
         var subtitlesRoot = Path.Combine(narrationRoot, "subtitles", language);
+        DeleteTargetNarrationFolders(narrationRoot);
         Directory.CreateDirectory(shortRoot);
         Directory.CreateDirectory(longRoot);
         Directory.CreateDirectory(subtitlesRoot);
@@ -2207,6 +2253,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
         var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
         var narrationFileWriteDiagnostics = ValidateNarrationFileWriteTrace(narrationFileWriteTrace, shortItems.Count + longNarrationV3Items.Count);
+        ValidateV31NarrationBeforeSrt(shortRoot, longRoot, shortItems, longNarrationV3Items);
 
         var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
         var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
@@ -3903,7 +3950,7 @@ public sealed partial class ProductionPipelineExecutionService(
             return ["001-hook", "002-what-is-it", "003-cause", "004-viewing-tip", "005-final-reminder"];
         return string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
             ? ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]
-            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tip", "009-final-reminder"];
+            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
     }
 
     private static string ResolvePhase14ScenePurpose(string sceneId)
@@ -3916,7 +3963,7 @@ public sealed partial class ProductionPipelineExecutionService(
             "005-best-time" => "best-time",
             "006-accurate-sky-guide" or "003-accurate-sky-guide" => "accurate-sky-guide",
             "007-what-you-will-see" => "what-you-will-see",
-            "008-viewing-tip" or "004-viewing-tip" => "viewing-tips",
+            "008-viewing-tips" or "008-viewing-tip" or "004-viewing-tip" => "viewing-tips",
             "009-final-reminder" or "005-final-reminder" => "final-reminder",
             _ => "what-you-will-see"
         };
@@ -4058,16 +4105,35 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<SceneAudioSyncItem> ApplyDocumentaryNarrationToSyncItems(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyDictionary<string, string> documentaryTextBySceneId)
         => items.Select(item =>
         {
-            var text = documentaryTextBySceneId.TryGetValue(item.SceneId, out var documentaryText) ? documentaryText : item.NarrationText;
+            var normalizedSceneId = NormalizeV31NarrationSceneId(item.SceneId);
+            var text = documentaryTextBySceneId.TryGetValue(item.SceneId, out var documentaryText)
+                ? documentaryText
+                : documentaryTextBySceneId.TryGetValue(normalizedSceneId, out documentaryText)
+                    ? documentaryText
+                    : item.NarrationText;
             return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "NarrationGenerationServiceV31" };
         }).ToArray();
+
+    private static IReadOnlyList<SceneAudioSyncItem> NormalizeV31NarrationSceneIds(string format, IReadOnlyList<SceneAudioSyncItem> items)
+    {
+        var expected = ExpectedV31NarrationSceneIds(format);
+        return items.Select((item, index) => item with { SceneId = index < expected.Length ? expected[index] : NormalizeV31NarrationSceneId(item.SceneId) }).ToArray();
+    }
+
+    private static string[] ExpectedV31NarrationSceneIds(string format)
+        => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
+            ? ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]
+            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
+
+    private static string NormalizeV31NarrationSceneId(string sceneId)
+        => string.Equals(sceneId, "008-viewing-tip", StringComparison.OrdinalIgnoreCase) ? "008-viewing-tips" : sceneId;
 
     private async Task<Phase14DocumentaryNarration> BuildV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
     {
         if (narrationV31Composer is null)
             throw new InvalidOperationException("V3.1 NarrationGenerationService is not configured for production narration integration.");
 
-        var response = await narrationV31Composer.WriteFinalSceneNarrationAsync(new NarrationV31PreviewRequest(
+        var response = await narrationV31Composer.PreviewAsync(new NarrationV31PreviewRequest(
             EventId: FirstNonEmpty(context.EventId, context.Request.PlanId.ToString("D")),
             RegionId: FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
             Language: ResolvePipelineLanguage(context.Request.Language),
@@ -4153,8 +4219,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static Dictionary<string, string> MapV31ScenesToSceneIds(IReadOnlyList<SceneAudioSyncItem> items, IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes)
-        => items.Select((item, index) => new { item.SceneId, Text = scenes[index].NarrationText })
-            .ToDictionary(x => x.SceneId, x => x.Text, StringComparer.OrdinalIgnoreCase);
+        => scenes.ToDictionary(scene => NormalizeV31NarrationSceneId(scene.Section), scene => scene.NarrationText, StringComparer.OrdinalIgnoreCase);
 
     private static string ResolvePhase14NarrationFamily(ProductionPhaseContext context)
     {
@@ -4214,14 +4279,14 @@ public sealed partial class ProductionPipelineExecutionService(
             NormalizePath(path),
             item.SceneId,
             format,
-            "SceneLevelNarrationComposer",
+            "NarrationGenerationServiceV31",
             existedBeforeWrite ? "Overwrite" : "Create",
             writeOrder,
             Preview(content, 180),
             content.Contains("centers on", StringComparison.OrdinalIgnoreCase),
             content.Contains("Moon names are cultural memory", StringComparison.OrdinalIgnoreCase),
-            "SceneLevelNarrationComposer",
-            string.IsNullOrWhiteSpace(item.SourceNarrationStrategy) ? "SceneLevelNarrationComposer" : item.SourceNarrationStrategy);
+            "NarrationGenerationServiceV31",
+            string.IsNullOrWhiteSpace(item.SourceNarrationStrategy) ? "NarrationGenerationServiceV31" : item.SourceNarrationStrategy);
 
     private static NarrationFileWriteDiagnostics ValidateNarrationFileWriteTrace(IReadOnlyList<NarrationFileWriteTraceEntry> writeTrace, int expectedWriteCount)
     {
@@ -4237,7 +4302,8 @@ public sealed partial class ProductionPipelineExecutionService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var fallbackInjected = writeTrace.Any(entry =>
-            !entry.WriterComponent.Equals("SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase)
+            !entry.WriterComponent.Equals("NarrationGenerationServiceV31", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceStrategy.Contains("SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase)
             || entry.SourceStrategy.Contains("Fallback", StringComparison.OrdinalIgnoreCase)
             || entry.SourceStrategy.Contains("SceneTimelineNarrationBeat", StringComparison.OrdinalIgnoreCase)
             || entry.SourceStrategy.Contains("EventProductionIntelligence", StringComparison.OrdinalIgnoreCase)
@@ -4245,7 +4311,7 @@ public sealed partial class ProductionPipelineExecutionService(
             || entry.SourceComponent.Contains("DocumentaryNarrationComposer", StringComparison.OrdinalIgnoreCase));
 
         if (writeTrace.Count != expectedWriteCount || duplicateWrites.Length > 0 || appendedFiles.Length > 0 || fallbackInjected)
-            throw new InvalidOperationException("Narration scene file overwritten after SceneLevelNarrationComposer");
+            throw new InvalidOperationException("Narration scene file overwritten after NarrationGenerationServiceV31");
 
         return new NarrationFileWriteDiagnostics(writeTrace.Count, duplicateWrites, overwrittenFiles, appendedFiles, fallbackInjected);
     }
