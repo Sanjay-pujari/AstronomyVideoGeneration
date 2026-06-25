@@ -404,6 +404,20 @@ app.MapPost("/api/astronomy-intelligence/narration-v31/preview", async (Narratio
 });
 
 
+
+app.MapPost("/api/astronomy/v3/narration/preview", async (NarrationPreviewRequest request, INarrationGenerationService narration, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy V3 narration preview request received for {RegionId}. EventName={EventName}; Language={Language}", request.RegionId, request.EventName, request.Language);
+    try
+    {
+        return Results.Ok(await narration.GeneratePreviewAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAssetStoryGenerationRequest request, IHeroAssetIntelligenceEngine heroAssetEngine, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Hero hook intelligence generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
