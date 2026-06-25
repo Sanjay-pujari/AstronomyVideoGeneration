@@ -99,7 +99,7 @@ public sealed class NarrationPreviewRequestTests
 
         Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
         Assert.NotNull(response.NarrationContextDiagnostics);
-        Assert.Equal("Jupiter and Venus Conjunction", response.NarrationContextDiagnostics.DisplayTitle);
+        Assert.Equal("the Jupiter–Venus conjunction", response.NarrationContextDiagnostics.DisplayTitle);
         Assert.Equal("Udaipur", response.NarrationContextDiagnostics.DisplayLocation);
         Assert.Equal("PlanetConjunction", response.NarrationContextDiagnostics.Family);
         Assert.NotNull(response.NarrationContextDiagnostics.ObservationContextDiagnostics);
@@ -144,8 +144,8 @@ public sealed class NarrationPreviewRequestTests
 
         Assert.Equal("रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक", response.FormattingDiagnostics.Direction);
         Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "BestTime" && scene.Narration == "उदयपुर में देखने का सुझाया समय 14 दिसंबर 2026 की रात 12 बजे से सुबह 5 बजे तक है। रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक देखें।");
-        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration.Contains("जेमिनिड्स (Geminids)", StringComparison.Ordinal));
-        Assert.DoesNotContain(response.Scenes.Where(scene => scene.ScenePurpose != "Hook"), scene => scene.Narration.Contains("(Geminids)", StringComparison.Ordinal));
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration.Contains("जेमिनिड्स", StringComparison.Ordinal));
+        Assert.DoesNotContain(response.Scenes, scene => scene.Narration.Contains("Geminids", StringComparison.Ordinal));
         Assert.DoesNotContain(" to ", narration, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("after", narration, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("before", narration, StringComparison.OrdinalIgnoreCase);
