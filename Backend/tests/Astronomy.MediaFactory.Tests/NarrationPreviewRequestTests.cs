@@ -102,6 +102,14 @@ public sealed class NarrationPreviewRequestTests
         Assert.Equal("Jupiter and Venus Conjunction", response.NarrationContextDiagnostics.DisplayTitle);
         Assert.Equal("Udaipur", response.NarrationContextDiagnostics.DisplayLocation);
         Assert.Equal("PlanetConjunction", response.NarrationContextDiagnostics.Family);
+        Assert.NotNull(response.NarrationContextDiagnostics.ObservationContextDiagnostics);
+        Assert.Equal("June 7, 2026 19:30", response.NarrationContextDiagnostics.ObservationContextDiagnostics.GeometricPeakTime);
+        Assert.Equal("from 7:00 PM to 8:30 PM IST", response.NarrationContextDiagnostics.ObservationContextDiagnostics.ObservationWindow);
+        Assert.Equal("western sky after sunset", response.NarrationContextDiagnostics.ObservationContextDiagnostics.ObservationDirection);
+        Assert.Equal("metadata.bestViewingWindowLocal", response.NarrationContextDiagnostics.ObservationContextDiagnostics.WindowSource);
+        Assert.Equal("metadata.skyDirectionHint", response.NarrationContextDiagnostics.ObservationContextDiagnostics.DirectionSource);
+        Assert.False(response.NarrationContextDiagnostics.ObservationContextDiagnostics.FallbackUsed);
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "BestTime" && scene.Narration == "For observers in Udaipur, the best viewing window runs from 7:00 PM to 8:30 PM IST. Look toward western sky after sunset while both planets are above the horizon.");
         Assert.DoesNotContain("2026-06-07", narration, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("+05:30", narration, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("minimum angular separation", narration, StringComparison.OrdinalIgnoreCase);
@@ -184,6 +192,9 @@ public sealed class NarrationPreviewPlanHydrationTests
         Assert.Equal("Geminids Meteor Shower", response.NarrationContextDiagnostics.DisplayTitle);
         Assert.Equal("Udaipur", response.NarrationContextDiagnostics.DisplayLocation);
         Assert.Equal("MeteorShower", response.NarrationContextDiagnostics.Family);
+        Assert.NotNull(response.NarrationContextDiagnostics.ObservationContextDiagnostics);
+        Assert.Equal("from midnight to 5:00 AM IST", response.NarrationContextDiagnostics.ObservationContextDiagnostics.ObservationWindow);
+        Assert.Equal("East to overhead after 10 PM", response.NarrationContextDiagnostics.ObservationContextDiagnostics.ObservationDirection);
         Assert.NotNull(response.PlanHydrationDiagnostics);
         Assert.True(response.PlanHydrationDiagnostics.PlanLoaded);
         Assert.True(response.PlanHydrationDiagnostics.EventIntelligenceLoaded);
