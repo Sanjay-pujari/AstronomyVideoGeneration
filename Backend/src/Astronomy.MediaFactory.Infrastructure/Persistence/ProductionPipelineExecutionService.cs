@@ -39,7 +39,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
     ISceneAssetsV3Service? sceneAssetsV3Service = null,
     IOptions<ThumbnailOptions>? thumbnailOptions = null,
-    IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null,
+    INarrationV31Composer? narrationV31Composer = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -114,6 +115,25 @@ public sealed partial class ProductionPipelineExecutionService(
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
+            }
+            if (phase.No == 14 && narrationV31Composer is not null)
+            {
+                var v31 = await narrationV31Composer.WriteFinalSceneNarrationAsync(new NarrationV31PreviewRequest(
+                    EventId: context.EventId,
+                    RegionId: context.ExecutionContext.RegionId ?? productionRequest.RegionId ?? string.Empty,
+                    Language: ResolvePipelineLanguage(context.Request.Language),
+                    DryRun: false,
+                    OverwriteExisting: true,
+                    ProductionContext: context.ExecutionContext,
+                    OutputRoot: context.OutputRoot,
+                    EventType: context.ProductionEventIntelligence.EventType,
+                    Title: context.ProductionEventIntelligence.Title,
+                    LocalPeakTime: context.ProductionEventIntelligence.LocalPeakTime,
+                    SkyDirectionHint: context.ProductionEventIntelligence.SkyDirectionHint,
+                    BestViewingWindowLocal: context.ProductionEventIntelligence.BestViewingWindowLocal), cancellationToken);
+                generatedFiles.AddRange(v31.GeneratedFiles.Where(File.Exists));
+                warnings.Add("v31NarrationComposer=finalSceneNarrationWrittenBeforePhase14");
+                warnings.AddRange(v31.Warnings);
             }
             var result = await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken);
             phaseResults.Add(result);

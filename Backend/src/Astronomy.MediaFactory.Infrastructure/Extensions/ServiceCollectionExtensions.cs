@@ -650,6 +650,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2NarrativeAbstractionBuilder, WeeklySkyForecastV2NarrativeAbstractionBuilder>();
         services.AddScoped<IWeeklySkyForecastV2NarrationPlanner, WeeklySkyForecastV2NarrationPlanner>();
         services.AddScoped<IWeeklySkyForecastV2NarrationTextGenerator, WeeklySkyForecastV2NarrationTextGenerator>();
+        services.AddScoped<INarrationV31Composer, NarrationV31Composer>();
         services.AddScoped<IWeeklySkyForecastV2AssetResolver, WeeklySkyForecastV2AssetResolver>();
         services.AddScoped<IWeeklySkyForecastV2EditorialNormalizer, WeeklySkyForecastV2EditorialNormalizer>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeStructurePolicy>();

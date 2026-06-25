@@ -390,6 +390,19 @@ app.MapPost("/api/astronomy-intelligence/generate-question-driven-narration", as
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/narration-v31/preview", async (NarrationV31PreviewRequest request, INarrationV31Composer composer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("V3.1 narration preview request received for {RegionId}. EventId={EventId}; Language={Language}", request.RegionId, request.EventId, request.Language);
+    try
+    {
+        return Results.Ok(await composer.PreviewAsync(request with { DryRun = true }, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 
 app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAssetStoryGenerationRequest request, IHeroAssetIntelligenceEngine heroAssetEngine, ILogger<Program> logger, CancellationToken ct) =>
 {
