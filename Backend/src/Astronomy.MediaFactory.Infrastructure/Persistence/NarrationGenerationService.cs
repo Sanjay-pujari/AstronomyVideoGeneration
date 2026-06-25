@@ -1,21 +1,58 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Microsoft.EntityFrameworkCore;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class NarrationGenerationService : INarrationGenerationService
 {
     private readonly NarrationTimeFormatter formatter = new();
+    private readonly MediaFactoryDbContext? db;
 
-    public Task<NarrationPreviewResponse> GeneratePreviewAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
-        => Task.FromResult(Generate(request));
+    public NarrationGenerationService() { }
 
-    public Task<NarrationPreviewResponse> GenerateProductionNarrationAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
-        => Task.FromResult(Generate(request));
+    public NarrationGenerationService(MediaFactoryDbContext db)
+        => this.db = db;
 
-    private NarrationPreviewResponse Generate(NarrationPreviewRequest request)
+    public async Task<NarrationPreviewResponse> GeneratePreviewAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
+        => Generate(await HydrateAsync(request, cancellationToken));
+
+    public async Task<NarrationPreviewResponse> GenerateProductionNarrationAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
+        => Generate(await HydrateAsync(request, cancellationToken));
+
+    private async Task<HydratedNarrationRequest> HydrateAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.PlanId)) return new(request, null);
+        if (!Guid.TryParse(request.PlanId, out var planId)) throw new ArgumentException($"planId '{request.PlanId}' is not a valid content generation plan id.", nameof(request));
+        if (db is null) throw new ArgumentException($"planId '{request.PlanId}' was provided, but plan hydration is not available in this runtime.", nameof(request));
+
+        var plan = await db.ContentGenerationPlans
+            .AsNoTracking()
+            .Include(p => p.AstronomyEventIntelligence)!.ThenInclude(e => e!.Objects)
+            .FirstOrDefaultAsync(p => p.Id == planId, cancellationToken)
+            ?? throw new ArgumentException($"ContentGenerationPlan '{request.PlanId}' was not found.", nameof(request));
+        var intelligence = plan.AstronomyEventIntelligence
+            ?? throw new ArgumentException($"ContentGenerationPlan '{request.PlanId}' is not linked to AstronomyEventIntelligence.", nameof(request));
+
+        var metadata = BuildPlanMetadata(intelligence);
+        var hydrated = request with
+        {
+            EventType = Clean(intelligence.EventType, Clean(plan.PrimaryAstronomyEventTypeCode, request.EventType)),
+            EventName = Clean(intelligence.Title, Clean(plan.Title, request.EventName)),
+            ShortTitle = FirstNonEmpty(ReadEventJsonString(intelligence, "shortTitle", "ShortTitle"), intelligence.Summary, request.ShortTitle),
+            Language = Clean(plan.Language, Clean(intelligence.Language, request.Language)),
+            RegionId = Clean(plan.RegionId, Clean(intelligence.RegionId, request.RegionId)),
+            Format = Clean(plan.PlannedFormat, request.Format),
+            EventMetadata = metadata
+        };
+        return new(hydrated, new(request.PlanId, true, true, false, hydrated.EventType, hydrated.EventName, hydrated.RegionId));
+    }
+
+    private NarrationPreviewResponse Generate(HydratedNarrationRequest hydratedRequest)
+    {
+        var request = hydratedRequest.Request;
         ArgumentNullException.ThrowIfNull(request);
         var language = IsHindi(request.Language) ? "hi" : "en";
         var eventType = Clean(request.EventType, "astronomy event");
@@ -41,7 +78,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         var overall = new NarrationValidationResult(errors.Count == 0, errors, warnings);
         var diagnostics = new NarrationFormattingDiagnostics(date, peak, window, direction,
             ["FormatEventDate(language)", "FormatPeakTime(language)", "FormatViewingWindow(language)", "FormatDirection(language)", "No SRT/TTS/video/Phase14 execution"], []);
-        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics);
+        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics, Clean(request.ShortTitle, null!), hydratedRequest.Diagnostics);
     }
 
     private static NarrationPreviewScene Scene(string id, string purpose, string narration) => new(id, purpose, narration, new(true, [], []));
@@ -106,6 +143,40 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     }
     private static string NormalizeSentence(string text) => Regex.Replace(text, @"\s+", " ").Trim().ToLowerInvariant();
     private static bool IsHindi(string? language) => string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase) || string.Equals(language, "hi-IN", StringComparison.OrdinalIgnoreCase);
+
+    private static JsonElement? BuildPlanMetadata(AstronomyEventIntelligence intelligence)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["eventDate"] = FirstNonEmpty(ReadEventJsonString(intelligence, "eventDate", "EventDate", "localDate"), intelligence.PeakUtc?.ToString("yyyy-MM-dd"), intelligence.StartUtc.ToString("yyyy-MM-dd")),
+            ["localPeakTime"] = FirstNonEmpty(ReadEventJsonString(intelligence, "localPeakTime", "LocalPeakTime", "peakTime"), intelligence.PeakUtc?.ToString("yyyy-MM-dd HH:mm zzz")),
+            ["bestViewingWindowLocal"] = ReadEventJsonString(intelligence, "bestViewingWindowLocal", "BestViewingWindowLocal", "bestViewingWindow", "viewingWindow"),
+            ["direction"] = ReadEventJsonString(intelligence, "skyDirectionHint", "SkyDirectionHint", "direction"),
+            ["moonInterference"] = ReadEventJsonString(intelligence, "moonInterference", "MoonInterference")
+        };
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(values.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).ToDictionary(kv => kv.Key, kv => kv.Value)));
+        return doc.RootElement.Clone();
+    }
+
+    private static string? ReadEventJsonString(AstronomyEventIntelligence intelligence, params string[] names)
+        => FirstNonEmpty(ReadJsonString(intelligence.MetadataJson, names), ReadJsonString(intelligence.RawDataJson, names));
+
+    private static string? ReadJsonString(string? json, params string[] names)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var name in names)
+                if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null)
+                    return value.ToString();
+        }
+        catch (JsonException) { }
+        return null;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
+    private sealed record HydratedNarrationRequest(NarrationPreviewRequest Request, NarrationPlanHydrationDiagnostics? Diagnostics);
 
     private sealed record Metadata(string? EventDate, string? PeakDate, string? PeakTime, string? ViewingWindow, string? Direction)
     {
