@@ -77,13 +77,19 @@ public sealed partial class ProductionPipelineExecutionService(
         var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 20, startPhaseNo, 20);
         var phaseResults = new List<ProductionPhaseResult>();
         var deletedFilesDueToOverwrite = new List<string>();
+        var deletedDirectoriesDueToOverwrite = new List<string>();
+        var skippedDirectoriesDueToOverwrite = new List<string>();
 
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
-        var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite);
+        var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite, deletedDirectoriesDueToOverwrite, skippedDirectoriesDueToOverwrite);
         if (request.OverwriteExisting)
+        {
+            LogPhase15SrtExistence(context, "before-cleanup");
             ClearPhaseRangeOutputsForOverwrite(context);
+            LogPhase15SrtExistence(context, "after-cleanup");
+        }
 
         Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "short"));
         Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "long"));
@@ -6725,6 +6731,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var selectedShortSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");
         var selectedLongSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "long");
+        logger.LogInformation("Phase 15 SRT existence before validation: Exists(short.srt)={ShortSrtExists}; Exists(long.srt)={LongSrtExists}; shortSrtPath={ShortSrtPath}; longSrtPath={LongSrtPath}", File.Exists(selectedShortSrt), File.Exists(selectedLongSrt), NormalizePath(selectedShortSrt), NormalizePath(selectedLongSrt));
         if (!File.Exists(selectedShortSrt)) errors.Add($"short.srt missing: {NormalizePath(selectedShortSrt)}");
         if (!File.Exists(selectedLongSrt)) errors.Add($"long.srt missing: {NormalizePath(selectedLongSrt)}");
 
@@ -11529,6 +11536,9 @@ public sealed partial class ProductionPipelineExecutionService(
             downstreamHardcodingDetected = context.ProductionEventIntelligence.DownstreamHardcodingDetected,
             cleanupScope = BuildCleanupScopeDiagnostics(context),
             deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
+            cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
+            cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
+            cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
             sceneAssetsVersion = sceneAssetsV3Diagnostics?.SceneAssetsVersion,
             sceneAssetsV3Enabled = sceneAssetsV3Diagnostics?.SceneAssetsV3Enabled,
             sceneAssetsRoot = sceneAssetsV3Diagnostics?.SceneAssetsRoot,
@@ -12769,7 +12779,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var dependencyExpansionApplied = requestedStartPhase != context.StartPhaseNo || requestedEndPhase != context.EndPhaseNo;
         var filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
         var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray();
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
+            cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
+            cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
+            cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
     }
 
 
@@ -12888,17 +12901,20 @@ public sealed partial class ProductionPipelineExecutionService(
             File.Delete(file);
     }
 
-    private static void DeleteProductionSubtree(string path, List<string>? deletedFiles = null)
+    private static void DeleteProductionSubtree(string path, List<string>? deletedFiles = null, List<string>? deletedDirectories = null)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
         if (deletedFiles is not null)
             deletedFiles.AddRange(Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Select(NormalizePath));
+        deletedDirectories?.Add(NormalizePath(path));
         Directory.Delete(path, recursive: true);
     }
 
     private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
     {
         var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
+        var deletedDirectories = context.DeletedDirectoriesDueToOverwrite as List<string>;
+        var skippedDirectories = context.SkippedDirectoriesDueToOverwrite as List<string>;
         var deleteStartPhaseNo = context.StartPhaseNo;
         var deleteEndPhaseNo = context.EndPhaseNo;
 
@@ -12916,36 +12932,42 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (deleteStartPhaseNo <= 9 && deleteEndPhaseNo >= 8)
         {
-            DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles);
-            DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles);
-            DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles);
+            DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles, deletedDirectories);
+            DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles, deletedDirectories);
+            DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles, deletedDirectories);
         }
 
         if (deleteStartPhaseNo <= 11 && deleteEndPhaseNo >= 11)
-            DeleteProductionSubtree(context.ExecutionContext.HeroRoot!, deletedFiles);
+            DeleteProductionSubtree(context.ExecutionContext.HeroRoot!, deletedFiles, deletedDirectories);
 
         if (deleteStartPhaseNo <= 12 && deleteEndPhaseNo >= 12)
-            DeleteProductionSubtree(context.ExecutionContext.ThumbnailRoot!, deletedFiles);
+            DeleteProductionSubtree(context.ExecutionContext.ThumbnailRoot!, deletedFiles, deletedDirectories);
 
         if (deleteStartPhaseNo <= 13 && deleteEndPhaseNo >= 13)
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "gallery"), deletedFiles);
+            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "gallery"), deletedFiles, deletedDirectories);
 
         if (deleteStartPhaseNo <= 14 && deleteEndPhaseNo >= 14)
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "sync"), deletedFiles);
+            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "sync"), deletedFiles, deletedDirectories);
 
         if (deleteStartPhaseNo <= 15 && deleteEndPhaseNo >= 15)
-            DeleteProductionSubtree(context.ExecutionContext.NarrationRoot!, deletedFiles);
+        {
+            skippedDirectories?.Add(NormalizePath(context.ExecutionContext.NarrationRoot!));
+            skippedDirectories?.Add(NormalizePath(Path.Combine(context.ExecutionContext.NarrationRoot!, "subtitles")));
+            DeleteProductionSubtree(context.ExecutionContext.TtsRoot!, deletedFiles, deletedDirectories);
+        }
 
         if (deleteStartPhaseNo <= 17 && deleteEndPhaseNo >= 16)
-            DeleteProductionSubtree(context.ExecutionContext.TtsRoot!, deletedFiles);
+            DeleteProductionSubtree(context.ExecutionContext.TtsRoot!, deletedFiles, deletedDirectories);
 
         if (deleteStartPhaseNo <= 19 && deleteEndPhaseNo >= 18)
-            DeleteProductionSubtree(context.ExecutionContext.VideoAssemblyRoot!, deletedFiles);
+            DeleteProductionSubtree(context.ExecutionContext.VideoAssemblyRoot!, deletedFiles, deletedDirectories);
 
         var firstValidationToDelete = Math.Max(deleteStartPhaseNo, 1);
         var lastValidationToDelete = Math.Min(deleteEndPhaseNo, 20);
         for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
+
+        FailIfPhase15CleanupRemovedNarrationSubtitles(context);
     }
 
     private static void ValidatePartialPhaseExecutionContract(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, List<string> errors)
@@ -12968,6 +12990,37 @@ public sealed partial class ProductionPipelineExecutionService(
         if (forbiddenOutput.Length > 0)
             errors.Add($"Partial execution validation failed: scene-assets-v3 or hero output was regenerated by phase(s) [{string.Join(',', forbiddenOutput)}] during requested range 12-13.");
     }
+
+    private void LogPhase15SrtExistence(ProductionPhaseContext context, string stage)
+    {
+        if (context.StartPhaseNo > 15 || context.EndPhaseNo < 15) return;
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
+        var shortSrt = ResolvePhase15SrtPath(context.OutputRoot, requestedLanguage, "short");
+        var longSrt = ResolvePhase15SrtPath(context.OutputRoot, requestedLanguage, "long");
+        logger.LogInformation("Phase 15 cleanup {Stage}: Exists(short.srt)={ShortSrtExists}; Exists(long.srt)={LongSrtExists}; shortSrtPath={ShortSrtPath}; longSrtPath={LongSrtPath}", stage, File.Exists(shortSrt), File.Exists(longSrt), NormalizePath(shortSrt), NormalizePath(longSrt));
+    }
+
+    private static void FailIfPhase15CleanupRemovedNarrationSubtitles(ProductionPhaseContext context)
+    {
+        if (context.StartPhaseNo > 15 || context.EndPhaseNo < 15) return;
+        var narrationRoot = NormalizePath(context.ExecutionContext.NarrationRoot!);
+        var narrationSubtitlesRoot = NormalizePath(Path.Combine(context.ExecutionContext.NarrationRoot!, "subtitles"));
+        var removedDirectories = (context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>())
+            .Where(path => IsSamePath(path, narrationRoot) || IsSamePath(path, narrationSubtitlesRoot) || IsPathUnder(path, narrationSubtitlesRoot))
+            .Select(NormalizePath);
+        var removedFiles = (context.DeletedFilesDueToOverwrite ?? Array.Empty<string>())
+            .Where(path => IsPathUnder(path, narrationSubtitlesRoot))
+            .Select(NormalizePath);
+        var removed = removedDirectories.Concat(removedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (removed.Length > 0)
+            throw new InvalidOperationException($"Phase 15 cleanup removed Phase 14-owned narration/subtitles assets: {string.Join(", ", removed)}");
+    }
+
+    private static bool IsSamePath(string path, string root)
+        => string.Equals(NormalizePath(path).TrimEnd('/'), NormalizePath(root).TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPathUnder(string path, string root)
+        => NormalizePath(path).StartsWith(NormalizePath(root).TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<string> BuildOutputRootsDeletedDiagnostics(ProductionPhaseContext context)
     {
@@ -13013,7 +13066,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (startPhaseNo <= 12 && endPhaseNo >= 12) roots.Add(context.ExecutionContext.ThumbnailRoot!);
         if (startPhaseNo <= 13 && endPhaseNo >= 13) roots.Add(Path.Combine(context.OutputRoot, "gallery"));
         if (startPhaseNo <= 14 && endPhaseNo >= 14) roots.Add(Path.Combine(context.OutputRoot, "sync"));
-        if (startPhaseNo <= 15 && endPhaseNo >= 15) roots.Add(context.ExecutionContext.NarrationRoot!);
+        if (startPhaseNo <= 15 && endPhaseNo >= 15) roots.Add(context.ExecutionContext.TtsRoot!);
         if (startPhaseNo <= 17 && endPhaseNo >= 16) roots.Add(context.ExecutionContext.TtsRoot!);
         if (startPhaseNo <= 19 && endPhaseNo >= 18) roots.Add(context.ExecutionContext.VideoAssemblyRoot!);
         return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
