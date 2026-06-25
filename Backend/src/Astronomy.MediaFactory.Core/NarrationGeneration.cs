@@ -68,11 +68,19 @@ public sealed record NarrationContext(
     string DisplayPeakTime,
     string DisplayViewingWindow,
     string DisplayDirection,
+    string ObservationWindow,
+    string ObservationDirection,
+    string ObservationTimingNote,
+    string? GeometricPeakTime,
+    string ViewerBestTime,
+    string? DisplayObjectPair,
+    string? SafetyNote,
     string ScientificSummary,
     string InterestingFact,
     string HistoricalContext,
     string RarityContext,
-    string Language);
+    string Language,
+    ObservationContextDiagnostics? ObservationContextDiagnostics = null);
 
 public sealed record NarrationContextDiagnostics(
     bool NormalizerUsed,
@@ -83,7 +91,18 @@ public sealed record NarrationContextDiagnostics(
     string DisplayDate,
     string DisplayViewingWindow,
     string DisplayDirection,
-    string Family);
+    string Family,
+    ObservationContextDiagnostics? ObservationContextDiagnostics = null);
+
+public sealed record ObservationContextDiagnostics(
+    string Family,
+    string? GeometricPeakTime,
+    string ViewerBestTime,
+    string ObservationWindow,
+    string ObservationDirection,
+    string DirectionSource,
+    string WindowSource,
+    bool FallbackUsed);
 
 public sealed record NarrationPlanHydrationDiagnostics(
     string PlanId,
