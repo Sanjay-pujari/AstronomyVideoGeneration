@@ -117,6 +117,45 @@ public sealed class NarrationPreviewRequestTests
         Assert.DoesNotContain("IN-RJ-UDAIPUR", narration, StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Fact]
+    public async Task NarrationGenerationLocalizesHindiMeteorDirectionAndRejectsEnglishDirectionLeakage()
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: "MeteorShower",
+            EventName: "Geminids Meteor Shower Peak",
+            ShortTitle: "Geminids",
+            Language: "hi",
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(new
+            {
+                eventDate = "2026-12-14",
+                localPeakTime = "2026-12-14 11:30 +05:30",
+                bestViewingWindowLocal = "2026-12-14 00:00–05:00 IST",
+                skyDirectionHint = "East to overhead after 10 PM",
+                moonInterference = "low"
+            }));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+        var narration = string.Join(" ", response.Scenes.Select(s => s.Narration));
+
+        Assert.Equal("रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक", response.FormattingDiagnostics.Direction);
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "BestTime" && scene.Narration == "उदयपुर में देखने का सुझाया समय 14 दिसंबर 2026 की रात 12 बजे से सुबह 5 बजे तक है। रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक देखें।");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration.Contains("जेमिनिड्स (Geminids)", StringComparison.Ordinal));
+        Assert.DoesNotContain(response.Scenes.Where(scene => scene.ScenePurpose != "Hook"), scene => scene.Narration.Contains("(Geminids)", StringComparison.Ordinal));
+        Assert.DoesNotContain(" to ", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("after", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("before", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PM", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AM", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("East", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("overhead", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+    }
+
     private static string RequestJson(string returnScenes) => $$"""
         {
           "eventType": "meteor_shower",

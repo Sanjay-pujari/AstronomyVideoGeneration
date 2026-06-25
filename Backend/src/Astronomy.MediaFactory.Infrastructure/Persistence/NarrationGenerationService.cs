@@ -105,7 +105,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     private static string BestTime(NarrationContext context)
     {
         if (IsHindi(context.Language))
-            return $"{HindiRegion(context.DisplayLocation)} में देखने का सुझाया समय {context.ObservationWindow} है। {NormalizeDirectionForSentence(context.ObservationDirection)} की ओर देखें।";
+            return $"{HindiRegion(context.DisplayLocation)} में देखने का सुझाया समय {context.DisplayDate} की {context.ObservationWindow} है। {NormalizeDirectionForSentence(context.ObservationDirection)} देखें।";
         if (context.Family == "PlanetConjunction")
             return context.ViewerBestTime;
         if (context.Family == "SolarEclipse" && !string.IsNullOrWhiteSpace(context.SafetyNote))
@@ -114,7 +114,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     }
 
     private static string FinalReminder(NarrationContext context) => IsHindi(context.Language)
-        ? $"अगर आसमान साफ रहे, तो {HindiName(context.ShortDisplayTitle)} साल के यादगार आकाश-दृश्यों में से एक बन सकता है। कुछ शांत मिनट बाहर बिताइए और रात के आसमान को आपको चौंकाने दीजिए।"
+        ? $"अगर आसमान साफ रहे, तो {HindiShortName(context.ShortDisplayTitle)} साल के यादगार आकाश-दृश्यों में से एक बन सकता है। कुछ शांत मिनट बाहर बिताइए और रात के आसमान को आपको चौंकाने दीजिए।"
         : $"If skies remain clear, {context.ShortDisplayTitle} could become one of the most rewarding skywatching moments of the year. {context.RarityContext}";
 
     private static string EventFact(string type, string name, string lang)
@@ -151,12 +151,13 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (purpose == "BestTime" && (Regex.IsMatch(text, @"\b(metadata|window unavailable|not available)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(text, @"\b(AM|PM|midnight|sunrise|sunset|twilight|evening|dawn|सुबह|शाम|रात|बजे)\b", RegexOptions.IgnoreCase))) errors.Add("BestTime lacks real formatted window.");
         if (purpose == "BestTime" && Regex.IsMatch(text, @"\b\d{1,2}:\d{2}\s*[–-]\s*\d{1,2}:\d{2}\b")) errors.Add("BestTime contains raw numeric time range.");
         if (purpose == "BestTime" && context.Family == "PlanetConjunction" && Regex.IsMatch(text.Trim(), @"^(?:.*\s)?\d{1,2}:\d{2}(?:\s*(?:AM|PM|IST))?\.?$", RegexOptions.IgnoreCase)) errors.Add("Planet Conjunction BestTime uses only a raw time.");
-        if (purpose == "BestTime" && !Regex.IsMatch(text, @"\b(toward|horizon|sky|above the horizon|overhead|moonrise|sunrise|sunset|दिशा|ओर)\b", RegexOptions.IgnoreCase)) errors.Add("BestTime lacks viewer-useful direction.");
+        if (purpose == "BestTime" && !Regex.IsMatch(text, @"\b(toward|horizon|sky|above the horizon|overhead|moonrise|sunrise|sunset|दिशा|ओर|आकाश|सिर के ऊपर)\b", RegexOptions.IgnoreCase)) errors.Add("BestTime lacks viewer-useful direction.");
         if (Regex.IsMatch(text, @"toward the open sky", RegexOptions.IgnoreCase)) errors.Add("Forbidden generic direction appears.");
         if (purpose == "BestTime" && Regex.IsMatch(text, @"use\s+.+?\s+as your peak-time cue", RegexOptions.IgnoreCase)) errors.Add("BestTime contains peak-time cue phrasing.");
         if (purpose == "FinalReminder" && text.Contains("come back for the next sky event", StringComparison.OrdinalIgnoreCase)) errors.Add("FinalReminder is generic.");
         if (purpose == "InterestingFact" && !ContainsSpecificFact(text, eventName)) errors.Add("InterestingFact lacks event-specific fact.");
-        if (IsHindi(language) && Regex.IsMatch(text, @"\b(December|from|midnight|eastern|sky|toward|overhead|viewing|window|meteor shower|comet|asteroid|typical|traditions|winter|family)\b", RegexOptions.IgnoreCase)) errors.Add("Hindi contains English leakage outside approved proper nouns.");
+        if (IsHindi(language) && Regex.IsMatch(text, @"\b(December|from|midnight|eastern|sky|toward|overhead|viewing|window|meteor shower|comet|asteroid|typical|traditions|winter|family)\b|\s+to\s+|after|before|PM|AM|East", RegexOptions.IgnoreCase)) errors.Add("Hindi contains English leakage outside approved proper nouns.");
+        if (IsHindi(language) && Regex.IsMatch(text, @"(?:पूर्व|पूर्वी|पश्चिम|सिर के ऊपर).*(?:\s+to\s+|after|before|PM|AM|East|overhead)|(?:\s+to\s+|after|before|PM|AM|East|overhead).*(?:पूर्व|पूर्वी|पश्चिम|सिर के ऊपर)", RegexOptions.IgnoreCase)) errors.Add("Hindi contains mixed Hindi-English direction phrasing.");
         return new(errors.Count == 0, errors, warnings);
     }
 
@@ -238,6 +239,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     }
     private static bool ContainsSpecificFact(string text, string eventName) => text.Contains("3200 Phaethon", StringComparison.OrdinalIgnoreCase) || text.Contains("Swift-Tuttle", StringComparison.OrdinalIgnoreCase) || text.Contains("strawberr", StringComparison.OrdinalIgnoreCase) || text.Contains("wolf", StringComparison.OrdinalIgnoreCase) || text.Contains("brightest planets", StringComparison.OrdinalIgnoreCase) || text.Contains("Harvest Moon", StringComparison.OrdinalIgnoreCase) || text.Contains("farmers", StringComparison.OrdinalIgnoreCase) || text.Contains("रंग", StringComparison.OrdinalIgnoreCase) || text.Contains("मौसमी", StringComparison.OrdinalIgnoreCase);
     private static string HindiName(string name) => name.Contains("Geminid", StringComparison.OrdinalIgnoreCase) ? "जेमिनिड्स (Geminids)" : name.Contains("Perseid", StringComparison.OrdinalIgnoreCase) ? "पर्सिड्स (Perseids)" : name.Replace("Moon", "मून", StringComparison.OrdinalIgnoreCase).Replace("Conjunction", "संयोग", StringComparison.OrdinalIgnoreCase);
+    private static string HindiShortName(string name) => name.Contains("Geminid", StringComparison.OrdinalIgnoreCase) ? "जेमिनिड्स" : name.Contains("Perseid", StringComparison.OrdinalIgnoreCase) ? "पर्सिड्स" : HindiName(name);
     private static string HindiFact(string name, string fact)
     {
         if (name.Contains("Geminid", StringComparison.OrdinalIgnoreCase)) return "जेमिनिड्स का संबंध सामान्य धूमकेतु से नहीं, क्षुद्रग्रह 3200 Phaethon से जुड़े मलबे से है";
