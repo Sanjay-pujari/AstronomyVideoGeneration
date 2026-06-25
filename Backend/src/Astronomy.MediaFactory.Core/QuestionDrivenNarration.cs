@@ -102,6 +102,8 @@ public sealed record QuestionDrivenNarrationDiagnosticsDto(
     bool HardcodedTemplateUsed = false,
     IReadOnlyList<string>? SourceEventFactsUsed = null,
     IReadOnlyList<string>? ScenePurposeUsed = null,
+    IReadOnlyDictionary<string, string>? ScenePurposeToNarrationSection = null,
+    IReadOnlyDictionary<string, int>? NarrationSectionAppearanceCounts = null,
     int AiRewriteAttemptCount = 0,
     bool FallbackStaticTextUsed = false);
 
