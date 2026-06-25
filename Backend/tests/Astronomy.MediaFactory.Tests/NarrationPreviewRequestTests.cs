@@ -156,6 +156,60 @@ public sealed class NarrationPreviewRequestTests
         Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
     }
 
+
+    [Fact]
+    public async Task NarrationGenerationHindiBestTimeDoesNotPrependDateWhenViewingWindowAlreadyIncludesDate()
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: "MeteorShower",
+            EventName: "Geminids Meteor Shower Peak",
+            ShortTitle: "Geminids",
+            Language: "hi",
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(new
+            {
+                eventDate = "2026-12-14",
+                bestViewingWindowLocal = "2026-12-14 00:00–05:00 IST",
+                skyDirectionHint = "East to overhead after 10 PM"
+            }));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+        var bestTime = Assert.Single(response.Scenes.Where(scene => scene.ScenePurpose == "BestTime"));
+
+        Assert.Equal("14 दिसंबर 2026 की रात 12 बजे से सुबह 5 बजे तक", response.FormattingDiagnostics.ViewingWindow);
+        Assert.Equal("उदयपुर में देखने का सुझाया समय 14 दिसंबर 2026 की रात 12 बजे से सुबह 5 बजे तक है। रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक देखें।", bestTime.Narration);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(bestTime.Narration, "14 दिसंबर 2026"));
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+    }
+
+    [Fact]
+    public async Task NarrationGenerationHindiBestTimeValidationRejectsRepeatedDatePhrase()
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: "MeteorShower",
+            EventName: "Geminids Meteor Shower Peak",
+            ShortTitle: "Geminids",
+            Language: "hi",
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(new
+            {
+                eventDate = "2026-12-14",
+                bestViewingWindowLocal = "2026-12-14 2026-12-14 00:00–05:00 IST",
+                skyDirectionHint = "East to overhead after 10 PM"
+            }));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+
+        Assert.False(response.Validation.IsValid);
+        Assert.Contains("BestTime contains the same Hindi date phrase twice.", response.Validation.Errors);
+    }
+
     private static string RequestJson(string returnScenes) => $$"""
         {
           "eventType": "meteor_shower",
