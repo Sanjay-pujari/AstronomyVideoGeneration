@@ -12,7 +12,9 @@ public sealed class NarrationV31Composer : INarrationV31Composer
     private static readonly string[] AuthoringPhrases = ["open with", "explain", "describe", "focus on", "json", "metadata", "source answer"];
     private static readonly IReadOnlyDictionary<string, string> HindiTerms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["Moon"] = "चंद्रमा", ["Jupiter"] = "बृहस्पति", ["Venus"] = "शुक्र", ["Mars"] = "मंगल",
+        ["Jupiter and Venus"] = "बृहस्पति और शुक्र", ["Jupiter"] = "बृहस्पति", ["Venus"] = "शुक्र", ["Geminids"] = "जेमिनिड्स",
+        ["Phaethon"] = "फेथॉन (Phaethon)", ["Wolf Moon"] = "वुल्फ मून", ["Strawberry Moon"] = "स्ट्रॉबेरी मून",
+        ["Corona"] = "सूर्य का कोरोना", ["Total Solar Eclipse"] = "पूर्ण सूर्य ग्रहण", ["Moon"] = "चंद्रमा", ["Mars"] = "मंगल",
         ["Saturn"] = "शनि", ["meteor shower"] = "उल्का वर्षा", ["eclipse"] = "ग्रहण", ["constellation"] = "नक्षत्र",
         ["telescope"] = "दूरबीन", ["binoculars"] = "दूरबीन", ["horizon"] = "क्षितिज", ["sky"] = "आकाश"
     };
@@ -70,7 +72,7 @@ public sealed class NarrationV31Composer : INarrationV31Composer
     {
         if (language == "hi")
         {
-            title = ApplyHindiTerms(title); eventType = ApplyHindiTerms(eventType); direction = ApplyHindiTerms(direction);
+            title = ApplyHindiTerms(title); eventType = ApplyHindiTerms(eventType); direction = ApplyHindiObservationTerms(ApplyHindiTerms(direction));
             return section switch
             {
                 "Hook" => $"आज रात {title} आकाश में एक शांत लेकिन यादगार दृश्य बना रहा है।",
@@ -119,14 +121,18 @@ public sealed class NarrationV31Composer : INarrationV31Composer
         if (!noDup) errors.Add("Duplicate narration text detected.");
         if (!noInstructions) errors.Add("Authoring instruction text detected.");
         if (!localizedTime) errors.Add("Hindi narration must use localized time formatting.");
-        return new(counts && noDup && noInstructions && localizedTime && hindiTerms, counts, noDup, noInstructions, localizedTime, hindiTerms, errors, warnings);
+        if (language == "hi" && scenes.Any(s => Regex.IsMatch(s.NarrationText, @"\b(Jupiter and Venus|early evening|before sunrise|after sunset|eastern horizon|PM|AM)\b|\s+to\s+|\b(eastern|western|northern|southern)\s+(?:horizon|sky)\b|\b(?:toward|overhead|open sky)\b", RegexOptions.IgnoreCase)))
+            errors.Add("Hindi narration contains raw English direction or timing phrasing.");
+        return new(counts && noDup && noInstructions && localizedTime && hindiTerms && errors.Count == 0, counts, noDup, noInstructions, localizedTime, hindiTerms, errors, warnings);
     }
 
     private static string FormatObservationWindow(string value, string language)
     {
         var text = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
         text = Regex.Replace(text, @"\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", m => FormatClock(int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), m.Groups[2].Success ? m.Groups[2].Value : "00", m.Groups[3].Value, language), RegexOptions.IgnoreCase);
-        return language == "hi" ? ApplyHindiDigits(text.Replace("tonight", "आज रात", StringComparison.OrdinalIgnoreCase).Replace("after", "के बाद", StringComparison.OrdinalIgnoreCase).Replace("around", "लगभग", StringComparison.OrdinalIgnoreCase)) : text;
+        if (language != "hi") return text;
+        text = ApplyHindiObservationTerms(text);
+        return ApplyHindiDigits(text.Replace("tonight", "आज रात", StringComparison.OrdinalIgnoreCase).Replace("after", "के बाद", StringComparison.OrdinalIgnoreCase).Replace("around", "लगभग", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string FormatClock(int hour, string minute, string ampm, string language)
@@ -136,7 +142,20 @@ public sealed class NarrationV31Composer : INarrationV31Composer
         return ApplyHindiDigits(minute == "00" ? $"{period} {hour} बजे" : $"{period} {hour}:{minute} बजे");
     }
 
-    private static string ApplyHindiTerms(string value) { foreach (var kv in HindiTerms) value = Regex.Replace(value ?? string.Empty, Regex.Escape(kv.Key), kv.Value, RegexOptions.IgnoreCase); return value; }
+    private static string ApplyHindiTerms(string value) { foreach (var kv in HindiTerms.OrderByDescending(kv => kv.Key.Length)) value = Regex.Replace(value ?? string.Empty, Regex.Escape(kv.Key), kv.Value, RegexOptions.IgnoreCase); return value; }
+    private static string ApplyHindiObservationTerms(string value)
+    {
+        var text = value ?? string.Empty;
+        text = Regex.Replace(text, @"\bearly evening\b", "सूर्यास्त के बाद शुरुआती शाम", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bbefore sunrise\b", "सूर्योदय से पहले", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bafter sunset\b", "सूर्यास्त के बाद", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\beastern horizon\b", "पूर्वी क्षितिज", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\beastern sky\b", "पूर्वी आकाश", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\boverhead\b", "सिर के ऊपर", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bopen sky\b", "खुले आकाश", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bafter 10\s*PM\b", "रात 10 बजे के बाद", RegexOptions.IgnoreCase);
+        return text;
+    }
     private static string ApplyHindiDigits(string value) => string.Concat((value ?? string.Empty).Select(c => c is >= '0' and <= '9' ? (char)('०' + c - '0') : c));
     private static int EstimateSeconds(string text, string language) => Math.Max(6, (int)Math.Ceiling(Regex.Matches(text ?? string.Empty, @"[\p{L}\p{Nd}]+", RegexOptions.CultureInvariant).Count / (language == "hi" ? 120.0 : 135.0) * 60.0));
     private static string Caption(string text) => text.Length <= 80 ? text : text[..80].TrimEnd() + "…";

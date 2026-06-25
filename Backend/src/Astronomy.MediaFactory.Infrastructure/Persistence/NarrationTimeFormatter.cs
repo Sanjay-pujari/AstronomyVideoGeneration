@@ -20,7 +20,14 @@ public sealed class NarrationTimeFormatter
     public string FormatDirection(string? value, string language)
     {
         var text = string.IsNullOrWhiteSpace(value) ? (IsHindi(language) ? "खुले आकाश की ओर" : "toward the open sky") : value.Trim();
-        if (!IsHindi(language)) return CleanForbiddenLabels(text);
+        if (!IsHindi(language))
+        {
+            if (Regex.IsMatch(text, @"^east\s+to\s+overhead\s+after\s+10\s*PM$", RegexOptions.IgnoreCase))
+                return "eastern sky toward overhead after 10 PM";
+            text = Regex.Replace(text, @"\beast(?:ern)?\s+sky\s+to\s+overhead\b", "eastern sky toward overhead", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"\beast\s+to\s+overhead\b", "eastern sky toward overhead", RegexOptions.IgnoreCase);
+            return CleanForbiddenLabels(text);
+        }
         text = CleanForbiddenLabels(text);
         if (Regex.IsMatch(text, @"^east\s+to\s+overhead\s+after\s+10\s*PM$", RegexOptions.IgnoreCase))
             return "रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक";
@@ -46,7 +53,8 @@ public sealed class NarrationTimeFormatter
     {
         var text = CleanForbiddenLabels(string.IsNullOrWhiteSpace(value) ? (IsHindi(language) ? "रात में" : "at night") : value.Trim());
         text = Regex.Replace(text, @"\b\d{4}-\d{2}-\d{2}\b", m => new NarrationTimeFormatter().FormatEventDate(m.Value, language));
-        text = Regex.Replace(text, @"\s*\+\d{2}:\d{2}\b", string.Empty);
+        text = Regex.Replace(text, @"\s*\+\d{2}:?\d{2}\b", string.Empty);
+        text = Regex.Replace(text, @"\s*\bUTC\b", string.Empty, RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\s+|(?:\b\d{4}-\d{2}-\d{2}\s+))?00:00\s*[–-]\s*05:00\s*IST\b", "from midnight to 5:00 AM IST", RegexOptions.IgnoreCase);
         if (!IsHindi(language)) return text.Replace("midnight", "midnight", StringComparison.OrdinalIgnoreCase);
         text = Regex.Replace(text, @"(?<h1>\d{1,2}):(?<m1>\d{2})\s*[–-]\s*(?<h2>\d{1,2}):(?<m2>\d{2})\s*IST\b", m =>
