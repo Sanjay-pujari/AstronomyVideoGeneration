@@ -18,30 +18,35 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     {
         ArgumentNullException.ThrowIfNull(request);
         var language = IsHindi(request.Language) ? "hi" : "en";
+        var eventType = Clean(request.EventType, "astronomy event");
+        var eventName = Clean(request.EventName, Clean(request.ShortTitle, "this sky event"));
+        var regionId = Clean(request.RegionId, string.Empty);
         var metadata = Metadata.From(request.EventMetadata);
         var date = formatter.FormatEventDate(metadata.EventDate ?? metadata.PeakDate, language);
         var peak = formatter.FormatPeakTime(metadata.PeakTime, language);
         var window = formatter.FormatViewingWindow(metadata.ViewingWindow ?? metadata.PeakTime, language);
         var direction = formatter.FormatDirection(metadata.Direction, language);
-        var fact = EventFact(request.EventType, request.EventName, language);
+        var fact = EventFact(eventType, eventName, language);
         var scenes = new[]
         {
-            Scene("hook", "Hook", Hook(request.EventName, request.EventType, date, fact, language)),
-            Scene("interesting-fact", "InterestingFact", InterestingFact(request.EventName, fact, language)),
-            Scene("best-time", "BestTime", BestTime(request.EventName, window, peak, direction, language)),
-            Scene("final-reminder", "FinalReminder", FinalReminder(request.EventName, language))
+            Scene("hook", "Hook", Hook(eventName, eventType, date, fact, language)),
+            Scene("interesting-fact", "InterestingFact", InterestingFact(eventName, fact, language)),
+            Scene("best-time", "BestTime", BestTime(eventName, window, peak, direction, language)),
+            Scene("final-reminder", "FinalReminder", FinalReminder(eventName, language))
         };
-        var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, request.EventName, language) }).ToArray();
+        var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, eventName, language) }).ToArray();
         var errors = validated.SelectMany(s => s.Validation.Errors).ToList();
         var warnings = validated.SelectMany(s => s.Validation.Warnings).ToList();
         if (validated.Select(s => NormalizeSentence(s.Narration)).GroupBy(s => s).Any(g => g.Count() > 1)) errors.Add("Duplicate sentence appears in narration.");
         var overall = new NarrationValidationResult(errors.Count == 0, errors, warnings);
         var diagnostics = new NarrationFormattingDiagnostics(date, peak, window, direction,
             ["FormatEventDate(language)", "FormatPeakTime(language)", "FormatViewingWindow(language)", "FormatDirection(language)", "No SRT/TTS/video/Phase14 execution"], []);
-        return new NarrationPreviewResponse(request.PlanId, request.EventType, request.EventName, language, request.RegionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics);
+        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics);
     }
 
     private static NarrationPreviewScene Scene(string id, string purpose, string narration) => new(id, purpose, narration, new(true, [], []));
+
+    private static string Clean(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 
     private static string Hook(string name, string type, string date, string fact, string lang) => IsHindi(lang)
         ? $"{date} को {HindiName(name)} देखने लायक है, क्योंकि {HindiFact(name, fact)}—और यही छोटी-सी बात इसे आसमान में खोजने की जिज्ञासा जगाती है।"
