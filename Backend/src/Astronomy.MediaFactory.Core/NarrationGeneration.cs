@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -11,7 +12,34 @@ public sealed record NarrationPreviewRequest(
     string RegionId,
     string? Format,
     JsonElement? EventMetadata,
+    [property: JsonConverter(typeof(FlexibleBooleanJsonConverter))]
     bool ReturnScenes = true);
+
+public sealed class FlexibleBooleanJsonConverter : JsonConverter<bool>
+{
+    public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.True => true,
+            JsonTokenType.False => false,
+            JsonTokenType.String when bool.TryParse(reader.GetString(), out var value) => value,
+            JsonTokenType.Number when reader.TryGetInt32(out var value) => value != 0,
+            JsonTokenType.StartArray => ReadArrayAsBoolean(ref reader),
+            JsonTokenType.Null => true,
+            _ => throw new JsonException($"Expected a boolean-compatible value, but received {reader.TokenType}.")
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options)
+        => writer.WriteBooleanValue(value);
+
+    private static bool ReadArrayAsBoolean(ref Utf8JsonReader reader)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        return document.RootElement.GetArrayLength() > 0;
+    }
+}
 
 public sealed record NarrationPreviewResponse(
     string? PlanId,
