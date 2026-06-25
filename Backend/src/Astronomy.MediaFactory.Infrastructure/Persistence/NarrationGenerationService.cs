@@ -105,13 +105,22 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     private static string BestTime(NarrationContext context)
     {
         if (IsHindi(context.Language))
-            return $"{HindiRegion(context.DisplayLocation)} में देखने का सुझाया समय {context.DisplayDate} की {context.ObservationWindow} है। {NormalizeDirectionForSentence(context.ObservationDirection)} देखें।";
+            return $"{HindiRegion(context.DisplayLocation)} में देखने का सुझाया समय {HindiBestTimeWindow(context)} है। {NormalizeDirectionForSentence(context.ObservationDirection)} देखें।";
         if (context.Family == "PlanetConjunction")
             return context.ViewerBestTime;
         if (context.Family == "SolarEclipse" && !string.IsNullOrWhiteSpace(context.SafetyNote))
             return $"For observers in {context.DisplayLocation}, the eclipse viewing window runs {context.ObservationWindow} on {context.DisplayDate}. Look toward {NormalizeDirectionForSentence(context.ObservationDirection)} only with {context.SafetyNote}.";
         return $"For observers in {context.DisplayLocation}, the recommended viewing window runs {context.ObservationWindow} on {context.DisplayDate}. Look toward {NormalizeDirectionForSentence(context.ObservationDirection)} as the night deepens.";
     }
+
+    private static string HindiBestTimeWindow(NarrationContext context)
+    {
+        var window = context.DisplayViewingWindow.Trim();
+        return ContainsDisplayDate(window, context.DisplayDate) ? window : $"{context.DisplayDate} की {window}";
+    }
+
+    private static bool ContainsDisplayDate(string text, string displayDate)
+        => !string.IsNullOrWhiteSpace(displayDate) && text.Contains(displayDate, StringComparison.OrdinalIgnoreCase);
 
     private static string FinalReminder(NarrationContext context) => IsHindi(context.Language)
         ? $"अगर आसमान साफ रहे, तो {HindiShortName(context.ShortDisplayTitle)} साल के यादगार आकाश-दृश्यों में से एक बन सकता है। कुछ शांत मिनट बाहर बिताइए और रात के आसमान को आपको चौंकाने दीजिए।"
@@ -154,6 +163,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (purpose == "BestTime" && !Regex.IsMatch(text, @"\b(toward|horizon|sky|above the horizon|overhead|moonrise|sunrise|sunset|दिशा|ओर|आकाश|सिर के ऊपर)\b", RegexOptions.IgnoreCase)) errors.Add("BestTime lacks viewer-useful direction.");
         if (Regex.IsMatch(text, @"toward the open sky", RegexOptions.IgnoreCase)) errors.Add("Forbidden generic direction appears.");
         if (purpose == "BestTime" && Regex.IsMatch(text, @"use\s+.+?\s+as your peak-time cue", RegexOptions.IgnoreCase)) errors.Add("BestTime contains peak-time cue phrasing.");
+        if (purpose == "BestTime" && IsHindi(language) && ContainsRepeatedHindiDatePhrase(text)) errors.Add("BestTime contains the same Hindi date phrase twice.");
         if (purpose == "FinalReminder" && text.Contains("come back for the next sky event", StringComparison.OrdinalIgnoreCase)) errors.Add("FinalReminder is generic.");
         if (purpose == "InterestingFact" && !ContainsSpecificFact(text, eventName)) errors.Add("InterestingFact lacks event-specific fact.");
         if (IsHindi(language) && Regex.IsMatch(text, @"\b(December|from|midnight|eastern|sky|toward|overhead|viewing|window|meteor shower|comet|asteroid|typical|traditions|winter|family)\b|\s+to\s+|after|before|PM|AM|East", RegexOptions.IgnoreCase)) errors.Add("Hindi contains English leakage outside approved proper nouns.");
@@ -230,6 +240,12 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         text = Regex.Replace(text, @"^east\s+to\s+overhead\s+after\s+10\s*PM$", "eastern sky toward overhead after 10 PM", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"^from\s+", string.Empty, RegexOptions.IgnoreCase);
         return text;
+    }
+
+    private static bool ContainsRepeatedHindiDatePhrase(string text)
+    {
+        var matches = Regex.Matches(text, @"\b\d{1,2}\s+(?:जनवरी|फ़रवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\s+\d{4}\b");
+        return matches.Select(m => m.Value).GroupBy(v => v).Any(g => g.Count() > 1);
     }
 
     private static bool ShareSameFactPhrase(string hook, string fact)
