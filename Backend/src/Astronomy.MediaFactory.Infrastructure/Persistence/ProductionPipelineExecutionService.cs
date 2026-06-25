@@ -2253,7 +2253,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var longNarrationV3Items = BuildLongDocumentaryNarrationV3Items(longItems);
         var shortNarrationFiles = await WriteNarrationTextFilesAsync("short", shortRoot, shortItems, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
         var longNarrationFiles = await WriteNarrationTextFilesAsync("long", longRoot, longNarrationV3Items, cleanupService, files, cleanedNarrationFiles, manifestItems, narrationFileWriteTrace, cancellationToken);
-        var narrationFileWriteDiagnostics = ValidateNarrationFileWriteTrace(narrationFileWriteTrace, shortItems.Count + longNarrationV3Items.Count);
+        var expectedNarrationFileWriteCount = shortItems.Count + longNarrationV3Items.Count;
+        if (narrationFileWriteTrace.Count == 0)
+            throw new InvalidOperationException("V3.1 narration validation failed before SRT: narrationFileWriteCount is 0.");
+        var narrationFileWriteDiagnostics = ValidateNarrationFileWriteTrace(narrationFileWriteTrace, expectedNarrationFileWriteCount);
+        if (narrationFileWriteDiagnostics.NarrationFileWriteCount != expectedNarrationFileWriteCount)
+            throw new InvalidOperationException($"V3.1 narration validation failed before SRT: narrationFileWriteCount must equal expected scene count. expected={expectedNarrationFileWriteCount}; actual={narrationFileWriteDiagnostics.NarrationFileWriteCount}.");
         ValidateV31NarrationBeforeSrt(shortRoot, longRoot, shortItems, longNarrationV3Items);
 
         var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
@@ -6235,7 +6240,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedLongNarrationSource = NormalizePath(longNarration),
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
-            matchingStrategy = "SceneLevelNarrationComposer",
+            matchingStrategy = "NarrationGenerationServiceV31",
             translation = adapterDiagnostics?.TranslationDiagnostics,
             sourceLanguage = adapterDiagnostics?.TranslationDiagnostics?.SourceLanguage,
             translatedLanguage = adapterDiagnostics?.TranslationDiagnostics?.TranslatedLanguage,
@@ -6263,8 +6268,8 @@ public sealed partial class ProductionPipelineExecutionService(
             expectedFamily = eventConsistencyDiagnostics?.ExpectedFamily,
             actualFamily = eventConsistencyDiagnostics?.ActualFamily,
             eventConsistencyFirstSentenceByScene = eventConsistencyDiagnostics?.FirstSentenceByScene,
-            adapterUsed = adapterDiagnostics?.AdapterUsed ?? false,
-            adapterName = adapterDiagnostics?.AdapterName,
+            adapterUsed = false,
+            adapterName = "NarrationGenerationServiceV31",
             eventType = adapterDiagnostics?.EventType,
             shortSceneCount = adapterDiagnostics?.ShortSceneCount,
             longSceneCount = adapterDiagnostics?.LongSceneCount,
@@ -6277,7 +6282,7 @@ public sealed partial class ProductionPipelineExecutionService(
             expansionReason = adapterDiagnostics?.ExpansionReason,
             sourceStorySectionsUsed = adapterDiagnostics?.SourceStorySectionsUsed,
             scenePurposeBySceneId = adapterDiagnostics?.ScenePurposeBySceneId,
-            outputNarrationFiles = adapterDiagnostics?.OutputNarrationFiles,
+            outputNarrationFiles = writeTrace?.Select(entry => entry.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? adapterDiagnostics?.OutputNarrationFiles ?? Array.Empty<string>(),
             srtFilesGenerated = adapterDiagnostics?.SrtFilesGenerated,
             narrationFileWriteCount = writeDiagnostics?.NarrationFileWriteCount ?? 0,
             duplicateNarrationFileWrites = writeDiagnostics?.DuplicateNarrationFileWrites ?? Array.Empty<string>(),
