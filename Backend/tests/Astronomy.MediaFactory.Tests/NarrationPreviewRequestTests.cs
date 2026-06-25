@@ -74,6 +74,41 @@ public sealed class NarrationPreviewRequestTests
         Assert.NotEmpty(response.Scenes);
     }
 
+    [Fact]
+    public async Task NarrationGenerationNormalizesPlanetConjunctionProductionMetadata()
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: "PlanetConjunction",
+            EventName: "Jupiter Venus Conjunction peaks 2026-06-07 IN-RJ-UDAIPUR minimum angular separation 0.5 degrees consolidated from feed",
+            ShortTitle: "Jupiter Venus 2026-06-07 Udaipur +05:30",
+            Language: "en",
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(new
+            {
+                eventDate = "2026-06-07",
+                localPeakTime = "2026-06-07 19:30 +05:30",
+                bestViewingWindowLocal = "2026-06-07 19:00–20:30 IST",
+                skyDirectionHint = "western sky after sunset"
+            }));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+        var narration = string.Join(" ", response.Scenes.Select(s => s.Narration));
+
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+        Assert.NotNull(response.NarrationContextDiagnostics);
+        Assert.Equal("Jupiter and Venus Conjunction", response.NarrationContextDiagnostics.DisplayTitle);
+        Assert.Equal("Udaipur", response.NarrationContextDiagnostics.DisplayLocation);
+        Assert.Equal("PlanetConjunction", response.NarrationContextDiagnostics.Family);
+        Assert.DoesNotContain("2026-06-07", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("+05:30", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("minimum angular separation", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("consolidated from", narration, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("IN-RJ-UDAIPUR", narration, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string RequestJson(string returnScenes) => $$"""
         {
           "eventType": "meteor_shower",
@@ -139,11 +174,16 @@ public sealed class NarrationPreviewPlanHydrationTests
         Assert.Equal("December 14, 2026 11:30", response.FormattingDiagnostics.PeakTime);
         Assert.Equal("from midnight to 5:00 AM IST", response.FormattingDiagnostics.ViewingWindow);
         Assert.Equal("East to overhead after 10 PM", response.FormattingDiagnostics.Direction);
-        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration == "On December 14, 2026, the Geminids meteor shower will reach its peak, offering one of the year's best chances to see bright meteors streak across the night sky.");
-        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "InterestingFact" && scene.Narration == "Unlike most major meteor showers, the Geminids come from asteroid 3200 Phaethon rather than a traditional comet, which makes this annual display scientifically unusual.");
-        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "BestTime" && scene.Narration == "For observers in Udaipur, the recommended viewing window runs from midnight to 5:00 AM IST on December 14, 2026. Look from the eastern sky toward overhead after 10 PM as the night deepens.");
-        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "FinalReminder" && scene.Narration == "If skies remain clear, Geminids could become one of the most rewarding skywatching moments of the year. Take a few quiet minutes outside and let the night sky surprise you.");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration == "On December 14, 2026, Geminids Meteor Shower will reach its peak, offering one of the year's best chances to see bright meteors streak across the night sky.");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "InterestingFact" && scene.Narration == "Unlike most major meteor showers, the Geminids come from asteroid 3200 Phaethon rather than a traditional comet.");
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "BestTime" && scene.Narration == "For observers in Udaipur, the recommended viewing window runs from midnight to 5:00 AM IST on December 14, 2026. Look toward eastern sky toward overhead after 10 PM as the night deepens.");
+        Assert.DoesNotContain(response.Scenes, scene => scene.Narration.Contains("Geminids Meteor Shower Peak", StringComparison.Ordinal));
         Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+        Assert.NotNull(response.NarrationContextDiagnostics);
+        Assert.True(response.NarrationContextDiagnostics.NormalizerUsed);
+        Assert.Equal("Geminids Meteor Shower", response.NarrationContextDiagnostics.DisplayTitle);
+        Assert.Equal("Udaipur", response.NarrationContextDiagnostics.DisplayLocation);
+        Assert.Equal("MeteorShower", response.NarrationContextDiagnostics.Family);
         Assert.NotNull(response.PlanHydrationDiagnostics);
         Assert.True(response.PlanHydrationDiagnostics.PlanLoaded);
         Assert.True(response.PlanHydrationDiagnostics.EventIntelligenceLoaded);
