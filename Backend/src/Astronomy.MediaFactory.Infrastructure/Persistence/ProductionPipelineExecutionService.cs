@@ -5984,7 +5984,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .Where(item => !string.IsNullOrWhiteSpace(item.SceneId))
             .GroupBy(item => item.SceneId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var canonicalSceneIds = GetPhase14SceneIds(format);
+        var canonicalSceneIds = ReadPhase14SceneIds(context.OutputRoot, format, ResolvePhase14NarrationFamily(context));
         var items = new List<SceneAudioSyncItem>();
         for (var i = 0; i < expectedCount; i++)
         {
