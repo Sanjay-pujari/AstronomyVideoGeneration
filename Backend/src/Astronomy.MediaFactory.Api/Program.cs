@@ -690,11 +690,11 @@ app.MapPost("/api/astronomy/v3/narration/preview", (AstronomyV31NarrationPreview
 
     var requestErrors = AstronomyV31NarrationPreviewEndpoint.ValidateRequest(request);
     if (requestErrors.Count > 0)
-        return Results.BadRequest(new AstronomyV31NarrationPreviewResponse(request.PlanId, request.EventType, request.EventName, request.Language, request.RegionId, request.Format, [], new(false, requestErrors, [])));
+        return Results.BadRequest(new AstronomyV31NarrationPreviewResponse(request.PlanId, request.EventType, request.EventName, request.Language, request.RegionId, request.Format, [], new(false, requestErrors, []), AstronomyV31NarrationPreviewEndpoint.BuildFormattingDiagnostics(request)));
 
     var scenes = AstronomyV31NarrationPreviewEndpoint.BuildScenes(request);
     var validation = AstronomyV31NarrationPreviewEndpoint.ValidatePreview(request, scenes);
-    return Results.Ok(new AstronomyV31NarrationPreviewResponse(request.PlanId, request.EventType, request.EventName, request.Language, request.RegionId, request.Format, scenes, validation));
+    return Results.Ok(new AstronomyV31NarrationPreviewResponse(request.PlanId, request.EventType, request.EventName, request.Language, request.RegionId, request.Format, scenes, validation, AstronomyV31NarrationPreviewEndpoint.BuildFormattingDiagnostics(request)));
 });
 
 app.MapPost("/api/astronomy-intelligence/generate-narration-scripts", async (NarrationPlanningRequest request, INarrationPlanningService narration, ILogger<Program> logger, CancellationToken ct) =>
@@ -11299,7 +11299,8 @@ record AstronomyV31NarrationPreviewScene(string SceneId, string ScenePurpose, st
 record AstronomyV31NarrationSceneValidation(bool Passed, IReadOnlyList<string> Issues);
 record AstronomyV31NarrationPreviewValidation(bool Passed, IReadOnlyList<string> Issues, IReadOnlyList<AstronomyV31NarrationSceneValidationResult> Scenes);
 record AstronomyV31NarrationSceneValidationResult(string SceneId, string ScenePurpose, bool Passed, IReadOnlyList<string> Issues);
-record AstronomyV31NarrationPreviewResponse(string? PlanId, string EventType, string EventName, string Language, string RegionId, string Format, IReadOnlyList<AstronomyV31NarrationPreviewScene> Scenes, AstronomyV31NarrationPreviewValidation Validation);
+record AstronomyV31NarrationFormattingDiagnostics(bool FormatterUsed, string? RawBestViewingWindowLocal, string? FormattedViewingWindow, string? RawLocalPeakTime, string? FormattedPeakTime, bool BestTimeTemplateUsedFormattedFields);
+record AstronomyV31NarrationPreviewResponse(string? PlanId, string EventType, string EventName, string Language, string RegionId, string Format, IReadOnlyList<AstronomyV31NarrationPreviewScene> Scenes, AstronomyV31NarrationPreviewValidation Validation, AstronomyV31NarrationFormattingDiagnostics FormattingDiagnostics);
 
 static class AstronomyV31NarrationPreviewEndpoint
 {
@@ -11330,13 +11331,33 @@ public static IReadOnlyList<AstronomyV31NarrationPreviewScene> BuildScenes(Astro
     return scenes;
 }
 
+public static AstronomyV31NarrationFormattingDiagnostics BuildFormattingDiagnostics(AstronomyV31NarrationPreviewRequest request)
+{
+    var rawWindow = MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow");
+    var rawPeak = MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time");
+    var timezone = MetadataText(request.EventMetadata, "timezone", "timeZone", "tz") ?? string.Empty;
+    var formattedWindow = NarrationTimeFormatter.FormatViewingWindow(rawWindow, timezone);
+    var formattedWindowWithoutDate = Regex.Replace(formattedWindow, @"\s+on\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4}\b", string.Empty).Trim();
+    return new AstronomyV31NarrationFormattingDiagnostics(
+        true,
+        rawWindow,
+        string.IsNullOrWhiteSpace(formattedWindowWithoutDate) ? formattedWindow : formattedWindowWithoutDate,
+        rawPeak,
+        NarrationTimeFormatter.FormatPeakTime(rawPeak, timezone),
+        true);
+}
+
 static string BuildAstronomyV31NarrationLine(AstronomyV31NarrationPreviewRequest request, string scenePurpose)
 {
-    var date = FormatAstronomyV31Date(MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate"), request.Language);
-    var peak = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time"), request.Language);
-    var window = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow"), request.Language);
-    var direction = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook"), request.Language) ?? (IsHindi(request.Language) ? "खुले आकाश" : "the open sky");
-    var timezone = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "timezone", "timeZone", "tz"), request.Language);
+    var timezone = MetadataText(request.EventMetadata, "timezone", "timeZone", "tz") ?? string.Empty;
+    var eventDateText = NarrationTimeFormatter.FormatEventDate(MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate"));
+    var peakTimeText = NarrationTimeFormatter.FormatPeakTime(MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time"), timezone);
+    var viewingWindowText = NarrationTimeFormatter.FormatViewingWindow(MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow"), timezone);
+    var directionText = NarrationTimeFormatter.FormatDirection(MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook"));
+    var date = IsHindi(request.Language) ? FormatAstronomyV31Date(MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate"), request.Language) : eventDateText;
+    var peak = string.IsNullOrWhiteSpace(peakTimeText) ? null : peakTimeText;
+    var window = string.IsNullOrWhiteSpace(viewingWindowText) ? null : viewingWindowText;
+    var direction = string.IsNullOrWhiteSpace(directionText) ? (IsHindi(request.Language) ? "खुले आकाश" : "the open sky") : directionText;
     var city = ResolveAstronomyV31Place(request.RegionId);
     var objects = MetadataText(request.EventMetadata, "primaryObjects", "objects", "planets", "radiant") ?? request.EventName;
     var fact = BuildAstronomyV31EventSpecificFact(request);
@@ -11353,7 +11374,7 @@ static string BuildAstronomyV31NarrationLine(AstronomyV31NarrationPreviewRequest
     }
 
     if (p.Contains("hook")) return $"On {date}, {request.ShortTitle} will reach its peak, offering one of the year's best chances to see a real sky event unfold from your location.";
-    if (p.Contains("best")) return $"For observers in {city}, the best viewing period begins {FormatAstronomyV31WindowPhrase(window)} on {date}, with the strongest activity expected around {peak ?? window ?? "the local peak time"}{FormatAstronomyV31Timezone(timezone)}. Look from {direction} as the night deepens.";
+    if (p.Contains("best")) return $"For observers in {city}, the recommended viewing window runs {window ?? $"around {peak ?? "the formatted peak time"} on {date}"}. Look {direction} as the night deepens.";
     if (p.Contains("interesting") || p.Contains("fact")) return fact;
     if (p.Contains("final") || p.Contains("reminder")) return $"If skies remain clear, {request.ShortTitle} could become one of the most rewarding skywatching moments of the year. Take a few quiet minutes outside and let the night sky surprise you.";
     return $"This {scenePurpose} moment stays centered on {request.EventName}, with {objects} visible toward {direction} and timing anchored to {date}.";
@@ -11402,11 +11423,11 @@ static AstronomyV31NarrationSceneValidation ValidateAstronomyV31NarrationScene(A
     var issues = new List<string>();
     var lowerPurpose = scenePurpose.ToLowerInvariant();
     var exactDateRaw = MetadataText(request.EventMetadata, "exactDate", "eventDate", "date", "peakDate");
-    var exactDate = FormatAstronomyV31Date(exactDateRaw, request.Language);
-    var exactWindow = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow"), request.Language);
-    var localPeak = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time"), request.Language);
-    var direction = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook"), request.Language);
-    var timezone = HumanizeAstronomyV31Metadata(MetadataText(request.EventMetadata, "timezone", "timeZone", "tz"), request.Language);
+    var timezone = MetadataText(request.EventMetadata, "timezone", "timeZone", "tz") ?? string.Empty;
+    var exactDate = IsHindi(request.Language) ? FormatAstronomyV31Date(exactDateRaw, request.Language) : NarrationTimeFormatter.FormatEventDate(exactDateRaw);
+    var exactWindow = NarrationTimeFormatter.FormatViewingWindow(MetadataText(request.EventMetadata, "bestViewingWindowLocal", "bestTimeWindow", "bestTime", "timeWindow"), timezone);
+    var localPeak = NarrationTimeFormatter.FormatPeakTime(MetadataText(request.EventMetadata, "localPeakTime", "peakTime", "time"), timezone);
+    var direction = NarrationTimeFormatter.FormatDirection(MetadataText(request.EventMetadata, "direction", "skyDirection", "whereToLook"));
     if (Regex.IsMatch(narration, "\\b(today|tonight|tomorrow|yesterday|next week|this evening|this month)\\b", RegexOptions.IgnoreCase)) issues.Add("Narration contains a relative date.");
     if (RawAstronomyV31IsoDateRegex().IsMatch(narration)) issues.Add("Narration contains a raw ISO date.");
     foreach (var phrase in AstronomyV31PlaceholderPhrases) if (narration.Contains(phrase, StringComparison.OrdinalIgnoreCase)) issues.Add($"Narration contains placeholder phrase: {phrase}.");
@@ -11416,12 +11437,23 @@ static AstronomyV31NarrationSceneValidation ValidateAstronomyV31NarrationScene(A
     if (sentences.Count != sentences.Distinct(StringComparer.OrdinalIgnoreCase).Count()) issues.Add("Narration contains duplicate sentences.");
     if (lowerPurpose.Contains("hook") && !string.IsNullOrWhiteSpace(exactDate) && !narration.Contains(exactDate, StringComparison.OrdinalIgnoreCase)) issues.Add("Hook must contain the exact formatted event date.");
     if (lowerPurpose.Contains("hook") && narration.Contains("3200 Phaethon", StringComparison.OrdinalIgnoreCase)) issues.Add("Geminids Hook must not mention asteroid 3200 Phaethon; reserve it for InterestingFact.");
-    if (lowerPurpose.Contains("best") && (!ContainsIfKnown(narration, exactDate) || !ContainsIfKnown(narration, localPeak) || !ContainsIfKnown(narration, exactWindow) || !ContainsIfKnown(narration, direction) || !ContainsIfKnown(narration, timezone))) issues.Add("Best-time scene must include actual eventDate, localPeakTime, bestViewingWindowLocal, direction, and timezone metadata when supplied.");
+    if (lowerPurpose.Contains("best") && (!ContainsIfKnown(narration, exactDate) || !ContainsIfKnown(narration, exactWindow) || !ContainsIfKnown(narration, direction))) issues.Add("Best-time scene must include formatted eventDateText, viewingWindowText, and directionText when supplied.");
+    if (lowerPurpose.Contains("best")) ValidateAstronomyV31BestTimeFormattedText(narration, exactDate, issues);
     if ((lowerPurpose.Contains("interesting") || lowerPurpose.Contains("fact")) && IsGenericAstronomyV31Fact(request, narration)) issues.Add("Interesting-fact scene must contain an event-specific fact.");
     if ((lowerPurpose.Contains("interesting") || lowerPurpose.Contains("fact")) && request.EventName.Contains("Geminid", StringComparison.OrdinalIgnoreCase) && !narration.Contains("3200", StringComparison.OrdinalIgnoreCase)) issues.Add("Geminids InterestingFact must mention asteroid 3200 Phaethon.");
     if ((lowerPurpose.Contains("final") || lowerPurpose.Contains("reminder")) && !SoundsLikeAstronomyV31Closing(narration, request.Language)) issues.Add("Final-reminder scene must sound like a professional presenter closing, not a procedural checklist.");
     if (IsHindi(request.Language) && ContainsLiteralHindiTranslationSmell(narration)) issues.Add("Hindi narration should be natural, not a literal translation.");
     return new AstronomyV31NarrationSceneValidation(issues.Count == 0, issues);
+}
+
+static void ValidateAstronomyV31BestTimeFormattedText(string narration, string? exactDate, List<string> issues)
+{
+    if (Regex.IsMatch(narration, @"(?<!\w)[+-]\d{2}:\d{2}(?!\w)")) issues.Add("Best-time scene contains a raw timezone offset.");
+    if (RawAstronomyV31IsoDateRegex().IsMatch(narration)) issues.Add("Best-time scene contains a raw yyyy-mm-dd date.");
+    foreach (var phrase in new[] { "during December", "local viewing window", "listed viewing window", "exact window" })
+        if (narration.Contains(phrase, StringComparison.OrdinalIgnoreCase)) issues.Add($"Best-time scene contains forbidden raw/placeholder phrase: {phrase}.");
+    if (!string.IsNullOrWhiteSpace(exactDate) && Regex.Matches(narration, Regex.Escape(exactDate), RegexOptions.IgnoreCase).Count > 1)
+        issues.Add("Best-time scene repeats date phrase more than once.");
 }
 
 static readonly string[] AstronomyV31PlaceholderPhrases = ["listed viewing window", "use ... as your guide", "worth your attention because", "professional observing reminder", "exact window", "local viewing window", "as your guide in the sky"];
