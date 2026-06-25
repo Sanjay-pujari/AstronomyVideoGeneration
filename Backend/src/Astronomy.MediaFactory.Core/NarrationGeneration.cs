@@ -52,7 +52,38 @@ public sealed record NarrationPreviewResponse(
     NarrationValidationResult OverallValidation,
     NarrationFormattingDiagnostics FormattingDiagnostics,
     string? ShortTitle = null,
-    NarrationPlanHydrationDiagnostics? PlanHydrationDiagnostics = null);
+    NarrationPlanHydrationDiagnostics? PlanHydrationDiagnostics = null,
+    NarrationContextDiagnostics? NarrationContextDiagnostics = null)
+{
+    public NarrationValidationResult Validation => OverallValidation;
+}
+
+public sealed record NarrationContext(
+    string Family,
+    string DisplayTitle,
+    string ShortDisplayTitle,
+    IReadOnlyList<string> DisplayObjects,
+    string DisplayLocation,
+    string DisplayDate,
+    string DisplayPeakTime,
+    string DisplayViewingWindow,
+    string DisplayDirection,
+    string ScientificSummary,
+    string InterestingFact,
+    string HistoricalContext,
+    string RarityContext,
+    string Language);
+
+public sealed record NarrationContextDiagnostics(
+    bool NormalizerUsed,
+    string RawEventName,
+    string RawShortTitle,
+    string DisplayTitle,
+    string DisplayLocation,
+    string DisplayDate,
+    string DisplayViewingWindow,
+    string DisplayDirection,
+    string Family);
 
 public sealed record NarrationPlanHydrationDiagnostics(
     string PlanId,

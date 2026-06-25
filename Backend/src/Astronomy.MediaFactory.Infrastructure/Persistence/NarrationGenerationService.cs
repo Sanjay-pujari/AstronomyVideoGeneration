@@ -16,10 +16,10 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         => this.db = db;
 
     public async Task<NarrationPreviewResponse> GeneratePreviewAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
-        => Generate(await HydrateAsync(request, cancellationToken));
+        => Generate(await HydrateAsync(request, cancellationToken), useNormalizer: true);
 
     public async Task<NarrationPreviewResponse> GenerateProductionNarrationAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
-        => Generate(await HydrateAsync(request, cancellationToken));
+        => Generate(await HydrateAsync(request, cancellationToken), useNormalizer: false);
 
     private async Task<HydratedNarrationRequest> HydrateAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
     {
@@ -50,7 +50,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         return new(hydrated, new(request.PlanId, true, true, false, hydrated.EventType, hydrated.EventName, hydrated.RegionId));
     }
 
-    private NarrationPreviewResponse Generate(HydratedNarrationRequest hydratedRequest)
+    private NarrationPreviewResponse Generate(HydratedNarrationRequest hydratedRequest, bool useNormalizer)
     {
         var request = hydratedRequest.Request;
         ArgumentNullException.ThrowIfNull(request);
@@ -63,15 +63,17 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         var peak = formatter.FormatPeakTime(metadata.PeakTime, language);
         var window = formatter.FormatViewingWindow(metadata.ViewingWindow ?? metadata.PeakTime, language);
         var direction = formatter.FormatDirection(metadata.Direction, language);
-        var fact = EventFact(eventType, eventName, language);
+        var context = useNormalizer
+            ? NarrationEventNormalizer.Normalize(request, metadata, date, peak, window, direction, language)
+            : LegacyContext(eventType, eventName, regionId, date, peak, window, direction, language);
         var scenes = new[]
         {
-            Scene("hook", "Hook", Hook(eventName, eventType, date, language)),
-            Scene("interesting-fact", "InterestingFact", InterestingFact(eventName, fact, language)),
-            Scene("best-time", "BestTime", BestTime(regionId, date, window, direction, language)),
-            Scene("final-reminder", "FinalReminder", FinalReminder(eventName, eventType, language))
+            Scene("hook", "Hook", Hook(context)),
+            Scene("interesting-fact", "InterestingFact", InterestingFact(context)),
+            Scene("best-time", "BestTime", BestTime(context)),
+            Scene("final-reminder", "FinalReminder", FinalReminder(context))
         };
-        var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, eventName, language) }).ToArray();
+        var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, eventName, language, request.ShortTitle, context) }).ToArray();
         var errors = validated.SelectMany(s => s.Validation.Errors).ToList();
         var warnings = validated.SelectMany(s => s.Validation.Warnings).ToList();
         if (validated.Select(s => NormalizeSentence(s.Narration)).GroupBy(s => s).Any(g => g.Count() > 1)) errors.Add("Duplicate sentence appears in narration.");
@@ -80,31 +82,33 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (ShareSameFactPhrase(hookText, factText)) errors.Add("Hook and InterestingFact share the same fact phrase.");
         var overall = new NarrationValidationResult(errors.Count == 0, errors, warnings);
         var diagnostics = new NarrationFormattingDiagnostics(date, peak, window, direction,
-            ["FormatEventDate(language)", "FormatPeakTime(language)", "FormatViewingWindow(language)", "FormatDirection(language)", "No SRT/TTS/video/Phase14 execution"], []);
-        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics, Clean(request.ShortTitle, null!), hydratedRequest.Diagnostics);
+            ["FormatEventDate(language)", "FormatPeakTime(language)", "FormatViewingWindow(language)", "FormatDirection(language)", useNormalizer ? "NarrationEventNormalizer" : "Legacy narration context", "No SRT/TTS/video/Phase14 execution"], []);
+        var contextDiagnostics = new NarrationContextDiagnostics(useNormalizer, eventName, Clean(request.ShortTitle, string.Empty), context.DisplayTitle, context.DisplayLocation, context.DisplayDate, context.DisplayViewingWindow, context.DisplayDirection, context.Family);
+        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics, Clean(request.ShortTitle, null!), hydratedRequest.Diagnostics, contextDiagnostics);
     }
 
     private static NarrationPreviewScene Scene(string id, string purpose, string narration) => new(id, purpose, narration, new(true, [], []));
 
     private static string Clean(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 
-    private static string Hook(string name, string type, string date, string lang) => IsHindi(lang)
-        ? $"{date} को {HindiName(name)} अपने चरम पर होगा, इसलिए साफ आसमान में इसे देखने का यह अच्छा मौका है।"
-        : $"On {date}, {EventDisplayName(name, type)} will reach its peak, offering one of the year's best chances to see {ViewerBenefit(type, name)}.";
+    private static NarrationContext LegacyContext(string eventType, string eventName, string regionId, string date, string peak, string window, string direction, string language)
+        => new(FamilyFrom(eventType, eventName), EventDisplayName(eventName, eventType), EventShortName(eventName), ExtractObjects(eventName), RegionName(regionId), date, peak, window, direction, EventFact(eventType, eventName, language), EventFact(eventType, eventName, language), HistoricalContextFor(FamilyFrom(eventType, eventName), eventName), RarityContextFor(FamilyFrom(eventType, eventName), eventName), language);
 
-    private static string InterestingFact(string name, string fact, string lang) => IsHindi(lang)
-        ? $"{HindiFact(name, fact)}।"
-        : name.Contains("Geminid", StringComparison.OrdinalIgnoreCase)
-            ? $"Unlike most major meteor showers, {fact}, which makes this annual display scientifically unusual."
-            : $"A useful scientific detail: {fact}.";
+    private static string Hook(NarrationContext context) => IsHindi(context.Language)
+        ? $"{context.DisplayDate} को {HindiName(context.DisplayTitle)} अपने चरम पर होगा, इसलिए साफ आसमान में इसे देखने का यह अच्छा मौका है।"
+        : $"On {context.DisplayDate}, {context.DisplayTitle} will reach its peak, offering one of the year's best chances to see {ViewerBenefit(context.Family, context.DisplayTitle)}.";
 
-    private static string BestTime(string regionId, string date, string window, string direction, string lang) => IsHindi(lang)
-        ? $"{HindiRegion(regionId)} में देखने का सुझाया समय {window} है। रात गहराने पर {direction} देखें।"
-        : $"For observers in {RegionName(regionId)}, the recommended viewing window runs {window} on {date}. Look from the {NormalizeDirectionForSentence(direction)} as the night deepens.";
+    private static string InterestingFact(NarrationContext context) => IsHindi(context.Language)
+        ? $"{HindiFact(context.DisplayTitle, context.InterestingFact)}।"
+        : context.InterestingFact;
 
-    private static string FinalReminder(string name, string type, string lang) => IsHindi(lang)
-        ? $"अगर आसमान साफ रहे, तो {HindiName(name)} साल के यादगार आकाश-दृश्यों में से एक बन सकता है। कुछ शांत मिनट बाहर बिताइए और रात के आसमान को आपको चौंकाने दीजिए।"
-        : $"If skies remain clear, {EventShortName(name)} could become one of the most rewarding skywatching moments of the year. Take a few quiet minutes outside and let the night sky surprise you.";
+    private static string BestTime(NarrationContext context) => IsHindi(context.Language)
+        ? $"{HindiRegion(context.DisplayLocation)} में देखने का सुझाया समय {context.DisplayViewingWindow} है। रात गहराने पर {context.DisplayDirection} देखें।"
+        : $"For observers in {context.DisplayLocation}, the recommended viewing window runs {context.DisplayViewingWindow} on {context.DisplayDate}. Look toward {NormalizeDirectionForSentence(context.DisplayDirection)} as the night deepens.";
+
+    private static string FinalReminder(NarrationContext context) => IsHindi(context.Language)
+        ? $"अगर आसमान साफ रहे, तो {HindiName(context.ShortDisplayTitle)} साल के यादगार आकाश-दृश्यों में से एक बन सकता है। कुछ शांत मिनट बाहर बिताइए और रात के आसमान को आपको चौंकाने दीजिए।"
+        : $"If skies remain clear, {context.ShortDisplayTitle} could become one of the most rewarding skywatching moments of the year. {context.RarityContext}";
 
     private static string EventFact(string type, string name, string lang)
     {
@@ -121,10 +125,16 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         return $"this {type} has specific timing, geometry, and observing conditions for this event";
     }
 
-    private static NarrationValidationResult ValidateScene(string purpose, string text, string eventName, string language)
+    private static NarrationValidationResult ValidateScene(string purpose, string text, string eventName, string language, string? rawShortTitle, NarrationContext context)
     {
         var errors = new List<string>(); var warnings = new List<string>();
         if (Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}\b")) errors.Add("Raw ISO date appears.");
+        if (Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?Z?)?\b")) errors.Add("Raw ISO date or UTC timestamp appears.");
+        if (Regex.IsMatch(text, @"\bUTC\b", RegexOptions.IgnoreCase)) errors.Add("UTC timestamp appears.");
+        if (Regex.IsMatch(text, @"peaks\s+2026|minimum angular separation|consolidated from", RegexOptions.IgnoreCase)) errors.Add("Raw production metadata phrase appears.");
+        if (Regex.IsMatch(text, @"\b[A-Z]{2}-[A-Z]{2}-[A-Z0-9-]+\b")) errors.Add("Raw region code appears.");
+        if (!string.IsNullOrWhiteSpace(rawShortTitle) && !string.Equals(rawShortTitle, context.ShortDisplayTitle, StringComparison.OrdinalIgnoreCase) && text.Contains(rawShortTitle, StringComparison.OrdinalIgnoreCase)) errors.Add("Raw short title appears.");
+        if (!string.IsNullOrWhiteSpace(eventName) && !string.Equals(eventName, context.DisplayTitle, StringComparison.OrdinalIgnoreCase) && text.Contains(eventName, StringComparison.OrdinalIgnoreCase)) errors.Add("Raw internal event title appears.");
         if (Regex.IsMatch(text, @"[+-]\d{2}:\d{2}")) errors.Add("Timezone offset appears.");
         if (Regex.IsMatch(text, "placeholder|listed viewing window|local viewing window|during December", RegexOptions.IgnoreCase)) errors.Add("Placeholder or forbidden phrase appears.");
         if (text.Length > 0 && char.IsLower(text[0])) errors.Add("Scene narration starts with lowercase letter.");
@@ -158,7 +168,41 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     {
         if (type.Contains("meteor", StringComparison.OrdinalIgnoreCase) || name.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "bright meteors streak across the night sky";
         if (type.Contains("moon", StringComparison.OrdinalIgnoreCase) || name.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "the Moon at its most photogenic";
+        if (type.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "the changing Sun and Moon safely";
         return "a memorable skywatching view";
+    }
+
+    private static string FamilyFrom(string eventType, string eventName)
+    {
+        var text = $"{eventType} {eventName}";
+        if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
+        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (text.Contains("solar", StringComparison.OrdinalIgnoreCase) && text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "SolarEclipse";
+        if (text.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
+        return "AstronomyEvent";
+    }
+
+    private static IReadOnlyList<string> ExtractObjects(string text)
+    {
+        var known = new[] { "Jupiter", "Venus", "Mars", "Saturn", "Mercury", "Moon", "Sun" };
+        var objects = known.Where(o => text.Contains(o, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return objects.Length == 0 ? ["Sky"] : objects;
+    }
+
+    private static string HistoricalContextFor(string family, string name)
+    {
+        if (family == "NamedFullMoon" && name.Contains("Strawberry", StringComparison.OrdinalIgnoreCase)) return "The Strawberry Moon name is tied to June seasonal traditions and ripening strawberries.";
+        if (family == "NamedFullMoon" && name.Contains("Wolf", StringComparison.OrdinalIgnoreCase)) return "The Wolf Moon name comes from winter folklore and the sound of wolves in the cold season.";
+        if (family == "SolarEclipse") return "Solar eclipses have helped observers study the Sun's outer atmosphere during totality.";
+        return "Skywatchers have long used moments like this as seasonal markers.";
+    }
+
+    private static string RarityContextFor(string family, string name)
+    {
+        if (family == "SolarEclipse") return "Use proper solar filters outside totality, and if totality occurs, watch for the Sun's corona only during the safe total phase.";
+        if (family == "PlanetConjunction") return "The apparent pairing is brief, because both planets keep moving against the background stars.";
+        if (family == "MeteorShower") return "The best memories often come from patient watching under a dark, open sky.";
+        return "The name and timing make this event feel different from an ordinary night outside.";
     }
 
     private static string RegionName(string regionId)
@@ -195,6 +239,109 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     }
     private static string NormalizeSentence(string text) => Regex.Replace(text, @"\s+", " ").Trim().ToLowerInvariant();
     private static bool IsHindi(string? language) => string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase) || string.Equals(language, "hi-IN", StringComparison.OrdinalIgnoreCase);
+
+    private static class NarrationEventNormalizer
+    {
+        public static NarrationContext Normalize(NarrationPreviewRequest request, Metadata metadata, string date, string peak, string window, string direction, string language)
+        {
+            var rawName = Clean(request.EventName, Clean(request.ShortTitle, "this sky event"));
+            var eventType = Clean(request.EventType, string.Empty);
+            var family = FamilyFrom(eventType, rawName);
+            var displayTitle = BuildDisplayTitle(family, rawName, eventType);
+            var shortTitle = ShortDisplayTitle(family, displayTitle);
+            var location = RegionName(Clean(request.RegionId, string.Empty));
+            var objects = family == "PlanetConjunction" && displayTitle.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && displayTitle.Contains("Venus", StringComparison.OrdinalIgnoreCase)
+                ? new[] { "Jupiter", "Venus" }
+                : ExtractObjects(displayTitle);
+
+            return new NarrationContext(
+                family,
+                displayTitle,
+                shortTitle,
+                objects,
+                location,
+                date,
+                peak,
+                HumanizeWindow(window),
+                direction,
+                ScientificSummaryFor(family, displayTitle),
+                InterestingFactFor(family, displayTitle),
+                HistoricalContextFor(family, displayTitle),
+                RarityContextFor(family, displayTitle),
+                language);
+        }
+
+        private static string BuildDisplayTitle(string family, string rawName, string eventType)
+        {
+            if (family == "PlanetConjunction" && rawName.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && rawName.Contains("Venus", StringComparison.OrdinalIgnoreCase))
+                return "Jupiter and Venus Conjunction";
+            if (family == "MeteorShower")
+            {
+                if (rawName.Contains("Geminid", StringComparison.OrdinalIgnoreCase)) return "Geminids Meteor Shower";
+                if (rawName.Contains("Perseid", StringComparison.OrdinalIgnoreCase)) return "Perseids Meteor Shower";
+                return Regex.Replace(rawName, @"\s+Peak\b.*$", string.Empty, RegexOptions.IgnoreCase).Trim();
+            }
+            if (family == "NamedFullMoon")
+            {
+                var match = Regex.Match(rawName, @"\b([A-Z][a-z]+)\s+Moon\b");
+                if (match.Success) return $"{match.Groups[1].Value} Moon";
+            }
+            if (family == "SolarEclipse")
+            {
+                if (rawName.Contains("total", StringComparison.OrdinalIgnoreCase) || eventType.Contains("total", StringComparison.OrdinalIgnoreCase)) return "Total Solar Eclipse";
+                if (rawName.Contains("annular", StringComparison.OrdinalIgnoreCase)) return "Annular Solar Eclipse";
+                if (rawName.Contains("partial", StringComparison.OrdinalIgnoreCase)) return "Partial Solar Eclipse";
+                return "Solar Eclipse";
+            }
+
+            var cleaned = Regex.Replace(rawName, @"\s+(?:on|for|in)\s+\d{4}[-\s].*$", string.Empty, RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"\s*[-–—]\s*(?:\d{4}.*|[A-Z]{2}-[A-Z]{2}-[A-Z0-9-]+|Udaipur.*)$", string.Empty, RegexOptions.IgnoreCase);
+            return string.IsNullOrWhiteSpace(cleaned) ? "Astronomy Event" : cleaned.Trim();
+        }
+
+        private static string ShortDisplayTitle(string family, string displayTitle)
+            => family == "MeteorShower" ? Regex.Replace(displayTitle, @"\s+Meteor\s+Shower$", string.Empty, RegexOptions.IgnoreCase) : displayTitle;
+
+        private static string ScientificSummaryFor(string family, string title)
+            => family switch
+            {
+                "PlanetConjunction" => $"{title} is an apparent close pairing in our line of sight, not a physical meeting in space.",
+                "MeteorShower" => $"{title} happens when Earth crosses a stream of small particles that burn brightly in the atmosphere.",
+                "SolarEclipse" => $"{title} occurs when the Moon passes between Earth and the Sun.",
+                "NamedFullMoon" => $"{title} is a seasonal full Moon with a name rooted in observing traditions.",
+                _ => $"{title} has specific timing and viewing conditions."
+            };
+
+        private static string InterestingFactFor(string family, string title)
+        {
+            if (family == "MeteorShower" && title.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
+                return "Unlike most major meteor showers, the Geminids come from asteroid 3200 Phaethon rather than a traditional comet.";
+            if (family == "PlanetConjunction") return "Jupiter and Venus are the two brightest planets, so their close pairing after twilight is especially striking.";
+            if (family == "NamedFullMoon" && title.Contains("Strawberry", StringComparison.OrdinalIgnoreCase)) return "The Strawberry Moon name comes from June traditions connected with ripening strawberries, not from the Moon turning pink.";
+            if (family == "NamedFullMoon" && title.Contains("Wolf", StringComparison.OrdinalIgnoreCase)) return "The Wolf Moon name is tied to winter folklore and the presence of wolves in the cold season.";
+            if (family == "SolarEclipse") return "During a total solar eclipse, the Moon can reveal the Sun's faint corona, but safe eye protection is essential outside totality.";
+            return ScientificSummaryFor(family, title);
+        }
+
+        private static string HumanizeWindow(string window)
+        {
+            var cleaned = Regex.Replace(window, @"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\s+", string.Empty);
+            return Regex.Replace(cleaned, @"\b(?<h1>\d{1,2}):(?<m1>\d{2})\s*[–-]\s*(?<h2>\d{1,2}):(?<m2>\d{2})(?<suffix>\s*[A-Z]{2,4})?\b", m =>
+            {
+                var start = FormatClock(int.Parse(m.Groups["h1"].Value), m.Groups["m1"].Value);
+                var end = FormatClock(int.Parse(m.Groups["h2"].Value), m.Groups["m2"].Value);
+                return $"from {start} to {end}{m.Groups["suffix"].Value}";
+            });
+        }
+
+        private static string FormatClock(int hour, string minutes)
+        {
+            var suffix = hour >= 12 ? "PM" : "AM";
+            var displayHour = hour % 12;
+            if (displayHour == 0) displayHour = 12;
+            return $"{displayHour}:{minutes} {suffix}";
+        }
+    }
 
     private static JsonElement? BuildPlanMetadata(AstronomyEventIntelligence intelligence)
     {
