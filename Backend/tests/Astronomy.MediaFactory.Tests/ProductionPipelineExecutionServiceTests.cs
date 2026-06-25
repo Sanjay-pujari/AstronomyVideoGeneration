@@ -36,7 +36,7 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
-    public void ResolvePhase15SrtPath_FallsBackToLegacyUnscopedOnlyWhenLanguageScopedMissing()
+    public void ResolvePhase15SrtPath_UsesCanonicalLanguageScopedPathEvenWhenLegacyUnscopedExists()
     {
         var planRoot = Path.Combine(Path.GetTempPath(), "phase15-srt-path-" + Guid.NewGuid().ToString("N"));
         try
@@ -50,7 +50,7 @@ public sealed class ProductionPipelineExecutionServiceTests
 
             var result = (string)method!.Invoke(null, new object?[] { planRoot, "en", "long" })!;
 
-            Assert.Equal(Path.Combine(planRoot, "narration", "subtitles", "long.srt"), result);
+            Assert.Equal(Path.Combine(planRoot, "narration", "subtitles", "en", "long.srt"), result);
         }
         finally
         {
