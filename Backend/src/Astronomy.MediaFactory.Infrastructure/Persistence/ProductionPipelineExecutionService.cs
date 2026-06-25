@@ -2014,7 +2014,10 @@ public sealed partial class ProductionPipelineExecutionService(
                     phase14Modified = false,
                     phase15Modified = false,
                     sceneLevelTtsPreserved = true,
-                    narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray()
+                    narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray(),
+                    NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
+                    NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
+                    SubtitleValidationInputPath = NormalizePath(narrationOutput.SelectedNarrationRoot)
                 }
             }, JsonOptions), cancellationToken);
             selectedShortNarrationSource = SelectFirstNarrationOutputFile(narrationOutput.Files, "short");
@@ -2088,6 +2091,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 longNarrationSource = NormalizePath(selectedLongNarrationSource),
                 narrationRoot = NormalizePath(narrationOutput.Root),
                 narrationManifestPath = NormalizePath(narrationOutput.ManifestPath),
+                NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
+                NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
+                SubtitleValidationInputPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
                 cleanupApplied = true,
                 cleanedNarrationFiles = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath),
                 subtitleFilesGenerated = File.Exists(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "short.srt")) && File.Exists(Path.Combine(narrationOutput.Root, "subtitles", ResolvePipelineLanguage(context.Request.Language), "long.srt")),
@@ -2152,7 +2158,10 @@ public sealed partial class ProductionPipelineExecutionService(
                     phase14Modified = false,
                     phase15Modified = false,
                     sceneLevelTtsPreserved = true,
-                    narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray()
+                    narrationFilesWritten = narrationOutput.Files.Where(path => path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).Select(NormalizePath).ToArray(),
+                    NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
+                    NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
+                    SubtitleValidationInputPath = NormalizePath(narrationOutput.SelectedNarrationRoot)
                 },
                 sectionsExtracted = extractedSections,
                 matchedPairs,
@@ -2225,7 +2234,10 @@ public sealed partial class ProductionPipelineExecutionService(
             ttsMode = phase14SubtitleOptions.TtsMode,
             @short = shortSrtTiming.SrtGenerationDiagnostics,
             @long = longSrtTiming.SrtGenerationDiagnostics,
-            srtWriteValidation = new { @short = shortSrtWriteValidation, @long = longSrtWriteValidation }
+            srtWriteValidation = new { @short = shortSrtWriteValidation, @long = longSrtWriteValidation },
+            NarrationReadPath = NormalizePath(selectedNarrationRoot),
+            NarrationWritePath = NormalizePath(selectedNarrationRoot),
+            SubtitleValidationInputPath = NormalizePath(selectedNarrationRoot)
         }, JsonOptions), cancellationToken);
         files.Add(srtGenerationDiagnosticsPath);
         var srtWrittenUtc = DateTimeOffset.UtcNow;
@@ -2247,6 +2259,9 @@ public sealed partial class ProductionPipelineExecutionService(
             version = "v1",
             requestedLanguage = language,
             selectedNarrationLanguage = language,
+            NarrationReadPath = NormalizePath(selectedNarrationRoot),
+            NarrationWritePath = NormalizePath(selectedNarrationRoot),
+            SubtitleValidationInputPath = NormalizePath(selectedNarrationRoot),
             selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, language)),
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", language)),
@@ -2376,7 +2391,7 @@ public sealed partial class ProductionPipelineExecutionService(
             files = manifestItems
         }, JsonOptions), cancellationToken);
 
-        return new NarrationOutputLayerResult(narrationRoot, manifestPath, files, narrationFileWriteDiagnostics, narrationFileWriteTrace, sceneDurationPlanResolution);
+        return new NarrationOutputLayerResult(narrationRoot, selectedNarrationRoot, manifestPath, files, narrationFileWriteDiagnostics, narrationFileWriteTrace, sceneDurationPlanResolution);
     }
 
 
@@ -4605,7 +4620,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (duplicateSubtitleBlockIds.Length > 0)
-            throw new InvalidOperationException("Phase 14 SRT validation failed: duplicateSubtitleBlockCount must be 0.");
+            throw new InvalidOperationException($"Phase 14 SRT validation failed: duplicateSubtitleBlockCount must be 0. validationObject=BuildNarrationSrtFromCleanFiles.DuplicateSubtitleBlockValidation; SubtitleValidationInputPath={NormalizePath(Path.GetDirectoryName(narrationFiles.FirstOrDefault() ?? string.Empty) ?? string.Empty)}; duplicateSubtitleBlockCountBeforeRewrite={duplicateSubtitleBlockIdsBeforeRewrite.Length}; duplicateSubtitleBlockCountAfterRewrite={duplicateSubtitleBlockIds.Length}; duplicateSubtitleBlockIds={string.Join(",", duplicateSubtitleBlockIds)}");
         var srt = new StringBuilder();
         foreach (var block in blocks)
         {
@@ -6296,7 +6311,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record NarrationSceneDiagnostic(int SceneNumber, string Section, string NarrationText);
     private sealed record Phase14MatchedPair(string Format, string Section, string ScenePurpose, string MappedSceneId, string SceneId, string MatchingStrategy);
-    private sealed record NarrationOutputLayerResult(string Root, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace, Phase14SceneDurationPlanResolution SceneDurationPlanResolution);
+    private sealed record NarrationOutputLayerResult(string Root, string SelectedNarrationRoot, string ManifestPath, IReadOnlyList<string> Files, NarrationFileWriteDiagnostics WriteDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry> WriteTrace, Phase14SceneDurationPlanResolution SceneDurationPlanResolution);
     private sealed record Phase14SceneDurationPlanResolution(string SceneDurationPlanPath, bool SceneDurationPlanFound, int ShortSceneDurationPlanItemCount, int LongSceneDurationPlanItemCount, bool SceneDurationPlanGeneratedFallback, string SceneDurationPlanGenerationSource, IReadOnlyList<string> MissingDurationSceneIds);
     private sealed record NarrationSrtTimingResult(string Srt, SubtitleGenerationDiagnostics Diagnostics, IReadOnlyList<object> SrtGenerationDiagnostics);
     private sealed record Phase14TimelineSrtResult(string Srt, int GeneratedCueCount);
