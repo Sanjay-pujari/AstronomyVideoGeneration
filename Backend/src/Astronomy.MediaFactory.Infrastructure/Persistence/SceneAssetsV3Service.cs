@@ -234,7 +234,15 @@ public sealed class SceneAssetsV3Service(
 
         errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, metadataPath, review, expectedCount));
         errors.AddRange(BuildGuideValidationErrors(context.EventType, beats));
-        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, beats.All(b => !string.IsNullOrWhiteSpace(b.VisualIntent)), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, relativeDateWordsDetected, distinctCompositionTypes, errors, BuildFontDiagnostics());
+        var expectedSceneIds = SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
+        var actualSceneIds = manifestScenes.Select(s => s.SceneId).ToArray();
+        var missingSceneIds = expectedSceneIds.Where(id => !actualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var extraSceneIds = actualSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var expectedSceneAssetPaths = expectedSceneIds.Select(id => Path.Combine(root, $"{SanitizeFileName(id)}.png").Replace('\\', '/')).ToArray();
+        var actualSceneAssetPaths = manifestScenes.Select(s => s.ImagePath).ToArray();
+        if (missingSceneIds.Length > 0) errors.Add($"Missing Scene Assets V3 {format} scene ids: {string.Join(", ", missingSceneIds)}.");
+        if (extraSceneIds.Length > 0) errors.Add($"Extra Scene Assets V3 {format} scene ids: {string.Join(", ", extraSceneIds)}.");
+        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, beats.All(b => !string.IsNullOrWhiteSpace(b.VisualIntent)), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, relativeDateWordsDetected, distinctCompositionTypes, errors, BuildFontDiagnostics(), expectedSceneIds, actualSceneIds, missingSceneIds, extraSceneIds, expectedSceneAssetPaths, actualSceneAssetPaths, SceneAssetsV3SceneContract.ContractSource);
         await WriteJsonAsync(validationPath, validation, ct); files.Add(validationPath);
         return validationPath;
     }
@@ -607,9 +615,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
 
     private static IReadOnlyList<SceneAssetsV3Beat> BuildBeats(SceneAssetsV3TimelineContext context, string format, int count)
     {
-        var ids = format == "short"
-            ? new[] { "001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder" }
-            : new[] { "001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder" };
+        var ids = SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
         var modes = ids.Select(id => id.Contains("accurate-sky-guide", StringComparison.OrdinalIgnoreCase) ? "AccurateSkyGuideScene" : id.Contains("tip", StringComparison.OrdinalIgnoreCase) || id.Contains("time", StringComparison.OrdinalIgnoreCase) ? "ViewingTipsScene" : id.Contains("final", StringComparison.OrdinalIgnoreCase) ? "FinalReminderScene" : id.Contains("cause", StringComparison.OrdinalIgnoreCase) || id.Contains("what", StringComparison.OrdinalIgnoreCase) || id.Contains("fact", StringComparison.OrdinalIgnoreCase) ? "ExplainerScene" : "CinematicStoryScene").ToArray();
         var result = new List<SceneAssetsV3Beat>();
         for (var i = 0; i < count; i++)

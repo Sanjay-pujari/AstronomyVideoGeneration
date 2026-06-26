@@ -732,8 +732,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 throw new InvalidOperationException("Scene Assets V3 folder is missing after V3 generation.");
 
             var files = response.GeneratedFiles.ToList();
-            if (generateShort) ValidateSceneAssetsV3Format(context.OutputRoot, "short", 5);
-            if (generateLong) ValidateSceneAssetsV3Format(context.OutputRoot, "long", 9);
+            if (generateShort) ValidateSceneAssetsV3Format(context.OutputRoot, "short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count);
+            if (generateLong) ValidateSceneAssetsV3Format(context.OutputRoot, "long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count);
             await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, files), cancellationToken);
             return files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
@@ -762,8 +762,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> ValidateSceneAssetsV3(ProductionPhaseContext context)
     {
-        var shortFiles = ValidateSceneAssetsV3Format(context.OutputRoot, "short", 5);
-        var longFiles = ValidateSceneAssetsV3Format(context.OutputRoot, "long", 9);
+        var shortFiles = ValidateSceneAssetsV3Format(context.OutputRoot, "short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count);
+        var longFiles = ValidateSceneAssetsV3Format(context.OutputRoot, "long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count);
         var duplicate = shortFiles.Concat(longFiles).Where(p => p.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).Select(ComputePhase8VisualHash).GroupBy(h => h).Any(g => g.Count() > 1);
         if (duplicate) throw new InvalidOperationException("Scene Assets V3 validation failed: duplicate image hashes detected.");
         return shortFiles.Concat(longFiles).ToArray();
@@ -806,18 +806,27 @@ public sealed partial class ProductionPipelineExecutionService(
         var root = Path.Combine(outputRoot, "scene-assets-v3", format);
         if (!Directory.Exists(root)) throw new InvalidOperationException($"Scene Assets V3 {format} folder is missing: {NormalizePath(root)}");
         var required = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json" }.Select(f => Path.Combine(root, f)).ToList();
-        var expectedImages = ExpectedV31NarrationSceneIds(format).Select(sceneId => $"{SanitizeFileName(sceneId)}.png").ToArray();
+        var expectedSceneIds = SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
+        var expectedImages = expectedSceneIds.Select(sceneId => $"{SanitizeFileName(sceneId)}.png").ToArray();
         required.AddRange(expectedImages.Select(f => Path.Combine(root, f)));
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: missing {string.Join(", ", missing)}");
         var manifest = JsonSerializer.Deserialize<SceneAssetsV3Manifest>(File.ReadAllText(Path.Combine(root, "scene-manifest-v3.json")), JsonOptions)
             ?? throw new InvalidOperationException($"Scene Assets V3 {format} manifest could not be parsed.");
-        if (manifest.SceneCount != expectedCount || manifest.Scenes.Count != expectedCount) throw new InvalidOperationException($"Scene Assets V3 {format} expected {expectedCount} scenes but found {manifest.Scenes.Count}.");
+        var actualSceneIds = manifest.Scenes.Select(s => s.SceneId).ToArray();
+        var missingSceneIds = expectedSceneIds.Where(id => !actualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var extraSceneIds = actualSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        if (manifest.SceneCount != expectedCount || manifest.Scenes.Count != expectedCount) throw new InvalidOperationException($"Scene Assets V3 {format} expected {expectedCount} scenes but found {manifest.Scenes.Count}. expectedSceneIds={string.Join(",", expectedSceneIds)} actualSceneIds={string.Join(",", actualSceneIds)} sceneContractSource={SceneAssetsV3SceneContract.ContractSource}");
+        if (missingSceneIds.Length > 0 || extraSceneIds.Length > 0) throw new InvalidOperationException($"Scene Assets V3 {format} scene contract mismatch. expectedSceneIds={string.Join(",", expectedSceneIds)} actualSceneIds={string.Join(",", actualSceneIds)} missingSceneIds={string.Join(",", missingSceneIds)} extraSceneIds={string.Join(",", extraSceneIds)} sceneContractSource={SceneAssetsV3SceneContract.ContractSource}");
         if (!manifest.Scenes.Any(s => s.RenderMode == "AccurateSkyGuideScene")) throw new InvalidOperationException($"Scene Assets V3 {format} is missing AccurateSkyGuideScene.");
         if (manifest.Scenes.Any(s => string.IsNullOrWhiteSpace(s.NarrationBeat))) throw new InvalidOperationException($"Scene Assets V3 {format} has a scene without narrationBeat.");
         var metadata = JsonSerializer.Deserialize<SceneTimelineMetadataDocument>(File.ReadAllText(Path.Combine(root, "scene-timeline-metadata.json")), JsonOptions)
             ?? throw new InvalidOperationException($"Scene Assets V3 {format} timeline metadata could not be parsed.");
         if (metadata.Scenes.Count != expectedCount) throw new InvalidOperationException($"Scene Assets V3 {format} timeline metadata expected {expectedCount} scenes but found {metadata.Scenes.Count}.");
+        var timelineSceneIds = metadata.Scenes.Select(s => s.SceneId).ToArray();
+        var missingTimelineSceneIds = expectedSceneIds.Where(id => !timelineSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var extraTimelineSceneIds = timelineSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        if (missingTimelineSceneIds.Length > 0 || extraTimelineSceneIds.Length > 0) throw new InvalidOperationException($"Scene Assets V3 {format} visual timeline scene contract mismatch. expectedSceneIds={string.Join(",", expectedSceneIds)} actualSceneIds={string.Join(",", timelineSceneIds)} missingSceneIds={string.Join(",", missingTimelineSceneIds)} extraSceneIds={string.Join(",", extraTimelineSceneIds)} sceneContractSource={SceneAssetsV3SceneContract.ContractSource}");
         var review = JsonSerializer.Deserialize<SceneAssetsV3Review>(File.ReadAllText(Path.Combine(root, "scene-review-v3.json")), JsonOptions)
             ?? throw new InvalidOperationException($"Scene Assets V3 {format} review could not be parsed.");
         if (review.SameBackgroundDetected) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: sameBackgroundDetected is true.");
@@ -4174,7 +4183,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string[] ExpectedV31NarrationSceneIds(string format)
-        => NarrationV31Composer.ExpectedSceneIds(format).ToArray();
+        => SceneAssetsV3SceneContract.GetExpectedSceneIds(format).ToArray();
 
     private static string[] BuildV31NarrationKeysUsed(IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems)
         => shortItems.Select(item => $"short:{NormalizeV31NarrationSceneId(item.SceneId)}")
@@ -11856,6 +11865,13 @@ public sealed partial class ProductionPipelineExecutionService(
         d["imageCount"] = diag.SceneCount;
         d["renderModesUsed"] = JsonSerializer.SerializeToNode(diag.RenderModesUsed, JsonOptions);
         d["accurateSkyGuidePresent"] = diag.AccurateSkyGuidePresent;
+        d["expectedSceneIds"] = JsonSerializer.SerializeToNode(diag.ExpectedSceneIds, JsonOptions);
+        d["actualSceneIds"] = JsonSerializer.SerializeToNode(diag.ActualSceneIds, JsonOptions);
+        d["missingSceneIds"] = JsonSerializer.SerializeToNode(diag.MissingSceneIds, JsonOptions);
+        d["extraSceneIds"] = JsonSerializer.SerializeToNode(diag.ExtraSceneIds, JsonOptions);
+        d["expectedSceneAssetPaths"] = JsonSerializer.SerializeToNode(diag.ExpectedSceneAssetPaths, JsonOptions);
+        d["actualSceneAssetPaths"] = JsonSerializer.SerializeToNode(diag.ActualSceneAssetPaths, JsonOptions);
+        d["sceneContractSource"] = diag.SceneContractSource;
     }
 
     private static void PopulateSceneAssetsValidationDiagnostics(JsonObject d, string outputRoot, bool validationPassed)
@@ -11874,7 +11890,16 @@ public sealed partial class ProductionPipelineExecutionService(
         d["longImageCount"] = Directory.Exists(longRoot) ? Directory.EnumerateFiles(longRoot, "*.png", SearchOption.TopDirectoryOnly).Count() : 0;
         d["legacyShortImageCount"] = Directory.Exists(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "short")) ? Directory.EnumerateFiles(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "short"), "*.png", SearchOption.AllDirectories).Count() : 0;
         d["legacyLongImageCount"] = Directory.Exists(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "long")) ? Directory.EnumerateFiles(Path.Combine(outputRoot, "question-engine", "scene-approval-v3", "scene-assets", "long"), "*.png", SearchOption.AllDirectories).Count() : 0;
+        var shortDiag = BuildSceneAssetsV3FormatDiagnostics(shortRoot, "short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count);
+        var longDiag = BuildSceneAssetsV3FormatDiagnostics(longRoot, "long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count);
         d["missingFiles"] = JsonSerializer.SerializeToNode(BuildSceneAssetsV3Missing(shortRoot, "short").Concat(BuildSceneAssetsV3Missing(longRoot, "long")).ToArray(), JsonOptions);
+        d["expectedSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.ExpectedSceneIds, longDiag.ExpectedSceneIds }, JsonOptions);
+        d["actualSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.ActualSceneIds, longDiag.ActualSceneIds }, JsonOptions);
+        d["missingSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.MissingSceneIds, longDiag.MissingSceneIds }, JsonOptions);
+        d["extraSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.ExtraSceneIds, longDiag.ExtraSceneIds }, JsonOptions);
+        d["expectedSceneAssetPaths"] = JsonSerializer.SerializeToNode(new { shortDiag.ExpectedSceneAssetPaths, longDiag.ExpectedSceneAssetPaths }, JsonOptions);
+        d["actualSceneAssetPaths"] = JsonSerializer.SerializeToNode(new { shortDiag.ActualSceneAssetPaths, longDiag.ActualSceneAssetPaths }, JsonOptions);
+        d["sceneContractSource"] = SceneAssetsV3SceneContract.ContractSource;
         d["validationPassed"] = validationPassed;
     }
 
@@ -11889,8 +11914,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var root = Path.Combine(context.OutputRoot, "scene-assets-v3");
         var shortRoot = Path.Combine(root, "short");
         var longRoot = Path.Combine(root, "long");
-        var shortDiag = BuildSceneAssetsV3FormatDiagnostics(shortRoot, "short", 5);
-        var longDiag = BuildSceneAssetsV3FormatDiagnostics(longRoot, "long", 9);
+        var shortDiag = BuildSceneAssetsV3FormatDiagnostics(shortRoot, "short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count);
+        var longDiag = BuildSceneAssetsV3FormatDiagnostics(longRoot, "long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count);
         var relevant = phaseNo == 8 ? shortDiag : phaseNo == 9 ? longDiag : null;
         var validation = phaseNo == 10 ? new SceneAssetsV3ValidationDiagnostics(
             shortDiag.SceneCount == 5 && shortDiag.VisualTimelinePath.Length > 0 && shortDiag.SceneManifestPath.Length > 0 && shortDiag.SceneReviewPath.Length > 0 && shortDiag.AccurateSkyGuidePresent,
@@ -11909,12 +11934,17 @@ public sealed partial class ProductionPipelineExecutionService(
         SceneAssetsV3Manifest? manifest = File.Exists(manifestPath) ? JsonSerializer.Deserialize<SceneAssetsV3Manifest>(File.ReadAllText(manifestPath), JsonOptions) : null;
         var images = Directory.Exists(root) ? Directory.EnumerateFiles(root, "*.png", SearchOption.TopDirectoryOnly).Select(NormalizePath).Order().ToArray() : Array.Empty<string>();
         var modes = manifest?.Scenes.Select(s => s.RenderMode).Distinct().Order().ToArray() ?? Array.Empty<string>();
+        var expectedSceneIds = SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
+        var actualSceneIds = manifest?.Scenes.Select(s => s.SceneId).ToArray() ?? Array.Empty<string>();
+        var missingSceneIds = expectedSceneIds.Where(id => !actualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var extraSceneIds = actualSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var expectedSceneAssetPaths = expectedSceneIds.Select(id => NormalizePath(Path.Combine(root, $"{SanitizeFileName(id)}.png"))).ToArray();
         return new SceneAssetsV3FormatDiagnostics(format, manifest?.Scenes.Count ?? 0, expected,
             File.Exists(Path.Combine(root, "visual-timeline-v3.json")) ? NormalizePath(Path.Combine(root, "visual-timeline-v3.json")) : string.Empty,
             File.Exists(manifestPath) ? NormalizePath(manifestPath) : string.Empty,
             File.Exists(Path.Combine(root, "scene-review-v3.json")) ? NormalizePath(Path.Combine(root, "scene-review-v3.json")) : string.Empty,
             images, modes, manifest?.Scenes.Any(s => s.RenderMode == "AccurateSkyGuideScene") == true, manifest?.Scenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)) == true,
-            0, true, true);
+            0, true, true, expectedSceneIds, actualSceneIds, missingSceneIds, extraSceneIds, expectedSceneAssetPaths, images, SceneAssetsV3SceneContract.ContractSource);
     }
 
     private static IReadOnlyList<string> BuildSceneAssetsV3Missing(string root, string format)
@@ -11925,7 +11955,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private sealed record SceneAssetsV3PhaseDiagnostics(string SceneAssetsVersion, bool SceneAssetsV3Enabled, string SceneAssetsRoot, string ShortSceneAssetsRoot, string LongSceneAssetsRoot, bool V3GeneratorCalled, bool LegacyV2GeneratorCalled, bool VisualTimelineGenerated, bool SceneManifestGenerated, bool SceneReviewGenerated, IReadOnlyList<string> RenderModesUsed, bool AccurateSkyGuidePresent, bool AllScenesHaveNarrationBeat, bool DuplicateHashDetected, bool RepeatedBackgroundDetected, IReadOnlyList<int> ExecutedPhaseNumbers, SceneAssetsV3FormatDiagnostics? Phase8SceneAssetsV3Diagnostics, SceneAssetsV3FormatDiagnostics? Phase9SceneAssetsV3Diagnostics, SceneAssetsV3ValidationDiagnostics? Phase10SceneAssetsV3Validation);
-    private sealed record SceneAssetsV3FormatDiagnostics(string Format, int SceneCount, int ExpectedSceneCount, string VisualTimelinePath, string SceneManifestPath, string SceneReviewPath, IReadOnlyList<string> ImagePaths, IReadOnlyList<string> RenderModesUsed, bool AccurateSkyGuidePresent, bool AllScenesHaveNarrationBeat, int AzureCallsCount, bool ProviderCalled, bool ProviderSucceeded);
+    private sealed record SceneAssetsV3FormatDiagnostics(string Format, int SceneCount, int ExpectedSceneCount, string VisualTimelinePath, string SceneManifestPath, string SceneReviewPath, IReadOnlyList<string> ImagePaths, IReadOnlyList<string> RenderModesUsed, bool AccurateSkyGuidePresent, bool AllScenesHaveNarrationBeat, int AzureCallsCount, bool ProviderCalled, bool ProviderSucceeded, IReadOnlyList<string> ExpectedSceneIds, IReadOnlyList<string> ActualSceneIds, IReadOnlyList<string> MissingSceneIds, IReadOnlyList<string> ExtraSceneIds, IReadOnlyList<string> ExpectedSceneAssetPaths, IReadOnlyList<string> ActualSceneAssetPaths, string SceneContractSource);
     private sealed record SceneAssetsV3ValidationDiagnostics(bool ShortValidated, bool LongValidated, int ShortSceneCount, int LongSceneCount, IReadOnlyList<string> ShortMissingFiles, IReadOnlyList<string> LongMissingFiles, bool AccurateSkyGuidePresentInShort, bool AccurateSkyGuidePresentInLong, bool DuplicateHashDetected, bool RepeatedBackgroundDetected, bool ValidationPassed);
 
     private static Phase8SceneVariantDiagnostics BuildPhase8SceneVariantDiagnostics(ProductionPhaseContext context, string failureReason)
