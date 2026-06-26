@@ -267,8 +267,8 @@ public sealed class SceneAssetsV3Service(
     {
         try
         {
-            using var image = Image.Identify(path);
-            return image is not null && image.Width > 0 && image.Height > 0;
+            var imageInfo = Image.Identify(path);
+            return imageInfo is not null && imageInfo.Width > 0 && imageInfo.Height > 0;
         }
         catch
         {
