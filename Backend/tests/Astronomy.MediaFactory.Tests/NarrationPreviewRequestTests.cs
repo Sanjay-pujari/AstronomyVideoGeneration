@@ -157,6 +157,37 @@ public sealed class NarrationPreviewRequestTests
     }
 
 
+    [Fact]
+    public async Task NarrationGenerationHindiNamedFullMoonAcceptsLocalPeakTimeDevanagariDate()
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: "NamedFullMoon",
+            EventName: "Wolf Moon",
+            ShortTitle: "Wolf Moon",
+            Language: "hi",
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(new
+            {
+                eventDate = "2026-01-02",
+                localPeakTime = "2026-01-03 15:32 +0530"
+            }));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+        var hook = Assert.Single(response.Scenes.Where(scene => scene.ScenePurpose == "Hook"));
+
+        Assert.Contains("3 जनवरी 2026", hook.Narration, StringComparison.Ordinal);
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+        Assert.Contains(hook.Validation.Warnings, warning => warning.Contains("\"requestedLanguage\":\"hi\"", StringComparison.Ordinal)
+            && warning.Contains("\"resolvedLanguage\":\"hi\"", StringComparison.Ordinal)
+            && warning.Contains("3 जनवरी 2026", StringComparison.Ordinal)
+            && warning.Contains("०३ जनवरी २०२६", StringComparison.Ordinal)
+            && warning.Contains("\"dateValidationPassed\":true", StringComparison.Ordinal)
+            && warning.Contains("\"dateSourceUsed\":\"localPeakTime\"", StringComparison.Ordinal));
+    }
+
 
     [Fact]
     public async Task NarrationGenerationAllowsRawShortTitleInsideApprovedMeteorDisplayNames()
