@@ -4210,6 +4210,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 response = await narrationGenerationService.GeneratePreviewAsync(request, cancellationToken);
                 hydrationUsed = response.PlanHydrationDiagnostics?.PlanLoaded == true;
                 fallbackMetadataUsed = response.PlanHydrationDiagnostics?.FallbackUsed == true || !hydrationUsed;
+                ApplyPhase14NarrationResolutionDiagnostics(context, response);
             }
             catch (Exception ex) when (!string.IsNullOrWhiteSpace(request.PlanId))
             {
@@ -4217,6 +4218,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 try
                 {
                     response = await narrationGenerationService.GeneratePreviewAsync(BuildPhase14NarrationPreviewRequest(context, includePlanId: false, language), cancellationToken);
+                    ApplyPhase14NarrationResolutionDiagnostics(context, response);
                     fallbackMetadataUsed = true;
                 }
                 catch (Exception fallbackEx)
@@ -4236,8 +4238,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 OverwriteExisting: context.PipelineRequest.OverwriteExisting,
                 ProductionContext: context.ExecutionContext,
                 OutputRoot: context.OutputRoot,
-                EventType: FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
-                Title: FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
+                EventType: FirstNonEmpty(context.Request.EventType, context.ProductionEventIntelligence.EventType),
+                Title: FirstNonEmpty(context.Request.Title, context.Request.ShortTitle, context.ProductionEventIntelligence.Title),
                 LocalPeakTime: FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime),
                 SkyDirectionHint: FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
                 BestViewingWindowLocal: FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal)), cancellationToken);
@@ -4251,7 +4253,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
         ValidateNarrationGenerationPreview(response);
         var sourceScenes = response.Scenes.ToDictionary(s => s.ScenePurpose, s => s.Narration, StringComparer.OrdinalIgnoreCase);
-        var family = ResolvePhase14NarrationFamily(context);
+        var family = ResolvePhase14EventFamily(response.EventType, response.EventName, context.Request.PrimaryObjects, context.Request.SecondaryObjects);
+        Phase14ExceptionDiagnosticsState.EventType = response.EventType;
+        Phase14ExceptionDiagnosticsState.ResolvedFamily = family;
         var shortTexts = AdaptNarrationGenerationScenes(shortItems, sourceScenes, family, language, false);
         var longTexts = AdaptNarrationGenerationScenes(longItems, sourceScenes, family, language, true);
         ValidateAdaptedV31ProductionNarration(shortTexts, longTexts, shortItems.Count, longItems.Count);
@@ -4280,18 +4284,36 @@ public sealed partial class ProductionPipelineExecutionService(
             ["localPeakTime"] = FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime),
             ["bestViewingWindowLocal"] = FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal),
             ["skyDirectionHint"] = FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
-            ["direction"] = FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint)
+            ["direction"] = FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint),
+            ["family"] = ResolvePhase14EventFamily(context.Request.EventType, context.Request.Title, context.Request.PrimaryObjects, context.Request.SecondaryObjects)
         };
         return new NarrationPreviewRequest(
             includePlanId ? context.Request.PlanId.ToString("D") : null,
-            FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType),
-            FirstNonEmpty(context.ProductionEventIntelligence.Title, context.Request.Title, context.Request.ShortTitle),
+            FirstNonEmpty(context.Request.EventType, context.ProductionEventIntelligence.EventType),
+            FirstNonEmpty(context.Request.Title, context.Request.ShortTitle, context.ProductionEventIntelligence.Title),
             FirstNonEmpty(context.Request.ShortTitle, context.ProductionEventIntelligence.ShortTitle, context.ProductionEventIntelligence.Title),
             language,
             FirstNonEmpty(context.Request.RegionId, context.ProductionEventIntelligence.VisibilityRegion),
             context.Request.PlannedFormat,
             JsonSerializer.SerializeToElement(metadata, JsonOptions),
             true);
+    }
+
+    private static void ApplyPhase14NarrationResolutionDiagnostics(ProductionPhaseContext context, NarrationPreviewResponse response)
+    {
+        var finalEventType = FirstNonEmpty(response.EventType, context.Request.EventType, context.ProductionEventIntelligence.EventType);
+        Phase14ExceptionDiagnosticsState.EventType = finalEventType;
+        Phase14ExceptionDiagnosticsState.ResolvedFamily = response.NarrationContextDiagnostics?.Family
+            ?? ResolvePhase14EventFamily(finalEventType, FirstNonEmpty(response.EventName, context.Request.Title), context.Request.PrimaryObjects, context.Request.SecondaryObjects);
+        Phase14ExceptionDiagnosticsState.RequestedEventType = context.Request.EventType;
+        Phase14ExceptionDiagnosticsState.CurrentEventLockEventType = context.Request.EventType;
+        Phase14ExceptionDiagnosticsState.HydratedEventType = response.PlanHydrationDiagnostics?.HydratedEventType;
+        Phase14ExceptionDiagnosticsState.FinalResolvedEventType = finalEventType;
+        Phase14ExceptionDiagnosticsState.RequestedShortTitle = context.Request.ShortTitle;
+        Phase14ExceptionDiagnosticsState.HydratedShortTitle = response.PlanHydrationDiagnostics?.HydratedShortTitle;
+        Phase14ExceptionDiagnosticsState.FinalShortTitle = response.ShortTitle;
+        Phase14ExceptionDiagnosticsState.EventMetadataConflictDetected = response.PlanHydrationDiagnostics?.EventMetadataConflictDetected == true;
+        Phase14ExceptionDiagnosticsState.ConflictResolution = response.PlanHydrationDiagnostics?.ConflictResolution;
     }
 
     private static NarrationPreviewResponse ConvertLegacyV31Preview(NarrationV31PreviewResponse response, string language)
@@ -6156,6 +6178,15 @@ public sealed partial class ProductionPipelineExecutionService(
         public static string? RequestedLanguage { get; set; }
         public static string? EventType { get; set; }
         public static string? ResolvedFamily { get; set; }
+        public static string? RequestedEventType { get; set; }
+        public static string? CurrentEventLockEventType { get; set; }
+        public static string? HydratedEventType { get; set; }
+        public static string? FinalResolvedEventType { get; set; }
+        public static string? RequestedShortTitle { get; set; }
+        public static string? HydratedShortTitle { get; set; }
+        public static string? FinalShortTitle { get; set; }
+        public static bool EventMetadataConflictDetected { get; set; }
+        public static string? ConflictResolution { get; set; }
         public static IReadOnlyList<string> StepTrace { get; set; } = [];
         public static IReadOnlyList<string> ShortSceneIds { get; set; } = [];
         public static IReadOnlyList<string> LongSceneIds { get; set; } = [];
@@ -6220,8 +6251,17 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             planId = context.Request.PlanId.ToString("D"),
             requestedLanguage = Phase14ExceptionDiagnosticsState.RequestedLanguage ?? ResolvePipelineLanguage(context.Request.Language),
-            eventType = Phase14ExceptionDiagnosticsState.EventType ?? FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext?.EventType),
+            eventType = Phase14ExceptionDiagnosticsState.FinalResolvedEventType ?? Phase14ExceptionDiagnosticsState.EventType ?? FirstNonEmpty(context.Request.EventType, context.ProductionEventIntelligence.EventType, context.ExecutionContext?.EventType),
             resolvedFamily = Phase14ExceptionDiagnosticsState.ResolvedFamily,
+            requestedEventType = Phase14ExceptionDiagnosticsState.RequestedEventType ?? context.Request.EventType,
+            currentEventLockEventType = Phase14ExceptionDiagnosticsState.CurrentEventLockEventType ?? context.Request.EventType,
+            hydratedEventType = Phase14ExceptionDiagnosticsState.HydratedEventType,
+            finalResolvedEventType = Phase14ExceptionDiagnosticsState.FinalResolvedEventType ?? Phase14ExceptionDiagnosticsState.EventType ?? context.Request.EventType,
+            requestedShortTitle = Phase14ExceptionDiagnosticsState.RequestedShortTitle ?? context.Request.ShortTitle,
+            hydratedShortTitle = Phase14ExceptionDiagnosticsState.HydratedShortTitle,
+            finalShortTitle = Phase14ExceptionDiagnosticsState.FinalShortTitle ?? context.Request.ShortTitle,
+            eventMetadataConflictDetected = Phase14ExceptionDiagnosticsState.EventMetadataConflictDetected,
+            conflictResolution = Phase14ExceptionDiagnosticsState.ConflictResolution,
             lastSuccessfulStep = Phase14LastTraceName,
             exceptionType = exception.GetType().FullName,
             exceptionMessage = exception.Message,

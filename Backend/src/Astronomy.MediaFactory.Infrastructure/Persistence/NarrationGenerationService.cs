@@ -39,17 +39,32 @@ public sealed class NarrationGenerationService : INarrationGenerationService
             ?? throw new ArgumentException($"ContentGenerationPlan '{request.PlanId}' is not linked to AstronomyEventIntelligence.", nameof(request));
 
         var metadata = BuildPlanMetadata(intelligence);
+        var hydratedEventType = Clean(intelligence.EventType, Clean(plan.PrimaryAstronomyEventTypeCode, request.EventType));
+        var hydratedEventName = Clean(intelligence.Title, Clean(plan.Title, request.EventName));
+        var hydratedShortTitle = FirstNonEmpty(ReadEventJsonString(intelligence, "shortTitle", "ShortTitle"), intelligence.Summary, request.ShortTitle);
+        var requestedEventType = Clean(request.EventType, string.Empty);
+        var requestedEventName = Clean(request.EventName, string.Empty);
+        var requestedShortTitle = Clean(request.ShortTitle, string.Empty);
+        var authoritativeEventType = string.IsNullOrWhiteSpace(requestedEventType) ? hydratedEventType : requestedEventType;
+        var authoritativeEventName = string.IsNullOrWhiteSpace(requestedEventName) ? hydratedEventName : requestedEventName;
+        var authoritativeShortTitle = string.IsNullOrWhiteSpace(requestedShortTitle) ? hydratedShortTitle : requestedShortTitle;
+        var conflictDetected =
+            (!string.IsNullOrWhiteSpace(requestedEventType) && !string.Equals(requestedEventType, hydratedEventType, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrWhiteSpace(requestedShortTitle) && !string.Equals(requestedShortTitle, hydratedShortTitle, StringComparison.OrdinalIgnoreCase));
         var hydrated = request with
         {
-            EventType = Clean(intelligence.EventType, Clean(plan.PrimaryAstronomyEventTypeCode, request.EventType)),
-            EventName = Clean(intelligence.Title, Clean(plan.Title, request.EventName)),
-            ShortTitle = FirstNonEmpty(ReadEventJsonString(intelligence, "shortTitle", "ShortTitle"), intelligence.Summary, request.ShortTitle),
-            Language = Clean(plan.Language, Clean(intelligence.Language, request.Language)),
+            EventType = authoritativeEventType,
+            EventName = authoritativeEventName,
+            ShortTitle = authoritativeShortTitle,
+            Language = string.IsNullOrWhiteSpace(request.Language) ? Clean(plan.Language, Clean(intelligence.Language, request.Language)) : request.Language,
             RegionId = Clean(plan.RegionId, Clean(intelligence.RegionId, request.RegionId)),
             Format = Clean(plan.PlannedFormat, request.Format),
             EventMetadata = metadata
         };
-        return new(hydrated, new(request.PlanId, true, true, false, hydrated.EventType, hydrated.EventName, hydrated.RegionId));
+        return new(hydrated, new(request.PlanId, true, true, false, hydrated.EventType, hydrated.EventName, hydrated.RegionId,
+            requestedEventType, requestedEventType, hydratedEventType, authoritativeEventType,
+            requestedShortTitle, hydratedShortTitle, authoritativeShortTitle, conflictDetected,
+            conflictDetected ? "CurrentEventLockWins" : null));
     }
 
     private NarrationPreviewResponse Generate(HydratedNarrationRequest hydratedRequest, bool useNormalizer)
@@ -159,7 +174,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (Regex.IsMatch(text, @"peaks\s+2026|minimum angular separation|consolidated from", RegexOptions.IgnoreCase)) errors.Add("Raw production metadata phrase appears.");
         if (Regex.IsMatch(text, @"\b[A-Z]{2}-[A-Z]{2}-[A-Z0-9-]+\b")) errors.Add("Raw region code appears.");
         if (!string.IsNullOrWhiteSpace(rawShortTitle) && !string.Equals(rawShortTitle, context.ShortDisplayTitle, StringComparison.OrdinalIgnoreCase) && ContainsUnapprovedRawShortTitle(text, rawShortTitle, context)) errors.Add("Raw short title appears.");
-        if (!string.IsNullOrWhiteSpace(eventName) && !string.Equals(eventName, context.DisplayTitle, StringComparison.OrdinalIgnoreCase) && text.Contains(eventName, StringComparison.OrdinalIgnoreCase)) errors.Add("Raw internal event title appears.");
+        if (!string.IsNullOrWhiteSpace(eventName) && !string.Equals(eventName, context.DisplayTitle, StringComparison.OrdinalIgnoreCase) && !ContainsOnlyApprovedRawEventTitle(text, eventName, context)) errors.Add("Raw internal event title appears.");
         if (Regex.IsMatch(text, @"[+-]\d{2}:\d{2}")) errors.Add("Timezone offset appears.");
         if (Regex.IsMatch(text, "placeholder|listed viewing window|local viewing window|during December", RegexOptions.IgnoreCase)) errors.Add("Placeholder or forbidden phrase appears.");
         if (text.Length > 0 && char.IsLower(text[0])) errors.Add("Scene narration starts with lowercase letter.");
@@ -283,6 +298,34 @@ public sealed class NarrationGenerationService : INarrationGenerationService
                 yield return "जेमिनिड्स (Geminids)";
             }
         }
+
+        if (context.Family == "SolarEclipse")
+        {
+            yield return "the total solar eclipse";
+            yield return "total solar eclipse";
+            yield return "the solar eclipse";
+        }
+    }
+
+    private static bool ContainsOnlyApprovedRawEventTitle(string text, string rawEventTitle, NarrationContext context)
+    {
+        if (!text.Contains(rawEventTitle, StringComparison.OrdinalIgnoreCase)) return true;
+        if (context.Family != "SolarEclipse") return false;
+
+        var remaining = text;
+        foreach (var approved in ApprovedSolarEclipseDisplayTitlePhrases().OrderByDescending(value => value.Length))
+        {
+            remaining = Regex.Replace(remaining, Regex.Escape(approved), string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        return !remaining.Contains(rawEventTitle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> ApprovedSolarEclipseDisplayTitlePhrases()
+    {
+        yield return "the total solar eclipse";
+        yield return "total solar eclipse";
+        yield return "the solar eclipse";
     }
 
     private static string EventDisplayName(string name, string type)

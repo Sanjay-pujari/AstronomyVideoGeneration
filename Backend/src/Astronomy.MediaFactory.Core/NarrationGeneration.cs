@@ -111,7 +111,16 @@ public sealed record NarrationPlanHydrationDiagnostics(
     bool FallbackUsed,
     string? ResolvedEventType,
     string? ResolvedEventName,
-    string? ResolvedRegionId);
+    string? ResolvedRegionId,
+    string? RequestedEventType = null,
+    string? CurrentEventLockEventType = null,
+    string? HydratedEventType = null,
+    string? FinalResolvedEventType = null,
+    string? RequestedShortTitle = null,
+    string? HydratedShortTitle = null,
+    string? FinalShortTitle = null,
+    bool EventMetadataConflictDetected = false,
+    string? ConflictResolution = null);
 
 public sealed record NarrationPreviewScene(
     string SceneId,
