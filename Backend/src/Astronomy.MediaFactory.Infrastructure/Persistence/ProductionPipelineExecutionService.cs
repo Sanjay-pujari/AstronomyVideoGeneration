@@ -11893,12 +11893,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortDiag = BuildSceneAssetsV3FormatDiagnostics(shortRoot, "short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count);
         var longDiag = BuildSceneAssetsV3FormatDiagnostics(longRoot, "long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count);
         d["missingFiles"] = JsonSerializer.SerializeToNode(BuildSceneAssetsV3Missing(shortRoot, "short").Concat(BuildSceneAssetsV3Missing(longRoot, "long")).ToArray(), JsonOptions);
-        d["expectedSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.ExpectedSceneIds, longDiag.ExpectedSceneIds }, JsonOptions);
-        d["actualSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.ActualSceneIds, longDiag.ActualSceneIds }, JsonOptions);
-        d["missingSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.MissingSceneIds, longDiag.MissingSceneIds }, JsonOptions);
-        d["extraSceneIds"] = JsonSerializer.SerializeToNode(new { shortDiag.ExtraSceneIds, longDiag.ExtraSceneIds }, JsonOptions);
-        d["expectedSceneAssetPaths"] = JsonSerializer.SerializeToNode(new { shortDiag.ExpectedSceneAssetPaths, longDiag.ExpectedSceneAssetPaths }, JsonOptions);
-        d["actualSceneAssetPaths"] = JsonSerializer.SerializeToNode(new { shortDiag.ActualSceneAssetPaths, longDiag.ActualSceneAssetPaths }, JsonOptions);
+        d["expectedSceneIds"] = JsonSerializer.SerializeToNode(new { ShortExpectedSceneIds = shortDiag.ExpectedSceneIds, LongExpectedSceneIds = longDiag.ExpectedSceneIds }, JsonOptions);
+        d["actualSceneIds"] = JsonSerializer.SerializeToNode(new { ShortActualSceneIds = shortDiag.ActualSceneIds, LongActualSceneIds = longDiag.ActualSceneIds }, JsonOptions);
+        d["missingSceneIds"] = JsonSerializer.SerializeToNode(new { ShortMissingSceneIds = shortDiag.MissingSceneIds, LongMissingSceneIds = longDiag.MissingSceneIds }, JsonOptions);
+        d["extraSceneIds"] = JsonSerializer.SerializeToNode(new { ShortExtraSceneIds = shortDiag.ExtraSceneIds, LongExtraSceneIds = longDiag.ExtraSceneIds }, JsonOptions);
+        d["expectedSceneAssetPaths"] = JsonSerializer.SerializeToNode(new { ShortExpectedSceneAssetPaths = shortDiag.ExpectedSceneAssetPaths, LongExpectedSceneAssetPaths = longDiag.ExpectedSceneAssetPaths }, JsonOptions);
+        d["actualSceneAssetPaths"] = JsonSerializer.SerializeToNode(new { ShortActualSceneAssetPaths = shortDiag.ActualSceneAssetPaths, LongActualSceneAssetPaths = longDiag.ActualSceneAssetPaths }, JsonOptions);
         d["sceneContractSource"] = SceneAssetsV3SceneContract.ContractSource;
         d["validationPassed"] = validationPassed;
     }
