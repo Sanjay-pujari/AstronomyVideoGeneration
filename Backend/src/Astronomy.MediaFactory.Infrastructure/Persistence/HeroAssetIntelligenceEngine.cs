@@ -611,6 +611,8 @@ public sealed class HeroAssetStoryGenerator(
             issues.Add("Hero composition directionBlock.text must not be empty.");
         if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText))
             issues.Add("Hero rendering validation failed: directionBlock.text is non-empty but renderedDirectionText is empty.");
+        if (!string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText) && !HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText))
+            issues.Add("Hero rendering validation failed: renderedDirectionText is too long for the compact footer.");
         if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText))
             issues.Add("Hero rendering validation failed: timingBlock.text is non-empty but renderedTimeText is empty.");
         if (string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && !string.IsNullOrWhiteSpace(renderedText.RenderedCtaText))
@@ -641,7 +643,7 @@ public sealed class HeroAssetStoryGenerator(
             : $"TIME  {Clean(compositionModel.TimingBlock.Text).ToUpperInvariant()}";
         var renderedDirectionText = string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)
             ? string.Empty
-            : $"DIRECTION  {Clean(compositionModel.DirectionBlock.Text).ToUpperInvariant()}";
+            : $"DIRECTION  {ResolveHeroFooterDirection(compositionModel.DirectionBlock.Text)}";
         var renderedCtaText = string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text)
             ? string.Empty
             : Clean(compositionModel.CtaBlock.Text).ToUpperInvariant();
@@ -663,6 +665,7 @@ public sealed class HeroAssetStoryGenerator(
             && !string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)
             && !string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)
             && !string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)
+            && HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText)
             && !compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)
             && !(string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase));
         var isValid = !duplicateBlocksDetected && !textOverlapDetected && objectsVisible && compositionTextValid;
@@ -671,6 +674,7 @@ public sealed class HeroAssetStoryGenerator(
         if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)) errors = errors.Concat(["Hero directionBlock.text must not be empty."]).ToArray();
         if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) errors = errors.Concat(["Hero rendered timing text must not contain TIME TBD."]).ToArray();
         if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero directionBlock.text is non-empty but renderedDirectionText is empty."]).ToArray();
+        if (!string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText) && !HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero renderedDirectionText is too long for the compact footer."]).ToArray();
         if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)) errors = errors.Concat(["Hero timingBlock.text is non-empty but renderedTimeText is empty."]).ToArray();
         if (string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase)) errors = errors.Concat(["Hero CTA is reported rendered while ctaBlock.text is empty."]).ToArray();
         return new HeroLayoutValidationDto(
@@ -1157,17 +1161,8 @@ public sealed class HeroAssetStoryGenerator(
             ctx.DrawText(title, titleFont, Color.White, new PointF(marginX, topY));
             ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(marginX, subtitleY));
 
-            var directionPanelText = $"DIRECTION  {Clean(compositionModel.DirectionBlock.Text).ToUpperInvariant()}";
-            var directionPanelFont = FitHeroFont(directionPanelText, landscape ? 34f : square ? 27f : 32f, 20f, maxTextWidth, FontStyle.Bold);
-            var directionPanelBounds = TextMeasurer.MeasureBounds(directionPanelText, new TextOptions(directionPanelFont));
-            var directionPanelY = bottomBarY - directionPanelBounds.Height - (landscape ? 22f : 30f);
-            var directionPanelX = landscape ? width - marginX - directionPanelBounds.Width : marginX;
             if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text))
                 throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
-            if (directionPanelY <= topBlockBottom + 24f)
-                throw new InvalidOperationException("Phase 11 Hero rendering failed: direction text overlaps title/subtitle safe area.");
-            ctx.DrawText(new RichTextOptions(directionPanelFont) { Origin = new PointF(directionPanelX + 2, directionPanelY + 2), WrappingLength = maxTextWidth }, directionPanelText, Color.Black.WithAlpha(0.72f));
-            ctx.DrawText(new RichTextOptions(directionPanelFont) { Origin = new PointF(directionPanelX, directionPanelY), WrappingLength = maxTextWidth }, directionPanelText, Color.FromRgb(255, 212, 138));
 
             ctx.Fill(Color.Black.WithAlpha(0.58f), new RectangleF(0, bottomBarY, width, bottomBarHeight));
             ctx.Fill(Color.White.WithAlpha(0.10f), new RectangleF(0, bottomBarY, width, 2));
@@ -1202,7 +1197,9 @@ public sealed class HeroAssetStoryGenerator(
         if (time.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Phase 11 Hero rendering failed: rendered image would contain TIME TBD.");
         var direction = ResolveHeroFooterDirection(FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroStorySource.Where));
         if (string.IsNullOrWhiteSpace(direction)) throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
-        return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant(), $"DIRECTION  {direction}".ToUpperInvariant());
+        var renderedDirection = $"DIRECTION  {direction}".ToUpperInvariant();
+        if (!HeroFooterDirectionLengthIsValid(renderedDirection)) throw new InvalidOperationException("Phase 11 Hero rendering failed: renderedDirectionText is too long for the compact footer.");
+        return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant(), renderedDirection);
     }
 
     private static string ExtractHeroTimeText(string value)
@@ -1253,7 +1250,7 @@ public sealed class HeroAssetStoryGenerator(
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
     {
         if (IsPlanetGroupingHero(eventType, eventTitle, eventObjectContext))
-            return ("GROUPED PLANETS OVER UDAIPUR", "SATURN + MARS + JUPITER + VENUS");
+            return ("GROUPED PLANETS OVER UDAIPUR, RAJASTHAN", "SATURN + MARS + JUPITER + VENUS");
         if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
             return (BuildMeteorShowerTitle(eventTitle), "Meteor Shower Peak");
         if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
@@ -1385,10 +1382,14 @@ public sealed class HeroAssetStoryGenerator(
             missingVariants,
             timingSource = heroStory.HeroStorySource.When,
             directionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where),
+            directionSourceText = FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroAction, heroStory.HeroStorySource.Where),
+            compactDirectionText = renderedFooterDirectionText.Replace("DIRECTION  ", string.Empty, StringComparison.OrdinalIgnoreCase),
             renderedDateText,
             renderedTimeText,
             renderedDirectionText,
             renderedFooterDirectionText,
+            directionRenderMode = "FooterOnly",
+            largeDirectionOverlayRendered = false,
             renderedCtaText,
             directionBlockText = compositionModel.DirectionBlock.Text,
             timingBlockText = compositionModel.TimingBlock.Text,
@@ -1761,6 +1762,9 @@ public sealed class HeroAssetStoryGenerator(
 
         return cleaned;
     }
+
+    private static bool HeroFooterDirectionLengthIsValid(string renderedDirectionText)
+        => Clean(renderedDirectionText).Length <= 30;
 
     private static HeroAssetVisualReviewDto BuildHeroVisualReview(
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
