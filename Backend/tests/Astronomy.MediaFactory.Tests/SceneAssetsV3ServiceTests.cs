@@ -17,6 +17,7 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         var service = new SceneAssetsV3Service(
             Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot }),
             new DisabledAICinematicImageGenerator(),
+            Options.Create(new WeeklySkyForecastAICinematicAssetsOptions()),
             NullLogger<SceneAssetsV3Service>.Instance);
 
         var result = await service.GenerateAsync(new SceneAssetsV3Request(OverwriteExisting: true), CancellationToken.None);
@@ -79,6 +80,7 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         var service = new SceneAssetsV3Service(
             Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot }),
             new DisabledAICinematicImageGenerator(),
+            Options.Create(new WeeklySkyForecastAICinematicAssetsOptions()),
             NullLogger<SceneAssetsV3Service>.Instance);
 
         var result = await service.GenerateAsync(new SceneAssetsV3Request(planRoot, GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);
@@ -138,6 +140,7 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         var service = new SceneAssetsV3Service(
             Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot }),
             new DisabledAICinematicImageGenerator(),
+            Options.Create(new WeeklySkyForecastAICinematicAssetsOptions()),
             NullLogger<SceneAssetsV3Service>.Instance);
 
         var result = await service.GenerateAsync(new SceneAssetsV3Request(planRoot, GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);
@@ -194,6 +197,7 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         var service = new SceneAssetsV3Service(
             Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot, EnableAccurateSkyGuideV2 = true }),
             generator,
+            Options.Create(new WeeklySkyForecastAICinematicAssetsOptions()),
             NullLogger<SceneAssetsV3Service>.Instance);
 
         var result = await service.GenerateAsync(new SceneAssetsV3Request(GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);
@@ -214,6 +218,7 @@ public sealed class SceneAssetsV3ServiceTests : IDisposable
         var service = new SceneAssetsV3Service(
             Options.Create(new RenderingOptions { WorkingDirectory = _outputRoot, EnableAccurateSkyGuideV2 = true }),
             new CapturingAICinematicImageGenerator(createImage: false),
+            Options.Create(new WeeklySkyForecastAICinematicAssetsOptions()),
             NullLogger<SceneAssetsV3Service>.Instance);
 
         var result = await service.GenerateAsync(new SceneAssetsV3Request(GenerateShort: true, GenerateLong: false, OverwriteExisting: true), CancellationToken.None);

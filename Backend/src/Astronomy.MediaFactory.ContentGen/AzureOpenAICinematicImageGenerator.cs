@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -109,7 +110,7 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
                     ProviderConfigured: true,
                     warnings);
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException or TimeoutException)
             {
                 throw;
             }
@@ -125,6 +126,10 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
                     "UnsupportedSize",
                     size);
             }
+            catch (HttpRequestException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(
@@ -135,12 +140,7 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
                     request.SegmentType,
                     request.PlannedImagePath,
                     "Failed");
-                warnings.Add($"Azure OpenAI image generation failed: {ex.Message}");
-                return new AICinematicProviderResult(
-                    "Failed",
-                    null,
-                    ProviderConfigured: true,
-                    warnings);
+                throw;
             }
         }
 
@@ -175,64 +175,150 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
             "Create one clean production still image only. Do not include text, labels, watermarks, logos, borders, UI, thumbnails, fake exact star maps, false object labels, fake rare conjunctions, scientific diagrams, or misleading object alignments."
         });
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
-        {
-            Content = JsonContent.Create(new
-            {
-                prompt,
-                n = 1,
-                size
-            })
-        };
-
-        await AddAuthorizationAsync(request, cancellationToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
         var startedUtc = DateTimeOffset.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         var timeoutSeconds = Math.Max(1, _aiCinematicOptions.SingleImageTimeoutSeconds);
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        _logger.LogInformation(
-            "AI_IMAGE_GENERATION_REQUEST_START deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} targetWidth={TargetWidth} targetHeight={TargetHeight} size={Size} startedUtc={StartedUtc:o} timeoutSeconds={TimeoutSeconds}",
-            DeploymentName,
-            assetRequest.AssetCode,
-            assetRequest.SegmentType,
-            assetRequest.PlannedImagePath,
-            "Started",
-            assetRequest.TargetWidth,
-            assetRequest.TargetHeight,
-            size,
-            startedUtc,
-            timeoutSeconds);
+        const int maxAttempts = 2;
 
-        using var response = await _httpClient.SendAsync(request, timeoutCts.Token);
-        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
-        stopwatch.Stop();
-
-        if (!response.IsSuccessStatusCode)
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            throw new HttpRequestException(
-                $"Azure OpenAI image request failed with status {(int)response.StatusCode} ({response.StatusCode}) for size {size}. Body: {payload}",
-                null,
-                response.StatusCode);
+            using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = JsonContent.Create(new
+                {
+                    prompt,
+                    n = 1,
+                    size
+                })
+            };
+
+            await AddAuthorizationAsync(request, cancellationToken);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            _logger.LogInformation(
+                "AI_IMAGE_GENERATION_REQUEST_START deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} targetWidth={TargetWidth} targetHeight={TargetHeight} size={Size} startedUtc={StartedUtc:o} timeoutSeconds={TimeoutSeconds} attempt={Attempt} maxAttempts={MaxAttempts}",
+                DeploymentName,
+                assetRequest.AssetCode,
+                assetRequest.SegmentType,
+                assetRequest.PlannedImagePath,
+                "Started",
+                assetRequest.TargetWidth,
+                assetRequest.TargetHeight,
+                size,
+                startedUtc,
+                timeoutSeconds,
+                attempt,
+                maxAttempts);
+
+            try
+            {
+                using var response = await _httpClient.SendAsync(request, timeoutCts.Token);
+                var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var ex = new HttpRequestException(
+                        $"Azure OpenAI image request failed with status {(int)response.StatusCode} ({response.StatusCode}) for size {size}. Body: {payload}",
+                        null,
+                        response.StatusCode);
+                    LogRequestFailure(assetRequest, size, startedUtc, stopwatch.ElapsedMilliseconds, timeoutSeconds, ex, isTimeout: false, cancellationToken.IsCancellationRequested);
+                    if (attempt < maxAttempts && IsRetryableStatusCode(response.StatusCode))
+                    {
+                        await DelayBeforeRetryAsync(attempt, cancellationToken);
+                        continue;
+                    }
+
+                    throw ex;
+                }
+
+                _logger.LogInformation(
+                    "AI_IMAGE_GENERATION_REQUEST_COMPLETE deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} size={Size} startedUtc={StartedUtc:o} completedUtc={CompletedUtc:o} elapsedMs={ElapsedMs} responseLength={ResponseLength} attempt={Attempt}",
+                    DeploymentName,
+                    assetRequest.AssetCode,
+                    assetRequest.SegmentType,
+                    assetRequest.PlannedImagePath,
+                    "Generated",
+                    size,
+                    startedUtc,
+                    DateTimeOffset.UtcNow,
+                    stopwatch.ElapsedMilliseconds,
+                    payload.Length,
+                    attempt);
+
+                return await ExtractImageBytesAsync(payload, cancellationToken);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException or TimeoutException or HttpRequestException)
+            {
+                var normalized = NormalizeImageGenerationException(ex, assetRequest, size, timeoutSeconds, timeoutCts.IsCancellationRequested, cancellationToken.IsCancellationRequested);
+                var isTimeout = normalized is TimeoutException || timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
+                LogRequestFailure(assetRequest, size, startedUtc, stopwatch.ElapsedMilliseconds, timeoutSeconds, normalized, isTimeout, cancellationToken.IsCancellationRequested);
+
+                if (cancellationToken.IsCancellationRequested && normalized is OperationCanceledException)
+                    throw;
+
+                if (attempt < maxAttempts && IsRetryableException(normalized))
+                {
+                    await DelayBeforeRetryAsync(attempt, cancellationToken);
+                    continue;
+                }
+
+                throw normalized;
+            }
+            catch (Exception ex)
+            {
+                LogRequestFailure(assetRequest, size, startedUtc, stopwatch.ElapsedMilliseconds, timeoutSeconds, ex, isTimeout: false, cancellationToken.IsCancellationRequested);
+                throw;
+            }
         }
 
-        _logger.LogInformation(
-            "AI_IMAGE_GENERATION_REQUEST_COMPLETE deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} size={Size} startedUtc={StartedUtc:o} completedUtc={CompletedUtc:o} elapsedMs={ElapsedMs} responseLength={ResponseLength}",
+        throw new TimeoutException($"Azure OpenAI image generation timed out after {timeoutSeconds}s for assetCode={assetRequest.AssetCode}, segmentType={assetRequest.SegmentType}, size={size}");
+    }
+
+    private Exception NormalizeImageGenerationException(Exception ex, AICinematicAssetRequest assetRequest, string size, int timeoutSeconds, bool timeoutCancellationRequested, bool parentCancellationRequested)
+    {
+        if (timeoutCancellationRequested && !parentCancellationRequested)
+        {
+            return new TimeoutException($"Azure OpenAI image generation timed out after {timeoutSeconds}s for assetCode={assetRequest.AssetCode}, segmentType={assetRequest.SegmentType}, size={size}", ex);
+        }
+
+        return ex;
+    }
+
+    private void LogRequestFailure(AICinematicAssetRequest assetRequest, string size, DateTimeOffset startedUtc, long elapsedMs, int timeoutSeconds, Exception ex, bool isTimeout, bool isParentCancellation)
+    {
+        _logger.LogError(
+            ex,
+            "AI_IMAGE_GENERATION_REQUEST_FAILED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} size={Size} startedUtc={StartedUtc:o} failedUtc={FailedUtc:o} elapsedMs={ElapsedMs} timeoutSeconds={TimeoutSeconds} exceptionType={ExceptionType} exceptionMessage={ExceptionMessage} isTimeout={IsTimeout} isParentCancellation={IsParentCancellation}",
             DeploymentName,
             assetRequest.AssetCode,
             assetRequest.SegmentType,
             assetRequest.PlannedImagePath,
-            "Generated",
             size,
             startedUtc,
             DateTimeOffset.UtcNow,
-            stopwatch.ElapsedMilliseconds,
-            payload.Length);
-
-        return await ExtractImageBytesAsync(payload, cancellationToken);
+            elapsedMs,
+            timeoutSeconds,
+            ex.GetType().Name,
+            ex.Message,
+            isTimeout,
+            isParentCancellation);
     }
+
+    private static bool IsRetryableException(Exception ex)
+    {
+        if (ex is TimeoutException) return true;
+        if (ex is HttpRequestException httpRequestException)
+            return httpRequestException.StatusCode is null || IsRetryableStatusCode(httpRequestException.StatusCode.Value);
+        return false;
+    }
+
+    private static bool IsRetryableStatusCode(HttpStatusCode statusCode)
+        => statusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout;
+
+    private static Task DelayBeforeRetryAsync(int attempt, CancellationToken cancellationToken)
+        => Task.Delay(TimeSpan.FromSeconds(Math.Min(5, attempt * 2)), cancellationToken);
 
     private async Task AddAuthorizationAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
