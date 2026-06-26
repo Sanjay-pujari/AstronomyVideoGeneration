@@ -806,9 +806,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var root = Path.Combine(outputRoot, "scene-assets-v3", format);
         if (!Directory.Exists(root)) throw new InvalidOperationException($"Scene Assets V3 {format} folder is missing: {NormalizePath(root)}");
         var required = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json" }.Select(f => Path.Combine(root, f)).ToList();
-        var expectedImages = format.Equals("short", StringComparison.OrdinalIgnoreCase)
-            ? new[] { "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" }
-            : new[] { "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tip.png", "009-final-reminder.png" };
+        var expectedImages = ExpectedV31NarrationSceneIds(format).Select(sceneId => $"{SanitizeFileName(sceneId)}.png").ToArray();
         required.AddRange(expectedImages.Select(f => Path.Combine(root, f)));
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0) throw new InvalidOperationException($"Scene Assets V3 {format} validation failed: missing {string.Join(", ", missing)}");
@@ -4017,7 +4015,8 @@ public sealed partial class ProductionPipelineExecutionService(
             "005-best-time" => "best-time",
             "006-accurate-sky-guide" or "003-accurate-sky-guide" => "accurate-sky-guide",
             "007-what-you-will-see" => "what-you-will-see",
-            "008-viewing-tips" or "008-viewing-tip" or "004-viewing-tip" => "viewing-tips",
+            "004-viewing-tip" => NarrationV31Composer.ResolveScenePurpose(sceneId),
+            "008-viewing-tips" => NarrationV31Composer.ResolveScenePurpose(sceneId),
             "009-final-reminder" or "005-final-reminder" => "final-reminder",
             _ => "what-you-will-see"
         };
@@ -4175,9 +4174,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string[] ExpectedV31NarrationSceneIds(string format)
-        => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
-            ? ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]
-            : ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
+        => NarrationV31Composer.ExpectedSceneIds(format).ToArray();
 
     private static string[] BuildV31NarrationKeysUsed(IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems)
         => shortItems.Select(item => $"short:{NormalizeV31NarrationSceneId(item.SceneId)}")
@@ -4185,7 +4182,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
 
     private static string NormalizeV31NarrationSceneId(string sceneId)
-        => string.Equals(sceneId, "008-viewing-tip", StringComparison.OrdinalIgnoreCase) ? "008-viewing-tips" : sceneId;
+        => sceneId;
 
     private async Task<Phase14DocumentaryNarration> BuildV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
     {
@@ -6450,7 +6447,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 ["005-best-time"] = ["005-best-time"],
                 ["006-accurate-sky-guide"] = ["006-accurate-sky-guide"],
                 ["007-what-you-will-see"] = ["007-what-you-will-see"],
-                ["008-viewing-tip"] = ["008-viewing-tip"],
+                ["008-viewing-tips"] = ["008-viewing-tips"],
                 ["009-final-reminder"] = ["009-final-reminder"]
             };
 
@@ -11922,7 +11919,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> BuildSceneAssetsV3Missing(string root, string format)
     {
-        var expected = format == "short" ? new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-cause.png", "003-accurate-sky-guide.png", "004-viewing-tip.png", "005-final-reminder.png" } : new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json", "001-hook.png", "002-what-is-it.png", "003-cause.png", "004-interesting-fact.png", "005-best-time.png", "006-accurate-sky-guide.png", "007-what-you-will-see.png", "008-viewing-tip.png", "009-final-reminder.png" };
+        var expected = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json" }
+            .Concat(ExpectedV31NarrationSceneIds(format).Select(sceneId => $"{SanitizeFileName(sceneId)}.png"));
         return expected.Select(f => Path.Combine(root, f)).Where(p => !File.Exists(p)).Select(NormalizePath).ToArray();
     }
 
