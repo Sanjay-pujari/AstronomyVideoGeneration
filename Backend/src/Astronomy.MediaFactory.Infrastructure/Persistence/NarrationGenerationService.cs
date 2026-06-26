@@ -193,7 +193,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (purpose == "BestTime" && Regex.IsMatch(text, @"use\s+.+?\s+as your peak-time cue", RegexOptions.IgnoreCase)) errors.Add("BestTime contains peak-time cue phrasing.");
         if (purpose == "BestTime" && IsHindi(language) && ContainsRepeatedHindiDatePhrase(text)) errors.Add("BestTime contains the same Hindi date phrase twice.");
         if (purpose == "FinalReminder" && text.Contains("come back for the next sky event", StringComparison.OrdinalIgnoreCase)) errors.Add("FinalReminder is generic.");
-        if (purpose == "InterestingFact" && !ContainsSpecificFact(text, eventName)) errors.Add("InterestingFact lacks event-specific fact.");
+        if (purpose == "InterestingFact" && !ContainsSpecificFact(text, eventName, context, out var factDiagnostics)) errors.Add($"InterestingFact lacks event-specific fact. {factDiagnostics}");
         if (IsHindi(language) && Regex.IsMatch(text, @"\b(Jupiter and Venus|early evening|before sunrise|after sunset|eastern horizon|PM|AM|raw English direction phrases)\b|\s+to\s+|\b(eastern|western|northern|southern)\s+(?:horizon|sky)\b|\b(?:toward|overhead|open sky)\b", RegexOptions.IgnoreCase)) errors.Add("Hindi contains English leakage outside approved proper nouns.");
         if (IsHindi(language) && Regex.IsMatch(text, @"(?:पूर्व|पूर्वी|पश्चिम|सिर के ऊपर).*(?:\s+to\s+|after|before|PM|AM|East|overhead)|(?:\s+to\s+|after|before|PM|AM|East|overhead).*(?:पूर्व|पूर्वी|पश्चिम|सिर के ऊपर)", RegexOptions.IgnoreCase)) errors.Add("Hindi contains mixed Hindi-English direction phrasing.");
         return new(errors.Count == 0, errors, warnings);
@@ -438,18 +438,99 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         var factPhrases = new[] { "3200 Phaethon", "Swift-Tuttle", "debris", "traditional comet", "typical comet", "brightest planets", "seasonal traditions" };
         return factPhrases.Any(phrase => hook.Contains(phrase, StringComparison.OrdinalIgnoreCase) && fact.Contains(phrase, StringComparison.OrdinalIgnoreCase));
     }
-    private static bool ContainsSpecificFact(string text, string eventName) => text.Contains("3200 Phaethon", StringComparison.OrdinalIgnoreCase) || text.Contains("फेथॉन", StringComparison.OrdinalIgnoreCase) || text.Contains("Swift-Tuttle", StringComparison.OrdinalIgnoreCase) || text.Contains("strawberr", StringComparison.OrdinalIgnoreCase) || text.Contains("स्ट्रॉबेरी", StringComparison.OrdinalIgnoreCase) || text.Contains("wolf", StringComparison.OrdinalIgnoreCase) || text.Contains("वुल्फ", StringComparison.OrdinalIgnoreCase) || text.Contains("brightest planets", StringComparison.OrdinalIgnoreCase) || text.Contains("चमकीले ग्रह", StringComparison.OrdinalIgnoreCase) || text.Contains("Harvest Moon", StringComparison.OrdinalIgnoreCase) || text.Contains("farmers", StringComparison.OrdinalIgnoreCase) || text.Contains("रंग", StringComparison.OrdinalIgnoreCase) || text.Contains("मौसमी", StringComparison.OrdinalIgnoreCase) || (Regex.IsMatch(eventName, "solar.*eclipse|eclipse", RegexOptions.IgnoreCase) && Regex.IsMatch(text, "corona|totality|safety|कोरोना|पूर्णता|सुरक्षा|सोलर ग्रहण चश्मे", RegexOptions.IgnoreCase));
+    private static bool ContainsSpecificFact(string text, string eventName, NarrationContext context, out string diagnostics)
+    {
+        diagnostics = string.Empty;
+        if (context.Family == "MeteorShower") return ContainsMeteorShowerSpecificFact(text, eventName, context, out diagnostics);
+        if (context.Family == "NamedFullMoon") return ContainsNamedFullMoonSpecificFact(text, context, out diagnostics);
+        if (context.Family == "PlanetConjunction") return ContainsPlanetConjunctionSpecificFact(text, context, out diagnostics);
+        if (context.Family == "SolarEclipse") return ContainsSolarEclipseSpecificFact(text, context, out diagnostics);
+
+        var passed = text.Contains("debris", StringComparison.OrdinalIgnoreCase) || text.Contains("seasonal traditions", StringComparison.OrdinalIgnoreCase) || text.Contains("specific timing", StringComparison.OrdinalIgnoreCase);
+        if (!passed) diagnostics = BuildFactValidationDiagnostics(context.Family, eventName, context.ShortDisplayTitle, text, [context.ShortDisplayTitle, context.DisplayTitle], [], null, null, "No family-specific fact token found.");
+        return passed;
+    }
+
+    private static bool ContainsMeteorShowerSpecificFact(string text, string eventName, NarrationContext context, out string diagnostics)
+    {
+        var intelligence = MeteorShowerIntelligence.For(context.DisplayTitle, eventName);
+        var expected = new[] { intelligence.ShortTitle, intelligence.ParentBody, intelligence.Radiant }.Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var detected = expected.Where(token => ContainsToken(text, token)).ToArray();
+        var meteorScience = Regex.IsMatch(text, @"\b(debris|comet|asteroid|radiant|meteors?|particles?)\b", RegexOptions.IgnoreCase) && detected.Length > 0;
+        var passed = detected.Length > 0 || meteorScience;
+        diagnostics = passed ? string.Empty : BuildFactValidationDiagnostics("MeteorShower", eventName, context.ShortDisplayTitle, text, expected, detected, intelligence.ParentBody, intelligence.Radiant, "Meteor shower fact must mention this shower, its parent body, or its radiant.");
+        return passed;
+    }
+
+    private static bool ContainsNamedFullMoonSpecificFact(string text, NarrationContext context, out string diagnostics)
+    {
+        var tokens = new[] { context.ShortDisplayTitle, Regex.Replace(context.ShortDisplayTitle, @"^the\s+", string.Empty, RegexOptions.IgnoreCase), "Moon", "seasonal", "traditions", "folklore", "farmers", "ripening", "winter" }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var detected = tokens.Where(token => ContainsToken(text, token)).ToArray();
+        var passed = detected.Contains("Moon", StringComparer.OrdinalIgnoreCase) && detected.Any(t => !t.Equals("Moon", StringComparison.OrdinalIgnoreCase));
+        diagnostics = passed ? string.Empty : BuildFactValidationDiagnostics("NamedFullMoon", context.DisplayTitle, context.ShortDisplayTitle, text, tokens, detected, null, null, "Named full Moon fact must mention the name or a seasonal naming tradition.");
+        return passed;
+    }
+
+    private static bool ContainsPlanetConjunctionSpecificFact(string text, NarrationContext context, out string diagnostics)
+    {
+        var objects = context.DisplayObjects.Where(o => !o.Equals("Sky", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var tokens = objects.Concat(["conjunction", "line-of-sight", "pairing", "planet", "brightness", "color", "twilight", "horizon"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var detected = tokens.Where(token => ContainsToken(text, token)).ToArray();
+        var passed = objects.Length >= 2 ? objects.All(o => ContainsToken(text, o)) || detected.Length >= 2 : detected.Length >= 2;
+        diagnostics = passed ? string.Empty : BuildFactValidationDiagnostics("PlanetConjunction", context.DisplayTitle, context.ShortDisplayTitle, text, tokens, detected, null, null, "Planet conjunction fact must mention the pair or conjunction geometry.");
+        return passed;
+    }
+
+    private static bool ContainsSolarEclipseSpecificFact(string text, NarrationContext context, out string diagnostics)
+    {
+        var variant = Regex.Match(context.DisplayTitle, @"\b(total|partial|annular|hybrid)\b", RegexOptions.IgnoreCase).Value;
+        var tokens = new[] { variant, "solar eclipse", "Moon", "Sun", "corona", "totality", "annular", "partial", "hybrid", "safety", "solar filters", "सोलर ग्रहण चश्मे" }.Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var detected = tokens.Where(token => ContainsToken(text, token)).ToArray();
+        var passed = detected.Length >= 2 || Regex.IsMatch(text, "corona|totality|safety|कोरोना|पूर्णता|सुरक्षा|सोलर ग्रहण चश्मे", RegexOptions.IgnoreCase);
+        diagnostics = passed ? string.Empty : BuildFactValidationDiagnostics("SolarEclipse", context.DisplayTitle, context.ShortDisplayTitle, text, tokens, detected, null, null, "Solar eclipse fact must mention the variant, Sun-Moon geometry, or safe-viewing science.");
+        return passed;
+    }
+
+    private static bool ContainsToken(string text, string token) => !string.IsNullOrWhiteSpace(token) && text.Contains(token, StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildFactValidationDiagnostics(string family, string eventName, string shortTitle, string fact, IReadOnlyCollection<string> expected, IReadOnlyCollection<string> detected, string? parentBody, string? radiant, string reason)
+        => JsonSerializer.Serialize(new { family, eventName, shortTitle, generatedInterestingFact = fact, expectedFactTokens = expected, detectedFactTokens = detected, parentBodyUsed = parentBody, radiantUsed = radiant, validationReason = reason });
     private static string HindiName(string name) => name.Contains("Geminid", StringComparison.OrdinalIgnoreCase) ? "जेमिनिड्स" : name.Contains("Perseid", StringComparison.OrdinalIgnoreCase) ? "पर्सिड्स" : Regex.Replace(FormatHindiTerminology(name), @"^the\s+", string.Empty, RegexOptions.IgnoreCase);
     private static string HindiShortName(string name) => name.Contains("Geminid", StringComparison.OrdinalIgnoreCase) ? "जेमिनिड्स" : name.Contains("Perseid", StringComparison.OrdinalIgnoreCase) ? "पर्सिड्स" : HindiName(name);
     private static string HindiFact(string name, string fact)
     {
         if (name.Contains("Geminid", StringComparison.OrdinalIgnoreCase)) return "जेमिनिड्स का संबंध सामान्य धूमकेतु से नहीं, क्षुद्रग्रह 3200 फेथॉन (Phaethon) से जुड़े मलबे से है";
-        if (name.Contains("Perseid", StringComparison.OrdinalIgnoreCase)) return "पर्सिड्स धूमकेतु Swift-Tuttle के छोड़े मलबे से बनते हैं";
+        if (name.Contains("Perseid", StringComparison.OrdinalIgnoreCase)) return "पर्सिड्स धूमकेतु Swift-Tuttle के छोड़े मलबे से बनते हैं और Perseus से निकलते दिखते हैं";
         if (name.Contains("Strawberry", StringComparison.OrdinalIgnoreCase)) return "स्ट्रॉबेरी मून का नाम जून में स्ट्रॉबेरी पकने की मौसमी परंपरा से जुड़ा है";
         if (name.Contains("Wolf", StringComparison.OrdinalIgnoreCase)) return "वुल्फ मून का नाम सर्दियों और भेड़ियों से जुड़ी लोक परंपरा से आता है";
         if (name.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && name.Contains("Venus", StringComparison.OrdinalIgnoreCase)) return "बृहस्पति और शुक्र दो बेहद चमकीले ग्रह हैं, इसलिए उनका पास दिखना खास लगता है";
         if (name.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return "पूर्ण सूर्य ग्रहण में पूर्णता के समय सूर्य का कोरोना दिख सकता है, लेकिन सुरक्षा सबसे जरूरी है";
         return "इस घटना की अपनी खास समय-रेखा और देखने की दिशा है";
+    }
+
+    private sealed record MeteorShowerIntelligence(string ShortTitle, string? ParentBody, string? Radiant)
+    {
+        public static MeteorShowerIntelligence For(string displayTitle, string eventName)
+        {
+            var text = $"{displayTitle} {eventName}";
+            foreach (var known in Known)
+                if (text.Contains(known.ShortTitle, StringComparison.OrdinalIgnoreCase) || text.Contains(known.ShortTitle.TrimEnd('s'), StringComparison.OrdinalIgnoreCase))
+                    return known;
+            var shortTitle = Regex.Replace(displayTitle, @"^the\s+|\s+Meteor\s+Shower$", string.Empty, RegexOptions.IgnoreCase).Trim();
+            shortTitle = string.IsNullOrWhiteSpace(shortTitle) ? Regex.Replace(eventName, @"\s+Meteor\s+Shower.*$", string.Empty, RegexOptions.IgnoreCase).Trim() : shortTitle;
+            return new(string.IsNullOrWhiteSpace(shortTitle) ? "this meteor shower" : shortTitle, null, null);
+        }
+
+        private static readonly MeteorShowerIntelligence[] Known =
+        [
+            new("Geminids", "asteroid 3200 Phaethon", "Gemini"),
+            new("Perseids", "comet 109P/Swift-Tuttle", "Perseus"),
+            new("Leonids", "comet 55P/Tempel-Tuttle", "Leo"),
+            new("Orionids", "Halley's Comet", "Orion"),
+            new("Eta Aquariids", "Halley's Comet", "Aquarius"),
+            new("Quadrantids", "2003 EH1", "Boötes/Quadrans Muralis region"),
+            new("Lyrids", "comet C/1861 G1 Thatcher", "Lyra")
+        ];
     }
     private static string NormalizeSentence(string text) => Regex.Replace(text, @"\s+", " ").Trim().ToLowerInvariant();
     private static bool IsHindi(string? language) => string.Equals(language, "hi", StringComparison.OrdinalIgnoreCase) || string.Equals(language, "hi-IN", StringComparison.OrdinalIgnoreCase);
@@ -488,7 +569,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
                 observation.DisplayObjectPair,
                 observation.SafetyNote,
                 ScientificSummaryFor(family, displayTitle),
-                InterestingFactFor(family, displayTitle),
+                InterestingFactFor(family, displayTitle, observation),
                 HistoricalContextFor(family, displayTitle),
                 RarityContextFor(family, displayTitle),
                 language,
@@ -624,15 +705,34 @@ public sealed class NarrationGenerationService : INarrationGenerationService
                 _ => $"{title} has specific timing and viewing conditions."
             };
 
-        private static string InterestingFactFor(string family, string title)
+        private static string InterestingFactFor(string family, string title, ObservationContext observation)
         {
-            if (family == "MeteorShower" && title.Contains("Geminids", StringComparison.OrdinalIgnoreCase))
-                return "Unlike most major meteor showers, the Geminids come from asteroid 3200 Phaethon rather than a traditional comet.";
-            if (family == "PlanetConjunction") return "Jupiter and Venus are the two brightest planets, so their close pairing after twilight is especially striking.";
-            if (family == "NamedFullMoon" && title.Contains("Strawberry", StringComparison.OrdinalIgnoreCase)) return "The Strawberry Moon name comes from June traditions connected with ripening strawberries, not from the Moon turning pink.";
-            if (family == "NamedFullMoon" && title.Contains("Wolf", StringComparison.OrdinalIgnoreCase)) return "The Wolf Moon name is linked with deep winter nights and wolf folklore.";
-            if (family == "NamedFullMoon" && title.Contains("Harvest", StringComparison.OrdinalIgnoreCase)) return "The Harvest Moon is known for rising near sunset for several nights, historically helping farmers extend evening work.";
-            if (family == "SolarEclipse") return "During a total solar eclipse, the Moon can reveal the Sun's faint corona, but safe eye protection is essential outside totality.";
+            if (family == "MeteorShower")
+            {
+                var intelligence = MeteorShowerIntelligence.For(title, title);
+                if (!string.IsNullOrWhiteSpace(intelligence.ParentBody) && !string.IsNullOrWhiteSpace(intelligence.Radiant))
+                    return $"The {intelligence.ShortTitle} come from debris left by {intelligence.ParentBody}, and the meteors appear to radiate from {intelligence.Radiant}.";
+                return $"{title} is event-specific because its meteors trace back to this shower's own debris stream; use {observation.Window} and look {observation.Direction} to connect the fact to this event.";
+            }
+            if (family == "PlanetConjunction")
+            {
+                var objects = ExtractObjects(title).Where(o => !o.Equals("Sky", StringComparison.OrdinalIgnoreCase)).ToArray();
+                return objects.Length >= 2
+                    ? $"{objects[0]} and {objects[1]} only appear close from Earth's line of sight; the planets remain far apart in space while their changing positions create the conjunction."
+                    : $"{title} is a line-of-sight pairing, so its appearance depends on the planets' brightness, color, separation, and twilight timing.";
+            }
+            if (family == "NamedFullMoon") return $"{title} carries a seasonal observing name, tying this full Moon to local traditions, weather, wildlife, harvests, or other calendar markers.";
+            if (family == "SolarEclipse")
+            {
+                var variant = Regex.Match(title, @"\b(total|partial|annular|hybrid)\b", RegexOptions.IgnoreCase).Value.ToLowerInvariant();
+                return variant switch
+                {
+                    "partial" => "In a partial solar eclipse, the Moon covers only part of the Sun, so certified solar filters are required for the entire event.",
+                    "annular" => "In an annular solar eclipse, the Moon appears too small to cover the Sun fully, leaving a bright ring that still requires certified solar filters.",
+                    "hybrid" => "A hybrid solar eclipse shifts between annular and total along different parts of its path, making local eclipse geometry especially important.",
+                    _ => "During a total solar eclipse, the Moon can reveal the Sun's faint corona, but safe eye protection is essential outside totality."
+                };
+            }
             return ScientificSummaryFor(family, title);
         }
 
