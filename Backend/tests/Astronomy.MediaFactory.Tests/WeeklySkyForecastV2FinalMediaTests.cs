@@ -90,6 +90,7 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
         public Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)
             => Task.FromResult(new GenerateContentPlanResponse(Guid.NewGuid(), "Planned", null, null));
 
+        public Task<CreatePlanFromEventResponse> CreatePlanFromEventAsync(CreatePlanFromEventRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ContentGenerationPlan> GenerateDailyPlanAsync(string contentCategoryCode, string language, string regionId, DateTimeOffset scheduledUtc, string? primaryCelestialObjectCode, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
