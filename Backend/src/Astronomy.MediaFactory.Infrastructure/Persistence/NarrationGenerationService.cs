@@ -353,12 +353,15 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     {
         var text = $"{eventType} {eventName}";
         if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
-        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (IsPlanetPairingFamilyText(text)) return "PlanetConjunction";
         if (text.Contains("planetgrouping", StringComparison.OrdinalIgnoreCase) || text.Contains("groupedplanets", StringComparison.OrdinalIgnoreCase) || text.Contains("planet grouping", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
         if (text.Contains("solar", StringComparison.OrdinalIgnoreCase) && text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "SolarEclipse";
         if (text.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
         return "AstronomyEvent";
     }
+
+    private static bool IsPlanetPairingFamilyText(string text)
+        => Regex.IsMatch(text ?? string.Empty, @"\b(PlanetPairing|PlanetConjunction|PLANET_CONJUNCTION|Conjunction|PlanetaryEncounter|CloseApproach|pairing)\b", RegexOptions.IgnoreCase);
 
     private static IReadOnlyList<string> ExtractObjects(string text)
     {
@@ -420,6 +423,8 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     private static string FormatHindiObservation(string value)
     {
         var text = value ?? string.Empty;
+        text = Regex.Replace(text, @"\bsouth[-–— ]?east(?:ern)?(?:\s+sky)?\b", "दक्षिण-पूर्वी आकाश", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bSE\b", "दक्षिण-पूर्व", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"\bnorth[-–— ]?east\s+after\s+midnight\b", "आधी रात के बाद उत्तर-पूर्व दिशा", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"\bnorth[-–— ]?east\b", "उत्तर-पूर्व", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"\bafter\s+midnight\b", "आधी रात के बाद", RegexOptions.IgnoreCase);
@@ -438,8 +443,8 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     private static bool ContainsViewerUsefulDirection(string text, string language, NarrationContext context, out string diagnostics)
     {
         var expected = IsHindi(language)
-            ? new[] { "उत्तर-पूर्व", "उत्तर पूर्व", "आधी रात के बाद", "रात 12 बजे के बाद", "सुबह", "दिशा", "आकाश", "क्षितिज", "ओर", "सूर्य", "चंद्रोदय", "सिर के ऊपर" }
-            : new[] { "northeast", "north-east", "after midnight", "eastern", "northern", "east", "north", "sky", "direction", "horizon", "toward", "sun", "moonrise", "overhead" };
+            ? new[] { "दक्षिण-पूर्व", "उत्तर-पूर्व", "उत्तर पूर्व", "पूर्व", "आधी रात के बाद", "रात 12 बजे के बाद", "सुबह", "दिशा", "आकाश", "क्षितिज", "ओर", "सूर्य", "चंद्रोदय", "सिर के ऊपर" }
+            : new[] { "southeast", "south-east", "northeast", "north-east", "after midnight", "eastern", "southern", "northern", "east", "south", "north", "sky", "direction", "horizon", "toward", "sun", "moonrise", "overhead" };
         var normalizedText = NormalizeValidationText(text, language);
         var detected = expected.Where(token => normalizedText.Contains(NormalizeValidationText(token, language), StringComparison.OrdinalIgnoreCase)).ToArray();
         var passed = detected.Length > 0;
@@ -616,9 +621,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
             var displayTitle = BuildDisplayTitle(family, rawName, eventType);
             var shortTitle = ShortDisplayTitle(family, displayTitle);
             var location = RegionName(Clean(request.RegionId, string.Empty));
-            var objects = family == "PlanetConjunction" && displayTitle.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && displayTitle.Contains("Venus", StringComparison.OrdinalIgnoreCase)
-                ? new[] { "Jupiter", "Venus" }
-                : ExtractObjects(displayTitle);
+            IReadOnlyList<string> objects = family == "PlanetConjunction" ? ExtractObjects(displayTitle).DefaultIfEmpty("Mars").Take(2).ToArray() : ExtractObjects(displayTitle);
 
             var observation = BuildObservationContext(family, displayTitle, location, date, peak, window, direction, metadata, language);
 
@@ -662,7 +665,8 @@ public sealed class NarrationGenerationService : INarrationGenerationService
 
             if (family is "PlanetConjunction" or "PlanetGrouping")
             {
-                pair = title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && title.Contains("Venus", StringComparison.OrdinalIgnoreCase) ? (IsHindi(language) ? "बृहस्पति और शुक्र" : "Jupiter and Venus") : null;
+                var planetObjects = ExtractObjects(title).Take(2).ToArray();
+                pair = planetObjects.Length >= 2 ? (IsHindi(language) ? $"{HindiPlanetName(planetObjects[0])} और {HindiPlanetName(planetObjects[1])}" : $"{planetObjects[0]} and {planetObjects[1]}") : null;
                 if (string.IsNullOrWhiteSpace(metadata.ViewingWindow))
                 {
                     humanWindow = DeriveConjunctionWindowPhrase(metadata.PeakTime ?? peak, cleanDirection);
@@ -675,10 +679,12 @@ public sealed class NarrationGenerationService : INarrationGenerationService
                     fallback = true;
                 }
                 timingNote = "Use the darker twilight window while both planets are above the horizon.";
-                var article = title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && title.Contains("Venus", StringComparison.OrdinalIgnoreCase) ? "this conjunction" : "the conjunction";
-                var viewer = !string.IsNullOrWhiteSpace(metadata.ViewingWindow)
-                    ? $"For observers in {location}, the best viewing window runs {humanWindow}. Look toward {NormalizeDirectionForSentence(cleanDirection)} while both planets are above the horizon."
-                    : $"For observers in {location}, the best chance to see {article} is during the darker twilight window when Jupiter and Venus are both above the horizon. Look toward {NormalizeDirectionForSentence(cleanDirection)}, and use a clear, low view for the best result.";
+                var article = string.IsNullOrWhiteSpace(pair) ? "the conjunction" : $"the {pair} pairing";
+                var viewer = IsHindi(language)
+                    ? $"{LocalizeWindow(humanWindow, language)} सबसे अच्छा समय है। {LocalizeDirection(cleanDirection, language)} की ओर देखें और क्षितिज के पास खुला दृश्य रखें।"
+                    : !string.IsNullOrWhiteSpace(metadata.ViewingWindow)
+                        ? $"For observers in {location}, the best viewing window runs {humanWindow}. Look toward {NormalizeDirectionForSentence(cleanDirection)} while both planets are above the horizon."
+                        : $"For observers in {location}, the best chance to see {article} is {humanWindow}. Look toward {NormalizeDirectionForSentence(cleanDirection)}, and use a clear, low view near the horizon.";
                 return Pack(family, geometricPeak, viewer, LocalizeWindow(humanWindow, language), LocalizeDirection(cleanDirection, language), directionSource, windowSource, fallback, timingNote, pair, safety);
             }
 
@@ -714,12 +720,15 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         private static string LocalizeWindow(string value, string language) => IsHindi(language) ? FormatHindiObservation(value) : value;
         private static string LocalizeDirection(string value, string language) => IsHindi(language) ? FormatHindiObservation(value) : value;
 
+        private static string HindiPlanetName(string name) => name.ToLowerInvariant() switch { "mars" => "मंगल", "jupiter" => "बृहस्पति", "venus" => "शुक्र", "mercury" => "बुध", "saturn" => "शनि", "moon" => "चंद्रमा", "sun" => "सूर्य", _ => name };
+
         private static string CleanDirection(string direction) => IsOpenSky(direction) ? "toward the open sky" : Regex.Replace(direction.Trim(), @"^toward\s+", string.Empty, RegexOptions.IgnoreCase);
         private static bool IsOpenSky(string? direction) => string.IsNullOrWhiteSpace(direction) || direction.Contains("open sky", StringComparison.OrdinalIgnoreCase);
 
         private static string DeriveConjunctionDirection(string title, string peak, string? rawDirection)
         {
             var text = $"{rawDirection} {peak}";
+            if (Regex.IsMatch(text, @"\bSE\b|south[- ]?east|southeast", RegexOptions.IgnoreCase)) return "the southeastern sky before sunrise";
             if (Regex.IsMatch(text, "sunrise|dawn|morning|AM", RegexOptions.IgnoreCase)) return "the eastern horizon before sunrise";
             if (Regex.IsMatch(text, "sunset|evening|PM|west", RegexOptions.IgnoreCase)) return "low in the western sky after sunset";
             return title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && title.Contains("Venus", StringComparison.OrdinalIgnoreCase) ? "the eastern horizon before sunrise" : "low near the horizon during twilight";
@@ -737,8 +746,11 @@ public sealed class NarrationGenerationService : INarrationGenerationService
 
         private static string BuildDisplayTitle(string family, string rawName, string eventType)
         {
-            if (family == "PlanetConjunction" && rawName.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && rawName.Contains("Venus", StringComparison.OrdinalIgnoreCase))
-                return "the Jupiter–Venus conjunction";
+            if (family == "PlanetConjunction")
+            {
+                var planets = ExtractObjects(rawName).Take(2).ToArray();
+                if (planets.Length >= 2) return $"the {planets[0]}–{planets[1]} conjunction";
+            }
             if (family == "PlanetGrouping") return Regex.Replace(rawName, @"\s+(?:planet\s+)?grouping.*$", " planet grouping", RegexOptions.IgnoreCase).Trim();
             if (family == "MeteorShower")
             {

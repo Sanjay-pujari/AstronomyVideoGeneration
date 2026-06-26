@@ -2664,8 +2664,8 @@ public sealed partial class ProductionPipelineExecutionService(
         TracePhase14Checkpoint("phase14.longTexts.built");
         if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
         {
-            ApplyPlanetConjunctionNarrationV22(shortTexts, expansionContext);
-            ApplyPlanetConjunctionNarrationV22(longTexts, expansionContext);
+            ApplyPlanetConjunctionNarrationV22(shortTexts, expansionContext, requestedLanguage: "en");
+            ApplyPlanetConjunctionNarrationV22(longTexts, expansionContext, requestedLanguage: "en");
         }
         var composerTrace = new List<SceneNarrationComposerTraceEntry>();
         SanitizeSceneNarrationComposerOutputs(context, family, shortTexts, composerTrace, "short");
@@ -2676,6 +2676,11 @@ public sealed partial class ProductionPipelineExecutionService(
         TracePhase14Checkpoint("Phase14.BuildPhase14DocumentaryNarration.before.ApplyPhase14NarrationTranslationIfNeeded");
         TracePhase14Checkpoint("phase14.translation.started");
         var translationDiagnostics = ApplyPhase14NarrationTranslationIfNeeded(requestedLanguage, family, shortTexts, longTexts, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext?.EventType), context.ProductionEventIntelligence.PrimaryObjects.Count > 0 ? context.ProductionEventIntelligence.PrimaryObjects : context.Request.PrimaryObjects, context.ProductionEventIntelligence.SecondaryObjects.Count > 0 ? context.ProductionEventIntelligence.SecondaryObjects : context.Request.SecondaryObjects);
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase) && IsHindiLanguage(requestedLanguage))
+        {
+            ApplyPlanetConjunctionNarrationV22(shortTexts, expansionContext, requestedLanguage);
+            ApplyPlanetConjunctionNarrationV22(longTexts, expansionContext, requestedLanguage);
+        }
         TracePhase14Checkpoint("phase14.translation.completed");
         var allTexts = shortTexts.Select(kv => new { format = "short", kv.Key, kv.Value }).Concat(longTexts.Select(kv => new { format = "long", kv.Key, kv.Value })).ToArray();
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
@@ -2805,7 +2810,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var text = string.Join(' ', new[] { eventType, title }.Where(v => !string.IsNullOrWhiteSpace(v)).Concat(primaryObjects ?? Array.Empty<string>()).Concat(secondaryObjects ?? Array.Empty<string>()));
         if (ContainsMeteorEventSignal(text)) return "Meteor";
-        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (IsPhase14PlanetPairingFamilyText(text)) return "PlanetConjunction";
         if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
         if (text.Contains("moon", StringComparison.OrdinalIgnoreCase) || text.Contains("lunar", StringComparison.OrdinalIgnoreCase)) return "Moon";
         return "PlanetGrouping";
@@ -2814,7 +2819,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolvePhase14NarrationTextFamily(string resolvedNarrationFamily, string narrationText)
     {
         if (ContainsAnyForbiddenPhrase(narrationText, ["meteor shower", "radiant", "Geminids", "उल्का", "उल्का वर्षा", "रेडिएंट", "जेमिनिड्स"])) return "Meteor";
-        if (ContainsAnyForbiddenPhrase(narrationText, ["Jupiter", "Venus", "conjunction", "two planets", "बृहस्पति", "शुक्र", "युति"])) return "PlanetConjunction";
+        if (ContainsAnyForbiddenPhrase(narrationText, ["Jupiter", "Venus", "Mars", "conjunction", "pairing", "two planets", "बृहस्पति", "शुक्र", "मंगल", "युति", "संयोग"])) return "PlanetConjunction";
         return resolvedNarrationFamily;
     }
 
@@ -3807,27 +3812,43 @@ public sealed partial class ProductionPipelineExecutionService(
         => string.IsNullOrEmpty(text) ? 0 : text.Count(ch => (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z'));
 
 
-    private static void ApplyPlanetConjunctionNarrationV22(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context)
+    private static void ApplyPlanetConjunctionNarrationV22(IDictionary<string, string> texts, LongSceneNarrationExpansionContext context, string requestedLanguage)
     {
-        var time = NaturalViewingWindow(context.LocalPeakTime);
-        var direction = NaturalSkyDirection(context.SkyDirectionHint);
-        var objectLabel = PlanetConjunctionObjectLabel(context.ShortTitle);
+        var isHindi = IsHindiLanguage(requestedLanguage);
+        var time = NaturalViewingWindow(context.LocalPeakTime, isHindi);
+        var direction = NaturalSkyDirection(context.SkyDirectionHint, isHindi);
+        var objectLabel = PlanetConjunctionObjectLabel(context.ShortTitle, isHindi);
+        var title = PlanetConjunctionDisplayTitle(context.ShortTitle, isHindi);
         foreach (var sceneId in texts.Keys.ToArray())
         {
             var purpose = ResolvePhase14ScenePurpose(sceneId);
-            var replacement = purpose switch
-            {
-                "hook" => $"Hello, fellow stargazers. Over the next few evenings, {CleanPhase14Title(context.ShortTitle)} offers a quiet chance to watch two bright planets gather in the twilight. At first it looks simple, but the closer we look, the more the scene becomes a story of distance, motion, and perspective. Let’s take a closer look.",
-                "what-is-it" => "That opening view leads us into a planetary conjunction: not a physical meeting, but a shared direction in our sky.",
-                "cause" => $"Although {objectLabel} appear remarkably close together in our evening sky, they remain separated by hundreds of millions of kilometers in space. Their apparent meeting is created by perspective, as Earth and the two planets briefly align from our point of view.",
-                "interesting-fact" => "From night to night, the changing gap lets you sense the solar system moving, not as a diagram, but as a quiet shift above the horizon.",
-                "best-time" => $"The conjunction reaches its finest appearance during the evenings surrounding {time}. Arriving a little before sunset gives your eyes time to adjust as the sky slowly darkens.",
-                "accurate-sky-guide" => $"About thirty minutes after sunset, turn your attention toward {direction}. There you'll find two bright planets appearing unusually close together above the skyline.",
-                "what-you-will-see" => "By then, one world may look brilliant and sharp while the other appears steadier, with their apparent closeness held only by our line of sight.",
-                "viewing-tips" => "From there, give the view a few quiet minutes, keep phones dim, and let binoculars become a second look rather than the first step.",
-                "final-reminder" => "In a few nights, the planets will drift apart once again. Their brief meeting in our evening sky will end, just as all celestial alignments eventually do. But for those who pause to look up, the memory of seeing two distant worlds share the same patch of sky can remain long after the conjunction itself has passed.",
-                _ => texts[sceneId]
-            };
+            var replacement = isHindi
+                ? purpose switch
+                {
+                    "hook" => $"नमस्कार, आकाश प्रेमियों। {title} भोर से पहले दो चमकीले ग्रहों को पास-पास देखने का शांत मौका देता है। यह दृश्य दूरी, गति और पृथ्वी से दिखने वाले नजरिए की कहानी है।",
+                    "what-is-it" => $"{title} में दो ग्रह वास्तव में नहीं मिलते; वे हमारे आकाश में एक ही दिशा में पास दिखाई देते हैं।",
+                    "cause" => $"{objectLabel} हमें पास दिखते हैं क्योंकि पृथ्वी से देखने पर वे लगभग एक ही दिशा में दिखाई देते हैं, जबकि अंतरिक्ष में वे बहुत दूर रहते हैं।",
+                    "interesting-fact" => $"रोचक बात यह है कि {objectLabel} की दूरी रातों-रात बदलती दिख सकती है, इसलिए सौर मंडल की गति सीधे आकाश में महसूस होती है।",
+                    "best-time" => $"सबसे अच्छा समय {time} है। {direction} की ओर देखें और क्षितिज के पास खुला दृश्य रखें।",
+                    "accurate-sky-guide" => $"सूर्योदय से पहले {direction} की ओर देखें, और क्षितिज के पास खुला दृश्य रखें।",
+                    "what-you-will-see" => $"आप {objectLabel} को एक ही आकाशी हिस्से में पास-पास चमकते देखेंगे, भले ही वे अंतरिक्ष में बहुत दूर हों।",
+                    "viewing-tips" => "इमारतों और पेड़ों से खुला क्षितिज चुनें, फोन की रोशनी कम रखें, और आँखों को कुछ मिनट अंधेरे में ढलने दें।",
+                    "final-reminder" => $"कुछ दिनों बाद {objectLabel} फिर अलग दिखने लगेंगे। अगर आकाश साफ हो, तो यह छोटा संयोग यादगार दृश्य बन सकता है।",
+                    _ => texts[sceneId]
+                }
+                : purpose switch
+                {
+                    "hook" => $"Hello, fellow stargazers. {title} offers a quiet chance to watch two bright planets gather before sunrise. At first it looks simple, but the closer we look, the more the scene becomes a story of distance, motion, and perspective. Let’s take a closer look.",
+                    "what-is-it" => $"{title} is a line-of-sight pairing where two planets appear close together in our sky without physically meeting.",
+                    "cause" => $"{objectLabel} appear close because they line up from our viewpoint on Earth, even though they remain far apart in space.",
+                    "interesting-fact" => $"An interesting detail is that {objectLabel} can change their apparent gap from morning to morning, letting you sense the solar system in motion.",
+                    "best-time" => $"The best view is {time}. Look toward the {direction} with a clear view near the horizon.",
+                    "accurate-sky-guide" => $"Look toward the {direction} before sunrise, with a clear view near the horizon.",
+                    "what-you-will-see" => $"You will see {objectLabel} shining close together in the same part of the sky, even though their closeness is only line of sight.",
+                    "viewing-tips" => "Choose an open horizon away from buildings and trees, keep phone screens dim, and give your eyes a few minutes to adjust.",
+                    "final-reminder" => $"In a few days, {objectLabel} will drift apart again. If the sky is clear, this brief pairing can become a memorable pre-dawn view.",
+                    _ => texts[sceneId]
+                };
             texts[sceneId] = RewriteBannedNarrationPhrases(replacement);
         }
     }
@@ -3835,40 +3856,68 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string CleanPhase14Title(string? value)
         => string.IsNullOrWhiteSpace(value) ? "this planetary conjunction" : Regex.Replace(value, @"\s+", " ").Trim();
 
-    private static string NaturalViewingWindow(string? value)
+    private static string NaturalViewingWindow(string? value, bool isHindi = false)
     {
         var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
-        if (string.IsNullOrWhiteSpace(cleaned)) return "the peak date";
+        if (string.IsNullOrWhiteSpace(cleaned)) return isHindi ? "सूर्योदय से पहले" : "before sunrise";
         cleaned = Regex.Replace(cleaned, @"\b(best viewing window|local viewing window|best local viewing window|best time)\b", "", RegexOptions.IgnoreCase).Trim(' ', ':', '-', '–', '—');
         cleaned = Regex.Replace(cleaned, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b", "", RegexOptions.IgnoreCase).Trim(' ', ',', ':', '-', '–', '—');
+        var isoDate = Regex.Match(cleaned, @"\b(?<year>20\d{2})-(?<month>\d{1,2})-(?<day>\d{1,2})\b");
+        if (isoDate.Success && int.TryParse(isoDate.Groups["year"].Value, out var isoYear) && int.TryParse(isoDate.Groups["month"].Value, out var isoMonth) && int.TryParse(isoDate.Groups["day"].Value, out var isoDay))
+            return isHindi ? $"{isoDay} {HindiMonth(isoMonth)} {isoYear} को सूर्योदय से पहले" : $"before sunrise on {CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(isoMonth)} {isoDay}, {isoYear}";
         if (DateTimeOffset.TryParse(cleaned, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var dto))
-            return $"{dto:MMMM} {OrdinalWord(dto.Day)}";
+            return isHindi ? $"{dto.Day} {HindiMonth(dto.Month)} {dto.Year} को सूर्योदय से पहले" : $"before sunrise on {dto:MMMM d, yyyy}";
         var match = Regex.Match(cleaned, @"\b(?<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(?<day>\d{1,2})\b", RegexOptions.IgnoreCase);
         if (match.Success && int.TryParse(match.Groups["day"].Value, out var day))
-            return $"{CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Groups["month"].Value.TrimEnd('.').ToLowerInvariant())} {OrdinalWord(day)}";
-        return string.IsNullOrWhiteSpace(cleaned) ? "the peak date" : cleaned;
+            return isHindi ? $"{day} {HindiMonth(MonthNumber(match.Groups["month"].Value))} को सूर्योदय से पहले" : $"before sunrise on {CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Groups["month"].Value.TrimEnd('.').ToLowerInvariant())} {day}";
+        return string.IsNullOrWhiteSpace(cleaned) ? (isHindi ? "सूर्योदय से पहले" : "before sunrise") : cleaned;
     }
 
-    private static string NaturalSkyDirection(string? value)
+    private static string NaturalSkyDirection(string? value, bool isHindi = false)
     {
         var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim().Trim(' ', '.', ',');
-        if (string.IsNullOrWhiteSpace(cleaned)) return "the western horizon";
+        if (string.IsNullOrWhiteSpace(cleaned)) return isHindi ? "दक्षिण-पूर्वी आकाश" : "southeastern sky";
         cleaned = Regex.Replace(cleaned, @"\b(after sunset|about thirty minutes|thirty minutes|look|turn|face|toward|find|begin|start|scan|use|clear|unobstructed)\b", "", RegexOptions.IgnoreCase);
         cleaned = Regex.Replace(cleaned, @"\b(the\s+)+", "the ", RegexOptions.IgnoreCase);
         cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim(' ', '.', ',');
-        if (Regex.IsMatch(cleaned, @"\bwest(?:ern)?\b", RegexOptions.IgnoreCase)) return "the western horizon";
-        if (Regex.IsMatch(cleaned, @"\beast(?:ern)?\b", RegexOptions.IgnoreCase)) return "the eastern horizon";
-        if (Regex.IsMatch(cleaned, @"\bnorth(?:ern)?\b", RegexOptions.IgnoreCase)) return "the northern horizon";
-        if (Regex.IsMatch(cleaned, @"\bsouth(?:ern)?\b", RegexOptions.IgnoreCase)) return "the southern horizon";
-        return "the western horizon";
+        if (Regex.IsMatch(cleaned, @"^SE$|south[- ]?east|southeast", RegexOptions.IgnoreCase)) return isHindi ? "दक्षिण-पूर्वी आकाश" : "southeastern sky";
+        if (Regex.IsMatch(cleaned, @"^NE$|north[- ]?east|northeast", RegexOptions.IgnoreCase)) return isHindi ? "उत्तर-पूर्वी आकाश" : "northeastern sky";
+        if (Regex.IsMatch(cleaned, @"^SW$|south[- ]?west|southwest", RegexOptions.IgnoreCase)) return isHindi ? "दक्षिण-पश्चिमी आकाश" : "southwestern sky";
+        if (Regex.IsMatch(cleaned, @"^NW$|north[- ]?west|northwest", RegexOptions.IgnoreCase)) return isHindi ? "उत्तर-पश्चिमी आकाश" : "northwestern sky";
+        if (Regex.IsMatch(cleaned, @"^E$|\beast(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "पूर्वी आकाश" : "eastern sky";
+        if (Regex.IsMatch(cleaned, @"^W$|\bwest(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "पश्चिमी आकाश" : "western sky";
+        if (Regex.IsMatch(cleaned, @"^N$|\bnorth(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "उत्तरी आकाश" : "northern sky";
+        if (Regex.IsMatch(cleaned, @"^S$|\bsouth(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "दक्षिणी आकाश" : "southern sky";
+        return isHindi ? "दक्षिण-पूर्वी आकाश" : "southeastern sky";
     }
 
-    private static string PlanetConjunctionObjectLabel(string? title)
+    private static string PlanetConjunctionObjectLabel(string? title, bool isHindi = false)
     {
-        var text = title ?? string.Empty;
-        if (text.Contains("Venus", StringComparison.OrdinalIgnoreCase) && text.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) return "Venus and Jupiter";
-        return "the two planets";
+        var planets = ExtractPlanetNames(title).Take(2).ToArray();
+        if (planets.Length < 2) planets = ["Mars", "Jupiter"];
+        return isHindi ? $"{LocalizePlanetHi(planets[0])} और {LocalizePlanetHi(planets[1])}" : $"{planets[0]} and {planets[1]}";
     }
+
+    private static string PlanetConjunctionDisplayTitle(string? title, bool isHindi)
+    {
+        var planets = ExtractPlanetNames(title).Take(2).ToArray();
+        if (planets.Length < 2) planets = ["Mars", "Jupiter"];
+        return isHindi ? $"{LocalizePlanetHi(planets[0])}–{LocalizePlanetHi(planets[1])} संयोग" : $"the {planets[0]}–{planets[1]} pairing";
+    }
+
+    private static IEnumerable<string> ExtractPlanetNames(string? text)
+    {
+        foreach (var name in new[] { "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Moon", "Sun" })
+            if ((text ?? string.Empty).Contains(name, StringComparison.OrdinalIgnoreCase)) yield return name;
+    }
+
+    private static string LocalizePlanetHi(string name) => name.ToLowerInvariant() switch
+    {
+        "mars" => "मंगल", "jupiter" => "बृहस्पति", "venus" => "शुक्र", "mercury" => "बुध", "saturn" => "शनि", "moon" => "चंद्रमा", "sun" => "सूर्य", _ => name
+    };
+
+    private static string HindiMonth(int month) => month switch { 1 => "जनवरी", 2 => "फ़रवरी", 3 => "मार्च", 4 => "अप्रैल", 5 => "मई", 6 => "जून", 7 => "जुलाई", 8 => "अगस्त", 9 => "सितंबर", 10 => "अक्टूबर", 11 => "नवंबर", 12 => "दिसंबर", _ => string.Empty };
+    private static int MonthNumber(string month) => DateTime.ParseExact(month.TrimEnd('.'), month.TrimEnd('.').Length <= 3 ? "MMM" : "MMMM", CultureInfo.InvariantCulture).Month;
 
     private static string OrdinalWord(int day) => day switch
     {
@@ -4557,9 +4606,12 @@ public sealed partial class ProductionPipelineExecutionService(
         if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "Meteor";
         if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Eclipse";
         if (text.Contains("moon", StringComparison.OrdinalIgnoreCase) || text.Contains("lunar", StringComparison.OrdinalIgnoreCase)) return "Moon";
-        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetConjunction";
+        if (IsPhase14PlanetPairingFamilyText(text)) return "PlanetConjunction";
         return "PlanetGrouping";
     }
+
+    private static bool IsPhase14PlanetPairingFamilyText(string? text)
+        => Regex.IsMatch(text ?? string.Empty, @"\b(PlanetPairing|PlanetConjunction|PLANET_CONJUNCTION|Conjunction|PlanetaryEncounter|CloseApproach|pairing)\b", RegexOptions.IgnoreCase);
 
     private static async Task<IReadOnlyList<string>> WriteNarrationTextFilesAsync(string format, string outputRoot, IReadOnlyList<SceneAudioSyncItem> items, NarrationCleanupService cleanupService, List<string> files, List<string> cleanedNarrationFiles, List<object> manifestItems, List<NarrationFileWriteTraceEntry> writeTrace, CancellationToken cancellationToken)
     {
@@ -6260,6 +6312,19 @@ public sealed partial class ProductionPipelineExecutionService(
             requestedShortTitle = Phase14ExceptionDiagnosticsState.RequestedShortTitle ?? context.Request.ShortTitle,
             hydratedShortTitle = Phase14ExceptionDiagnosticsState.HydratedShortTitle,
             finalShortTitle = Phase14ExceptionDiagnosticsState.FinalShortTitle ?? context.Request.ShortTitle,
+            primaryObjects = context.Request.PrimaryObjects,
+            localizedPrimaryObjects = (context.Request.PrimaryObjects ?? []).Select(LocalizePlanetHi).ToArray(),
+            rawDirection = FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint),
+            normalizedDirection = NaturalSkyDirection(FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint), false),
+            localizedDirection = NaturalSkyDirection(FirstNonEmpty(context.ProductionEventIntelligence.SkyDirectionHint, context.Request.SkyDirectionHint), true),
+            rawBestViewingWindowLocal = FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal),
+            derivedViewingWindow = NaturalViewingWindow(FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime), false),
+            localizedViewingWindow = NaturalViewingWindow(FirstNonEmpty(context.ProductionEventIntelligence.LocalPeakTime, context.Request.LocalPeakTime), true),
+            viewingWindowSource = string.IsNullOrWhiteSpace(FirstNonEmpty(context.ProductionEventIntelligence.BestViewingWindowLocal, context.Request.BestViewingWindowLocal)) ? "derivedFromPeakTime" : "metadata",
+            expectedBestTimeTokens = IsHindiLanguage(Phase14ExceptionDiagnosticsState.RequestedLanguage ?? ResolvePipelineLanguage(context.Request.Language)) ? new[] { "सूर्योदय से पहले", "भोर", "सुबह", "तड़के", "प्रातः", "दक्षिण-पूर्व", "पूर्व", "दिशा", "आकाश", "क्षितिज" } : new[] { "before sunrise", "pre-dawn", "early morning", "dawn", "morning twilight", "southeast", "sky", "horizon" },
+            detectedBestTimeTokens = Array.Empty<string>(),
+            expectedPlanetTokens = context.Request.PrimaryObjects,
+            detectedPlanetTokens = Array.Empty<string>(),
             eventMetadataConflictDetected = Phase14ExceptionDiagnosticsState.EventMetadataConflictDetected,
             conflictResolution = Phase14ExceptionDiagnosticsState.ConflictResolution,
             lastSuccessfulStep = Phase14LastTraceName,
