@@ -1712,8 +1712,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var forbidden = ResolveThumbnailValidatorProfile(request).ForbiddenTermsApplied;
         var isConjunction = AllowsConjunctionVocabulary(eventType, request.ProductionContext?.Category);
         var mainText = string.Join(" / ", rc1TextLines.Take(2));
+        var groupingInstruction = IsPlanetGroupingEvent(eventType)
+            ? " Show 4 bright planets in the same visible sky region: Saturn, Mars, Jupiter, and Venus. Arrange them along a gentle arc above the eastern horizon, visually grouped and not randomly scattered, close enough to read as a grouped planet event but not colliding. No labels/text inside generated background; final text overlays are added by renderer only."
+            : string.Empty;
         var conjunctionInstruction = isConjunction ? " For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair." : string.Empty;
-        var basePrompt = $"Azure Image2 BACKGROUND ONLY for Thumbnail V5 global asset for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. No embedded text, labels, typography, UI, panels, guide cards, safety text, direction text, observing instructions, location references, event codes, or metadata boxes. Leave the visual sky dominant (at least 65% of canvas) and reserve no more than 35% for deterministic V5 guide overlay: compact information panel, sky labels, direction marker, and bottom viewing tips strip. Visual theme: {visualTheme}.{conjunctionInstruction}";
+        var basePrompt = $"Azure Image2 BACKGROUND ONLY for Thumbnail V5 global asset for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. No embedded text, labels, typography, UI, panels, guide cards, safety text, direction text, observing instructions, location references, event codes, or metadata boxes. Leave the visual sky dominant (at least 65% of canvas) and reserve no more than 35% for deterministic V5 guide overlay: compact information panel, sky labels, direction marker, and bottom viewing tips strip. Visual theme: {visualTheme}.{conjunctionInstruction}{groupingInstruction}";
         var text = rc1TextLines.Take(isMeteor ? 2 : 3).ToArray();
         var forbiddenInOverlayText = DetectThumbnailForbiddenTerms(ResolveThumbnailValidatorProfile(request), text);
         if (forbiddenInOverlayText.Count > 0)
@@ -3732,7 +3735,11 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
 
     private static bool AllowsConjunctionVocabulary(string? eventType, string? contentCategoryCode)
         => string.Equals(eventType, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(contentCategoryCode, "PlanetConjunction", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(eventType, "PlanetPairing", StringComparison.OrdinalIgnoreCase)
+            || IsPlanetGroupingEvent(eventType)
+            || string.Equals(contentCategoryCode, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(contentCategoryCode, "PlanetPairing", StringComparison.OrdinalIgnoreCase)
+            || IsPlanetGroupingEvent(contentCategoryCode);
 
     private static IReadOnlyList<string> DetectConjunctionVocabulary(string text)
     {
@@ -4848,6 +4855,11 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
             lines.Add(meteorName);
             lines.Add("METEOR SHOWER PEAK");
         }
+        else if (IsPlanetGroupingEvent(current.EventType) && eventObjectContext.ObjectCount >= 2)
+        {
+            lines.Add(BuildPlanetGroupingThumbnailObjectLine(eventObjectContext.ObjectNames));
+            lines.Add("PLANET GROUPING");
+        }
         else if (isConjunction && eventObjectContext.ObjectCount >= 2)
         {
             lines.Add($"{eventObjectContext.ObjectNames[0]} + {eventObjectContext.ObjectNames[1]}".ToUpperInvariant());
@@ -4870,6 +4882,17 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
 
         return lines.Where(line => !string.IsNullOrWhiteSpace(line)).Take(3).ToArray();
     }
+
+    private static string BuildPlanetGroupingThumbnailObjectLine(IReadOnlyList<string> objectNames)
+    {
+        var names = objectNames.Where(value => !string.IsNullOrWhiteSpace(value)).Take(4).Select(value => CleanHook(value)).ToArray();
+        if (names.Length <= 3) return string.Join(" + ", names);
+        var full = string.Join(" + ", names);
+        return full.Length <= 32 ? full : $"{names[0]} + {names[1]} + {names[2]} + MORE";
+    }
+
+    private static bool IsPlanetGroupingEvent(string? eventType)
+        => NormalizeEventTypeToken(eventType ?? string.Empty) is "PLANETGROUPING" or "PLANETPARADE";
 
     private static string CleanMeteorDisplayName(string value)
     {
