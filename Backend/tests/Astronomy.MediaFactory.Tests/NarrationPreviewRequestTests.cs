@@ -370,4 +370,73 @@ public sealed class NarrationPreviewPlanHydrationTests
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.GeneratePreviewAsync(request, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task NarrationGenerationKeepsRequestedSolarEclipseMetadataWhenPlanHydrationConflicts()
+    {
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<MediaFactoryDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        await using var db = new MediaFactoryDbContext(options);
+        var planId = Guid.Parse("58a48363-60bf-421a-98d7-135c163de821");
+        var intelligence = new Astronomy.MediaFactory.Core.AstronomyEventIntelligence
+        {
+            EventType = "NamedFullMoon",
+            Title = "Wolf Moon",
+            Summary = "Wolf Moon",
+            Language = "en",
+            StartUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero),
+            PeakUtc = new DateTimeOffset(2026, 8, 12, 17, 0, 0, TimeSpan.Zero),
+            RegionId = "IN-RJ-UDAIPUR",
+            MetadataJson = JsonSerializer.Serialize(new
+            {
+                shortTitle = "Wolf Moon",
+                eventDate = "2026-08-12",
+                localPeakTime = "2026-08-12 22:30 +05:30",
+                bestViewingWindowLocal = "2026-08-12 17:00–19:00 IST",
+                skyDirectionHint = "toward the Sun"
+            })
+        };
+        var plan = new Astronomy.MediaFactory.Core.ContentGenerationPlan
+        {
+            Language = "en",
+            RegionId = "IN-RJ-UDAIPUR",
+            Title = "Stale full moon plan title",
+            AstronomyEventIntelligence = intelligence,
+            AstronomyEventIntelligenceId = intelligence.Id,
+            PlannedFormat = "ShortVideo"
+        };
+        plan.AssignId(planId);
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var request = new NarrationPreviewRequest(
+            planId.ToString("D"),
+            "SolarEclipse",
+            "Total Solar Eclipse",
+            "total solar eclipse",
+            "en",
+            "IN-RJ-UDAIPUR",
+            "ShortVideo",
+            null);
+        var service = new NarrationGenerationService(db);
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+
+        Assert.Equal("SolarEclipse", response.EventType);
+        Assert.Equal("Total Solar Eclipse", response.EventName);
+        Assert.Equal("total solar eclipse", response.ShortTitle);
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+        Assert.NotNull(response.NarrationContextDiagnostics);
+        Assert.Equal("SolarEclipse", response.NarrationContextDiagnostics.Family);
+        Assert.Contains(response.Scenes, scene => scene.ScenePurpose == "Hook" && scene.Narration.Contains("the total solar eclipse", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("Raw internal event title appears.", response.Validation.Errors);
+        Assert.DoesNotContain("Raw short title appears.", response.Validation.Errors);
+        Assert.NotNull(response.PlanHydrationDiagnostics);
+        Assert.True(response.PlanHydrationDiagnostics.EventMetadataConflictDetected);
+        Assert.Equal("NamedFullMoon", response.PlanHydrationDiagnostics.HydratedEventType);
+        Assert.Equal("SolarEclipse", response.PlanHydrationDiagnostics.FinalResolvedEventType);
+        Assert.Equal("Wolf Moon", response.PlanHydrationDiagnostics.HydratedShortTitle);
+        Assert.Equal("total solar eclipse", response.PlanHydrationDiagnostics.FinalShortTitle);
+        Assert.Equal("CurrentEventLockWins", response.PlanHydrationDiagnostics.ConflictResolution);
+    }
 }
