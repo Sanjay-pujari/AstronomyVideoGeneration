@@ -4196,6 +4196,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<Phase14DocumentaryNarration> BuildV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
     {
         var language = ResolvePipelineLanguage(context.Request.Language);
+        Phase14ExceptionDiagnosticsState.RequestedLanguage = language;
         NarrationPreviewResponse response;
         var hydrationUsed = false;
         var fallbackMetadataUsed = false;

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
@@ -59,7 +61,8 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         var eventName = Clean(request.EventName, Clean(request.ShortTitle, "this sky event"));
         var regionId = Clean(request.RegionId, string.Empty);
         var metadata = Metadata.From(request.EventMetadata);
-        var date = formatter.FormatEventDate(metadata.EventDate ?? metadata.PeakDate, language);
+        var dateResolution = ResolveEventDate(metadata);
+        var date = formatter.FormatEventDate(dateResolution.Value, language);
         var peak = formatter.FormatPeakTime(metadata.PeakTime, language);
         var window = formatter.FormatViewingWindow(metadata.ViewingWindow ?? metadata.PeakTime, language);
         var direction = formatter.FormatDirection(metadata.Direction, language);
@@ -73,7 +76,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
             Scene("best-time", "BestTime", BestTime(context)),
             Scene("final-reminder", "FinalReminder", FinalReminder(context))
         };
-        var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, eventName, language, request.ShortTitle, context) }).ToArray();
+        var validated = scenes.Select(s => s with { Validation = ValidateScene(s.ScenePurpose, s.Narration, eventName, language, request.ShortTitle, context, request.Language, dateResolution) }).ToArray();
         var errors = validated.SelectMany(s => s.Validation.Errors).ToList();
         var warnings = validated.SelectMany(s => s.Validation.Warnings).ToList();
         if (validated.Select(s => NormalizeSentence(s.Narration)).GroupBy(s => s).Any(g => g.Count() > 1)) errors.Add("Duplicate sentence appears in narration.");
@@ -145,11 +148,13 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         return $"this {type} has specific timing, geometry, and observing conditions for this event";
     }
 
-    private static NarrationValidationResult ValidateScene(string purpose, string text, string eventName, string language, string? rawShortTitle, NarrationContext context)
+    private static NarrationValidationResult ValidateScene(string purpose, string text, string eventName, string language, string? rawShortTitle, NarrationContext context, string? requestedLanguage, DateResolution dateResolution)
     {
         var errors = new List<string>(); var warnings = new List<string>();
-        if (Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}\b")) errors.Add("Raw ISO date appears.");
-        if (Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?Z?)?\b")) errors.Add("Raw ISO date or UTC timestamp appears.");
+        var hookDateValidation = purpose == "Hook" ? ValidateHookExactDate(text, language, requestedLanguage, dateResolution) : null;
+        var rawIsoDateAllowedAsFallback = hookDateValidation?.Passed == true && !IsHindi(language) && Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}\b");
+        if (!rawIsoDateAllowedAsFallback && Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}\b")) errors.Add("Raw ISO date appears.");
+        if (!rawIsoDateAllowedAsFallback && Regex.IsMatch(text, @"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?Z?)?\b")) errors.Add("Raw ISO date or UTC timestamp appears.");
         if (Regex.IsMatch(text, @"\bUTC\b", RegexOptions.IgnoreCase)) errors.Add("UTC timestamp appears.");
         if (Regex.IsMatch(text, @"peaks\s+2026|minimum angular separation|consolidated from", RegexOptions.IgnoreCase)) errors.Add("Raw production metadata phrase appears.");
         if (Regex.IsMatch(text, @"\b[A-Z]{2}-[A-Z]{2}-[A-Z0-9-]+\b")) errors.Add("Raw region code appears.");
@@ -158,7 +163,11 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (Regex.IsMatch(text, @"[+-]\d{2}:\d{2}")) errors.Add("Timezone offset appears.");
         if (Regex.IsMatch(text, "placeholder|listed viewing window|local viewing window|during December", RegexOptions.IgnoreCase)) errors.Add("Placeholder or forbidden phrase appears.");
         if (text.Length > 0 && char.IsLower(text[0])) errors.Add("Scene narration starts with lowercase letter.");
-        if (purpose == "Hook" && !Regex.IsMatch(text, @"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|जनवरी|फ़रवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\b")) errors.Add("Hook lacks exact date.");
+        if (hookDateValidation is not null)
+        {
+            warnings.Add(hookDateValidation.Diagnostics);
+            if (!hookDateValidation.Passed) errors.Add("Hook lacks exact date. " + hookDateValidation.Diagnostics);
+        }
         if (Regex.IsMatch(text, @"^\s*(Interesting fact|Best time):", RegexOptions.IgnoreCase)) errors.Add("Scene starts with a forbidden label.");
         if (Regex.IsMatch(text, @"\b" + Regex.Escape(eventName) + @"\s+matters because", RegexOptions.IgnoreCase)) errors.Add("Scene uses awkward full event title phrasing.");
         if (purpose == "BestTime" && (Regex.IsMatch(text, @"\b(metadata|window unavailable|not available)\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(text, @"\b(AM|PM|midnight|sunrise|sunset|twilight|evening|dawn|moonrise|maximum eclipse|सुबह|शाम|रात|बजे|चंद्रोदय|ग्रहण)\b", RegexOptions.IgnoreCase))) errors.Add("BestTime lacks real formatted window.");
@@ -174,6 +183,73 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         if (IsHindi(language) && Regex.IsMatch(text, @"(?:पूर्व|पूर्वी|पश्चिम|सिर के ऊपर).*(?:\s+to\s+|after|before|PM|AM|East|overhead)|(?:\s+to\s+|after|before|PM|AM|East|overhead).*(?:पूर्व|पूर्वी|पश्चिम|सिर के ऊपर)", RegexOptions.IgnoreCase)) errors.Add("Hindi contains mixed Hindi-English direction phrasing.");
         return new(errors.Count == 0, errors, warnings);
     }
+
+    private static HookDateValidation ValidateHookExactDate(string text, string resolvedLanguage, string? requestedLanguage, DateResolution dateResolution)
+    {
+        var normalizedText = NormalizeDateText(text);
+        var candidates = BuildExpectedDateCandidates(dateResolution.Value, resolvedLanguage).ToArray();
+        var normalizedCandidates = candidates.Select(NormalizeDateText).ToArray();
+        var passed = normalizedCandidates.Any(c => !string.IsNullOrWhiteSpace(c) && normalizedText.Contains(c, StringComparison.OrdinalIgnoreCase));
+        var diagnostics = JsonSerializer.Serialize(new
+        {
+            requestedLanguage = Clean(requestedLanguage, resolvedLanguage),
+            resolvedLanguage,
+            expectedDateCandidates = candidates,
+            actualHookText = text,
+            normalizedActualHookText = normalizedText,
+            dateValidationPassed = passed,
+            dateSourceUsed = dateResolution.Source
+        });
+        return new(passed, diagnostics);
+    }
+
+    private static IEnumerable<string> BuildExpectedDateCandidates(string? value, string language)
+    {
+        if (!TryParseDate(value, out var date)) yield break;
+        if (IsHindi(language))
+        {
+            var month = HindiMonthName(date.Month);
+            yield return $"{date.Day} {month} {date.Year}";
+            yield return $"{ToDevanagari(date.Day.ToString("00", CultureInfo.InvariantCulture))} {month} {ToDevanagari(date.Year.ToString(CultureInfo.InvariantCulture))}";
+            yield return date.ToString("d MMM yyyy", CultureInfo.GetCultureInfo("en-US"));
+            yield break;
+        }
+
+        yield return date.ToString("MMMM d, yyyy", CultureInfo.GetCultureInfo("en-US"));
+        yield return date.ToString("MMM d, yyyy", CultureInfo.GetCultureInfo("en-US"));
+        yield return date.ToString("d MMMM yyyy", CultureInfo.GetCultureInfo("en-US"));
+        yield return date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    }
+
+    private static DateResolution ResolveEventDate(Metadata metadata)
+    {
+        if (!string.IsNullOrWhiteSpace(metadata.LocalPeakTime)) return new(metadata.LocalPeakTime, "localPeakTime");
+        if (!string.IsNullOrWhiteSpace(metadata.EventDate)) return new(metadata.EventDate, "eventDate");
+        if (!string.IsNullOrWhiteSpace(metadata.PeakUtc)) return new(metadata.PeakUtc, "peakUtc");
+        return new(metadata.PeakDate, "fallback");
+    }
+
+    private static bool TryParseDate(string? value, out DateTime date)
+    {
+        if (DateTime.TryParse(value, CultureInfo.GetCultureInfo("en-US"), DateTimeStyles.AssumeLocal, out date)) return true;
+        date = default;
+        return false;
+    }
+
+    private static string NormalizeDateText(string value)
+    {
+        var text = ToAsciiDigits(value ?? string.Empty).Normalize(NormalizationForm.FormC);
+        text = Regex.Replace(text, @"[\u200c\u200d]", string.Empty);
+        text = Regex.Replace(text, @"\s+", " ").Trim();
+        return text;
+    }
+
+    private static string ToAsciiDigits(string value) => string.Concat((value ?? string.Empty).Select(ch => ch >= '०' && ch <= '९' ? (char)('0' + ch - '०') : ch));
+    private static string ToDevanagari(string value) => string.Concat((value ?? string.Empty).Select(ch => ch >= '0' && ch <= '9' ? (char)('०' + ch - '0') : ch));
+    private static string HindiMonthName(int month) => month is >= 1 and <= 12 ? HindiMonths[month - 1] : string.Empty;
+    private static readonly string[] HindiMonths = ["जनवरी", "फ़रवरी", "मार्च", "अप्रैल", "मई", "जून", "जुलाई", "अगस्त", "सितंबर", "अक्टूबर", "नवंबर", "दिसंबर"];
+    private sealed record DateResolution(string? Value, string Source);
+    private sealed record HookDateValidation(bool Passed, string Diagnostics);
 
     private static bool ContainsUnapprovedRawShortTitle(string text, string rawShortTitle, NarrationContext context)
     {
@@ -543,6 +619,7 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         {
             ["eventDate"] = FirstNonEmpty(ReadEventJsonString(intelligence, "eventDate", "EventDate", "localDate"), intelligence.PeakUtc?.ToString("yyyy-MM-dd"), intelligence.StartUtc.ToString("yyyy-MM-dd")),
             ["localPeakTime"] = FirstNonEmpty(ReadEventJsonString(intelligence, "localPeakTime", "LocalPeakTime", "peakTime"), intelligence.PeakUtc?.ToString("yyyy-MM-dd HH:mm zzz")),
+            ["peakUtc"] = intelligence.PeakUtc?.ToString("yyyy-MM-dd HH:mm zzz", CultureInfo.InvariantCulture),
             ["bestViewingWindowLocal"] = ReadEventJsonString(intelligence, "bestViewingWindowLocal", "BestViewingWindowLocal", "bestViewingWindow", "viewingWindow"),
             ["direction"] = ReadEventJsonString(intelligence, "skyDirectionHint", "SkyDirectionHint", "direction"),
             ["moonInterference"] = ReadEventJsonString(intelligence, "moonInterference", "MoonInterference")
@@ -571,14 +648,14 @@ public sealed class NarrationGenerationService : INarrationGenerationService
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
     private sealed record HydratedNarrationRequest(NarrationPreviewRequest Request, NarrationPlanHydrationDiagnostics? Diagnostics);
 
-    private sealed record Metadata(string? EventDate, string? PeakDate, string? PeakTime, string? ViewingWindow, string? Direction)
+    private sealed record Metadata(string? EventDate, string? PeakDate, string? PeakTime, string? LocalPeakTime, string? PeakUtc, string? ViewingWindow, string? Direction)
     {
         public static Metadata From(JsonElement? element)
         {
-            if (!element.HasValue || element.Value.ValueKind != JsonValueKind.Object) return new(null, null, null, null, null);
+            if (!element.HasValue || element.Value.ValueKind != JsonValueKind.Object) return new(null, null, null, null, null, null, null);
             var e = element.Value;
             string? Get(params string[] names) => names.Select(n => e.TryGetProperty(n, out var p) ? p.ToString() : null).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-            return new(Get("eventDate", "date", "localDate"), Get("peakDate"), Get("peakTime", "localPeakTime"), Get("viewingWindow", "bestViewingWindow", "bestViewingWindowLocal", "visibilityWindow", "localObservationWindow", "observationWindow"), Get("direction", "skyDirectionHint", "observationDirection", "visibilityDirection"));
+            return new(Get("eventDate", "date", "localDate"), Get("peakDate"), Get("peakTime", "localPeakTime"), Get("localPeakTime"), Get("peakUtc", "peakUTC"), Get("viewingWindow", "bestViewingWindow", "bestViewingWindowLocal", "visibilityWindow", "localObservationWindow", "observationWindow"), Get("direction", "skyDirectionHint", "observationDirection", "visibilityDirection"));
         }
     }
 }
