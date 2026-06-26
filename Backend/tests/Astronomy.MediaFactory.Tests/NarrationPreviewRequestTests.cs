@@ -271,6 +271,60 @@ public sealed class NarrationPreviewRequestTests
         Assert.Contains("BestTime contains the same Hindi date phrase twice.", response.Validation.Errors);
     }
 
+    [Theory]
+    [MemberData(nameof(Phase14FamilyLanguageCases))]
+    public async Task NarrationGenerationPhase14FamilyLevelNarrationValidatesForEnglishAndHindi(string eventType, string eventName, string shortTitle, string language, object metadata)
+    {
+        var request = new NarrationPreviewRequest(
+            PlanId: null,
+            EventType: eventType,
+            EventName: eventName,
+            ShortTitle: shortTitle,
+            Language: language,
+            RegionId: "IN-RJ-UDAIPUR",
+            Format: "ShortVideo",
+            EventMetadata: JsonSerializer.SerializeToElement(metadata));
+        var service = new NarrationGenerationService();
+
+        var response = await service.GeneratePreviewAsync(request, CancellationToken.None);
+        var bestTime = Assert.Single(response.Scenes.Where(scene => scene.ScenePurpose == "BestTime"));
+        var fact = Assert.Single(response.Scenes.Where(scene => scene.ScenePurpose == "InterestingFact"));
+        var narration = string.Join(" ", response.Scenes.Select(scene => scene.Narration));
+
+        Assert.True(bestTime.Validation.IsValid, string.Join("; ", bestTime.Validation.Errors));
+        Assert.True(fact.Validation.IsValid, string.Join("; ", fact.Validation.Errors));
+        Assert.True(response.Validation.IsValid, string.Join("; ", response.Validation.Errors));
+        if (language == "hi")
+        {
+            Assert.DoesNotContain("northeast after midnight", narration, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("eastern sky", narration, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("open sky", narration, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("after 10 PM", narration, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("early evening", narration, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("before sunrise", narration, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public static IEnumerable<object[]> Phase14FamilyLanguageCases()
+    {
+        yield return ["MeteorShower", "Geminids Meteor Shower Peak", "Geminids", "en", new { eventDate = "2026-12-14", bestViewingWindowLocal = "2026-12-14 00:00–05:00 IST", skyDirectionHint = "East to overhead after 10 PM" }];
+        yield return ["MeteorShower", "Geminids Meteor Shower Peak", "Geminids", "hi", new { eventDate = "2026-12-14", bestViewingWindowLocal = "2026-12-14 00:00–05:00 IST", skyDirectionHint = "East to overhead after 10 PM" }];
+        yield return ["MeteorShower", "Perseids Meteor Shower Peak", "Perseids", "en", new { eventDate = "2026-08-12", bestViewingWindowLocal = "2026-08-12 00:00–05:00 IST", skyDirectionHint = "Northeast after midnight" }];
+        yield return ["MeteorShower", "Perseids Meteor Shower Peak", "Perseids", "hi", new { eventDate = "2026-08-12", bestViewingWindowLocal = "2026-08-12 00:00–05:00 IST", skyDirectionHint = "Northeast after midnight" }];
+        yield return ["PlanetConjunction", "Jupiter Venus Conjunction", "Jupiter Venus", "en", new { eventDate = "2026-06-07", localPeakTime = "2026-06-07 19:30 +05:30", bestViewingWindowLocal = "2026-06-07 19:00–20:30 IST", skyDirectionHint = "western sky after sunset" }];
+        yield return ["PlanetConjunction", "Jupiter Venus Conjunction", "Jupiter Venus", "hi", new { eventDate = "2026-06-07", localPeakTime = "2026-06-07 19:30 +05:30", bestViewingWindowLocal = "2026-06-07 19:00–20:30 IST", skyDirectionHint = "western sky after sunset" }];
+        yield return ["PlanetConjunction", "Mars Jupiter Conjunction", "Mars Jupiter", "en", new { eventDate = "2026-01-11", localPeakTime = "2026-01-11 05:30 +05:30", bestViewingWindowLocal = "2026-01-11 04:30–06:00 IST", skyDirectionHint = "eastern horizon before sunrise" }];
+        yield return ["PlanetConjunction", "Mars Jupiter Conjunction", "Mars Jupiter", "hi", new { eventDate = "2026-01-11", localPeakTime = "2026-01-11 05:30 +05:30", bestViewingWindowLocal = "2026-01-11 04:30–06:00 IST", skyDirectionHint = "eastern horizon before sunrise" }];
+        yield return ["PlanetGrouping", "Mercury Venus Mars planet grouping", "Mercury Venus Mars", "en", new { eventDate = "2026-02-20", bestViewingWindowLocal = "2026-02-20 19:00–20:00 IST", skyDirectionHint = "western sky after sunset" }];
+        yield return ["PlanetGrouping", "Mercury Venus Mars planet grouping", "Mercury Venus Mars", "hi", new { eventDate = "2026-02-20", bestViewingWindowLocal = "2026-02-20 19:00–20:00 IST", skyDirectionHint = "western sky after sunset" }];
+        yield return ["NamedFullMoon", "Wolf Moon", "Wolf Moon", "en", new { eventDate = "2026-01-03", bestViewingWindowLocal = "2026-01-03 18:00–23:00 IST", skyDirectionHint = "eastern sky near moonrise" }];
+        yield return ["NamedFullMoon", "Wolf Moon", "Wolf Moon", "hi", new { eventDate = "2026-01-03", bestViewingWindowLocal = "2026-01-03 18:00–23:00 IST", skyDirectionHint = "eastern sky near moonrise" }];
+        yield return ["NamedFullMoon", "Strawberry Moon", "Strawberry Moon", "en", new { eventDate = "2026-06-29", bestViewingWindowLocal = "2026-06-29 19:00–23:30 IST", skyDirectionHint = "eastern sky near moonrise" }];
+        yield return ["NamedFullMoon", "Strawberry Moon", "Strawberry Moon", "hi", new { eventDate = "2026-06-29", bestViewingWindowLocal = "2026-06-29 19:00–23:30 IST", skyDirectionHint = "eastern sky near moonrise" }];
+        yield return ["SolarEclipse", "Total Solar Eclipse", "Total Solar Eclipse", "en", new { eventDate = "2026-08-12", bestViewingWindowLocal = "2026-08-12 17:00–19:00 IST", skyDirectionHint = "toward the Sun" }];
+        yield return ["SolarEclipse", "Total Solar Eclipse", "Total Solar Eclipse", "hi", new { eventDate = "2026-08-12", bestViewingWindowLocal = "2026-08-12 17:00–19:00 IST", skyDirectionHint = "toward the Sun" }];
+    }
+
     private static string RequestJson(string returnScenes) => $$"""
         {
           "eventType": "meteor_shower",
