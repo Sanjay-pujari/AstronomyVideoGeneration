@@ -604,13 +604,48 @@ public sealed class HeroAssetStoryGenerator(
     private static IReadOnlyList<string> ValidateHeroCompositionText(HeroCompositionModelDto compositionModel)
     {
         var issues = new List<string>();
+        var renderedText = ResolveHeroRenderedText(compositionModel);
         if (string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text))
             issues.Add("Hero composition timingBlock.text must not be empty.");
         if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text))
             issues.Add("Hero composition directionBlock.text must not be empty.");
+        if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText))
+            issues.Add("Hero rendering validation failed: directionBlock.text is non-empty but renderedDirectionText is empty.");
+        if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText))
+            issues.Add("Hero rendering validation failed: timingBlock.text is non-empty but renderedTimeText is empty.");
+        if (string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && !string.IsNullOrWhiteSpace(renderedText.RenderedCtaText))
+            issues.Add("Hero rendering validation failed: CTA is reported rendered while ctaBlock.text is empty.");
         if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase))
             issues.Add("Hero composition timingBlock.text must not contain TIME TBD.");
         return issues;
+    }
+
+    private static IReadOnlyList<string> BuildHeroRenderedBlocks(HeroCompositionModelDto compositionModel)
+    {
+        var renderedText = ResolveHeroRenderedText(compositionModel);
+        var blocks = new List<string> { "Title", "Visual" };
+        if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && !string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText))
+            blocks.Add("Direction");
+        if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && !string.IsNullOrWhiteSpace(renderedText.RenderedTimeText))
+            blocks.Add("Timing");
+        if (!string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && !string.IsNullOrWhiteSpace(renderedText.RenderedCtaText))
+            blocks.Add("CTA");
+        return blocks;
+    }
+
+    private static (string RenderedDateText, string RenderedTimeText, string RenderedDirectionText, string RenderedCtaText) ResolveHeroRenderedText(HeroCompositionModelDto compositionModel)
+    {
+        var renderedDateText = "DATE";
+        var renderedTimeText = string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text)
+            ? string.Empty
+            : $"TIME  {Clean(compositionModel.TimingBlock.Text).ToUpperInvariant()}";
+        var renderedDirectionText = string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)
+            ? string.Empty
+            : $"DIRECTION  {Clean(compositionModel.DirectionBlock.Text).ToUpperInvariant()}";
+        var renderedCtaText = string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text)
+            ? string.Empty
+            : Clean(compositionModel.CtaBlock.Text).ToUpperInvariant();
+        return (renderedDateText, renderedTimeText, renderedDirectionText, renderedCtaText);
     }
 
     private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
@@ -618,17 +653,26 @@ public sealed class HeroAssetStoryGenerator(
         var variants = HeroImageSpecs
             .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
             .ToArray();
-        var renderedBlocks = new[] { "Title", "Visual", "Direction", "Timing", "CTA" };
+        var renderedBlocks = BuildHeroRenderedBlocks(compositionModel);
         var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
         var textOverlapDetected = variants.Any(variant => variant.TextOverlapDetected);
         var objectsVisible = variants.All(variant => variant.ObjectsVisible);
         var overlapWarnings = variants.SelectMany(variant => variant.OverlapWarnings).ToArray();
-        var compositionTextValid = !string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && !string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && !compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase);
+        var renderedText = ResolveHeroRenderedText(compositionModel);
+        var compositionTextValid = !string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text)
+            && !string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)
+            && !string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)
+            && !string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)
+            && !compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)
+            && !(string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase));
         var isValid = !duplicateBlocksDetected && !textOverlapDetected && objectsVisible && compositionTextValid;
         var errors = BuildHeroLayoutErrors(duplicateBlocksDetected, textOverlapDetected, objectsVisible, overlapWarnings);
         if (string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text)) errors = errors.Concat(["Hero timingBlock.text must not be empty."]).ToArray();
         if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)) errors = errors.Concat(["Hero directionBlock.text must not be empty."]).ToArray();
         if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) errors = errors.Concat(["Hero rendered timing text must not contain TIME TBD."]).ToArray();
+        if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero directionBlock.text is non-empty but renderedDirectionText is empty."]).ToArray();
+        if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)) errors = errors.Concat(["Hero timingBlock.text is non-empty but renderedTimeText is empty."]).ToArray();
+        if (string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase)) errors = errors.Concat(["Hero CTA is reported rendered while ctaBlock.text is empty."]).ToArray();
         return new HeroLayoutValidationDto(
             renderedBlocks,
             duplicateBlocksDetected,
@@ -670,7 +714,7 @@ public sealed class HeroAssetStoryGenerator(
     private static HeroVariantLayoutValidationDto BuildHeroVariantLayoutValidation(HeroImageSpec spec, HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
     {
         var (marginX, marginY) = ResolveHeroSafeMargins(spec.Width, spec.Height);
-        var renderedBlocks = new[] { "Title", "Visual", "Direction", "Timing", "CTA" };
+        var renderedBlocks = BuildHeroRenderedBlocks(compositionModel);
         var duplicateBlocksDetected = renderedBlocks.GroupBy(block => block, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1);
         var boxes = BuildHeroTextBoxes(spec, marginX, marginY, compositionModel);
         var overlapWarnings = new List<string>();
@@ -818,7 +862,7 @@ public sealed class HeroAssetStoryGenerator(
             new HeroCompositionTextBlockDto("direction-panel", directionText),
             new HeroCompositionTextBlockDto("date-time-panel", timeText),
             new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "object-labels" : "", heroContract == "GuideHero" ? objectText : ""),
-            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(directionText), !string.IsNullOrWhiteSpace(timeText), true, !string.IsNullOrWhiteSpace(directionText) && !string.IsNullOrWhiteSpace(timeText) ? 100 : 70));
+            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(directionText), !string.IsNullOrWhiteSpace(timeText), heroContract == "GuideHero" && !string.IsNullOrWhiteSpace(objectText), !string.IsNullOrWhiteSpace(directionText) && !string.IsNullOrWhiteSpace(timeText) ? 100 : 70));
     }
 
     private static string BuildCinematicHeroTitleOverlay(EventObjectContext eventObjectContext, string eventTitle, string eventType, string selectedHook)
@@ -1113,31 +1157,52 @@ public sealed class HeroAssetStoryGenerator(
             ctx.DrawText(title, titleFont, Color.White, new PointF(marginX, topY));
             ctx.DrawText(subtitle, subtitleFont, Color.FromRgb(198, 226, 255), new PointF(marginX, subtitleY));
 
+            var directionPanelText = $"DIRECTION  {Clean(compositionModel.DirectionBlock.Text).ToUpperInvariant()}";
+            var directionPanelFont = FitHeroFont(directionPanelText, landscape ? 34f : square ? 27f : 32f, 20f, maxTextWidth, FontStyle.Bold);
+            var directionPanelBounds = TextMeasurer.MeasureBounds(directionPanelText, new TextOptions(directionPanelFont));
+            var directionPanelY = bottomBarY - directionPanelBounds.Height - (landscape ? 22f : 30f);
+            var directionPanelX = landscape ? width - marginX - directionPanelBounds.Width : marginX;
+            if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text))
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
+            if (directionPanelY <= topBlockBottom + 24f)
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: direction text overlaps title/subtitle safe area.");
+            ctx.DrawText(new RichTextOptions(directionPanelFont) { Origin = new PointF(directionPanelX + 2, directionPanelY + 2), WrappingLength = maxTextWidth }, directionPanelText, Color.Black.WithAlpha(0.72f));
+            ctx.DrawText(new RichTextOptions(directionPanelFont) { Origin = new PointF(directionPanelX, directionPanelY), WrappingLength = maxTextWidth }, directionPanelText, Color.FromRgb(255, 212, 138));
+
             ctx.Fill(Color.Black.WithAlpha(0.58f), new RectangleF(0, bottomBarY, width, bottomBarHeight));
             ctx.Fill(Color.White.WithAlpha(0.10f), new RectangleF(0, bottomBarY, width, 2));
-            var (date, time) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
-            var metaFont = FitHeroFont($"{date}      {time}", landscape ? 36f : square ? 28f : 34f, 22f, maxTextWidth, FontStyle.Bold);
-            var metaBounds = TextMeasurer.MeasureBounds($"{date}      {time}", new TextOptions(metaFont));
+            var (date, time, direction) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
+            var metaFont = FitHeroFont($"{date}      {time}      {direction}", landscape ? 34f : square ? 26f : 30f, 20f, maxTextWidth, FontStyle.Bold);
+            var metaBounds = TextMeasurer.MeasureBounds($"{date}      {time}      {direction}", new TextOptions(metaFont));
             var metaY = bottomBarY + (bottomBarHeight - metaBounds.Height) / 2f;
+            var dateBounds = TextMeasurer.MeasureBounds(date, new TextOptions(metaFont));
             var timeBounds = TextMeasurer.MeasureBounds(time, new TextOptions(metaFont));
+            var directionBounds = TextMeasurer.MeasureBounds(direction, new TextOptions(metaFont));
             var dateX = marginX;
-            var timeX = portrait ? width - marginX - timeBounds.Width : MathF.Min(width - marginX - timeBounds.Width, marginX + MathF.Max(width * 0.30f, 360f));
-            if (dateX + TextMeasurer.MeasureBounds(date, new TextOptions(metaFont)).Width >= timeX - 24f)
-                throw new InvalidOperationException("Phase 11 Hero rendering failed: date/time are not visible without overlap.");
+            var timeX = landscape ? (width - timeBounds.Width) / 2f : width - marginX - timeBounds.Width;
+            var directionX = landscape ? width - marginX - directionBounds.Width : marginX;
+            var directionY = landscape ? metaY : metaY + metaBounds.Height + 8f;
+            if (landscape && (dateX + dateBounds.Width >= timeX - 24f || timeX + timeBounds.Width >= directionX - 24f))
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: date/time/direction footer slots are not visible without overlap.");
+            if (!landscape && directionY + directionBounds.Height > height - 10f)
+                throw new InvalidOperationException("Phase 11 Hero rendering failed: direction footer is not visible.");
             ctx.DrawText(date, metaFont, Color.FromRgb(170, 233, 255), new PointF(dateX, metaY));
             ctx.DrawText(time, metaFont, Color.White, new PointF(timeX, metaY));
+            ctx.DrawText(direction, metaFont, Color.FromRgb(255, 212, 138), new PointF(directionX, directionY));
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
-    private static (string Date, string Time) BuildHeroV6MetadataValues(HeroAssetStoryDto heroStory, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence)
+    private static (string Date, string Time, string Direction) BuildHeroV6MetadataValues(HeroAssetStoryDto heroStory, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence)
     {
         var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "DATE TBD";
         var time = FirstNonEmpty(compositionModel.TimingBlock.Text, ExtractHeroTimeText(heroStory.HeroStorySource.When));
         if (string.IsNullOrWhiteSpace(time)) throw new InvalidOperationException("Phase 11 Hero rendering failed: timingBlock.text is empty.");
         if (time.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Phase 11 Hero rendering failed: rendered image would contain TIME TBD.");
-        return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant());
+        var direction = ResolveHeroFooterDirection(FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroStorySource.Where));
+        if (string.IsNullOrWhiteSpace(direction)) throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
+        return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant(), $"DIRECTION  {direction}".ToUpperInvariant());
     }
 
     private static string ExtractHeroTimeText(string value)
@@ -1298,8 +1363,11 @@ public sealed class HeroAssetStoryGenerator(
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
         var generatedVariants = variants.Select(v => NormalizeHeroVariantName(v.Variant)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
-        var renderedTimeText = $"TIME {compositionModel.TimingBlock.Text}";
-        var renderedDirectionText = compositionModel.DirectionBlock.Text;
+        var rendered = ResolveHeroRenderedText(compositionModel);
+        var (renderedDateText, _, renderedFooterDirectionText) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
+        var renderedTimeText = rendered.RenderedTimeText;
+        var renderedDirectionText = rendered.RenderedDirectionText;
+        var renderedCtaText = rendered.RenderedCtaText;
         var titleFitPassed = !string.IsNullOrWhiteSpace(heroTitle) && !heroTitle.EndsWith(",", StringComparison.Ordinal) && heroTitle.Length <= 40 && !string.IsNullOrWhiteSpace(heroSubtitle);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -1317,8 +1385,15 @@ public sealed class HeroAssetStoryGenerator(
             missingVariants,
             timingSource = heroStory.HeroStorySource.When,
             directionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where),
+            renderedDateText,
             renderedTimeText,
             renderedDirectionText,
+            renderedFooterDirectionText,
+            renderedCtaText,
+            directionBlockText = compositionModel.DirectionBlock.Text,
+            timingBlockText = compositionModel.TimingBlock.Text,
+            ctaBlockText = compositionModel.CtaBlock.Text,
+            ctaSkippedBecauseEmpty = string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text),
             titleFitPassed,
             variantCount = variants.Count,
             azureCallsCount = variants.Count(v => v.Result.ProviderCalled),
@@ -1663,6 +1738,28 @@ public sealed class HeroAssetStoryGenerator(
         if (string.IsNullOrWhiteSpace(cleaned))
             return "VIEWING DIRECTION";
         return cleaned.StartsWith('←') ? cleaned : cleaned;
+    }
+
+    private static string ResolveHeroFooterDirection(string directionText)
+    {
+        var cleaned = Clean(directionText).ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return string.Empty;
+
+        var skyMatch = System.Text.RegularExpressions.Regex.Match(
+            cleaned,
+            @"\b(NORTH(?:ERN)?|SOUTH(?:ERN)?|EAST(?:ERN)?|WEST(?:ERN)?|NORTHEAST(?:ERN)?|NORTHWEST(?:ERN)?|SOUTHEAST(?:ERN)?|SOUTHWEST(?:ERN)?)\s+SKY\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (skyMatch.Success)
+            return skyMatch.Value.ToUpperInvariant();
+
+        foreach (var direction in new[] { "NORTHEAST", "NORTHWEST", "SOUTHEAST", "SOUTHWEST", "EASTERN", "WESTERN", "NORTHERN", "SOUTHERN", "EAST", "WEST", "NORTH", "SOUTH" })
+        {
+            if (ContainsToken(cleaned, direction))
+                return direction.EndsWith("ERN", StringComparison.OrdinalIgnoreCase) ? $"{direction} SKY" : direction;
+        }
+
+        return cleaned;
     }
 
     private static HeroAssetVisualReviewDto BuildHeroVisualReview(
