@@ -460,6 +460,51 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
 
+
+    [Fact]
+    public void Phase11PlanetGroupingHero_CompactsDirectionToFooterOnlyMetadata()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("GROUPED PLANETS OVER UDAIPUR, RAJASTHAN"),
+            new HeroCompositionSceneBlockDto("planet grouping background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Look toward the eastern sky, then scan the arc above the horizon where the grouped planets appear."),
+            new HeroCompositionTextBlockDto("date-time-panel", "7:23 PM IST"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+
+        var method = typeof(HeroAssetStoryGenerator).GetMethod("ResolveHeroRenderedText", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var rendered = method!.Invoke(null, [composition]);
+        Assert.NotNull(rendered);
+        var renderedTuple = (System.Runtime.CompilerServices.ITuple)rendered!;
+        var renderedDirectionText = (string)renderedTuple[2]!;
+
+        Assert.Equal("DIRECTION  EASTERN SKY", renderedDirectionText);
+        Assert.DoesNotContain("SCAN THE ARC", renderedDirectionText);
+        Assert.True(renderedDirectionText.Length <= 30);
+    }
+
+    [Fact]
+    public void Phase11HeroLayoutValidation_FailsWhenDirectionCannotFitCompactFooter()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("GROUPED PLANETS OVER UDAIPUR, RAJASTHAN"),
+            new HeroCompositionSceneBlockDto("planet grouping background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Look across the broad upper twilight arc above the whole city horizon"),
+            new HeroCompositionTextBlockDto("date-time-panel", "7:23 PM IST"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+
+        var method = typeof(HeroAssetStoryGenerator).GetMethod("BuildHeroLayoutValidation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>()])!;
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("renderedDirectionText is too long", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task GenerateHeroAssetsAsync_SceneSelectionNonDryRunWritesHeroSceneManifestOnly()
     {
