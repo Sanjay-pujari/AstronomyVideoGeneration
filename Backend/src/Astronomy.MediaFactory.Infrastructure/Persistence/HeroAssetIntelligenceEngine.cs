@@ -356,8 +356,10 @@ public sealed class HeroAssetStoryGenerator(
             warnings.Add($"Required strategy celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
 
         var layoutValidation = BuildHeroLayoutValidation(compositionModel, planetAssets.Select(asset => asset.Label).ToArray());
+        var compositionValidationIssues = ValidateHeroCompositionText(compositionModel);
         var strategyValidationIssues = ValidateHeroStrategyRenderingContract(request, heroStory, compositionModel, planetAssets);
         warnings.AddRange(strategyValidationIssues);
+        warnings.AddRange(compositionValidationIssues);
         if (layoutValidation?.DuplicateBlocksDetected == true)
             warnings.Add("Hero layout validation failed: duplicate composition block rendering was detected.");
         if (layoutValidation?.TextOverlapDetected == true)
@@ -371,7 +373,8 @@ public sealed class HeroAssetStoryGenerator(
             && !layoutValidation.DuplicateBlocksDetected
             && !layoutValidation.TextOverlapDetected
             && layoutValidation.ObjectsVisible
-            && strategyValidationIssues.Count == 0;
+            && strategyValidationIssues.Count == 0
+            && compositionValidationIssues.Count == 0;
         if (!isValid)
         {
             if (layoutValidation is null || !layoutValidation.IsValid)
@@ -431,14 +434,19 @@ public sealed class HeroAssetStoryGenerator(
                 var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
                 if (!azureResult.ProviderSucceeded)
                     throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteHeroV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
+                await WriteHeroV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, compositionModel, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
                 var hash = await ComputeSha256Async(variantPath, cancellationToken);
                 heroVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, azureBackgroundPath, variantPath, azureResult, hash));
                 generatedFiles.Add(NormalizePath(azureBackgroundPath));
                 generatedFiles.Add(NormalizePath(variantPath));
             }
 
-            if (heroVariantResults.Count(v => v.Result.ProviderCalled) < 3)
+            var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
+            var generatedVariants = heroVariantResults.Select(result => NormalizeHeroVariantName(result.Variant)).ToArray();
+            var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (missingVariants.Length > 0)
+                throw new InvalidOperationException($"Hero V6 validation failed: missing required variants: {string.Join(", ", missingVariants)}.");
+            if (heroVariantResults.Count(v => v.Result.ProviderCalled) < expectedVariants.Length)
                 throw new InvalidOperationException("Hero V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
             if (heroVariantResults.Select(v => (v.Width, v.Height)).Distinct().Count() != 3)
                 throw new InvalidOperationException("Hero V6 validation failed: landscape, portrait, and square dimensions must be distinct.");
@@ -454,7 +462,7 @@ public sealed class HeroAssetStoryGenerator(
             await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
             await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
             generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json")));
-            await WriteHeroV6GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
+            await WriteHeroV6GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroStory, selectedHook, compositionModel, request.ProductionContext?.ProductionEventIntelligence, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
             generatedFiles.Add(NormalizePath(promptPath));
             generatedFiles.Add(NormalizePath(diagnosticsPath));
 
@@ -484,6 +492,19 @@ public sealed class HeroAssetStoryGenerator(
         {
             warnings.Add("Hero asset image generation failed validation: hero-final.png and hero-review.json are required.");
             isValid = false;
+        }
+
+        if (!request.DryRun)
+        {
+            var missingRequiredVariants = HeroImageSpecs
+                .Where(spec => !File.Exists(Path.Combine(heroAssetsRoot, spec.FileName)))
+                .Select(spec => spec.Variant)
+                .ToArray();
+            if (missingRequiredVariants.Length > 0)
+            {
+                warnings.Add($"Hero asset image generation failed validation: missing required variants {string.Join(", ", missingRequiredVariants)}.");
+                isValid = false;
+            }
         }
 
         return new HeroAssetGenerationResponse(request.EventId, isValid, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Images", true, true, imageGenerationExecuted)
@@ -580,18 +601,34 @@ public sealed class HeroAssetStoryGenerator(
     private static bool IsStoryPhase(string? phase)
         => string.Equals(phase?.Trim(), "Story", StringComparison.OrdinalIgnoreCase);
 
+    private static IReadOnlyList<string> ValidateHeroCompositionText(HeroCompositionModelDto compositionModel)
+    {
+        var issues = new List<string>();
+        if (string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text))
+            issues.Add("Hero composition timingBlock.text must not be empty.");
+        if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text))
+            issues.Add("Hero composition directionBlock.text must not be empty.");
+        if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase))
+            issues.Add("Hero composition timingBlock.text must not contain TIME TBD.");
+        return issues;
+    }
+
     private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
     {
         var variants = HeroImageSpecs
             .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
             .ToArray();
-        var renderedBlocks = new[] { "Title", "Visual" };
+        var renderedBlocks = new[] { "Title", "Visual", "Direction", "Timing", "CTA" };
         var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
         var textOverlapDetected = variants.Any(variant => variant.TextOverlapDetected);
         var objectsVisible = variants.All(variant => variant.ObjectsVisible);
         var overlapWarnings = variants.SelectMany(variant => variant.OverlapWarnings).ToArray();
-        var isValid = !duplicateBlocksDetected && !textOverlapDetected && objectsVisible;
+        var compositionTextValid = !string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && !string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && !compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase);
+        var isValid = !duplicateBlocksDetected && !textOverlapDetected && objectsVisible && compositionTextValid;
         var errors = BuildHeroLayoutErrors(duplicateBlocksDetected, textOverlapDetected, objectsVisible, overlapWarnings);
+        if (string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text)) errors = errors.Concat(["Hero timingBlock.text must not be empty."]).ToArray();
+        if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)) errors = errors.Concat(["Hero directionBlock.text must not be empty."]).ToArray();
+        if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) errors = errors.Concat(["Hero rendered timing text must not contain TIME TBD."]).ToArray();
         return new HeroLayoutValidationDto(
             renderedBlocks,
             duplicateBlocksDetected,
@@ -633,7 +670,7 @@ public sealed class HeroAssetStoryGenerator(
     private static HeroVariantLayoutValidationDto BuildHeroVariantLayoutValidation(HeroImageSpec spec, HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
     {
         var (marginX, marginY) = ResolveHeroSafeMargins(spec.Width, spec.Height);
-        var renderedBlocks = new[] { "Title", "Visual" };
+        var renderedBlocks = new[] { "Title", "Visual", "Direction", "Timing", "CTA" };
         var duplicateBlocksDetected = renderedBlocks.GroupBy(block => block, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1);
         var boxes = BuildHeroTextBoxes(spec, marginX, marginY, compositionModel);
         var overlapWarnings = new List<string>();
@@ -768,8 +805,8 @@ public sealed class HeroAssetStoryGenerator(
         var heroContract = ResolveHeroContract(request.ProductionContext, intelligence);
         var titleOverlay = BuildCinematicHeroTitleOverlay(eventObjectContext, eventTitle, eventType, selectedHook);
         var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date from event intelligence";
-        var timeText = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "Local viewing time");
-        var directionText = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "Viewing direction from event intelligence");
+        var timeText = ExtractHeroTimeText(heroStory.HeroStorySource.When);
+        var directionText = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where);
         var objectText = FirstNonEmpty(eventObjectContext.ObjectListText, primaryObjects, eventObjectContext.ObjectHeadlineText, "Key event objects");
         var prompt = heroContract == "GuideHero"
             ? BuildGuideHeroBackgroundPrompt(eventTitle, eventType, objectText, dateText, timeText, directionText)
@@ -778,10 +815,10 @@ public sealed class HeroAssetStoryGenerator(
         return new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto(titleOverlay),
             new HeroCompositionSceneBlockDto(prompt),
-            new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "direction-panel" : "", heroContract == "GuideHero" ? directionText : ""),
-            new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "date-time-panel" : "", heroContract == "GuideHero" ? $"{dateText} • {timeText}" : ""),
+            new HeroCompositionTextBlockDto("direction-panel", directionText),
+            new HeroCompositionTextBlockDto("date-time-panel", timeText),
             new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "object-labels" : "", heroContract == "GuideHero" ? objectText : ""),
-            new HeroCompositionValidationDto(true, true, true, true, true, 100));
+            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(directionText), !string.IsNullOrWhiteSpace(timeText), true, !string.IsNullOrWhiteSpace(directionText) && !string.IsNullOrWhiteSpace(timeText) ? 100 : 70));
     }
 
     private static string BuildCinematicHeroTitleOverlay(EventObjectContext eventObjectContext, string eventTitle, string eventType, string selectedHook)
@@ -1037,7 +1074,7 @@ public sealed class HeroAssetStoryGenerator(
         return FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, heroStory.HeroMessage, "astronomy sky target");
     }
 
-    private async Task WriteHeroV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
+    private async Task WriteHeroV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
         image.Mutate(ctx =>
@@ -1078,7 +1115,7 @@ public sealed class HeroAssetStoryGenerator(
 
             ctx.Fill(Color.Black.WithAlpha(0.58f), new RectangleF(0, bottomBarY, width, bottomBarHeight));
             ctx.Fill(Color.White.WithAlpha(0.10f), new RectangleF(0, bottomBarY, width, 2));
-            var (date, time) = BuildHeroV6MetadataValues(intelligence);
+            var (date, time) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
             var metaFont = FitHeroFont($"{date}      {time}", landscape ? 36f : square ? 28f : 34f, 22f, maxTextWidth, FontStyle.Bold);
             var metaBounds = TextMeasurer.MeasureBounds($"{date}      {time}", new TextOptions(metaFont));
             var metaY = bottomBarY + (bottomBarHeight - metaBounds.Height) / 2f;
@@ -1094,11 +1131,31 @@ public sealed class HeroAssetStoryGenerator(
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
-    private static (string Date, string Time) BuildHeroV6MetadataValues(ProductionEventIntelligence? intelligence)
+    private static (string Date, string Time) BuildHeroV6MetadataValues(HeroAssetStoryDto heroStory, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence)
     {
         var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "DATE TBD";
-        var time = FirstNonEmpty(intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "TIME TBD");
+        var time = FirstNonEmpty(compositionModel.TimingBlock.Text, ExtractHeroTimeText(heroStory.HeroStorySource.When));
+        if (string.IsNullOrWhiteSpace(time)) throw new InvalidOperationException("Phase 11 Hero rendering failed: timingBlock.text is empty.");
+        if (time.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Phase 11 Hero rendering failed: rendered image would contain TIME TBD.");
         return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant());
+    }
+
+    private static string ExtractHeroTimeText(string value)
+    {
+        var clean = Clean(value);
+        if (string.IsNullOrWhiteSpace(clean)) return string.Empty;
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            clean,
+            @"\b(?<time>\d{1,2}:\d{2}\s*(?:AM|PM)(?:\s+[A-Z]{2,5})?)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (match.Success)
+            return Clean(match.Groups["time"].Value).ToUpperInvariant();
+
+        return clean
+            .Replace("Best viewing is", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Best viewing", "", StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', '.', ':', '-', '–');
     }
 
     private static Font FitHeroFont(string text, float preferredSize, float minimumSize, float maxWidth, FontStyle style)
@@ -1130,6 +1187,8 @@ public sealed class HeroAssetStoryGenerator(
 
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
     {
+        if (IsPlanetGroupingHero(eventType, eventTitle, eventObjectContext))
+            return ("GROUPED PLANETS OVER UDAIPUR", "SATURN + MARS + JUPITER + VENUS");
         if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
             return (BuildMeteorShowerTitle(eventTitle), "Meteor Shower Peak");
         if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
@@ -1140,6 +1199,29 @@ public sealed class HeroAssetStoryGenerator(
             return (BuildNamedFullMoonTitle(eventTitle), "January Full Moon");
         return (TrimHeroTitle(eventTitle), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventType, "Astronomy Event")));
     }
+
+    private static bool IsPlanetGroupingHero(string eventType, string eventTitle, EventObjectContext eventObjectContext)
+    {
+        if (eventType.Contains("planetgrouping", StringComparison.OrdinalIgnoreCase) ||
+            eventType.Contains("planet grouping", StringComparison.OrdinalIgnoreCase) ||
+            eventTitle.Contains("planet grouping", StringComparison.OrdinalIgnoreCase) ||
+            eventTitle.Contains("grouped planet", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var planetNames = new[] { "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune" };
+        var objectCount = eventObjectContext.ObjectNames
+            .Count(name => planetNames.Any(planet => name.Contains(planet, StringComparison.OrdinalIgnoreCase)));
+        return objectCount >= 4;
+    }
+
+    private static string NormalizeHeroVariantName(string value)
+        => value.Equals("landscape", StringComparison.OrdinalIgnoreCase)
+            ? "Landscape"
+            : value.Equals("square", StringComparison.OrdinalIgnoreCase)
+                ? "Square"
+                : value.Equals("portrait", StringComparison.OrdinalIgnoreCase)
+                    ? "Portrait"
+                    : value;
 
     private static string BuildPlanetConjunctionHeroTitle(EventObjectContext eventObjectContext, string eventTitle)
     {
@@ -1164,13 +1246,13 @@ public sealed class HeroAssetStoryGenerator(
 
     private static string TrimHeroTitle(string value)
     {
-        var clean = Clean(value).Trim('.', '!', '?');
+        var clean = Clean(value).Trim('.', '!', '?', ',').Trim();
         if (clean.Length <= 40) return clean;
         return clean[..40].TrimEnd(' ', '-', '–', ':');
     }
 
     private static string LimitHeroTitle(string value)
-        => TrimHeroTitle(Clean(value)).ToUpperInvariant();
+        => TrimHeroTitle(Clean(value)).TrimEnd(',').ToUpperInvariant();
 
     private static string CleanHeroPromptText(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
 
@@ -1203,6 +1285,7 @@ public sealed class HeroAssetStoryGenerator(
         IReadOnlyList<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)> variants,
         HeroAssetStoryDto heroStory,
         string selectedHook,
+        HeroCompositionModelDto compositionModel,
         ProductionEventIntelligence? intelligence,
         long totalMs,
         CancellationToken cancellationToken)
@@ -1211,7 +1294,13 @@ public sealed class HeroAssetStoryGenerator(
         var deployment = options.ImageDeployment?.Trim() ?? string.Empty;
         var uniqueHashes = variants.Select(v => v.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var finalOutputHashBeforeOverlay = File.Exists(variants.First().BackgroundPath) ? await ComputeSha256Async(variants.First().BackgroundPath, cancellationToken) : string.Empty;
-        var (heroTitle, _) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
+        var (heroTitle, heroSubtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
+        var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
+        var generatedVariants = variants.Select(v => NormalizeHeroVariantName(v.Variant)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+        var renderedTimeText = $"TIME {compositionModel.TimingBlock.Text}";
+        var renderedDirectionText = compositionModel.DirectionBlock.Text;
+        var titleFitPassed = !string.IsNullOrWhiteSpace(heroTitle) && !heroTitle.EndsWith(",", StringComparison.Ordinal) && heroTitle.Length <= 40 && !string.IsNullOrWhiteSpace(heroSubtitle);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
@@ -1223,6 +1312,14 @@ public sealed class HeroAssetStoryGenerator(
             region = ResolveRegion(endpoint),
             renderer = "HeroV6Renderer",
             fallbackRendererUsed = false,
+            expectedVariants,
+            generatedVariants,
+            missingVariants,
+            timingSource = heroStory.HeroStorySource.When,
+            directionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where),
+            renderedTimeText,
+            renderedDirectionText,
+            titleFitPassed,
             variantCount = variants.Count,
             azureCallsCount = variants.Count(v => v.Result.ProviderCalled),
             uniqueImageHashes = uniqueHashes,
