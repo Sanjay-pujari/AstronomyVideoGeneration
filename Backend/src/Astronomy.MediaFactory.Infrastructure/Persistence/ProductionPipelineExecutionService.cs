@@ -737,7 +737,7 @@ public sealed partial class ProductionPipelineExecutionService(
             await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, files), cancellationToken);
             return files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or JsonException)
+        catch (Exception ex)
         {
             await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
             {
@@ -746,7 +746,16 @@ public sealed partial class ProductionPipelineExecutionService(
                 PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, []);
                 d["exceptionType"] = ex.GetType().Name;
                 d["exceptionMessage"] = ex.Message;
-            }, cancellationToken);
+                if (ex.Data.Contains("currentAssetCode")) d["currentAssetCode"] = ex.Data["currentAssetCode"]?.ToString() ?? string.Empty;
+                if (ex.Data.Contains("currentSegmentType")) d["currentSegmentType"] = ex.Data["currentSegmentType"]?.ToString() ?? string.Empty;
+                if (ex.Data.Contains("currentPlannedImagePath")) d["currentPlannedImagePath"] = ex.Data["currentPlannedImagePath"]?.ToString() ?? string.Empty;
+                if (ex.Data.Contains("currentPromptPreview")) d["currentPromptPreview"] = ex.Data["currentPromptPreview"]?.ToString() ?? string.Empty;
+                if (ex.Data.Contains("imageGenerationStartedUtc")) d["imageGenerationStartedUtc"] = ex.Data["imageGenerationStartedUtc"]?.ToString() ?? string.Empty;
+                if (ex.Data.Contains("imageGenerationElapsedMs") && long.TryParse(ex.Data["imageGenerationElapsedMs"]?.ToString(), out var elapsedMs)) d["imageGenerationElapsedMs"] = elapsedMs;
+                if (ex.Data.Contains("imageGenerationTimeoutSeconds") && int.TryParse(ex.Data["imageGenerationTimeoutSeconds"]?.ToString(), out var timeoutSeconds)) d["imageGenerationTimeoutSeconds"] = timeoutSeconds;
+                if (ex.Data.Contains("failedAssetIndex") && int.TryParse(ex.Data["failedAssetIndex"]?.ToString(), out var failedAssetIndex)) d["failedAssetIndex"] = failedAssetIndex;
+                if (ex.Data.Contains("generatedFilesBeforeFailure")) d["generatedFilesBeforeFailure"] = JsonSerializer.SerializeToNode((ex.Data["generatedFilesBeforeFailure"]?.ToString() ?? string.Empty).Split('|', StringSplitOptions.RemoveEmptyEntries), JsonOptions);
+            }, CancellationToken.None);
             throw;
         }
     }

@@ -19,6 +19,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed class SceneAssetsV3Service(
     IOptions<RenderingOptions> renderingOptions,
     IAICinematicImageGenerator imageGenerator,
+    IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptions,
     ILogger<SceneAssetsV3Service> logger) : ISceneAssetsV3Service
 {
     private const string Version = "v3.3";
@@ -71,6 +72,7 @@ public sealed class SceneAssetsV3Service(
         var accurateSkyGuideV2DiagnosticsPath = Path.Combine(dir, "accurate-sky-guide-v2-diagnostics.json");
         var manifestScenes = new List<SceneAssetsV3ManifestScene>();
         var sceneDiagnostics = new List<object>();
+        var generatedFilesBeforeFailure = new List<string>();
         var accurateSkyGuideV2Diagnostics = new List<object>();
         var errors = new List<string>();
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "visualTimeline", new SceneAssetsV3Timeline(Version, format, beats), context.ForbiddenTerms);
@@ -88,7 +90,14 @@ public sealed class SceneAssetsV3Service(
                 var providerSucceeded = false;
                 var fallbackUsed = false;
                 string? accurateSkyGuidePromptPath = null;
-                if ((!File.Exists(imagePath) || overwrite) && providerCalled)
+                var existingValidPng = File.Exists(imagePath) && IsValidPng(imagePath);
+                if (existingValidPng && !overwrite)
+                {
+                    providerSucceeded = true;
+                    logger.LogInformation("SCENE_ASSETS_V3_IMAGE_REUSED format={Format} sceneId={SceneId} plannedImagePath={PlannedImagePath}", format, beat.SceneId, imagePath);
+                }
+
+                if ((!existingValidPng || overwrite) && providerCalled)
                 {
                     var prompt = guideV2Enabled ? BuildAccurateSkyGuideV2Prompt(context, beat) : beat.VisualPrompt;
                     if (guideV2Enabled)
@@ -98,13 +107,35 @@ public sealed class SceneAssetsV3Service(
                         files.Add(accurateSkyGuidePromptPath);
                     }
 
-                    var result = await imageGenerator.GenerateAsync(new AICinematicAssetRequest(
+                    var generationStartedUtc = DateTimeOffset.UtcNow;
+                    var generationStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    var assetRequest = new AICinematicAssetRequest(
                         $"scene-assets-v3-{format}-{beat.SceneId}", beat.SceneId, beat.RenderMode, format, beat.SceneId,
                         "scene-background", beat.VisualIntent, beat.CompositionType, guideV2Enabled ? "Accurate Sky Guide V2, premium astronomy observation guide, NASA and National Geographic style" : StyleFor(beat.RenderMode), prompt,
-                        guideV2Enabled ? "dashboard UI, technical chart, crowded text, location text, watermark, branding, logo" : "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath), ct);
-                    providerSucceeded = result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(imagePath);
-                    if (!providerSucceeded)
-                        warnings.Add($"Azure Image2 did not produce {format}/{beat.SceneId}; deterministic Scene V3 fallback was rendered. Status={result.GenerationStatus}.");
+                        guideV2Enabled ? "dashboard UI, technical chart, crowded text, location text, watermark, branding, logo" : "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath);
+                    await WritePartialGenerationDiagnosticsAsync(diagnosticsPath, format, context, beat, imagePath, prompt, generationStartedUtc, generationStopwatch.ElapsedMilliseconds, null, generatedFilesBeforeFailure, ct);
+                    try
+                    {
+                        var result = await imageGenerator.GenerateAsync(assetRequest, ct);
+                        generationStopwatch.Stop();
+                        providerSucceeded = result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(imagePath);
+                        if (!providerSucceeded)
+                            warnings.Add($"Azure Image2 did not produce {format}/{beat.SceneId}; deterministic Scene V3 fallback was rendered. Status={result.GenerationStatus}.");
+                        await WritePartialGenerationDiagnosticsAsync(diagnosticsPath, format, context, beat, imagePath, prompt, generationStartedUtc, generationStopwatch.ElapsedMilliseconds, null, generatedFilesBeforeFailure, ct);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                    {
+                        generationStopwatch.Stop();
+                        await WritePartialGenerationDiagnosticsAsync(diagnosticsPath, format, context, beat, imagePath, prompt, generationStartedUtc, generationStopwatch.ElapsedMilliseconds, ex, generatedFilesBeforeFailure, CancellationToken.None);
+                        ex.Data["currentAssetCode"] = assetRequest.AssetCode;
+                        ex.Data["currentSegmentType"] = assetRequest.SegmentType;
+                        ex.Data["currentPlannedImagePath"] = assetRequest.PlannedImagePath;
+                        ex.Data["currentPromptPreview"] = prompt.Length <= 500 ? prompt : prompt[..500];
+                        ex.Data["imageGenerationStartedUtc"] = generationStartedUtc.ToString("O");
+                        ex.Data["imageGenerationElapsedMs"] = generationStopwatch.ElapsedMilliseconds;
+                        ex.Data["imageGenerationTimeoutSeconds"] = Math.Max(1, aiCinematicOptions.Value.SingleImageTimeoutSeconds);
+                        throw;
+                    }
                 }
 
                 if (!File.Exists(imagePath) || overwrite && !providerSucceeded)
@@ -159,6 +190,8 @@ public sealed class SceneAssetsV3Service(
                 });
                 manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, beat.VisualIntent, beat.VisualSubjectCategory, beat.PrimaryVisualSubject, beat.CameraDistance, beat.OverlayDensity, beat.InformationDensity, beat.OverlayStyle, beat.CompositionType, beat.OverlayText, beat.SupportingText, beat.SceneGuideType, beat.GuideElementsUsed ?? Array.Empty<string>(), await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
                 files.Add(imagePath);
+                generatedFilesBeforeFailure.Add(imagePath);
+                await WritePartialGenerationDiagnosticsAsync(diagnosticsPath, format, context, beat, imagePath, beat.VisualPrompt, DateTimeOffset.UtcNow, 0, null, generatedFilesBeforeFailure, ct);
             }
         }
         catch (OperationCanceledException)
@@ -171,6 +204,9 @@ public sealed class SceneAssetsV3Service(
             logger.LogWarning(ex, "{Warning}", warning);
             warnings.Add(warning);
             errors.Add(warning);
+            ex.Data["failedAssetIndex"] = manifestScenes.Count;
+            ex.Data["generatedFilesBeforeFailure"] = string.Join("|", generatedFilesBeforeFailure);
+            throw;
         }
 
         var manifest = new SceneAssetsV3Manifest(Version, format, manifestScenes.Count, manifestScenes);
@@ -203,6 +239,42 @@ public sealed class SceneAssetsV3Service(
         return validationPath;
     }
 
+
+
+    private async Task WritePartialGenerationDiagnosticsAsync(string diagnosticsPath, string format, SceneAssetsV3TimelineContext context, SceneAssetsV3Beat beat, string imagePath, string prompt, DateTimeOffset startedUtc, long elapsedMs, Exception? exception, IReadOnlyList<string> generatedFilesBeforeFailure, CancellationToken ct)
+    {
+        await WriteJsonAsync(diagnosticsPath, new
+        {
+            version = Version,
+            format,
+            currentPlanId = context.PlanId,
+            currentEventType = context.EventType,
+            currentAssetCode = $"scene-assets-v3-{format}-{beat.SceneId}",
+            currentSegmentType = beat.RenderMode,
+            currentPlannedImagePath = imagePath,
+            currentPromptPreview = prompt.Length <= 500 ? prompt : prompt[..500],
+            imageGenerationStartedUtc = startedUtc,
+            imageGenerationElapsedMs = elapsedMs,
+            imageGenerationTimeoutSeconds = Math.Max(1, aiCinematicOptions.Value.SingleImageTimeoutSeconds),
+            exceptionType = exception?.GetType().Name ?? string.Empty,
+            exceptionMessage = exception?.Message ?? string.Empty,
+            failedAssetIndex = exception is null ? (int?)null : generatedFilesBeforeFailure.Count,
+            generatedFilesBeforeFailure
+        }, ct);
+    }
+
+    private static bool IsValidPng(string path)
+    {
+        try
+        {
+            using var image = Image.Identify(path);
+            return image is not null && image.Width > 0 && image.Height > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static string ResolveAccurateSkyGuideV2Family(string eventType)
     {
