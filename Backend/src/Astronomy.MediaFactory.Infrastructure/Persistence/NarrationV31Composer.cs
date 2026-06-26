@@ -143,7 +143,7 @@ public sealed class NarrationV31Composer : INarrationV31Composer
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
         var mapping = scenes
             .ToDictionary(s => s.Section, s => s.ScenePurpose, StringComparer.OrdinalIgnoreCase);
-        var format = scenes.Count == ShortSceneIds.Length ? "short" : "long";
+        var format = scenes.Count == ShortSceneIds.Count ? "short" : "long";
         var keyedMapping = scenes
             .ToDictionary(s => $"{format}:{s.Section}", s => s.ScenePurpose, StringComparer.OrdinalIgnoreCase);
         var scopedPurposeMapping = scenes
@@ -173,10 +173,10 @@ public sealed class NarrationV31Composer : INarrationV31Composer
         var scenes = shortScenes.Select(s => new { Format = "short", Scene = s }).Concat(longScenes.Select(s => new { Format = "long", Scene = s })).ToArray();
         var noDup = scenes.Select(s => Normalize(s.Scene.NarrationText)).Where(s => s.Length > 0).GroupBy(s => s).All(g => g.Count() == 1);
         var noInstructions = !scenes.Any(s => AuthoringPhrases.Any(p => s.Scene.NarrationText.Contains(p, StringComparison.OrdinalIgnoreCase)));
-        var counts = shortScenes.Count == ShortSceneIds.Length && longScenes.Count == LongSceneIds.Length;
+        var counts = shortScenes.Count == ShortSceneIds.Count && longScenes.Count == LongSceneIds.Count;
         var localizedTime = language != "hi" || scenes.Any(s => Regex.IsMatch(s.Scene.NarrationText, "[०-९]|सुबह|शाम|रात|दोपहर|बजे"));
         var hindiTerms = language != "hi" || scenes.Any(s => s.Scene.NarrationText.Any(c => c >= '\u0900' && c <= '\u097F'));
-        if (!counts) errors.Add($"Narration must contain {ShortSceneIds.Length} short scenes and {LongSceneIds.Length} long scenes.");
+        if (!counts) errors.Add($"Narration must contain {ShortSceneIds.Count} short scenes and {LongSceneIds.Count} long scenes.");
         if (!noDup) errors.Add("Duplicate narration text detected.");
         if (!noInstructions) errors.Add("Authoring instruction text detected.");
         foreach (var group in scenes.GroupBy(s => s.Format, StringComparer.OrdinalIgnoreCase))
