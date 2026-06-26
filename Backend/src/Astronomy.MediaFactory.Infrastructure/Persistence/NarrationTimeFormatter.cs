@@ -32,6 +32,9 @@ public sealed class NarrationTimeFormatter
         if (Regex.IsMatch(text, @"^east\s+to\s+overhead\s+after\s+10\s*PM$", RegexOptions.IgnoreCase))
             return "रात 10 बजे के बाद पूर्वी आकाश से सिर के ऊपर तक";
 
+        text = Regex.Replace(text, @"\bnorth[-–— ]?east\s+after\s+midnight\b", "आधी रात के बाद उत्तर-पूर्व दिशा", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bnorth[-–— ]?east\b", "उत्तर-पूर्व", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bafter\s+midnight\b", "आधी रात के बाद", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"\bafter\s+10\s*PM\b", "रात 10 बजे के बाद", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"\bbefore\s+sunrise\b", "सूर्योदय से पहले", RegexOptions.IgnoreCase);
         text = Regex.Replace(text, @"\bfrom\s+eastern\s+sky\s+toward\s+overhead\b", "पूर्वी आकाश से सिर के ऊपर तक", RegexOptions.IgnoreCase);
