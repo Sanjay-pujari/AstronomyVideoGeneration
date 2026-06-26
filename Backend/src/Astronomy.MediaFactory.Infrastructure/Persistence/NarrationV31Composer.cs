@@ -9,6 +9,12 @@ public sealed class NarrationV31Composer : INarrationV31Composer
     private static readonly string[] ShortSceneIds = ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"];
     private static readonly string[] LongSceneIds = ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
     private static readonly string[] AuthoringPhrases = ["open with", "explain", "describe", "focus on", "json", "metadata", "source answer"];
+    public static IReadOnlyList<string> ExpectedSceneIds(string format)
+        => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase) ? ShortSceneIds : LongSceneIds;
+
+    public static string ResolveScenePurpose(string sceneId)
+        => ScenePurposeToNarrationSection.TryGetValue(sceneId, out var purpose) ? purpose : "what-you-will-see";
+
     private static readonly IReadOnlyDictionary<string, string> ScenePurposeToNarrationSection = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["001-hook"] = "hook",

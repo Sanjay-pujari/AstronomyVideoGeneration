@@ -1112,7 +1112,7 @@ Second display cue.
             ["FinalReminder"] = $"Final reminder for {title}."
         };
         var shortItems = CreateSceneAudioSyncItems("short", ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"]);
-        var longItems = CreateSceneAudioSyncItems("long", ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tip", "009-final-reminder"]);
+        var longItems = CreateSceneAudioSyncItems("long", ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"]);
         var adaptMethod = typeof(ProductionPipelineExecutionService).GetMethod("AdaptNarrationGenerationScenes", BindingFlags.NonPublic | BindingFlags.Static)!;
         var validateMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidateAdaptedV31ProductionNarration", BindingFlags.NonPublic | BindingFlags.Static)!;
 
