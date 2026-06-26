@@ -58,6 +58,7 @@ public sealed class StellariumCaptureEndpointSafetyTests
         public int GetPlanByIdCalls;
         public int ScenePreviewCalls;
         public Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<CreatePlanFromEventResponse> CreatePlanFromEventAsync(CreatePlanFromEventRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ContentGenerationPlan> GenerateDailyPlanAsync(string contentCategoryCode, string language, string regionId, DateTimeOffset scheduledUtc, string? primaryCelestialObjectCode, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) { GetPlanByIdCalls++; return Task.FromResult<ContentGenerationPlan?>(new ContentGenerationPlan{Status="Planned",ContentCategoryCode="DailySkyGuide"}); }
