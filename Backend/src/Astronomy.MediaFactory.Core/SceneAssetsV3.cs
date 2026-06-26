@@ -14,6 +14,21 @@ public sealed record SceneAssetsV3Response(
     string? ShortValidationPath,
     string? LongValidationPath);
 
+public static class SceneAssetsV3SceneContract
+{
+    public const string ContractSource = nameof(SceneAssetsV3SceneContract);
+
+    private static readonly string[] ShortSceneIds = ["001-hook", "002-cause", "003-accurate-sky-guide", "004-viewing-tip", "005-final-reminder"];
+    private static readonly string[] LongSceneIds = ["001-hook", "002-what-is-it", "003-cause", "004-interesting-fact", "005-best-time", "006-accurate-sky-guide", "007-what-you-will-see", "008-viewing-tips", "009-final-reminder"];
+
+    public static IReadOnlyList<string> GetExpectedSceneIds(string format)
+        => string.Equals(format, "short", StringComparison.OrdinalIgnoreCase)
+            ? ShortSceneIds
+            : string.Equals(format, "long", StringComparison.OrdinalIgnoreCase)
+                ? LongSceneIds
+                : throw new ArgumentException($"Unsupported Scene Assets V3 format '{format}'.", nameof(format));
+}
+
 public sealed record SceneAssetsV3Timeline(string Version, string Format, IReadOnlyList<SceneAssetsV3Beat> Beats);
 
 public sealed record SceneAssetsV3Beat(
@@ -111,7 +126,14 @@ public sealed record SceneAssetsV3Validation(
     IReadOnlyList<string> RelativeDateWordsDetected,
     int DistinctCompositionTypeCount,
     IReadOnlyList<string> Errors,
-    SceneAssetsV3FontDiagnostics? FontDiagnostics = null);
+    SceneAssetsV3FontDiagnostics? FontDiagnostics = null,
+    IReadOnlyList<string>? ExpectedSceneIds = null,
+    IReadOnlyList<string>? ActualSceneIds = null,
+    IReadOnlyList<string>? MissingSceneIds = null,
+    IReadOnlyList<string>? ExtraSceneIds = null,
+    IReadOnlyList<string>? ExpectedSceneAssetPaths = null,
+    IReadOnlyList<string>? ActualSceneAssetPaths = null,
+    string SceneContractSource = SceneAssetsV3SceneContract.ContractSource);
 
 public sealed record SceneTimelineMetadata(
     string SceneId,
