@@ -429,8 +429,8 @@ public sealed class HeroAssetStoryGenerator(
             generatedFiles.Add(NormalizePath(layoutValidationPath));
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var variantFiles = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
-            generatedFiles.AddRange(variantFiles);
+            var physicalWriteResult = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
+            generatedFiles.AddRange(physicalWriteResult.GeneratedFiles);
 
             var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
             var generatedVariants = HeroImageSpecs
@@ -447,7 +447,7 @@ public sealed class HeroAssetStoryGenerator(
             generatedFiles.Add(NormalizePath(heroPath));
 
             var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
-            await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariants, canonicalCopyApplied, cancellationToken);
+            await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariants, canonicalCopyApplied, physicalWriteResult, cancellationToken);
 
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
@@ -762,6 +762,7 @@ public sealed class HeroAssetStoryGenerator(
         HeroCompositionModelDto compositionModel,
         IReadOnlyList<string> generatedVariants,
         bool canonicalCopyApplied,
+        HeroPhysicalWriteResult physicalWriteResult,
         CancellationToken cancellationToken)
     {
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
@@ -801,6 +802,11 @@ public sealed class HeroAssetStoryGenerator(
             canonicalHeroFinalExists,
             canonicalHeroFinalFileSize,
             canonicalCopyApplied,
+            rendererReturnedPaths = physicalWriteResult.RendererReturnedPaths,
+            rendererReturnedBytesLength = physicalWriteResult.RendererReturnedBytesLength,
+            physicalWriteAttempted = physicalWriteResult.PhysicalWriteAttempted,
+            physicalWriteSucceeded = physicalWriteResult.PhysicalWriteSucceeded,
+            physicalWriteException = physicalWriteResult.PhysicalWriteException,
             missingCanonicalHeroFiles,
             renderSkippedReason = normalizedGeneratedVariants.Length == 0
                 ? "Hero renderer produced zero variants."
@@ -808,7 +814,7 @@ public sealed class HeroAssetStoryGenerator(
         }, JsonOptions), cancellationToken);
     }
 
-    private static bool EnsureCanonicalHeroFinalFile(string heroAssetsRoot)
+    private bool EnsureCanonicalHeroFinalFile(string heroAssetsRoot)
     {
         Directory.CreateDirectory(heroAssetsRoot);
         var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
@@ -816,8 +822,12 @@ public sealed class HeroAssetStoryGenerator(
         if (!HeroFileExistsWithContent(landscapePath))
             return false;
 
+        logger.LogInformation("HERO_FILE_WRITE_START path={Path}", NormalizePath(heroPath));
         File.Copy(landscapePath, heroPath, overwrite: true);
-        return HeroFileExistsWithContent(heroPath);
+        var exists = File.Exists(heroPath);
+        var size = exists ? new FileInfo(heroPath).Length : 0;
+        logger.LogInformation("HERO_FILE_WRITE_COMPLETE path={Path} exists={Exists} size={Size}", NormalizePath(heroPath), exists, size);
+        return exists && size > 0;
     }
 
     private static IReadOnlyList<string> BuildMissingCanonicalHeroFiles(string heroRoot)
@@ -1081,7 +1091,7 @@ public sealed class HeroAssetStoryGenerator(
     private static string BuildGuideHeroBackgroundPrompt(string eventTitle, string eventType, string objectText, string dateText, string timeText, string directionText)
         => $"Azure Image2 background only for an observing guide hero. Generate a realistic astronomy sky background for {eventTitle}. Event type: {eventType}. Key objects from eventObjectContext.objectNames only: {objectText}. Deterministic overlay will add compact date {dateText}, local time {timeText}, direction {directionText}. No embedded text, no labels, no watermark, no logo, no unrelated event imagery.";
 
-    private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
+    private async Task<HeroPhysicalWriteResult> GenerateHeroImageFilesAsync(
         string heroAssetsRoot,
         HeroAssetBlueprintDto blueprint,
         HeroCompositionModelDto compositionModel,
@@ -1089,18 +1099,50 @@ public sealed class HeroAssetStoryGenerator(
         CancellationToken cancellationToken)
     {
         var generatedFiles = new List<string>();
+        var rendererReturnedPaths = new List<string>();
+        var generatedVariantFileSizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var physicalWriteAttempted = false;
+        var physicalWriteSucceeded = false;
+        string? physicalWriteException = null;
+        long rendererReturnedBytesLength = 0;
         foreach (var spec in HeroImageSpecs)
         {
             var variant = blueprint.PlatformVariants.FirstOrDefault(platformVariant => string.Equals(platformVariant.Variant, spec.Variant, StringComparison.OrdinalIgnoreCase));
             var outputPath = Path.Combine(heroAssetsRoot, spec.FileName);
-            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, variant, compositionModel, planetAssets, cancellationToken);
-            generatedFiles.Add(NormalizePath(outputPath));
+            try
+            {
+                var writeResult = await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, variant, compositionModel, planetAssets, cancellationToken);
+                physicalWriteAttempted = physicalWriteAttempted || writeResult.PhysicalWriteAttempted;
+                physicalWriteSucceeded = physicalWriteSucceeded || writeResult.PhysicalWriteSucceeded;
+                rendererReturnedBytesLength += writeResult.RendererReturnedBytesLength;
+                rendererReturnedPaths.AddRange(writeResult.RendererReturnedPaths);
+                if (!writeResult.PhysicalWriteSucceeded && !string.IsNullOrWhiteSpace(writeResult.PhysicalWriteException))
+                    physicalWriteException = writeResult.PhysicalWriteException;
+            }
+            catch (Exception ex)
+            {
+                physicalWriteException = ex.Message;
+                throw;
+            }
+
+            if (HeroFileExistsWithContent(outputPath))
+            {
+                generatedFiles.Add(NormalizePath(outputPath));
+                generatedVariantFileSizes[spec.Variant] = GetHeroFileSize(outputPath);
+            }
+            else
+            {
+                generatedVariantFileSizes[spec.Variant] = 0;
+            }
         }
 
-        return generatedFiles;
+        if (rendererReturnedBytesLength <= 0 && rendererReturnedPaths.Count == 0)
+            throw new InvalidOperationException("Hero renderer returned no physical image output.");
+
+        return new HeroPhysicalWriteResult(generatedFiles, rendererReturnedPaths, rendererReturnedBytesLength, physicalWriteAttempted, physicalWriteSucceeded, physicalWriteException, generatedVariantFileSizes);
     }
 
-    private static async Task WriteHeroImageAsync(
+    private async Task<HeroPhysicalWriteResult> WriteHeroImageAsync(
         string outputPath,
         int width,
         int height,
@@ -1125,7 +1167,33 @@ public sealed class HeroAssetStoryGenerator(
             backgroundImagePath: null,
             compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
-        await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
+        Image<Rgba32>? image = null;
+        try
+        {
+            image = await AstronomyVisualCompositionEngine.ComposeAsync(request, cancellationToken);
+            await using var stream = new MemoryStream();
+            await image.SaveAsPngAsync(stream, cancellationToken);
+            var bytes = stream.ToArray();
+            if (bytes.Length == 0)
+                throw new InvalidOperationException("Hero renderer returned no physical image output.");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+            logger.LogInformation("HERO_FILE_WRITE_START path={Path}", NormalizePath(outputPath));
+            await File.WriteAllBytesAsync(outputPath, bytes, cancellationToken);
+            var exists = File.Exists(outputPath);
+            var size = exists ? new FileInfo(outputPath).Length : 0;
+            logger.LogInformation("HERO_FILE_WRITE_COMPLETE path={Path} exists={Exists} size={Size}", NormalizePath(outputPath), exists, size);
+            return new HeroPhysicalWriteResult([NormalizePath(outputPath)], [], bytes.Length, true, exists && size > 0, exists && size > 0 ? null : "Physical write did not create a non-empty file.", new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Hero physical file write failed for path={Path}", NormalizePath(outputPath));
+            return new HeroPhysicalWriteResult([], [], 0, true, false, ex.Message, new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            image?.Dispose();
+        }
     }
 
 
@@ -2594,6 +2662,16 @@ public sealed class HeroAssetStoryGenerator(
 
     private string BuildLayoutValidationOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroLayoutValidationFileName);
+
+
+    private sealed record HeroPhysicalWriteResult(
+        IReadOnlyList<string> GeneratedFiles,
+        IReadOnlyList<string> RendererReturnedPaths,
+        long RendererReturnedBytesLength,
+        bool PhysicalWriteAttempted,
+        bool PhysicalWriteSucceeded,
+        string? PhysicalWriteException,
+        IReadOnlyDictionary<string, long> GeneratedVariantFileSizes);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
