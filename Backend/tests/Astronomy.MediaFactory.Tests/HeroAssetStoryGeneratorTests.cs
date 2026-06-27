@@ -486,7 +486,7 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
     [Fact]
-    public void Phase11HeroLayoutValidation_FailsWhenDirectionCannotFitCompactFooter()
+    public void Phase11HeroLayoutValidation_NormalizesLongDirectionToCompactFooter()
     {
         var composition = new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto("GROUPED PLANETS OVER UDAIPUR, RAJASTHAN"),
@@ -501,14 +501,15 @@ public sealed class HeroAssetStoryGeneratorTests
 
         var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>(), true, "PLANET_GROUPING", false])!;
 
-        Assert.False(validation.IsValid);
-        Assert.Contains(validation.Errors, error => error.Contains("directionBlock.text contains more than 5 words", StringComparison.OrdinalIgnoreCase));
+        Assert.True(validation.IsValid);
+        Assert.Equal("BEST VIEWING SKY", validation.CompactDirectionText);
+        Assert.DoesNotContain(validation.Errors, error => error.Contains("directionBlock.text contains more than 5 words", StringComparison.OrdinalIgnoreCase));
     }
 
 
 
     [Fact]
-    public void Phase11HeroLayoutValidation_GenericSolarEclipseRejectsLongSafetyDirectionAndKeepsVariants()
+    public void Phase11HeroLayoutValidation_GenericSolarEclipseNormalizesLongSafetyDirectionAndKeepsVariants()
     {
         var composition = new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto("TOTAL SOLAR ECLIPSE"),
@@ -523,7 +524,7 @@ public sealed class HeroAssetStoryGeneratorTests
 
         var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>(), false, "SolarEclipse", false])!;
 
-        Assert.False(validation.IsValid);
+        Assert.True(validation.IsValid);
         Assert.True(validation.GenericRendererApplied);
         Assert.False(validation.PlanetGroupingRendererApplied);
         Assert.Equal("GenericHeroRenderer", validation.RendererPathSelected);
@@ -533,8 +534,9 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.ExpectedVariants);
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.GeneratedVariants);
         Assert.Empty(validation.MissingVariants);
-        Assert.Contains(validation.Errors, error => error.Contains("directionBlock.text contains more than 5 words", StringComparison.OrdinalIgnoreCase));
-        Assert.False(validation.FooterTextCompactValidationPassed);
+        Assert.Equal("SAFE SOLAR VIEWING", validation.CompactDirectionText);
+        Assert.DoesNotContain(validation.Errors, error => error.Contains("directionBlock.text contains more than 5 words", StringComparison.OrdinalIgnoreCase));
+        Assert.True(validation.FooterTextCompactValidationPassed);
     }
 
 
@@ -945,4 +947,27 @@ public sealed class HeroAssetStoryGeneratorTests
         Directory.CreateDirectory(path);
         return path;
     }
+    [Fact]
+    public void HeroMetadataNormalizer_CompactsPhase11SolarEclipseFooterMetadata()
+    {
+        Assert.Equal("11:30 PM IST", HeroMetadataNormalizer.NormalizeTime("Watch during 2026-08-12 23:30 +05:30 for maximum eclipse.", "SolarEclipse", "en"));
+        Assert.Equal("MAX ECLIPSE", HeroMetadataNormalizer.NormalizeTime("Exact eclipse time unknown", "SolarEclipse", "en"));
+        Assert.Equal("SAFE SOLAR VIEWING", HeroMetadataNormalizer.NormalizeDirection("Use local sky visibility for IN-RJ-UDAIPUR and keep the Sun safely filtered.", "SolarEclipse", "en"));
+        Assert.Equal("TOTAL SOLAR ECLIPSE", HeroMetadataNormalizer.NormalizeTitle("Total Solar Eclipse, IN-RJ-UDAIPUR", "SolarEclipse", "en"));
+        Assert.Equal("SUN + MOON", HeroMetadataNormalizer.NormalizeSubtitle(["Sun", "Moon"], "Solar Eclipse", "SolarEclipse", "en"));
+    }
+
+    [Fact]
+    public void HeroMetadataNormalizer_CompactsPhase11PlanetAndMoonFooterMetadata()
+    {
+        Assert.Equal("7:23 PM IST", HeroMetadataNormalizer.NormalizeTime("Best viewing is 7:23 PM IST, shortly after sunset.", "PlanetGrouping", "en"));
+        Assert.Equal("NORTHEAST", HeroMetadataNormalizer.NormalizeDirection("Northeast after midnight", "MeteorShower", "en"));
+        Assert.Equal("SOUTHEAST", HeroMetadataNormalizer.NormalizeDirection("Look toward the southeastern horizon before sunrise", "PlanetPairing", "en"));
+        Assert.Equal("EASTERN SKY", HeroMetadataNormalizer.NormalizeDirection("Look toward the eastern sky above the horizon.", "PlanetGrouping", "en"));
+        Assert.Equal("EASTERN SKY", HeroMetadataNormalizer.NormalizeDirection("Eastern sky near moonrise", "NamedFullMoon", "en"));
+        Assert.Equal("SATURN + MARS + JUPITER + VENUS", HeroMetadataNormalizer.NormalizeSubtitle(["Saturn", "Mars", "Jupiter", "Venus"], "Grouped planets", "PlanetGrouping", "en"));
+        Assert.Equal("SATURN + MARS + JUPITER + 2 MORE", HeroMetadataNormalizer.NormalizeSubtitle(["Saturn", "Mars", "Jupiter", "Venus", "Mercury"], "Grouped planets", "PlanetGrouping", "en"));
+        Assert.Equal("FULL MOON", HeroMetadataNormalizer.NormalizeSubtitle(["Moon"], "Wolf Moon", "NamedFullMoon", "en"));
+    }
+
 }

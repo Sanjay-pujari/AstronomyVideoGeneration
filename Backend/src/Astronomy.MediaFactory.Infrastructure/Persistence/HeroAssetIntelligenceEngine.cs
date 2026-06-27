@@ -596,13 +596,14 @@ public sealed class HeroAssetStoryGenerator(
             issues.Add("Hero composition directionBlock.text must not be empty.");
         if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText))
             issues.Add("Hero rendering validation failed: directionBlock.text is non-empty but renderedDirectionText is empty.");
-        var compactTimeText = Clean(compositionModel.TimingBlock.Text);
-        var compactDirectionText = ResolveHeroFooterDirection(compositionModel.DirectionBlock.Text);
+        var eventFamily = ResolveEventFamilyFromIntelligence(null);
+        var compactTimeText = HeroMetadataNormalizer.NormalizeTime(compositionModel.TimingBlock.Text, eventFamily, string.Empty);
+        var compactDirectionText = HeroMetadataNormalizer.NormalizeDirection(compositionModel.DirectionBlock.Text, eventFamily, string.Empty);
         if (CountWords(compositionModel.TimingBlock.Text) > 6)
             issues.Add("Hero rendering validation failed: timingBlock.text contains more than 6 words.");
-        if (CountWords(compositionModel.DirectionBlock.Text) > 5)
-            issues.Add("Hero rendering validation failed: directionBlock.text contains more than 5 words.");
-        if (ContainsRawRegionId(compositionModel.TimingBlock.Text) || ContainsRawRegionId(compositionModel.DirectionBlock.Text))
+        if (CountWords(compactDirectionText) > 4)
+            issues.Add("Hero rendering validation failed: compactDirectionText contains more than 4 words.");
+        if (ContainsRawRegionId(compactTimeText) || ContainsRawRegionId(compactDirectionText))
             issues.Add("Hero rendering validation failed: footer text must not contain raw region ids.");
         if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText))
             issues.Add("Hero rendering validation failed: timingBlock.text is non-empty but renderedTimeText is empty.");
@@ -652,12 +653,13 @@ public sealed class HeroAssetStoryGenerator(
         var objectsVisible = variants.All(variant => variant.ObjectsVisible);
         var overlapWarnings = variants.SelectMany(variant => variant.OverlapWarnings).ToArray();
         var renderedText = ResolveHeroRenderedText(compositionModel);
-        var compactTimeText = Clean(compositionModel.TimingBlock.Text);
-        var compactDirectionText = ResolveHeroFooterDirection(compositionModel.DirectionBlock.Text);
-        var footerTextCompactValidationPassed = CountWords(compositionModel.TimingBlock.Text) <= 6
-            && CountWords(compositionModel.DirectionBlock.Text) <= 5
-            && !ContainsRawRegionId(compositionModel.TimingBlock.Text)
-            && !ContainsRawRegionId(compositionModel.DirectionBlock.Text);
+        var compactTimeText = HeroMetadataNormalizer.NormalizeTime(compositionModel.TimingBlock.Text, eventFamily, string.Empty);
+        var compactDirectionText = HeroMetadataNormalizer.NormalizeDirection(compositionModel.DirectionBlock.Text, eventFamily, string.Empty);
+        var footerTextCompactValidationPassed = CountWords(compactTimeText) <= 6
+            && CountWords(compactDirectionText) <= 4
+            && !System.Text.RegularExpressions.Regex.IsMatch(compactTimeText, @"\b\d{4}-\d{2}-\d{2}\b")
+            && !ContainsRawRegionId(compactTimeText)
+            && !ContainsRawRegionId(compactDirectionText);
         var compositionTextValid = !string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text)
             && !string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)
             && !string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)
@@ -671,9 +673,10 @@ public sealed class HeroAssetStoryGenerator(
         if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)) errors = errors.Concat(["Hero directionBlock.text must not be empty."]).ToArray();
         if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) errors = errors.Concat(["Hero rendered timing text must not contain TIME TBD."]).ToArray();
         if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero directionBlock.text is non-empty but renderedDirectionText is empty."]).ToArray();
-        if (CountWords(compositionModel.TimingBlock.Text) > 6) errors = errors.Concat(["Hero timingBlock.text contains more than 6 words."]).ToArray();
-        if (CountWords(compositionModel.DirectionBlock.Text) > 5) errors = errors.Concat(["Hero directionBlock.text contains more than 5 words."]).ToArray();
-        if (ContainsRawRegionId(compositionModel.TimingBlock.Text) || ContainsRawRegionId(compositionModel.DirectionBlock.Text)) errors = errors.Concat(["Hero footer text must not contain raw region ids."]).ToArray();
+        if (CountWords(compactTimeText) > 6) errors = errors.Concat(["Hero compactTimeText contains more than 6 words."]).ToArray();
+        if (System.Text.RegularExpressions.Regex.IsMatch(compactTimeText, @"\b\d{4}-\d{2}-\d{2}\b")) errors = errors.Concat(["Hero compactTimeText contains a raw ISO date."]).ToArray();
+        if (CountWords(compactDirectionText) > 4) errors = errors.Concat(["Hero compactDirectionText contains more than 4 words."]).ToArray();
+        if (ContainsRawRegionId(compactTimeText) || ContainsRawRegionId(compactDirectionText)) errors = errors.Concat(["Hero footer text must not contain raw region ids."]).ToArray();
         if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)) errors = errors.Concat(["Hero timingBlock.text is non-empty but renderedTimeText is empty."]).ToArray();
         if (string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase)) errors = errors.Concat(["Hero CTA is reported rendered while ctaBlock.text is empty."]).ToArray();
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
@@ -932,10 +935,12 @@ public sealed class HeroAssetStoryGenerator(
                 : FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, "primary sky target");
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         var heroContract = ResolveHeroContract(request.ProductionContext, intelligence);
-        var titleOverlay = BuildCinematicHeroTitleOverlay(eventObjectContext, eventTitle, eventType, selectedHook);
+        var titleOverlay = HeroMetadataNormalizer.NormalizeTitle(BuildCinematicHeroTitleOverlay(eventObjectContext, eventTitle, eventType, selectedHook), eventType, request.Language);
         var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date from event intelligence";
-        var timeText = ExtractHeroTimeText(heroStory.HeroStorySource.When);
-        var directionText = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where);
+        var rawTimeText = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow);
+        var timeText = HeroMetadataNormalizer.NormalizeTime(rawTimeText, eventType, request.Language);
+        var rawDirectionText = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint);
+        var directionText = HeroMetadataNormalizer.NormalizeDirection(rawDirectionText, eventType, request.Language);
         var objectText = FirstNonEmpty(eventObjectContext.ObjectListText, primaryObjects, eventObjectContext.ObjectHeadlineText, "Key event objects");
         var prompt = heroContract == "GuideHero"
             ? BuildGuideHeroBackgroundPrompt(eventTitle, eventType, objectText, dateText, timeText, directionText)
@@ -960,8 +965,11 @@ public sealed class HeroAssetStoryGenerator(
     {
         var eventTitle = FirstNonEmpty(intelligence?.Title, request.PipelineRequest?.Title, heroStory.HeroStorySource.What, selectedHook, "Sky Event");
         var subtitle = FirstNonEmpty(heroStory.HeroMessage, intelligence?.ShortTitle, heroStory.HeroHook, "Observing guide");
-        var time = FirstNonEmpty(ExtractHeroTimeText(heroStory.HeroStorySource.When), intelligence?.PreferredViewingWindow, intelligence?.BestViewingWindowLocal, intelligence?.LocalPeakTime, "Viewing window");
-        var direction = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint, "Follow event safety guidance");
+        var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
+        var rawTime = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.PreferredViewingWindow, intelligence?.BestViewingWindowLocal, intelligence?.LocalPeakTime, "Viewing window");
+        var rawDirection = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint, "Follow event safety guidance");
+        var time = HeroMetadataNormalizer.NormalizeTime(rawTime, eventFamily, request.Language);
+        var direction = HeroMetadataNormalizer.NormalizeDirection(rawDirection, eventFamily, request.Language);
         return new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto(Clean(eventTitle)),
             new HeroCompositionSceneBlockDto($"generic astronomy hero background for {Clean(eventTitle)} with subtitle {Clean(subtitle)}"),
@@ -1312,14 +1320,15 @@ public sealed class HeroAssetStoryGenerator(
     private static (string Date, string Time, string Direction) BuildHeroV6MetadataValues(HeroAssetStoryDto heroStory, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence)
     {
         var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "DATE TBD";
-        var time = FirstNonEmpty(compositionModel.TimingBlock.Text, ExtractHeroTimeText(heroStory.HeroStorySource.When));
+        var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
+        var time = HeroMetadataNormalizer.NormalizeTime(FirstNonEmpty(compositionModel.TimingBlock.Text, heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal), eventFamily, string.Empty);
         if (string.IsNullOrWhiteSpace(time)) throw new InvalidOperationException("Phase 11 Hero rendering failed: timingBlock.text is empty.");
         if (time.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Phase 11 Hero rendering failed: rendered image would contain TIME TBD.");
-        var direction = ResolveHeroFooterDirection(FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroStorySource.Where));
+        var direction = HeroMetadataNormalizer.NormalizeDirection(FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint), eventFamily, string.Empty);
         if (string.IsNullOrWhiteSpace(direction)) throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
         if (CountWords(compositionModel.TimingBlock.Text) > 6) throw new InvalidOperationException("Phase 11 Hero rendering failed: timingBlock.text contains more than 6 words.");
-        if (CountWords(compositionModel.DirectionBlock.Text) > 5) throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text contains more than 5 words.");
-        if (ContainsRawRegionId(compositionModel.TimingBlock.Text) || ContainsRawRegionId(compositionModel.DirectionBlock.Text)) throw new InvalidOperationException("Phase 11 Hero rendering failed: footer text must not contain raw region ids.");
+        if (CountWords(direction) > 4) throw new InvalidOperationException("Phase 11 Hero rendering failed: compactDirectionText contains more than 4 words.");
+        if (ContainsRawRegionId(time) || ContainsRawRegionId(direction)) throw new InvalidOperationException("Phase 11 Hero rendering failed: footer text must not contain raw region ids.");
         var renderedDirection = $"DIRECTION  {direction}".ToUpperInvariant();
         return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant(), renderedDirection);
     }
@@ -1366,7 +1375,10 @@ public sealed class HeroAssetStoryGenerator(
             intelligence?.ShortTitle,
             family.Title,
             TrimHeroTitle(eventTitle));
-        return (LimitHeroTitle(title), LimitHeroTitle(family.Subtitle));
+        var objects = eventObjectContext.ObjectNames.Count > 0 ? eventObjectContext.ObjectNames : (intelligence?.PrimaryObjects ?? []).Concat(intelligence?.SecondaryObjects ?? []);
+        return (
+            HeroMetadataNormalizer.NormalizeTitle(title, eventType, string.Empty),
+            HeroMetadataNormalizer.NormalizeSubtitle(objects, FirstNonEmpty(intelligence?.ShortTitle, family.Subtitle), eventType, string.Empty));
     }
 
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
@@ -1492,15 +1504,21 @@ public sealed class HeroAssetStoryGenerator(
         var generatedVariants = variants.Select(v => NormalizeHeroVariantName(v.Variant)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
         var rendered = ResolveHeroRenderedText(compositionModel);
+        var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
+        var rawTimeSource = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, compositionModel.TimingBlock.Text);
+        var rawDirectionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint, compositionModel.DirectionBlock.Text);
+        var rawTitleSource = FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, heroStory.HeroStorySource.What, heroStory.HeroHook, selectedHook);
+        var rawSubtitleSource = string.Join(", ", EventObjectContextBuilder.FromIntelligence(intelligence).ObjectNames);
         var (renderedDateText, _, renderedFooterDirectionText) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
-        var compactTimeText = Clean(compositionModel.TimingBlock.Text);
-        var compactDirectionText = renderedFooterDirectionText.Replace("DIRECTION  ", string.Empty, StringComparison.OrdinalIgnoreCase);
-        var footerTextCompactValidationPassed = CountWords(compositionModel.TimingBlock.Text) <= 6 && CountWords(compositionModel.DirectionBlock.Text) <= 5 && !ContainsRawRegionId(compositionModel.TimingBlock.Text) && !ContainsRawRegionId(compositionModel.DirectionBlock.Text);
+        var compactTimeText = HeroMetadataNormalizer.NormalizeTime(rawTimeSource, eventFamily, string.Empty);
+        var compactDirectionText = HeroMetadataNormalizer.NormalizeDirection(rawDirectionSource, eventFamily, string.Empty);
+        var compactTitleText = heroTitle;
+        var compactSubtitleText = heroSubtitle;
+        var footerTextCompactValidationPassed = !string.IsNullOrWhiteSpace(compactTimeText) && !string.IsNullOrWhiteSpace(compactDirectionText) && CountWords(compactDirectionText) <= 4 && !System.Text.RegularExpressions.Regex.IsMatch(compactTimeText, @"\b\d{4}-\d{2}-\d{2}\b") && !ContainsRawRegionId(compactTimeText) && !ContainsRawRegionId(compactDirectionText);
         var renderedTimeText = rendered.RenderedTimeText;
         var renderedDirectionText = rendered.RenderedDirectionText;
         var renderedCtaText = rendered.RenderedCtaText;
         var titleFitPassed = !string.IsNullOrWhiteSpace(heroTitle) && !heroTitle.EndsWith(",", StringComparison.Ordinal) && heroTitle.Length <= 40 && !string.IsNullOrWhiteSpace(heroSubtitle);
-        var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var planetGroupingApplied = IsPlanetGroupingHeroFamily(eventFamily);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -1525,10 +1543,16 @@ public sealed class HeroAssetStoryGenerator(
             timingSource = heroStory.HeroStorySource.When,
             directionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where),
             directionSourceText = FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroAction, heroStory.HeroStorySource.Where),
+            rawTimeSource,
             compactTimeText,
+            rawDirectionSource,
             compactDirectionText,
-            rawTimeSource = compositionModel.TimingBlock.Text,
-            rawDirectionSource = compositionModel.DirectionBlock.Text,
+            rawTitleSource,
+            compactTitleText,
+            rawSubtitleSource,
+            compactSubtitleText,
+            heroMetadataNormalizerUsed = true,
+            normalizationRulesApplied = new[] { "NormalizeTime", "NormalizeDirection", "NormalizeTitle", "NormalizeSubtitle" },
             footerTextCompactValidationPassed,
             planetGroupingOnlyCustomizationApplied = planetGroupingApplied,
             renderedDateText,
