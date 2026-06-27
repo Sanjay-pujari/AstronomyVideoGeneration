@@ -12863,26 +12863,42 @@ public sealed partial class ProductionPipelineExecutionService(
         var heroOutputPath = NormalizePath(Path.Combine(heroRoot, "hero-final.png"));
         var landscapePath = Path.Combine(heroRoot, "hero-landscape.png");
         var canonicalCopyApplied = false;
-        if (!File.Exists(heroOutputPath) && File.Exists(landscapePath))
+        if (!HeroFileExistsWithContent(heroOutputPath) && HeroFileExistsWithContent(landscapePath))
         {
             File.Copy(landscapePath, heroOutputPath, overwrite: true);
-            canonicalCopyApplied = true;
+            canonicalCopyApplied = HeroFileExistsWithContent(heroOutputPath);
         }
-        var generatedVariantPaths = new[]
+
+        var variantFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            NormalizePath(Path.Combine(heroRoot, "hero-landscape.png")),
-            NormalizePath(Path.Combine(heroRoot, "hero-square.png")),
-            NormalizePath(Path.Combine(heroRoot, "hero-portrait.png"))
-        }.Where(File.Exists).ToArray();
+            ["Landscape"] = Path.Combine(heroRoot, "hero-landscape.png"),
+            ["Square"] = Path.Combine(heroRoot, "hero-square.png"),
+            ["Portrait"] = Path.Combine(heroRoot, "hero-portrait.png")
+        };
+        var generatedVariantPaths = variantFiles
+            .Where(variant => HeroFileExistsWithContent(variant.Value))
+            .Select(variant => NormalizePath(variant.Value))
+            .ToArray();
+        var generatedVariantFileExists = variantFiles
+            .ToDictionary(variant => variant.Key, variant => HeroFileExistsWithContent(variant.Value), StringComparer.OrdinalIgnoreCase);
+        var generatedVariantFileSizes = variantFiles
+            .ToDictionary(variant => variant.Key, variant => GetHeroFileSize(variant.Value), StringComparer.OrdinalIgnoreCase);
         var missingCanonicalHeroFiles = new[] { "hero-final.png", "hero-landscape.png", "hero-square.png", "hero-portrait.png" }
             .Select(fileName => NormalizePath(Path.Combine(heroRoot, fileName)))
-            .Where(path => !File.Exists(path))
+            .Where(path => !HeroFileExistsWithContent(path))
             .ToArray();
-        var canonicalHeroFinalExists = File.Exists(heroOutputPath);
+        var canonicalHeroFinalExists = HeroFileExistsWithContent(heroOutputPath);
+        var canonicalHeroFinalFileSize = GetHeroFileSize(heroOutputPath);
         if (missingCanonicalHeroFiles.Length > 0)
-            throw new InvalidOperationException($"Hero V6 validation failed: generated hero file metadata is missing at '{string.Join("', '", missingCanonicalHeroFiles)}'.");
-        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, generatedVariantPaths, heroOutputPath, canonicalHeroFinalExists, canonicalCopyApplied, missingCanonicalHeroFiles, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15);
+            throw new InvalidOperationException($"Hero V6 validation failed: canonical hero files are missing or empty at '{string.Join("', '", missingCanonicalHeroFiles)}'.");
+        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, generatedVariantPaths, generatedVariantFileExists, generatedVariantFileSizes, heroOutputPath, canonicalHeroFinalExists, canonicalHeroFinalFileSize, canonicalCopyApplied, missingCanonicalHeroFiles, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15);
     }
+
+    private static bool HeroFileExistsWithContent(string path)
+        => File.Exists(path) && new FileInfo(path).Length > 0;
+
+    private static long GetHeroFileSize(string path)
+        => File.Exists(path) ? new FileInfo(path).Length : 0;
 
     private static Phase13GalleryGuideDiagnostics BuildPhase13GalleryGuideDiagnostics(ProductionPhaseContext context)
     {
@@ -12896,7 +12912,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, guidePath, true, true, true, true, false, true, true, "How To Observe", true);
     }
 
-    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent);
+    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, IReadOnlyDictionary<string, bool> GeneratedVariantFileExists, IReadOnlyDictionary<string, long> GeneratedVariantFileSizes, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, long CanonicalHeroFinalFileSize, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent);
     private sealed record Phase13GalleryGuideDiagnostics(string GalleryVersion, string GuideVersion, IReadOnlyList<string> GalleryOutputPaths, string ObservationGuideOutputPath, bool DateAdded, bool TimeAdded, bool GalleryLocationRemoved, bool GalleryBottomPaddingApplied, bool GalleryTextCutDetected, bool OldAccurateSkyGuideReplaced, bool ObservationGuideCardAdded, string GuideTitle, bool FamilySpecificGuideApplied);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
