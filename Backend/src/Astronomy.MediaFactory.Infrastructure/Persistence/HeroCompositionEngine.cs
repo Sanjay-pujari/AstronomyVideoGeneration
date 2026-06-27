@@ -85,13 +85,43 @@ public sealed class HeroCompositionEngine : IHeroCompositionEngine
         => Clean(values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty);
 
     private static string ExtractDirection(string value)
-        => value.Contains("west", StringComparison.OrdinalIgnoreCase) ? "WEST" : Clean(value).ToUpperInvariant();
+    {
+        var cleaned = Clean(value);
+        if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
+        if (cleaned.Contains("solar", StringComparison.OrdinalIgnoreCase) || cleaned.Contains("eye protection", StringComparison.OrdinalIgnoreCase) || cleaned.Contains("certified", StringComparison.OrdinalIgnoreCase)) return "SAFE SOLAR VIEWING";
+        if (cleaned.Contains("east", StringComparison.OrdinalIgnoreCase)) return "EASTERN SKY";
+        if (cleaned.Contains("southeast", StringComparison.OrdinalIgnoreCase) || cleaned.Contains("south east", StringComparison.OrdinalIgnoreCase)) return "SOUTHEAST";
+        if (cleaned.Contains("southwest", StringComparison.OrdinalIgnoreCase) || cleaned.Contains("south west", StringComparison.OrdinalIgnoreCase)) return "SOUTHWEST";
+        if (cleaned.Contains("west", StringComparison.OrdinalIgnoreCase)) return "WEST";
+        if (cleaned.Contains("overhead", StringComparison.OrdinalIgnoreCase)) return "OVERHEAD";
+        return CompactWords(cleaned.ToUpperInvariant(), 5);
+    }
 
     private static string ExtractTiming(string value)
     {
         var cleaned = Clean(value);
-        var match = System.Text.RegularExpressions.Regex.Match(cleaned, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)\s*[A-Z]{2,4}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return match.Success ? match.Value.ToUpperInvariant() : cleaned;
+        if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
+        if (cleaned.Contains("max eclipse", StringComparison.OrdinalIgnoreCase)) return "MAX ECLIPSE";
+        var twelveHour = System.Text.RegularExpressions.Regex.Match(cleaned, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)\s*[A-Z]{2,4}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (twelveHour.Success) return twelveHour.Value.ToUpperInvariant();
+        var twentyFourHour = System.Text.RegularExpressions.Regex.Match(cleaned, @"\b(?<hour>[01]?\d|2[0-3]):(?<minute>[0-5]\d)\s*(?<zone>\+05:30|IST)?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (twentyFourHour.Success)
+        {
+            var hour = int.Parse(twentyFourHour.Groups["hour"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var minute = twentyFourHour.Groups["minute"].Value;
+            var suffix = hour >= 12 ? "PM" : "AM";
+            var hour12 = hour % 12;
+            if (hour12 == 0) hour12 = 12;
+            var zone = twentyFourHour.Groups["zone"].Success ? " IST" : string.Empty;
+            return $"{hour12}:{minute} {suffix}{zone}".Trim().ToUpperInvariant();
+        }
+        return CompactWords(cleaned.ToUpperInvariant(), 6);
+    }
+
+    private static string CompactWords(string value, int maxWords)
+    {
+        var words = Clean(value).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', words.Take(maxWords)).Trim(' ', '.', ',');
     }
 
     private static string ExtractCta(string value)

@@ -502,13 +502,13 @@ public sealed class HeroAssetStoryGeneratorTests
         var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>(), true, "PLANET_GROUPING", false])!;
 
         Assert.False(validation.IsValid);
-        Assert.Contains(validation.Errors, error => error.Contains("renderedDirectionText is too long", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(validation.Errors, error => error.Contains("directionBlock.text contains more than 5 words", StringComparison.OrdinalIgnoreCase));
     }
 
 
 
     [Fact]
-    public void Phase11HeroLayoutValidation_GenericSolarEclipseAllowsSafetyDirectionAndVariants()
+    public void Phase11HeroLayoutValidation_GenericSolarEclipseRejectsLongSafetyDirectionAndKeepsVariants()
     {
         var composition = new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto("TOTAL SOLAR ECLIPSE"),
@@ -523,7 +523,7 @@ public sealed class HeroAssetStoryGeneratorTests
 
         var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>(), false, "SolarEclipse", false])!;
 
-        Assert.True(validation.IsValid);
+        Assert.False(validation.IsValid);
         Assert.True(validation.GenericRendererApplied);
         Assert.False(validation.PlanetGroupingRendererApplied);
         Assert.Equal("GenericHeroRenderer", validation.RendererPathSelected);
@@ -533,7 +533,8 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.ExpectedVariants);
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.GeneratedVariants);
         Assert.Empty(validation.MissingVariants);
-        Assert.DoesNotContain(validation.Errors, error => error.Contains("compact footer", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(validation.Errors, error => error.Contains("directionBlock.text contains more than 5 words", StringComparison.OrdinalIgnoreCase));
+        Assert.False(validation.FooterTextCompactValidationPassed);
     }
 
 
