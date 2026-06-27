@@ -434,7 +434,7 @@ public sealed class HeroAssetStoryGenerator(
 
             var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
             var generatedVariants = HeroImageSpecs
-                .Where(spec => File.Exists(Path.Combine(heroAssetsRoot, spec.FileName)))
+                .Where(spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName)))
                 .Select(spec => spec.Variant)
                 .ToArray();
             var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -451,7 +451,7 @@ public sealed class HeroAssetStoryGenerator(
 
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
-                .Where(File.Exists)
+                .Where(HeroFileExistsWithContent)
                 .Select(NormalizePath)
                 .ToArray();
             var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, request.ProductionContext?.ProductionEventIntelligence);
@@ -766,8 +766,9 @@ public sealed class HeroAssetStoryGenerator(
     {
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
         var existingVariantPaths = HeroImageSpecs
-            .Where(spec => File.Exists(Path.Combine(heroAssetsRoot, spec.FileName)))
-            .Select(spec => new { variant = spec.Variant, path = NormalizePath(Path.Combine(heroAssetsRoot, spec.FileName)) })
+            .Select(spec => new { spec.Variant, Path = Path.Combine(heroAssetsRoot, spec.FileName) })
+            .Where(spec => HeroFileExistsWithContent(spec.Path))
+            .Select(spec => new { variant = spec.Variant, path = NormalizePath(spec.Path) })
             .ToArray();
         var normalizedGeneratedVariants = existingVariantPaths
             .Select(path => NormalizeHeroVariantName(path.variant))
@@ -775,7 +776,10 @@ public sealed class HeroAssetStoryGenerator(
             .ToArray();
         var missingVariants = expectedVariants.Except(normalizedGeneratedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
         var canonicalHeroFinalPath = NormalizePath(Path.Combine(heroAssetsRoot, HeroFileName));
-        var canonicalHeroFinalExists = File.Exists(canonicalHeroFinalPath);
+        var canonicalHeroFinalExists = HeroFileExistsWithContent(canonicalHeroFinalPath);
+        var canonicalHeroFinalFileSize = GetHeroFileSize(canonicalHeroFinalPath);
+        var generatedVariantFileExists = HeroImageSpecs.ToDictionary(spec => spec.Variant, spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName)), StringComparer.OrdinalIgnoreCase);
+        var generatedVariantFileSizes = HeroImageSpecs.ToDictionary(spec => spec.Variant, spec => GetHeroFileSize(Path.Combine(heroAssetsRoot, spec.FileName)), StringComparer.OrdinalIgnoreCase);
         var missingCanonicalHeroFiles = BuildMissingCanonicalHeroFiles(heroAssetsRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath) ?? ResolveWorkingDirectoryRoot());
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
@@ -790,9 +794,12 @@ public sealed class HeroAssetStoryGenerator(
             expectedVariants,
             generatedVariants = normalizedGeneratedVariants,
             generatedVariantPaths = existingVariantPaths,
+            generatedVariantFileExists,
+            generatedVariantFileSizes,
             missingVariants,
             canonicalHeroFinalPath,
             canonicalHeroFinalExists,
+            canonicalHeroFinalFileSize,
             canonicalCopyApplied,
             missingCanonicalHeroFiles,
             renderSkippedReason = normalizedGeneratedVariants.Length == 0
@@ -806,21 +813,28 @@ public sealed class HeroAssetStoryGenerator(
         Directory.CreateDirectory(heroAssetsRoot);
         var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
         var landscapePath = Path.Combine(heroAssetsRoot, HeroLandscapeFileName);
-        if (!File.Exists(landscapePath))
+        if (!HeroFileExistsWithContent(landscapePath))
             return false;
 
         File.Copy(landscapePath, heroPath, overwrite: true);
-        return true;
+        return HeroFileExistsWithContent(heroPath);
     }
 
     private static IReadOnlyList<string> BuildMissingCanonicalHeroFiles(string heroRoot)
     {
         return new[] { HeroFileName, HeroLandscapeFileName, HeroSquareFileName, HeroPortraitFileName }
             .Select(fileName => Path.Combine(heroRoot, fileName))
-            .Where(path => !File.Exists(path))
+            .Where(path => !HeroFileExistsWithContent(path))
             .Select(NormalizePath)
             .ToArray();
     }
+
+    private static bool HeroFileExistsWithContent(string path)
+        => File.Exists(path) && new FileInfo(path).Length > 0;
+
+    private static long GetHeroFileSize(string path)
+        => File.Exists(path) ? new FileInfo(path).Length : 0;
+
 
     private static IReadOnlyList<string> BuildHeroLayoutErrors(bool duplicateBlocksDetected, bool textOverlapDetected, bool objectsVisible, IReadOnlyList<string> overlapWarnings)
     {
