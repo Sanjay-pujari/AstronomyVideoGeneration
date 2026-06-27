@@ -443,11 +443,11 @@ public sealed class HeroAssetStoryGenerator(
             if (missingVariants.Length > 0)
                 throw new InvalidOperationException($"Hero renderer missing required variants: {string.Join(", ", missingVariants)}.");
 
-            File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
+            var canonicalCopyApplied = EnsureCanonicalHeroFinalFile(heroAssetsRoot);
             generatedFiles.Add(NormalizePath(heroPath));
 
             var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
-            await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariants, cancellationToken);
+            await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariants, canonicalCopyApplied, cancellationToken);
 
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
@@ -756,18 +756,27 @@ public sealed class HeroAssetStoryGenerator(
 
     private async Task WriteGenericHeroGenerationDiagnosticsAsync(
         string diagnosticsPath,
+        string heroAssetsRoot,
         string eventFamily,
         bool planetGroupingCustomizationApplied,
         HeroCompositionModelDto compositionModel,
         IReadOnlyList<string> generatedVariants,
+        bool canonicalCopyApplied,
         CancellationToken cancellationToken)
     {
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
-        var normalizedGeneratedVariants = generatedVariants
-            .Select(NormalizeHeroVariantName)
+        var existingVariantPaths = HeroImageSpecs
+            .Where(spec => File.Exists(Path.Combine(heroAssetsRoot, spec.FileName)))
+            .Select(spec => new { variant = spec.Variant, path = NormalizePath(Path.Combine(heroAssetsRoot, spec.FileName)) })
+            .ToArray();
+        var normalizedGeneratedVariants = existingVariantPaths
+            .Select(path => NormalizeHeroVariantName(path.variant))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var missingVariants = expectedVariants.Except(normalizedGeneratedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+        var canonicalHeroFinalPath = NormalizePath(Path.Combine(heroAssetsRoot, HeroFileName));
+        var canonicalHeroFinalExists = File.Exists(canonicalHeroFinalPath);
+        var missingCanonicalHeroFiles = BuildMissingCanonicalHeroFiles(heroAssetsRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath) ?? ResolveWorkingDirectoryRoot());
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -780,11 +789,37 @@ public sealed class HeroAssetStoryGenerator(
             compositionModelBuilt = HeroCompositionModelIsUsable(compositionModel),
             expectedVariants,
             generatedVariants = normalizedGeneratedVariants,
+            generatedVariantPaths = existingVariantPaths,
             missingVariants,
+            canonicalHeroFinalPath,
+            canonicalHeroFinalExists,
+            canonicalCopyApplied,
+            missingCanonicalHeroFiles,
             renderSkippedReason = normalizedGeneratedVariants.Length == 0
                 ? "Hero renderer produced zero variants."
                 : string.Empty
         }, JsonOptions), cancellationToken);
+    }
+
+    private static bool EnsureCanonicalHeroFinalFile(string heroAssetsRoot)
+    {
+        Directory.CreateDirectory(heroAssetsRoot);
+        var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
+        var landscapePath = Path.Combine(heroAssetsRoot, HeroLandscapeFileName);
+        if (!File.Exists(landscapePath))
+            return false;
+
+        File.Copy(landscapePath, heroPath, overwrite: true);
+        return true;
+    }
+
+    private static IReadOnlyList<string> BuildMissingCanonicalHeroFiles(string heroRoot)
+    {
+        return new[] { HeroFileName, HeroLandscapeFileName, HeroSquareFileName, HeroPortraitFileName }
+            .Select(fileName => Path.Combine(heroRoot, fileName))
+            .Where(path => !File.Exists(path))
+            .Select(NormalizePath)
+            .ToArray();
     }
 
     private static IReadOnlyList<string> BuildHeroLayoutErrors(bool duplicateBlocksDetected, bool textOverlapDetected, bool objectsVisible, IReadOnlyList<string> overlapWarnings)
@@ -1501,8 +1536,14 @@ public sealed class HeroAssetStoryGenerator(
         var finalOutputHashBeforeOverlay = File.Exists(variants.First().BackgroundPath) ? await ComputeSha256Async(variants.First().BackgroundPath, cancellationToken) : string.Empty;
         var (heroTitle, heroSubtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
-        var generatedVariants = variants.Select(v => NormalizeHeroVariantName(v.Variant)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var existingVariants = variants.Where(v => File.Exists(v.ImagePath)).ToArray();
+        var generatedVariants = existingVariants.Select(v => NormalizeHeroVariantName(v.Variant)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var generatedVariantPaths = existingVariants.Select(v => new { variant = NormalizeHeroVariantName(v.Variant), path = NormalizePath(v.ImagePath) }).ToArray();
         var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+        var canonicalHeroFinalPath = NormalizePath(imagePath);
+        var canonicalHeroFinalExists = File.Exists(canonicalHeroFinalPath);
+        var canonicalCopyApplied = canonicalHeroFinalExists && existingVariants.Any(v => string.Equals(NormalizeHeroVariantName(v.Variant), "Landscape", StringComparison.OrdinalIgnoreCase) && string.Equals(Path.GetFullPath(v.ImagePath), Path.GetFullPath(imagePath), StringComparison.OrdinalIgnoreCase));
+        var missingCanonicalHeroFiles = BuildMissingCanonicalHeroFiles(Path.GetDirectoryName(imagePath) ?? ResolveWorkingDirectoryRoot());
         var rendered = ResolveHeroRenderedText(compositionModel);
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var rawTimeSource = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, compositionModel.TimingBlock.Text);
@@ -1539,6 +1580,11 @@ public sealed class HeroAssetStoryGenerator(
             fallbackRendererUsed = false,
             expectedVariants,
             generatedVariants,
+            generatedVariantPaths,
+            canonicalHeroFinalPath,
+            canonicalHeroFinalExists,
+            canonicalCopyApplied,
+            missingCanonicalHeroFiles,
             missingVariants,
             timingSource = heroStory.HeroStorySource.When,
             directionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where),

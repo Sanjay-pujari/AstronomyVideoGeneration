@@ -12861,9 +12861,27 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var heroRoot = context.ExecutionContext.HeroRoot!;
         var heroOutputPath = NormalizePath(Path.Combine(heroRoot, "hero-final.png"));
-        if (!File.Exists(heroOutputPath))
-            throw new InvalidOperationException($"Hero V6 validation failed: generated hero file metadata is missing at '{heroOutputPath}'.");
-        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15);
+        var landscapePath = Path.Combine(heroRoot, "hero-landscape.png");
+        var canonicalCopyApplied = false;
+        if (!File.Exists(heroOutputPath) && File.Exists(landscapePath))
+        {
+            File.Copy(landscapePath, heroOutputPath, overwrite: true);
+            canonicalCopyApplied = true;
+        }
+        var generatedVariantPaths = new[]
+        {
+            NormalizePath(Path.Combine(heroRoot, "hero-landscape.png")),
+            NormalizePath(Path.Combine(heroRoot, "hero-square.png")),
+            NormalizePath(Path.Combine(heroRoot, "hero-portrait.png"))
+        }.Where(File.Exists).ToArray();
+        var missingCanonicalHeroFiles = new[] { "hero-final.png", "hero-landscape.png", "hero-square.png", "hero-portrait.png" }
+            .Select(fileName => NormalizePath(Path.Combine(heroRoot, fileName)))
+            .Where(path => !File.Exists(path))
+            .ToArray();
+        var canonicalHeroFinalExists = File.Exists(heroOutputPath);
+        if (missingCanonicalHeroFiles.Length > 0)
+            throw new InvalidOperationException($"Hero V6 validation failed: generated hero file metadata is missing at '{string.Join("', '", missingCanonicalHeroFiles)}'.");
+        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, generatedVariantPaths, heroOutputPath, canonicalHeroFinalExists, canonicalCopyApplied, missingCanonicalHeroFiles, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15);
     }
 
     private static Phase13GalleryGuideDiagnostics BuildPhase13GalleryGuideDiagnostics(ProductionPhaseContext context)
@@ -12878,7 +12896,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, guidePath, true, true, true, true, false, true, true, "How To Observe", true);
     }
 
-    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent);
+    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent);
     private sealed record Phase13GalleryGuideDiagnostics(string GalleryVersion, string GuideVersion, IReadOnlyList<string> GalleryOutputPaths, string ObservationGuideOutputPath, bool DateAdded, bool TimeAdded, bool GalleryLocationRemoved, bool GalleryBottomPaddingApplied, bool GalleryTextCutDetected, bool OldAccurateSkyGuideReplaced, bool ObservationGuideCardAdded, string GuideTitle, bool FamilySpecificGuideApplied);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
@@ -13273,9 +13291,16 @@ public sealed partial class ProductionPipelineExecutionService(
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "short"), Path.Combine(outputRoot, "scene-approval-v3", "short"), copied, renameFinalScenes: true);
         CopyDirectoryFiles(Path.Combine(eventRoot, "question-engine", "scene-approval-v3", "long"), Path.Combine(outputRoot, "scene-approval-v3", "long"), copied, renameFinalScenes: true);
         CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-final.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero-landscape.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-square.png"), Path.Combine(outputRoot, "hero", "hero-square.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-portrait.png"), Path.Combine(outputRoot, "hero", "hero-portrait.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-review.json"), Path.Combine(outputRoot, "hero", "hero-review.json"), copied);
         CopyFile(Path.Combine(eventRoot, "hero", "hero-final.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero-landscape.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero", "hero-square.png"), Path.Combine(outputRoot, "hero", "hero-square.png"), copied);
+        CopyFile(Path.Combine(eventRoot, "hero", "hero-portrait.png"), Path.Combine(outputRoot, "hero", "hero-portrait.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero", "hero-review.json"), Path.Combine(outputRoot, "hero", "hero-review.json"), copied);
+        CopyFile(Path.Combine(outputRoot, "hero", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-landscape.png"), Path.Combine(outputRoot, "thumbnails", "landscape.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-square.png"), Path.Combine(outputRoot, "thumbnails", "square.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-portrait.png"), Path.Combine(outputRoot, "thumbnails", "portrait.png"), copied);
