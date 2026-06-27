@@ -648,6 +648,11 @@ public sealed class HeroAssetStoryGenerator(
             .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
             .ToArray();
         var renderedBlocks = BuildHeroRenderedBlocks(compositionModel);
+        var rendererContract = ResolveRenderedHeroContract(renderedBlocks);
+        var heroContract = rendererContract;
+        var validatorContract = heroContract;
+        var validationProfileUsed = heroContract;
+        var contractMismatch = !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
         var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
         var textOverlapDetected = variants.Any(variant => variant.TextOverlapDetected);
         var objectsVisible = variants.All(variant => variant.ObjectsVisible);
@@ -713,9 +718,21 @@ public sealed class HeroAssetStoryGenerator(
             RawTimeSource = compositionModel.TimingBlock.Text,
             RawDirectionSource = compositionModel.DirectionBlock.Text,
             FooterTextCompactValidationPassed = footerTextCompactValidationPassed,
-            PlanetGroupingOnlyCustomizationApplied = IsPlanetGroupingHeroFamily(eventFamily) && planetGroupingRendererApplied
+            PlanetGroupingOnlyCustomizationApplied = IsPlanetGroupingHeroFamily(eventFamily) && planetGroupingRendererApplied,
+            HeroContract = heroContract,
+            ValidatorContract = validatorContract,
+            RendererContract = rendererContract,
+            ContractMismatch = contractMismatch,
+            ValidationProfileUsed = validationProfileUsed
         };
     }
+
+    private static string ResolveRenderedHeroContract(IReadOnlyList<string> renderedBlocks)
+        => renderedBlocks.Any(block => block.Equals("Direction", StringComparison.OrdinalIgnoreCase)
+            || block.Equals("Timing", StringComparison.OrdinalIgnoreCase)
+            || block.Equals("CTA", StringComparison.OrdinalIgnoreCase))
+            ? "GuideHero"
+            : "CinematicHero";
 
     private static int CountWords(string value)
         => string.IsNullOrWhiteSpace(value) ? 0 : System.Text.RegularExpressions.Regex.Matches(value, @"\b[\p{L}\p{N}:+'-]+\b").Count;

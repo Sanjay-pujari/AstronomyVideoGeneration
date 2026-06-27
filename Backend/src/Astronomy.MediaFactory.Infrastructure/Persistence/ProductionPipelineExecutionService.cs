@@ -1881,21 +1881,26 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var compositionModelPath = Path.Combine(heroRoot, "hero-composition-model.json");
         ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, compositionModelPath, reviewPath]);
-        ValidateCinematicHeroVisualStyle(compositionModelPath, layoutValidationPath);
+        ValidateHeroVisualStyle(compositionModelPath, blueprintPath, layoutValidationPath);
 
         outputs.AddRange(requiredFiles);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static void ValidateCinematicHeroVisualStyle(string compositionModelPath, string layoutValidationPath)
+    private static void ValidateHeroVisualStyle(string compositionModelPath, string blueprintPath, string layoutValidationPath)
     {
         var errors = new List<string>();
+        var renderedBlocks = ReadRenderedBlocks(layoutValidationPath);
+        var rendererContract = ResolveRendererContract(compositionModelPath, renderedBlocks);
+        var heroContract = ResolveHeroValidationContract(blueprintPath, layoutValidationPath, rendererContract);
+        var validatorContract = heroContract;
+        var validationProfileUsed = validatorContract;
+        var contractMismatch = !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
+
         if (File.Exists(compositionModelPath))
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(compositionModelPath));
             var root = doc.RootElement;
-            var scenePrompt = ReadNestedString(root, "visualBlock", "sourceScene");
-            var heroContract = scenePrompt.Contains("guide hero", StringComparison.OrdinalIgnoreCase) || scenePrompt.Contains("observing guide hero", StringComparison.OrdinalIgnoreCase) ? "GuideHero" : "CinematicHero";
             var titleText = ReadNestedString(root, "hookBlock", "text");
             var visibleText = string.Join(" ", new[]
             {
@@ -1905,7 +1910,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
             if ((titleText + " " + visibleText).Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase))
                 errors.Add("Hero overlay must not use narration hook text such as LOOK FOR.");
-            if (heroContract != "GuideHero" && !string.IsNullOrWhiteSpace(visibleText))
+            if (validatorContract == "CinematicHero" && !string.IsNullOrWhiteSpace(visibleText))
                 errors.Add("CinematicHero must use only a minimal title/subtitle overlay; direction, timing, and CTA text blocks must be empty unless heroContract=GuideHero.");
         }
 
@@ -1915,9 +1920,8 @@ public sealed partial class ProductionPipelineExecutionService(
             if (doc.RootElement.TryGetProperty("variants", out var variants) && variants.ValueKind == JsonValueKind.Array && variants.GetArrayLength() == 0)
                 errors.Add("Hero renderer produced zero variants.");
 
-            if (doc.RootElement.TryGetProperty("renderedBlocks", out var blocks) && blocks.ValueKind == JsonValueKind.Array)
+            if (validatorContract == "CinematicHero" && renderedBlocks.Count > 0)
             {
-                var renderedBlocks = blocks.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
                 var forbiddenBlocks = renderedBlocks.Where(block => block.Contains("Timing", StringComparison.OrdinalIgnoreCase)
                     || block.Contains("Direction", StringComparison.OrdinalIgnoreCase)
                     || block.Contains("CTA", StringComparison.OrdinalIgnoreCase)
@@ -1925,13 +1929,83 @@ public sealed partial class ProductionPipelineExecutionService(
                     || block.Contains("Bar", StringComparison.OrdinalIgnoreCase)).ToArray();
                 if (forbiddenBlocks.Length > 0)
                     errors.Add("Hero V3 layout contains forbidden informational blocks: " + string.Join(", ", forbiddenBlocks));
-                if (renderedBlocks.Length > 2)
-                    errors.Add($"Hero V3 layout must use no more than 2 text/visual blocks; actual={renderedBlocks.Length}.");
+                if (renderedBlocks.Count > 2)
+                    errors.Add($"Hero V3 layout must use no more than 2 text/visual blocks; actual={renderedBlocks.Count}.");
             }
         }
 
+        WriteHeroContractDiagnostics(layoutValidationPath, heroContract, validatorContract, rendererContract, contractMismatch, validationProfileUsed);
+
         if (errors.Count > 0)
             throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", errors));
+    }
+
+    private static IReadOnlyList<string> ReadRenderedBlocks(string layoutValidationPath)
+    {
+        if (!File.Exists(layoutValidationPath)) return [];
+        using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
+        return doc.RootElement.TryGetProperty("renderedBlocks", out var blocks) && blocks.ValueKind == JsonValueKind.Array
+            ? blocks.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(value => !string.IsNullOrWhiteSpace(value)).ToArray()
+            : [];
+    }
+
+    private static string ResolveRendererContract(string compositionModelPath, IReadOnlyList<string> renderedBlocks)
+    {
+        if (renderedBlocks.Any(block => block.Equals("Direction", StringComparison.OrdinalIgnoreCase) || block.Equals("Timing", StringComparison.OrdinalIgnoreCase) || block.Equals("CTA", StringComparison.OrdinalIgnoreCase)))
+            return "GuideHero";
+        if (File.Exists(compositionModelPath))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(compositionModelPath));
+            var scenePrompt = ReadNestedString(doc.RootElement, "visualBlock", "sourceScene");
+            if (scenePrompt.Contains("guide hero", StringComparison.OrdinalIgnoreCase) || scenePrompt.Contains("observing guide hero", StringComparison.OrdinalIgnoreCase))
+                return "GuideHero";
+        }
+        return "CinematicHero";
+    }
+
+    private static string ResolveHeroValidationContract(string blueprintPath, string layoutValidationPath, string rendererContract)
+    {
+        if (string.Equals(rendererContract, "GuideHero", StringComparison.OrdinalIgnoreCase)) return "GuideHero";
+        var blueprintContract = ReadHeroContractFromBlueprint(blueprintPath);
+        if (!string.IsNullOrWhiteSpace(blueprintContract)) return blueprintContract;
+        var layoutContract = ReadHeroContractFromLayoutValidation(layoutValidationPath);
+        if (!string.IsNullOrWhiteSpace(layoutContract)) return layoutContract;
+        return rendererContract;
+    }
+
+    private static string ReadHeroContractFromBlueprint(string blueprintPath)
+    {
+        if (!File.Exists(blueprintPath)) return string.Empty;
+        using var doc = JsonDocument.Parse(File.ReadAllText(blueprintPath));
+        var root = doc.RootElement.TryGetProperty("heroBlueprint", out var wrapped) ? wrapped : doc.RootElement;
+        var layoutStyle = root.TryGetProperty("layoutStyle", out var prop) && prop.ValueKind == JsonValueKind.String ? prop.GetString() ?? string.Empty : string.Empty;
+        return layoutStyle.Contains("GuideHero", StringComparison.OrdinalIgnoreCase) || layoutStyle.Contains("Observing", StringComparison.OrdinalIgnoreCase) || layoutStyle.Contains("Guide", StringComparison.OrdinalIgnoreCase) || layoutStyle.Contains("Educational", StringComparison.OrdinalIgnoreCase)
+            ? "GuideHero"
+            : layoutStyle.Contains("CinematicHero", StringComparison.OrdinalIgnoreCase) || layoutStyle.Contains("Cinematic", StringComparison.OrdinalIgnoreCase) ? "CinematicHero" : string.Empty;
+    }
+
+    private static string ReadHeroContractFromLayoutValidation(string layoutValidationPath)
+    {
+        if (!File.Exists(layoutValidationPath)) return string.Empty;
+        using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
+        var root = doc.RootElement;
+        foreach (var name in new[] { "heroContract", "validatorContract", "validationProfileUsed" })
+            if (root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(prop.GetString()))
+                return prop.GetString()!;
+        return ReadRenderedBlocks(layoutValidationPath).Any(block => block.Equals("Direction", StringComparison.OrdinalIgnoreCase) || block.Equals("Timing", StringComparison.OrdinalIgnoreCase) || block.Equals("CTA", StringComparison.OrdinalIgnoreCase)) ? "GuideHero" : string.Empty;
+    }
+
+    private static void WriteHeroContractDiagnostics(string layoutValidationPath, string heroContract, string validatorContract, string rendererContract, bool contractMismatch, string validationProfileUsed)
+    {
+        if (!File.Exists(layoutValidationPath)) return;
+        var node = JsonNode.Parse(File.ReadAllText(layoutValidationPath))?.AsObject();
+        if (node is null) return;
+        node["heroContract"] = heroContract;
+        node["validatorContract"] = validatorContract;
+        node["rendererContract"] = rendererContract;
+        node["contractMismatch"] = contractMismatch;
+        node["validationProfileUsed"] = validationProfileUsed;
+        File.WriteAllText(layoutValidationPath, node.ToJsonString(JsonOptions));
     }
 
     private static string ReadNestedString(JsonElement root, string objectName, string propertyName)
