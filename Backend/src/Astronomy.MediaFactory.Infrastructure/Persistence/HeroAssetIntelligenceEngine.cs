@@ -1543,7 +1543,7 @@ public sealed class HeroAssetStoryGenerator(
         var canonicalHeroFinalPath = NormalizePath(imagePath);
         var canonicalHeroFinalExists = File.Exists(canonicalHeroFinalPath);
         var canonicalCopyApplied = canonicalHeroFinalExists && existingVariants.Any(v => string.Equals(NormalizeHeroVariantName(v.Variant), "Landscape", StringComparison.OrdinalIgnoreCase) && string.Equals(Path.GetFullPath(v.ImagePath), Path.GetFullPath(imagePath), StringComparison.OrdinalIgnoreCase));
-        var missingCanonicalHeroFiles = BuildMissingCanonicalHeroFiles(Path.GetDirectoryName(imagePath) ?? ResolveWorkingDirectoryRoot());
+        var missingCanonicalHeroFiles = BuildMissingCanonicalHeroFiles(Path.GetDirectoryName(imagePath) ?? "./media-output");
         var rendered = ResolveHeroRenderedText(compositionModel);
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var rawTimeSource = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, compositionModel.TimingBlock.Text);
