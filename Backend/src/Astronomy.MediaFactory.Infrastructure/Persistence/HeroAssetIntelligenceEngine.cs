@@ -230,8 +230,9 @@ public sealed class HeroAssetStoryGenerator(
             .Select(score => score.Hook)
             .ToArray();
         heroStory = WithSelectedHook(heroStory, selectedHook);
-        var platformVariants = BuildPlatformVariants(selectedHook, heroStory);
-        var blueprint = BuildHeroBlueprint(platformVariants, heroStory);
+        var heroContract = ResolveHeroContract(request.ProductionContext, request.ProductionContext?.ProductionEventIntelligence);
+        var platformVariants = BuildPlatformVariants(selectedHook, heroStory, heroContract, request.ProductionContext?.ProductionEventIntelligence);
+        var blueprint = BuildHeroBlueprint(platformVariants, heroStory, heroContract, request.ProductionContext?.ProductionEventIntelligence);
         var reviewScores = BuildReviewScores();
 
         var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores);
@@ -2612,10 +2613,23 @@ public sealed class HeroAssetStoryGenerator(
     private static string CleanHook(string value)
         => Clean(value).Trim('.', '!', '?').ToUpperInvariant();
 
-    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants(string selectedHook, HeroAssetStoryDto heroStory)
+    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants(string selectedHook, HeroAssetStoryDto heroStory, string heroContract, ProductionEventIntelligence? intelligence)
     {
-        var visualFocus = Clean(heroStory.HeroVisualFocus);
-        if (string.IsNullOrWhiteSpace(visualFocus)) visualFocus = "Strategy-selected event visual";
+        var isGuideHero = string.Equals(heroContract, "GuideHero", StringComparison.OrdinalIgnoreCase);
+        var visualFocus = isGuideHero
+            ? Clean(heroStory.HeroVisualFocus)
+            : BuildCinematicHeroVisualFocus(heroStory, intelligence);
+        if (string.IsNullOrWhiteSpace(visualFocus)) visualFocus = isGuideHero ? "Strategy-selected event visual" : "Dominant cinematic astronomy event.";
+        var overlay = isGuideHero
+            ? "Educational poster overlay: event title, date, local time, viewing direction"
+            : "Cinematic hero poster overlay: minimal title treatment with no observing guide panels";
+        var background = isGuideHero
+            ? $"Astronomy image background: {visualFocus}"
+            : $"Cinematic astronomy hero background: {visualFocus}";
+        var labels = isGuideHero
+            ? "Compact guide information panels plus object labels"
+            : "Dominant cinematic event composition without local observing instructions";
+        var style = isGuideHero ? "Educational observing poster" : "Cinematic hero poster";
         return
         [
             new(
@@ -2623,38 +2637,81 @@ public sealed class HeroAssetStoryGenerator(
                 "1280x720",
                 "YouTube",
                 new HeroLayoutBlueprintDto(
-                    $"Educational poster overlay: event title, date, local time, viewing direction",
-                    $"Astronomy image background: {visualFocus}",
-                    "Compact guide information panels plus object labels",
-                    "Educational observing poster")),
+                    overlay,
+                    background,
+                    labels,
+                    style)),
             new(
                 "Square",
                 "1080x1080",
                 "Facebook/Instagram",
                 new HeroLayoutBlueprintDto(
-                    $"Educational poster overlay: event title, date, local time, viewing direction",
-                    $"Astronomy image background: {visualFocus}",
-                    "Compact guide information panels plus object labels",
-                    "Educational observing poster")),
+                    overlay,
+                    background,
+                    labels,
+                    style)),
             new(
                 "Portrait",
                 "1080x1920",
                 "Stories/Reels/Shorts",
                 new HeroLayoutBlueprintDto(
-                    $"Educational poster overlay: event title, date, local time, viewing direction",
-                    $"Astronomy image background: {visualFocus}",
-                    "Compact guide information panels plus object labels",
-                    "Educational observing poster"))
+                    overlay,
+                    background,
+                    labels,
+                    style))
         ];
     }
 
-    private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants, HeroAssetStoryDto heroStory)
-        => new(
-            "Education",
-            "EducationalObservingPoster",
-            Clean(heroStory.HeroVisualFocus),
+    private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants, HeroAssetStoryDto heroStory, string heroContract, ProductionEventIntelligence? intelligence)
+    {
+        var isGuideHero = string.Equals(heroContract, "GuideHero", StringComparison.OrdinalIgnoreCase);
+        return new(
+            Clean(heroStory.HeroEmotion),
+            isGuideHero ? "EducationalObservingPoster" : "CinematicHeroPoster",
+            isGuideHero ? Clean(heroStory.HeroVisualFocus) : BuildCinematicHeroVisualFocus(heroStory, intelligence),
             Clean(heroStory.HeroMessage),
             platformVariants);
+    }
+
+    private static string BuildCinematicHeroVisualFocus(HeroAssetStoryDto heroStory, ProductionEventIntelligence? intelligence)
+    {
+        var eventText = string.Join(" ", new[]
+        {
+            intelligence?.EventType,
+            intelligence?.Title,
+            heroStory.HeroStorySource.What,
+            heroStory.HeroVisualFocus
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var objects = intelligence?.PrimaryObjects?.Count > 0 == true
+            ? string.Join(" and ", intelligence.PrimaryObjects.Take(3))
+            : FirstNonEmpty(heroStory.HeroStorySource.What, heroStory.HeroVisualFocus, "the astronomy event");
+        if ((objects.Equals("what", StringComparison.OrdinalIgnoreCase) || objects.Equals("where", StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrWhiteSpace(heroStory.HeroVisualFocus))
+            objects = heroStory.HeroVisualFocus;
+        if (eventText.Contains("eclipse", StringComparison.OrdinalIgnoreCase))
+            return "Massive eclipse with dramatic corona dominating the frame.";
+        if (eventText.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("planet", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("venus", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("jupiter", StringComparison.OrdinalIgnoreCase))
+            return $"Dominant {BuildCinematicObjectPhrase(objects)} with cinematic twilight sky.";
+        if (eventText.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            return "Sky filled with dramatic meteor streaks.";
+
+        var cleanObjects = Clean(objects).TrimEnd('.');
+        return string.IsNullOrWhiteSpace(cleanObjects)
+            ? "Dominant cinematic astronomy event filling the frame."
+            : $"Dominant {cleanObjects} in a dramatic cinematic sky.";
+    }
+
+    private static string BuildCinematicObjectPhrase(string objects)
+    {
+        var knownObjects = new[] { "Jupiter", "Venus", "Mars", "Mercury", "Saturn", "Moon" }
+            .Where(name => objects.Contains(name, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (knownObjects.Length > 0)
+            return string.Join(" and ", knownObjects.OrderBy(name => objects.IndexOf(name, StringComparison.OrdinalIgnoreCase)));
+        return Clean(objects).TrimEnd('.');
+    }
 
     private static HeroAssetReviewScoresDto BuildReviewScores()
         => new(95, 95, 90, 95, 94);

@@ -243,8 +243,8 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
         Assert.Equal("LOOK WEST TONIGHT", result.HeroStory.HeroHook);
         Assert.Equal("Wonder", result.HeroBlueprint.HeroEmotion);
-        Assert.Equal("AstronomyPoster", result.HeroBlueprint.LayoutStyle);
-        Assert.Equal("Venus and Jupiter above the western horizon during twilight.", result.HeroBlueprint.VisualFocus);
+        Assert.Equal("CinematicHeroPoster", result.HeroBlueprint.LayoutStyle);
+        Assert.Equal("Dominant Venus and Jupiter with cinematic twilight sky.", result.HeroBlueprint.VisualFocus);
         Assert.Equal("Two bright planets together after sunset. Look west to see the pairing.", result.HeroBlueprint.VisualNarrative);
         Assert.Equal(3, result.PlatformVariants.Count);
         Assert.Equal(result.PlatformVariants, result.HeroBlueprint.PlatformVariants);
@@ -300,8 +300,8 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
         Assert.Equal("LOOK WEST TONIGHT", result.HeroStory.HeroHook);
         Assert.Equal("Wonder", result.HeroBlueprint.HeroEmotion);
-        Assert.Equal("AstronomyPoster", result.HeroBlueprint.LayoutStyle);
-        Assert.Equal("Venus and Jupiter above the western horizon during twilight.", result.HeroBlueprint.VisualFocus);
+        Assert.Equal("CinematicHeroPoster", result.HeroBlueprint.LayoutStyle);
+        Assert.Equal("Dominant Venus and Jupiter with cinematic twilight sky.", result.HeroBlueprint.VisualFocus);
         Assert.Equal("Two bright planets together after sunset. Look west to see the pairing.", result.HeroBlueprint.VisualNarrative);
         Assert.Equal(3, result.PlatformVariants.Count);
         Assert.Equal(result.PlatformVariants, result.HeroBlueprint.PlatformVariants);
@@ -347,8 +347,8 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal(EventId, blueprintDocument.RootElement.GetProperty("eventId").GetString());
         Assert.Equal("LOOK WEST TONIGHT", blueprintDocument.RootElement.GetProperty("selectedHook").GetString());
         var heroBlueprint = blueprintDocument.RootElement.GetProperty("heroBlueprint");
-        Assert.Equal("AstronomyPoster", heroBlueprint.GetProperty("layoutStyle").GetString());
-        Assert.Equal("Venus and Jupiter above the western horizon during twilight.", heroBlueprint.GetProperty("visualFocus").GetString());
+        Assert.Equal("CinematicHeroPoster", heroBlueprint.GetProperty("layoutStyle").GetString());
+        Assert.Equal("Dominant Venus and Jupiter with cinematic twilight sky.", heroBlueprint.GetProperty("visualFocus").GetString());
         Assert.Equal("Two bright planets together after sunset. Look west to see the pairing.", heroBlueprint.GetProperty("visualNarrative").GetString());
         Assert.Equal(3, heroBlueprint.GetProperty("platformVariants").GetArrayLength());
 
