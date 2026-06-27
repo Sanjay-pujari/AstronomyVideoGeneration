@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -544,6 +545,54 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(validation.FooterTextCompactValidationPassed);
     }
 
+    [Fact]
+    public void AzureHeroPromptBuilderV2_SolarEclipseBuildsCinematicDominantBackgroundPrompts()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("TOTAL SOLAR ECLIPSE"),
+            new HeroCompositionSceneBlockDto("solar eclipse background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Safe solar viewing"),
+            new HeroCompositionTextBlockDto("date-time-panel", "2:18 PM EDT"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+        var story = new HeroAssetStoryDto(
+            EventId,
+            RegionId,
+            "en",
+            "TOTAL SOLAR ECLIPSE",
+            "A total solar eclipse crosses the sky.",
+            "Use certified eclipse glasses.",
+            "Large corona ring silhouette.",
+            "Wonder",
+            "ScrollStoppingHeroAsset",
+            new HeroStorySourceDto("Total Solar Eclipse", "southwest sky", "2:18 PM EDT", "rare alignment"),
+            new HeroAssetStoryScoresDto(95, 95, 95, 95),
+            95,
+            DateTimeOffset.Parse("2026-06-27T00:00:00Z"));
+        var builder = typeof(HeroAssetStoryGenerator).GetNestedType("AzureHeroPromptBuilderV2", System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(builder);
+        var method = builder!.GetMethod("Build", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var prompts = (System.Collections.IEnumerable)method!.Invoke(null, [composition, story, "TOTAL SOLAR ECLIPSE", BuildSolarEclipseProductionEventIntelligence(), null])!;
+        var promptTexts = prompts.Cast<object>()
+            .Select(prompt => (string)((System.Runtime.CompilerServices.ITuple)prompt)[4]!)
+            .ToArray();
+
+        Assert.Equal(3, promptTexts.Length);
+        Assert.All(promptTexts, prompt =>
+        {
+            Assert.Contains("CinematicHero", prompt);
+            Assert.Contains("occupy 45–65% of the frame", prompt);
+            Assert.Contains("no guide panels", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no labels", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Stellarium", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("screenshot", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("eclipse must dominate", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("large corona", prompt, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
 
     [Fact]
     public void Phase11HeroLayoutValidation_PlanetGroupingKeepsGenericRendererWithIsolatedCustomizations()
@@ -784,7 +833,12 @@ public sealed class HeroAssetStoryGeneratorTests
         {
             WorkingDirectory = workingDirectory,
             CelestialAssetsRoot = Path.Combine(workingDirectory, "assets", "celestial")
-        }), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector(), new HeroCompositionEngine());
+        }), Options.Create(new AzureOpenAIForImageOptions()), new TestHttpClientFactory(), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector(), new HeroCompositionEngine());
+
+    private sealed class TestHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
+    }
 
 
 
@@ -826,6 +880,32 @@ public sealed class HeroAssetStoryGeneratorTests
             "MeteorShower",
             RequiredVisualObjects: ["meteor streaks", "radiant hint", "dark sky", "low moon interference", "viewing window"],
             HeroCopyCandidates: ["METEORS PEAK TONIGHT", "WATCH AFTER MIDNIGHT"]);
+
+    private static ProductionEventIntelligence BuildSolarEclipseProductionEventIntelligence()
+        => new(
+            "Astronomy",
+            "SolarEclipse",
+            "Total Solar Eclipse",
+            "Total eclipse",
+            DateTimeOffset.Parse("2026-08-12T00:00:00Z"),
+            DateTimeOffset.Parse("2026-08-12T18:18:00Z"),
+            "2:18 PM EDT",
+            "During totality",
+            "Southwest sky",
+            "United States",
+            ["Sun", "Moon"],
+            ["Corona"],
+            "Cinematic totality",
+            "safe solar viewing",
+            12,
+            "The Moon covers the Sun during a solar eclipse.",
+            ["Use certified solar glasses"],
+            ["large corona", "ring silhouette", "dramatic sky glow"],
+            ["Open on totality"],
+            [],
+            "SolarEclipse",
+            RequiredVisualObjects: ["large corona", "ring silhouette"],
+            HeroCopyCandidates: ["TOTAL SOLAR ECLIPSE"]);
 
     private static async Task WriteInputFilesAsync(string workingDirectory)
     {
