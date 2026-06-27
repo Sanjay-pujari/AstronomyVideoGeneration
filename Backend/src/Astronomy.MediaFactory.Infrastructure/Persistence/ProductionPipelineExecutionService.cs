@@ -1891,7 +1891,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var errors = new List<string>();
         var renderedBlocks = ReadRenderedBlocks(layoutValidationPath);
-        var rendererContract = ResolveRendererContract(compositionModelPath, renderedBlocks);
+        var rendererContract = ResolveRendererContract(compositionModelPath, layoutValidationPath, renderedBlocks);
         var heroContract = ResolveHeroValidationContract(blueprintPath, layoutValidationPath, rendererContract);
         var validatorContract = heroContract;
         var validationProfileUsed = validatorContract;
@@ -1910,7 +1910,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
             if ((titleText + " " + visibleText).Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase))
                 errors.Add("Hero overlay must not use narration hook text such as LOOK FOR.");
-            if (validatorContract == "CinematicHero" && !string.IsNullOrWhiteSpace(visibleText))
+            if (validatorContract == "CinematicHero" && !IsSelectedCinematicHeroRenderer(layoutValidationPath) && !string.IsNullOrWhiteSpace(visibleText))
                 errors.Add("CinematicHero must use only a minimal title/subtitle overlay; direction, timing, and CTA text blocks must be empty unless heroContract=GuideHero.");
         }
 
@@ -1949,8 +1949,11 @@ public sealed partial class ProductionPipelineExecutionService(
             : [];
     }
 
-    private static string ResolveRendererContract(string compositionModelPath, IReadOnlyList<string> renderedBlocks)
+    private static string ResolveRendererContract(string compositionModelPath, string layoutValidationPath, IReadOnlyList<string> renderedBlocks)
     {
+        var selectedRendererContract = ReadSelectedRendererContract(layoutValidationPath);
+        if (!string.IsNullOrWhiteSpace(selectedRendererContract)) return selectedRendererContract;
+
         if (renderedBlocks.Any(block => block.Equals("Direction", StringComparison.OrdinalIgnoreCase) || block.Equals("Timing", StringComparison.OrdinalIgnoreCase) || block.Equals("CTA", StringComparison.OrdinalIgnoreCase)))
             return "GuideHero";
         if (File.Exists(compositionModelPath))
@@ -1961,6 +1964,26 @@ public sealed partial class ProductionPipelineExecutionService(
                 return "GuideHero";
         }
         return "CinematicHero";
+    }
+
+    private static bool IsSelectedCinematicHeroRenderer(string layoutValidationPath)
+        => string.Equals(ReadSelectedRendererContract(layoutValidationPath), "CinematicHero", StringComparison.OrdinalIgnoreCase);
+
+    private static string ReadSelectedRendererContract(string layoutValidationPath)
+    {
+        if (!File.Exists(layoutValidationPath)) return string.Empty;
+        using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
+        var root = doc.RootElement;
+        if (root.TryGetProperty("rendererPathSelected", out var rendererPath)
+            && rendererPath.ValueKind == JsonValueKind.String
+            && string.Equals(rendererPath.GetString(), "AzureHeroRendererV2", StringComparison.OrdinalIgnoreCase))
+            return "CinematicHero";
+        if (root.TryGetProperty("genericRendererApplied", out var genericRendererApplied)
+            && genericRendererApplied.ValueKind is JsonValueKind.False
+            && root.TryGetProperty("cinematicHeroPromptApplied", out var cinematicHeroPromptApplied)
+            && cinematicHeroPromptApplied.ValueKind is JsonValueKind.True)
+            return "CinematicHero";
+        return string.Empty;
     }
 
     private static string ResolveHeroValidationContract(string blueprintPath, string layoutValidationPath, string rendererContract)

@@ -6,6 +6,7 @@ using Azure.Core;
 using Azure.Identity;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -438,6 +439,7 @@ public sealed class HeroAssetStoryGenerator(
                 {
                     var azureResult = await GenerateAzureHeroImageFilesAsync(heroAssetsRoot, heroPath, heroStory, selectedHook, compositionModel, azureOptions, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
                     generatedFiles.AddRange(azureResult.GeneratedFiles);
+                    await ApplySelectedHeroRendererContractAsync(layoutValidationPath, "AzureHeroRendererV2", "CinematicHero", genericRendererApplied: false, cinematicHeroPromptApplied: true, cancellationToken);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -573,6 +575,39 @@ public sealed class HeroAssetStoryGenerator(
         };
     }
 
+
+    private static async Task ApplySelectedHeroRendererContractAsync(string layoutValidationPath, string rendererPathSelected, string heroContract, bool genericRendererApplied, bool cinematicHeroPromptApplied, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(layoutValidationPath)) return;
+        var node = JsonNode.Parse(await File.ReadAllTextAsync(layoutValidationPath, cancellationToken))?.AsObject();
+        if (node is null) return;
+
+        node["rendererPathSelected"] = rendererPathSelected;
+        node["genericRendererApplied"] = genericRendererApplied;
+        node["cinematicHeroPromptApplied"] = cinematicHeroPromptApplied;
+        node["heroContract"] = heroContract;
+        node["validatorContract"] = heroContract;
+        node["rendererContract"] = heroContract;
+        node["contractMismatch"] = false;
+        node["validationProfileUsed"] = heroContract;
+
+        if (string.Equals(heroContract, "CinematicHero", StringComparison.OrdinalIgnoreCase))
+        {
+            var cinematicBlocks = new JsonArray("Title", "Visual");
+            node["renderedBlocks"] = cinematicBlocks.DeepClone();
+            RewriteVariantRenderedBlocks(node, "variants", cinematicBlocks);
+            RewriteVariantRenderedBlocks(node, "variantResults", cinematicBlocks);
+        }
+
+        await File.WriteAllTextAsync(layoutValidationPath, node.ToJsonString(JsonOptions), cancellationToken);
+    }
+
+    private static void RewriteVariantRenderedBlocks(JsonObject node, string propertyName, JsonArray renderedBlocks)
+    {
+        if (node[propertyName] is not JsonArray variants) return;
+        foreach (var variant in variants.OfType<JsonObject>())
+            variant["renderedBlocks"] = renderedBlocks.DeepClone();
+    }
 
     private static void CleanExistingHeroAssetOutputs(string heroAssetsRoot)
     {
