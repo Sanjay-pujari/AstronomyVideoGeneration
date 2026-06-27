@@ -84,6 +84,9 @@ internal static class ObjectEdgeIntegrationService
 
     private static void FillSoftEllipse(IImageProcessingContext ctx, PointF center, float radiusX, float radiusY, Color color, float maxAlpha, int rings)
     {
+        if (radiusX <= 0 || radiusY <= 0 || rings <= 0)
+            return;
+
         for (var i = rings; i >= 1; i--)
         {
             var t = i / (float)rings;
