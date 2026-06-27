@@ -346,7 +346,15 @@ public sealed class HeroAssetStoryGenerator(
         if (intelligence is null)
             warnings.Add("Hero V3 image generation requires ProductionPipelineRequest event intelligence in ProductionContext.");
 
+        var eventFamily = ResolvePhase11HeroEventFamily(request, intelligence);
+        var planetGroupingRendererApplied = IsPlanetGroupingHeroFamily(eventFamily);
+        var fallbackCompositionUsed = false;
         var compositionModel = BuildAzureFirstHeroCompositionModel(request, heroStory, selectedHook, intelligence);
+        if (!HeroCompositionModelIsUsable(compositionModel))
+        {
+            compositionModel = BuildFallbackHeroCompositionModel(request, heroStory, selectedHook, intelligence);
+            fallbackCompositionUsed = true;
+        }
         var planetAssets = ResolveHeroCelestialTextures(renderingOptions.Value.CelestialAssetsRoot, request.ProductionContext?.ProductionEventIntelligence, heroStory);
         var missingPlanetAssets = planetAssets
             .Where(asset => string.IsNullOrWhiteSpace(asset.TexturePath) || !File.Exists(asset.TexturePath))
@@ -355,8 +363,8 @@ public sealed class HeroAssetStoryGenerator(
         if (missingPlanetAssets.Length > 0)
             warnings.Add($"Required strategy celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
 
-        var layoutValidation = BuildHeroLayoutValidation(compositionModel, planetAssets.Select(asset => asset.Label).ToArray());
-        var compositionValidationIssues = ValidateHeroCompositionText(compositionModel);
+        var layoutValidation = BuildHeroLayoutValidation(compositionModel, planetAssets.Select(asset => asset.Label).ToArray(), planetGroupingRendererApplied, eventFamily, fallbackCompositionUsed);
+        var compositionValidationIssues = ValidateHeroCompositionText(compositionModel, planetGroupingRendererApplied);
         var strategyValidationIssues = ValidateHeroStrategyRenderingContract(request, heroStory, compositionModel, planetAssets);
         warnings.AddRange(strategyValidationIssues);
         warnings.AddRange(compositionValidationIssues);
@@ -601,7 +609,7 @@ public sealed class HeroAssetStoryGenerator(
     private static bool IsStoryPhase(string? phase)
         => string.Equals(phase?.Trim(), "Story", StringComparison.OrdinalIgnoreCase);
 
-    private static IReadOnlyList<string> ValidateHeroCompositionText(HeroCompositionModelDto compositionModel)
+    private static IReadOnlyList<string> ValidateHeroCompositionText(HeroCompositionModelDto compositionModel, bool planetGroupingRendererApplied = true)
     {
         var issues = new List<string>();
         var renderedText = ResolveHeroRenderedText(compositionModel);
@@ -611,7 +619,7 @@ public sealed class HeroAssetStoryGenerator(
             issues.Add("Hero composition directionBlock.text must not be empty.");
         if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText))
             issues.Add("Hero rendering validation failed: directionBlock.text is non-empty but renderedDirectionText is empty.");
-        if (!string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText) && !HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText))
+        if (planetGroupingRendererApplied && !string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText) && !HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText))
             issues.Add("Hero rendering validation failed: renderedDirectionText is too long for the compact footer.");
         if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText))
             issues.Add("Hero rendering validation failed: timingBlock.text is non-empty but renderedTimeText is empty.");
@@ -650,7 +658,7 @@ public sealed class HeroAssetStoryGenerator(
         return (renderedDateText, renderedTimeText, renderedDirectionText, renderedCtaText);
     }
 
-    private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames)
+    private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel, IReadOnlyList<string> objectNames, bool planetGroupingRendererApplied = true, string eventFamily = "PlanetGrouping", bool fallbackCompositionUsed = false)
     {
         var variants = HeroImageSpecs
             .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
@@ -665,7 +673,7 @@ public sealed class HeroAssetStoryGenerator(
             && !string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)
             && !string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)
             && !string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)
-            && HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText)
+            && (!planetGroupingRendererApplied || HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText))
             && !compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)
             && !(string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase));
         var isValid = !duplicateBlocksDetected && !textOverlapDetected && objectsVisible && compositionTextValid;
@@ -674,9 +682,13 @@ public sealed class HeroAssetStoryGenerator(
         if (string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text)) errors = errors.Concat(["Hero directionBlock.text must not be empty."]).ToArray();
         if (compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)) errors = errors.Concat(["Hero rendered timing text must not contain TIME TBD."]).ToArray();
         if (!string.IsNullOrWhiteSpace(compositionModel.DirectionBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero directionBlock.text is non-empty but renderedDirectionText is empty."]).ToArray();
-        if (!string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText) && !HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero renderedDirectionText is too long for the compact footer."]).ToArray();
+        if (planetGroupingRendererApplied && !string.IsNullOrWhiteSpace(renderedText.RenderedDirectionText) && !HeroFooterDirectionLengthIsValid(renderedText.RenderedDirectionText)) errors = errors.Concat(["Hero renderedDirectionText is too long for the compact footer."]).ToArray();
         if (!string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text) && string.IsNullOrWhiteSpace(renderedText.RenderedTimeText)) errors = errors.Concat(["Hero timingBlock.text is non-empty but renderedTimeText is empty."]).ToArray();
         if (string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase)) errors = errors.Concat(["Hero CTA is reported rendered while ctaBlock.text is empty."]).ToArray();
+        var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
+        var generatedVariants = variants.Select(variant => NormalizeHeroVariantName(variant.Variant)).ToArray();
+        var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (generatedVariants.Length == 0) errors = errors.Concat(["Hero renderer produced zero variants."]).ToArray();
         return new HeroLayoutValidationDto(
             renderedBlocks,
             duplicateBlocksDetected,
@@ -685,9 +697,21 @@ public sealed class HeroAssetStoryGenerator(
             objectsVisible,
             BuildObjectVisibility(objectNames, objectsVisible),
             variants,
-            isValid,
+            isValid && generatedVariants.Length > 0 && missingVariants.Length == 0,
             variants,
-            errors);
+            errors)
+        {
+            EventFamily = eventFamily,
+            RendererPathSelected = planetGroupingRendererApplied ? "PlanetGroupingCompactFooter" : "GenericHeroRenderer",
+            PlanetGroupingRendererApplied = planetGroupingRendererApplied,
+            GenericRendererApplied = !planetGroupingRendererApplied,
+            CompositionModelBuilt = HeroCompositionModelIsUsable(compositionModel),
+            FallbackCompositionUsed = fallbackCompositionUsed,
+            RenderSkippedReason = generatedVariants.Length == 0 ? "Hero renderer produced zero variants." : string.Empty,
+            ExpectedVariants = expectedVariants,
+            GeneratedVariants = generatedVariants,
+            MissingVariants = missingVariants
+        };
     }
 
     private static HeroLayoutValidationDto BuildInvalidHeroLayoutValidation()
@@ -701,7 +725,13 @@ public sealed class HeroAssetStoryGenerator(
             [],
             false,
             [],
-            []);
+            ["Hero renderer produced zero variants."])
+        {
+            RenderSkippedReason = "Hero renderer produced zero variants.",
+            ExpectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray(),
+            GeneratedVariants = [],
+            MissingVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray()
+        };
 
     private static IReadOnlyList<string> BuildHeroLayoutErrors(bool duplicateBlocksDetected, bool textOverlapDetected, bool objectsVisible, IReadOnlyList<string> overlapWarnings)
     {
@@ -867,6 +897,41 @@ public sealed class HeroAssetStoryGenerator(
             new HeroCompositionTextBlockDto("date-time-panel", timeText),
             new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "object-labels" : "", heroContract == "GuideHero" ? objectText : ""),
             new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(directionText), !string.IsNullOrWhiteSpace(timeText), heroContract == "GuideHero" && !string.IsNullOrWhiteSpace(objectText), !string.IsNullOrWhiteSpace(directionText) && !string.IsNullOrWhiteSpace(timeText) ? 100 : 70));
+    }
+
+
+    private static bool HeroCompositionModelIsUsable(HeroCompositionModelDto? compositionModel)
+        => compositionModel is not null
+            && !string.IsNullOrWhiteSpace(compositionModel.HookBlock.Text)
+            && !string.IsNullOrWhiteSpace(compositionModel.VisualBlock.SourceScene);
+
+    private static HeroCompositionModelDto BuildFallbackHeroCompositionModel(HeroAssetStoryGenerationRequest request, HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
+    {
+        var eventTitle = FirstNonEmpty(intelligence?.Title, request.PipelineRequest?.Title, heroStory.HeroStorySource.What, selectedHook, "Sky Event");
+        var subtitle = FirstNonEmpty(heroStory.HeroMessage, intelligence?.ShortTitle, heroStory.HeroHook, "Observing guide");
+        var time = FirstNonEmpty(ExtractHeroTimeText(heroStory.HeroStorySource.When), intelligence?.PreferredViewingWindow, intelligence?.BestViewingWindowLocal, intelligence?.LocalPeakTime, "Viewing window");
+        var direction = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint, "Follow event safety guidance");
+        return new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto(Clean(eventTitle)),
+            new HeroCompositionSceneBlockDto($"generic astronomy hero background for {Clean(eventTitle)} with subtitle {Clean(subtitle)}"),
+            new HeroCompositionTextBlockDto("direction-panel", direction),
+            new HeroCompositionTextBlockDto("date-time-panel", time),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(direction), !string.IsNullOrWhiteSpace(time), false, !string.IsNullOrWhiteSpace(direction) && !string.IsNullOrWhiteSpace(time) ? 90 : 70));
+    }
+
+    private static string ResolvePhase11HeroEventFamily(HeroAssetStoryGenerationRequest request, ProductionEventIntelligence? intelligence)
+        => FirstNonEmpty(ResolveEventFamilyFromIntelligence(intelligence), request.PipelineRequest?.EventType, request.ProductionContext?.EventType, "Generic");
+
+    private static string ResolveEventFamilyFromIntelligence(ProductionEventIntelligence? intelligence)
+        => FirstNonEmpty(intelligence?.EventType, intelligence?.StrategyId, string.Empty);
+
+    private static bool IsPlanetGroupingHeroFamily(string? eventFamily)
+    {
+        var value = eventFamily?.Trim() ?? string.Empty;
+        return value.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("GroupedPlanets", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildCinematicHeroTitleOverlay(EventObjectContext eventObjectContext, string eventTitle, string eventType, string selectedHook)
@@ -1045,7 +1110,7 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "hero", familyCode = familyProfile.Family.ToString(), detectedFamily = familyProfile.Family.ToString(), primaryEventTypeCode = SpecialEventSubtypeResolver.Normalize(eventType), selectedProfile = familyProfile.SelectedProfile, profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenTerms = familyProfile.ForbiddenTerms, forbiddenConcepts = familyProfile.ForbiddenTerms, requiredVisualElements = familyProfile.RequiredVisualElements, requiredOverlayElements = familyProfile.RequiredOverlayElements, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
         var heroContract = ResolveHeroContract(context, intelligence);
         var guidePanelAllowed = heroContract == "GuideHero";
-        var planetGroupingInstruction = IsPlanetGroupingHero(eventType, eventTitle, eventObjectContext)
+        var planetGroupingInstruction = IsPlanetGroupingHeroFamily(eventType)
             ? " Create a cinematic realistic twilight sky over Udaipur, Rajasthan. Show Saturn, Mars, Jupiter, and Venus as four bright planetary points arranged along a gentle arc above the eastern horizon, close enough to read as a grouped planet event but not colliding. Keep the sky scientifically respectful but not a fake star map. Keep the hero clean in the same style as a conjunction hero. No text, no labels, no diagrams, no UI; final text overlays are added by renderer only."
             : string.Empty;
         var basePrompt = guidePanelAllowed
@@ -1201,7 +1266,7 @@ public sealed class HeroAssetStoryGenerator(
         var direction = ResolveHeroFooterDirection(FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroStorySource.Where));
         if (string.IsNullOrWhiteSpace(direction)) throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
         var renderedDirection = $"DIRECTION  {direction}".ToUpperInvariant();
-        if (!HeroFooterDirectionLengthIsValid(renderedDirection)) throw new InvalidOperationException("Phase 11 Hero rendering failed: renderedDirectionText is too long for the compact footer.");
+        if (IsPlanetGroupingHeroFamily(ResolveEventFamilyFromIntelligence(intelligence)) && !HeroFooterDirectionLengthIsValid(renderedDirection)) throw new InvalidOperationException("Phase 11 Hero rendering failed: renderedDirectionText is too long for the compact footer.");
         return ($"DATE  {date}".ToUpperInvariant(), $"TIME  {time}".ToUpperInvariant(), renderedDirection);
     }
 
@@ -1252,7 +1317,7 @@ public sealed class HeroAssetStoryGenerator(
 
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
     {
-        if (IsPlanetGroupingHero(eventType, eventTitle, eventObjectContext))
+        if (IsPlanetGroupingHeroFamily(eventType))
             return ("GROUPED PLANETS OVER UDAIPUR, RAJASTHAN", "SATURN + MARS + JUPITER + VENUS");
         if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
             return (BuildMeteorShowerTitle(eventTitle), "Meteor Shower Peak");
@@ -1263,20 +1328,6 @@ public sealed class HeroAssetStoryGenerator(
         if (eventTitle.Contains("moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("moon", StringComparison.OrdinalIgnoreCase))
             return (BuildNamedFullMoonTitle(eventTitle), "January Full Moon");
         return (TrimHeroTitle(eventTitle), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventType, "Astronomy Event")));
-    }
-
-    private static bool IsPlanetGroupingHero(string eventType, string eventTitle, EventObjectContext eventObjectContext)
-    {
-        if (eventType.Contains("planetgrouping", StringComparison.OrdinalIgnoreCase) ||
-            eventType.Contains("planet grouping", StringComparison.OrdinalIgnoreCase) ||
-            eventTitle.Contains("planet grouping", StringComparison.OrdinalIgnoreCase) ||
-            eventTitle.Contains("grouped planet", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        var planetNames = new[] { "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune" };
-        var objectCount = eventObjectContext.ObjectNames
-            .Count(name => planetNames.Any(planet => name.Contains(planet, StringComparison.OrdinalIgnoreCase)));
-        return objectCount >= 4;
     }
 
     private static string NormalizeHeroVariantName(string value)

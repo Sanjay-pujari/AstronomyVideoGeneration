@@ -1912,6 +1912,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (File.Exists(layoutValidationPath))
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
+            if (doc.RootElement.TryGetProperty("variants", out var variants) && variants.ValueKind == JsonValueKind.Array && variants.GetArrayLength() == 0)
+                errors.Add("Hero renderer produced zero variants.");
+
             if (doc.RootElement.TryGetProperty("renderedBlocks", out var blocks) && blocks.ValueKind == JsonValueKind.Array)
             {
                 var renderedBlocks = blocks.EnumerateArray().Select(item => item.GetString() ?? string.Empty).Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();

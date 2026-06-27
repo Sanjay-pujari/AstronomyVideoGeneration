@@ -499,10 +499,37 @@ public sealed class HeroAssetStoryGeneratorTests
         var method = typeof(HeroAssetStoryGenerator).GetMethod("BuildHeroLayoutValidation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert.NotNull(method);
 
-        var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>()])!;
+        var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>(), true, "PLANET_GROUPING", false])!;
 
         Assert.False(validation.IsValid);
         Assert.Contains(validation.Errors, error => error.Contains("renderedDirectionText is too long", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+
+    [Fact]
+    public void Phase11HeroLayoutValidation_GenericSolarEclipseAllowsSafetyDirectionAndVariants()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("TOTAL SOLAR ECLIPSE"),
+            new HeroCompositionSceneBlockDto("solar eclipse background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Use certified solar eclipse glasses and never look directly at the Sun without approved protection."),
+            new HeroCompositionTextBlockDto("date-time-panel", "2:18 PM EDT"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+
+        var method = typeof(HeroAssetStoryGenerator).GetMethod("BuildHeroLayoutValidation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, Array.Empty<string>(), false, "SolarEclipse", false])!;
+
+        Assert.True(validation.IsValid);
+        Assert.True(validation.GenericRendererApplied);
+        Assert.False(validation.PlanetGroupingRendererApplied);
+        Assert.Equal(["Landscape", "Square", "Portrait"], validation.ExpectedVariants);
+        Assert.Equal(["Landscape", "Square", "Portrait"], validation.GeneratedVariants);
+        Assert.Empty(validation.MissingVariants);
+        Assert.DoesNotContain(validation.Errors, error => error.Contains("compact footer", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
