@@ -429,8 +429,36 @@ public sealed class HeroAssetStoryGenerator(
             generatedFiles.Add(NormalizePath(layoutValidationPath));
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var physicalWriteResult = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
-            generatedFiles.AddRange(physicalWriteResult.GeneratedFiles);
+            var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
+            var azureOptions = imageOptions.Value;
+            HeroPhysicalWriteResult? physicalWriteResult = null;
+            if (IsAzureImage2Configured(azureOptions))
+            {
+                try
+                {
+                    var azureResult = await GenerateAzureHeroImageFilesAsync(heroAssetsRoot, heroPath, heroStory, selectedHook, compositionModel, azureOptions, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
+                    generatedFiles.AddRange(azureResult.GeneratedFiles);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    warnings.Add($"Azure hero renderer unavailable; GenericHeroRenderer fallback applied: {ex.Message}");
+                    physicalWriteResult = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
+                    generatedFiles.AddRange(physicalWriteResult.GeneratedFiles);
+                    var canonicalCopyApplied = EnsureCanonicalHeroFinalFile(heroAssetsRoot);
+                    generatedFiles.Add(NormalizePath(heroPath));
+                    var generatedVariantsForFallback = HeroImageSpecs.Where(spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName))).Select(spec => spec.Variant).ToArray();
+                    await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariantsForFallback, canonicalCopyApplied, physicalWriteResult, cancellationToken, ex.Message);
+                }
+            }
+            else
+            {
+                physicalWriteResult = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
+                generatedFiles.AddRange(physicalWriteResult.GeneratedFiles);
+                var canonicalCopyApplied = EnsureCanonicalHeroFinalFile(heroAssetsRoot);
+                generatedFiles.Add(NormalizePath(heroPath));
+                var generatedVariantsForGeneric = HeroImageSpecs.Where(spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName))).Select(spec => spec.Variant).ToArray();
+                await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariantsForGeneric, canonicalCopyApplied, physicalWriteResult, cancellationToken, "Azure image generation is not configured or enabled.");
+            }
 
             var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
             var generatedVariants = HeroImageSpecs
@@ -442,12 +470,6 @@ public sealed class HeroAssetStoryGenerator(
                 throw new InvalidOperationException("Hero renderer produced zero variants.");
             if (missingVariants.Length > 0)
                 throw new InvalidOperationException($"Hero renderer missing required variants: {string.Join(", ", missingVariants)}.");
-
-            var canonicalCopyApplied = EnsureCanonicalHeroFinalFile(heroAssetsRoot);
-            generatedFiles.Add(NormalizePath(heroPath));
-
-            var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
-            await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariants, canonicalCopyApplied, physicalWriteResult, cancellationToken);
 
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
@@ -780,7 +802,8 @@ public sealed class HeroAssetStoryGenerator(
         IReadOnlyList<string> generatedVariants,
         bool canonicalCopyApplied,
         HeroPhysicalWriteResult physicalWriteResult,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? fallbackReason = null)
     {
         var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
         var existingVariantPaths = HeroImageSpecs
@@ -805,7 +828,13 @@ public sealed class HeroAssetStoryGenerator(
             phaseNo = 11,
             eventFamily,
             rendererPathSelected = "GenericHeroRenderer",
+            provider = "InternalTemplate",
+            azureCallsCount = 0,
             genericRendererApplied = true,
+            cinematicHeroPromptApplied = false,
+            compositionModelUsed = HeroCompositionModelIsUsable(compositionModel),
+            azureBackgroundGenerated = false,
+            fallbackReason,
             planetGroupingSubtitleFormatterApplied = planetGroupingCustomizationApplied,
             planetGroupingPromptApplied = planetGroupingCustomizationApplied,
             compositionModelBuilt = HeroCompositionModelIsUsable(compositionModel),
@@ -1213,6 +1242,51 @@ public sealed class HeroAssetStoryGenerator(
         }
     }
 
+    private async Task<HeroPhysicalWriteResult> GenerateAzureHeroImageFilesAsync(
+        string heroAssetsRoot,
+        string heroPath,
+        HeroAssetStoryDto heroStory,
+        string selectedHook,
+        HeroCompositionModelDto compositionModel,
+        AzureOpenAIForImageOptions options,
+        ProductionEventIntelligence? intelligence,
+        ProductionPipelineExecutionContext? context,
+        CancellationToken cancellationToken)
+    {
+        var prompts = AzureHeroPromptBuilderV2.Build(compositionModel, heroStory, selectedHook, intelligence, context);
+        var promptPath = Path.Combine(heroAssetsRoot, HeroPromptFileName);
+        Directory.CreateDirectory(heroAssetsRoot);
+        await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new
+        {
+            promptBuilder = "AzureHeroPromptBuilderV2",
+            visualIntent = "CinematicHero",
+            compositionModelUsed = HeroCompositionModelIsUsable(compositionModel),
+            variants = prompts.Select(p => new { p.Variant, p.FileName, p.Width, p.Height, p.Prompt })
+        }, JsonOptions), cancellationToken);
+        await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, prompts, intelligence, context, cancellationToken);
+
+        var generatedFiles = new List<string> { NormalizePath(promptPath) };
+        var variants = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+        foreach (var prompt in prompts)
+        {
+            var backgroundPath = Path.Combine(heroAssetsRoot, $"azure-background-{prompt.Variant}.png");
+            var outputPath = Path.Combine(heroAssetsRoot, prompt.FileName);
+            var result = await GenerateHeroWithAzureImage2Async(options, prompt.Prompt, backgroundPath, cancellationToken);
+            if (!result.ProviderSucceeded)
+                throw new InvalidOperationException(result.FailureReason ?? "Azure GPT Image background generation failed.");
+            await WriteHeroV6OverlayAsync(backgroundPath, outputPath, prompt.Width, prompt.Height, heroStory, selectedHook, compositionModel, intelligence, cancellationToken);
+            var hash = await ComputeSha256Async(outputPath, cancellationToken);
+            generatedFiles.Add(NormalizePath(backgroundPath));
+            generatedFiles.Add(NormalizePath(outputPath));
+            variants.Add((prompt.Variant, prompt.Prompt, prompt.Width, prompt.Height, backgroundPath, outputPath, result, hash));
+        }
+
+        File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
+        generatedFiles.Add(NormalizePath(heroPath));
+        await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName), variants, heroStory, selectedHook, compositionModel, intelligence, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
+        return new HeroPhysicalWriteResult(generatedFiles, variants.Select(v => NormalizePath(v.ImagePath)).ToArray(), variants.Sum(v => GetHeroFileSize(v.ImagePath)), true, true, null, variants.ToDictionary(v => NormalizeHeroVariantName(v.Variant), v => GetHeroFileSize(v.ImagePath), StringComparer.OrdinalIgnoreCase));
+    }
+
 
     private static void WriteHeroGenerationConfigurationDiagnostics(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, int width, int height, string promptPath, string diagnosticsPath)
     {
@@ -1317,6 +1391,38 @@ public sealed class HeroAssetStoryGenerator(
             ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: CinematicHero. Composition type: vertical cinematic astronomy image. Prompt variation: tall clean background with safe title space, no cropping. {basePrompt}"),
             ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: CinematicHero. Composition type: square cinematic astronomy image. Prompt variation: centered event-specific sky with safe title space, no cropping. {basePrompt}")
         ];
+    }
+
+    private static class AzureHeroPromptBuilderV2
+    {
+        public static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> Build(
+            HeroCompositionModelDto compositionModel,
+            HeroAssetStoryDto heroStory,
+            string selectedHook,
+            ProductionEventIntelligence? intelligence,
+            ProductionPipelineExecutionContext? context)
+        {
+            var eventTitle = FirstNonEmpty(intelligence?.Title, intelligence?.ShortTitle, compositionModel.HookBlock.Text, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event");
+            var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
+            var objects = EventObjectContextBuilder.FromIntelligence(intelligence);
+            var objectText = FirstNonEmpty(objects.ObjectListText, heroStory.HeroVisualFocus, compositionModel.VisualBlock.SourceScene, eventTitle);
+            var safeSpace = "Leave clean safe space for deterministic overlay title and compact footer metadata; do not generate text in that space.";
+            var basePrompt = $"Visual intent: CinematicHero. Premium YouTube thumbnail style cinematic astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Use dramatic lighting, high contrast, deep cinematic color, premium astrophotography-inspired atmosphere, and a clean event-poster composition. Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no embedded text. {safeSpace}";
+            if (IsSolarEclipse(eventType, eventTitle))
+                basePrompt += " Solar Eclipse enrichment: the eclipse must dominate the frame with a large corona or ring silhouette, dramatic sky glow, minimal horizon, no tiny sun or moon, and no distant observing scene.";
+
+            EventContentGuard.ValidateNoForbiddenTerms("AzureHeroPromptBuilderV2", "hero prompt", basePrompt, intelligence?.ForbiddenTerms ?? []);
+            return
+            [
+                ("landscape", HeroLandscapeFileName, 1920, 1080, $"Aspect ratio 16:9 landscape. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}"),
+                ("portrait", HeroPortraitFileName, 1080, 1920, $"Aspect ratio 9:16 portrait. Keep the dominant event large and cinematic with safe overlay space near the upper area and footer. {basePrompt}"),
+                ("square", HeroSquareFileName, 1080, 1080, $"Aspect ratio 1:1 square. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}")
+            ];
+        }
+
+        private static bool IsSolarEclipse(string eventType, string eventTitle)
+            => (eventType.Contains("solar", StringComparison.OrdinalIgnoreCase) && eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase))
+                || eventTitle.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase);
     }
 
 
@@ -1664,8 +1770,12 @@ public sealed class HeroAssetStoryGenerator(
         {
             phaseNo = 11,
             eventFamily,
-            rendererPathSelected = "GenericHeroRenderer",
-            genericRendererApplied = true,
+            rendererPathSelected = "AzureHeroRendererV2",
+            genericRendererApplied = false,
+            cinematicHeroPromptApplied = true,
+            compositionModelUsed = true,
+            azureBackgroundGenerated = variants.Any(v => File.Exists(v.BackgroundPath)),
+            fallbackReason = (string?)null,
             planetGroupingPromptApplied = planetGroupingApplied,
             planetGroupingSubtitleFormatterApplied = planetGroupingApplied,
             sharedFooterRendererUsed = true,
@@ -1675,7 +1785,7 @@ public sealed class HeroAssetStoryGenerator(
             endpoint,
             apiVersion = "2024-10-21",
             region = ResolveRegion(endpoint),
-            renderer = "HeroV6Renderer",
+            renderer = "AzureHeroRendererV2",
             fallbackRendererUsed = false,
             expectedVariants,
             generatedVariants,
