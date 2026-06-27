@@ -461,12 +461,41 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawHeroCtaAccent(IImageProcessingContext ctx, RectangleF textBounds, int width, int height)
     {
+        if (textBounds.Width <= 0 || textBounds.Height <= 0)
+        {
+            LogGlowSkipped(
+                "DrawHeroCtaAccent",
+                textBounds,
+                textBounds.Width,
+                textBounds.Height,
+                0f,
+                0f,
+                "ctaBounds must have positive width and height before rendering decorative glow.");
+            return;
+        }
+
         var underlineY = textBounds.Y + textBounds.Height * 0.86f;
         var underlineWidth = Math.Min(textBounds.Width * 0.58f, width * 0.36f);
         var start = new PointF(textBounds.X + textBounds.Width * 0.015f, underlineY);
         var end = new PointF(start.X + underlineWidth, underlineY);
         ctx.DrawLine(Color.ParseHex("#8FD2FF").WithAlpha(0.62f), Math.Max(2f, width * 0.0024f), start, end);
-        DrawGlow(ctx, new PointF(start.X + underlineWidth * 0.50f, underlineY), underlineWidth * 0.58f, Math.Max(8f, height * 0.006f), Color.ParseHex("#8FD2FF"), 0.050f, 6);
+
+        var radiusX = underlineWidth * 0.58f;
+        var radiusY = Math.Max(8f, height * 0.006f);
+        if (radiusX <= 0 || radiusY <= 0)
+        {
+            LogGlowSkipped(
+                "DrawHeroCtaAccent",
+                textBounds,
+                underlineWidth,
+                textBounds.Height,
+                radiusX,
+                radiusY,
+                "computed CTA accent glow radii must both be positive.");
+            return;
+        }
+
+        DrawGlow(ctx, new PointF(start.X + underlineWidth * 0.50f, underlineY), radiusX, radiusY, Color.ParseHex("#8FD2FF"), 0.050f, 6);
     }
 
     private static void DrawHeroDirectionCueAccent(IImageProcessingContext ctx, RectangleF textBounds, int width)
@@ -560,12 +589,39 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawGlow(IImageProcessingContext ctx, PointF center, float radiusX, float radiusY, Color color, float alpha, int rings)
     {
+        if (radiusX <= 0 || radiusY <= 0 || rings <= 0)
+        {
+            LogGlowSkipped(
+                "DrawGlow",
+                RectangleF.Empty,
+                0f,
+                0f,
+                radiusX,
+                radiusY,
+                rings <= 0
+                    ? "glow rings must be positive."
+                    : "decorative glow radii must both be positive.");
+            return;
+        }
+
         for (var i = rings; i >= 1; i--)
         {
             var t = i / (float)rings;
             ctx.Fill(color.WithAlpha(alpha * MathF.Pow(1f - t * 0.72f, 1.45f)), new EllipsePolygon(center.X, center.Y, radiusX * t, radiusY * t));
         }
     }
+
+    private static void LogGlowSkipped(string source, RectangleF ctaBounds, float ctaWidth, float ctaHeight, float radiusX, float radiusY, string glowSkipReason)
+        => Console.WriteLine(
+            "[Warning] Hero decorative glow skipped: " +
+            $"source={source}; " +
+            $"ctaBounds={{X={ctaBounds.X:F2},Y={ctaBounds.Y:F2},Width={ctaBounds.Width:F2},Height={ctaBounds.Height:F2}}}; " +
+            $"ctaWidth={ctaWidth:F2}; " +
+            $"ctaHeight={ctaHeight:F2}; " +
+            $"radiusX={radiusX:F2}; " +
+            $"radiusY={radiusY:F2}; " +
+            "glowSkipped=True; " +
+            $"glowSkipReason={glowSkipReason}");
 
     private static Color PlanetGlow(string label)
         => label.Contains("venus", StringComparison.OrdinalIgnoreCase) ? Color.ParseHex("#FFE9A6")
