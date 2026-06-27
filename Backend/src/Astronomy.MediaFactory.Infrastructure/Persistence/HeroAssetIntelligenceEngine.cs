@@ -751,7 +751,7 @@ public sealed class HeroAssetStoryGenerator(
             new("scene-006", AstronomyQuestionTypes.Action, "Call to action", "viewer action", heroStory.HeroAction, null)
         ];
 
-    private static async Task WriteGenericHeroGenerationDiagnosticsAsync(
+    private async Task WriteGenericHeroGenerationDiagnosticsAsync(
         string diagnosticsPath,
         string eventFamily,
         bool planetGroupingCustomizationApplied,
