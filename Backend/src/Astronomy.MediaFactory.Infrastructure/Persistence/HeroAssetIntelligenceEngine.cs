@@ -312,6 +312,7 @@ public sealed class HeroAssetStoryGenerator(
 
         var warnings = new List<string>();
         var generatedFiles = new List<string>();
+        var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
         var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
         var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
         var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
@@ -348,13 +349,12 @@ public sealed class HeroAssetStoryGenerator(
 
         var eventFamily = ResolvePhase11HeroEventFamily(request, intelligence);
         var planetGroupingRendererApplied = IsPlanetGroupingHeroFamily(eventFamily);
+        var approvedScenes = await LoadApprovedSceneCandidatesAsync(questionEngineRoot, cancellationToken);
+        if (approvedScenes.Count < 3)
+            approvedScenes = BuildGenericHeroApprovedSceneCandidates(heroStory);
+        selectedSceneManifest ??= await sceneSelector.SelectHeroScenesAsync(request, heroStory, blueprint, approvedScenes, cancellationToken);
+        var compositionModel = compositionEngine.ComposeHeroComposition(heroStory, selectedHook, blueprint, selectedSceneManifest, approvedScenes);
         var fallbackCompositionUsed = false;
-        var compositionModel = BuildAzureFirstHeroCompositionModel(request, heroStory, selectedHook, intelligence);
-        if (!HeroCompositionModelIsUsable(compositionModel))
-        {
-            compositionModel = BuildFallbackHeroCompositionModel(request, heroStory, selectedHook, intelligence);
-            fallbackCompositionUsed = true;
-        }
         var planetAssets = ResolveHeroCelestialTextures(renderingOptions.Value.CelestialAssetsRoot, request.ProductionContext?.ProductionEventIntelligence, heroStory);
         var missingPlanetAssets = planetAssets
             .Where(asset => string.IsNullOrWhiteSpace(asset.TexturePath) || !File.Exists(asset.TexturePath))
@@ -377,7 +377,6 @@ public sealed class HeroAssetStoryGenerator(
 
         var isValid = storyValidationIssues.Count == 0
             && blueprintValidationIssues.Count == 0
-            && intelligence is not null
             && !layoutValidation.DuplicateBlocksDetected
             && !layoutValidation.TextOverlapDetected
             && layoutValidation.ObjectsVisible
@@ -414,6 +413,11 @@ public sealed class HeroAssetStoryGenerator(
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
+            await File.WriteAllTextAsync(sceneManifestPath, JsonSerializer.Serialize(selectedSceneManifest, JsonOptions), cancellationToken);
+            if (!File.Exists(sceneManifestPath))
+                throw new InvalidOperationException($"Hero scene manifest was not generated at '{NormalizePath(sceneManifestPath)}'; aborting image generation.");
+            generatedFiles.Add(NormalizePath(sceneManifestPath));
+
             await File.WriteAllTextAsync(compositionModelPath, JsonSerializer.Serialize(compositionModel, JsonOptions), cancellationToken);
             if (!File.Exists(compositionModelPath))
                 throw new InvalidOperationException($"Hero composition model was not generated at '{NormalizePath(compositionModelPath)}'; aborting image generation.");
@@ -424,55 +428,26 @@ public sealed class HeroAssetStoryGenerator(
                 throw new InvalidOperationException($"Hero layout validation was not generated at '{NormalizePath(layoutValidationPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(layoutValidationPath));
 
-            var promptPath = Path.Combine(heroAssetsRoot, HeroPromptFileName);
-            var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
-            var heroDiagnosticsStopwatch = Stopwatch.StartNew();
-            WriteHeroGenerationConfigurationDiagnostics(compositionModel, imageOptions.Value, HeroImageSpecs[0].Width, HeroImageSpecs[0].Height, promptPath, diagnosticsPath);
-
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var heroVariants = BuildHeroV5AzurePrompts(heroStory, selectedHook, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext);
-            CleanHeroV5FinalRoot(heroAssetsRoot);
-            var candidatesRoot = Path.Combine(heroAssetsRoot, "candidates");
-            Directory.CreateDirectory(candidatesRoot);
-            var heroVariantResults = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
-            foreach (var variant in heroVariants)
-            {
-                var azureBackgroundPath = Path.Combine(candidatesRoot, $"hero-v6-{variant.Variant.ToLowerInvariant()}-azure-background.png");
-                var variantPath = Path.Combine(heroAssetsRoot, variant.FileName);
-                var azureResult = await GenerateHeroWithAzureImage2Async(imageOptions.Value, variant.Prompt, azureBackgroundPath, cancellationToken);
-                if (!azureResult.ProviderSucceeded)
-                    throw new InvalidOperationException($"Phase 11 Hero Azure Image2 generation failed for variant {variant.Variant}: {azureResult.FailureReason}");
-                await WriteHeroV6OverlayAsync(azureBackgroundPath, variantPath, variant.Width, variant.Height, heroStory, selectedHook, compositionModel, request.ProductionContext?.ProductionEventIntelligence, cancellationToken);
-                var hash = await ComputeSha256Async(variantPath, cancellationToken);
-                heroVariantResults.Add((variant.Variant, variant.Prompt, variant.Width, variant.Height, azureBackgroundPath, variantPath, azureResult, hash));
-                generatedFiles.Add(NormalizePath(azureBackgroundPath));
-                generatedFiles.Add(NormalizePath(variantPath));
-            }
+            var variantFiles = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
+            generatedFiles.AddRange(variantFiles);
 
             var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
-            var generatedVariants = heroVariantResults.Select(result => NormalizeHeroVariantName(result.Variant)).ToArray();
+            var generatedVariants = HeroImageSpecs
+                .Where(spec => File.Exists(Path.Combine(heroAssetsRoot, spec.FileName)))
+                .Select(spec => spec.Variant)
+                .ToArray();
             var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (generatedVariants.Length == 0)
+                throw new InvalidOperationException("Hero renderer produced zero variants.");
             if (missingVariants.Length > 0)
-                throw new InvalidOperationException($"Hero V6 validation failed: missing required variants: {string.Join(", ", missingVariants)}.");
-            if (heroVariantResults.Count(v => v.Result.ProviderCalled) < expectedVariants.Length)
-                throw new InvalidOperationException("Hero V6 validation failed: Azure Image2 must be called separately for landscape, portrait, and square.");
-            if (heroVariantResults.Select(v => (v.Width, v.Height)).Distinct().Count() != 3)
-                throw new InvalidOperationException("Hero V6 validation failed: landscape, portrait, and square dimensions must be distinct.");
-            var uniqueHeroHashes = heroVariantResults.Select(result => result.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (uniqueHeroHashes.Length != heroVariants.Count)
-                throw new InvalidOperationException($"Hero V6 variant validation failed: expected {heroVariants.Count} unique image hashes but found {uniqueHeroHashes.Length}.");
+                throw new InvalidOperationException($"Hero renderer missing required variants: {string.Join(", ", missingVariants)}.");
 
-            var selectedHero = heroVariantResults[0];
-            File.Copy(selectedHero.ImagePath, heroPath, overwrite: true);
+            File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
             generatedFiles.Add(NormalizePath(heroPath));
 
-            heroDiagnosticsStopwatch.Stop();
-            await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { variants = heroVariants.Select(v => new { name = v.Variant, v.Width, v.Height, fileName = v.FileName, prompt = v.Prompt }) }, JsonOptions), cancellationToken);
-            await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, heroVariants, request.ProductionContext?.ProductionEventIntelligence, request.ProductionContext, cancellationToken);
-            generatedFiles.Add(NormalizePath(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json")));
-            await WriteHeroV6GenerationSummaryDiagnosticsAsync(imageOptions.Value, heroPath, promptPath, diagnosticsPath, heroVariantResults, heroStory, selectedHook, compositionModel, request.ProductionContext?.ProductionEventIntelligence, heroDiagnosticsStopwatch.ElapsedMilliseconds, cancellationToken);
-            generatedFiles.Add(NormalizePath(promptPath));
-            generatedFiles.Add(NormalizePath(diagnosticsPath));
+            var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
+            await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariants, cancellationToken);
 
             var generatedHeroImages = HeroImageSpecs
                 .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
@@ -481,10 +456,9 @@ public sealed class HeroAssetStoryGenerator(
                 .ToArray();
             var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, request.ProductionContext?.ProductionEventIntelligence);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), cancellationToken);
-            generatedFiles.Add(NormalizePath(reviewPath));
         }
 
-        var heroSceneManifestGenerated = false;
+        var heroSceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
         var heroCompositionModelGenerated = request.DryRun || File.Exists(compositionModelPath);
         var layoutValidationGenerated = request.DryRun || File.Exists(layoutValidationPath);
         var heroImageGenerated = request.DryRun || File.Exists(Path.Combine(heroAssetsRoot, HeroFileName));
@@ -517,10 +491,13 @@ public sealed class HeroAssetStoryGenerator(
 
         return new HeroAssetGenerationResponse(request.EventId, isValid, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Images", true, true, imageGenerationExecuted)
         {
-            HeroSceneManifest = null,
-            HeroSceneSelectorExecuted = false,
-            HeroSceneManifestGenerated = false,
-            HeroSceneManifestPath = null,
+            HeroSceneManifest = selectedSceneManifest,
+            HeroSceneSelectorExecuted = true,
+            HeroSceneManifestGenerated = heroSceneManifestGenerated,
+            HeroSceneManifestPath = request.DryRun ? null : NormalizePath(sceneManifestPath),
+            PrimaryScene = selectedSceneManifest?.PrimaryScene.SceneId,
+            SecondaryScene = selectedSceneManifest?.SecondaryScene.SceneId,
+            SupportScene = selectedSceneManifest?.SupportScene.SceneId,
             HeroCompositionModelGenerated = heroCompositionModelGenerated,
             LayoutValidationGenerated = layoutValidationGenerated,
             DuplicateBlocksDetected = layoutValidation?.DuplicateBlocksDetected ?? false,
@@ -764,6 +741,48 @@ public sealed class HeroAssetStoryGenerator(
             GeneratedVariants = [],
             MissingVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray()
         };
+
+    private static IReadOnlyList<ApprovedHeroSceneCandidate> BuildGenericHeroApprovedSceneCandidates(HeroAssetStoryDto heroStory)
+        =>
+        [
+            new("scene-001", AstronomyQuestionTypes.What, "Hero event visual", heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, null),
+            new("scene-002", AstronomyQuestionTypes.Where, "Direction cue", "where to look", heroStory.HeroStorySource.Where, null),
+            new("scene-003", AstronomyQuestionTypes.When, "Timing cue", "when to look", heroStory.HeroStorySource.When, null),
+            new("scene-006", AstronomyQuestionTypes.Action, "Call to action", "viewer action", heroStory.HeroAction, null)
+        ];
+
+    private static async Task WriteGenericHeroGenerationDiagnosticsAsync(
+        string diagnosticsPath,
+        string eventFamily,
+        bool planetGroupingCustomizationApplied,
+        HeroCompositionModelDto compositionModel,
+        IReadOnlyList<string> generatedVariants,
+        CancellationToken cancellationToken)
+    {
+        var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
+        var normalizedGeneratedVariants = generatedVariants
+            .Select(NormalizeHeroVariantName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var missingVariants = expectedVariants.Except(normalizedGeneratedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
+        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath) ?? ResolveWorkingDirectoryRoot());
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 11,
+            eventFamily,
+            rendererPathSelected = "GenericHeroRenderer",
+            genericRendererApplied = true,
+            planetGroupingSubtitleFormatterApplied = planetGroupingCustomizationApplied,
+            planetGroupingPromptApplied = planetGroupingCustomizationApplied,
+            compositionModelBuilt = HeroCompositionModelIsUsable(compositionModel),
+            expectedVariants,
+            generatedVariants = normalizedGeneratedVariants,
+            missingVariants,
+            renderSkippedReason = normalizedGeneratedVariants.Length == 0
+                ? "Hero renderer produced zero variants."
+                : string.Empty
+        }, JsonOptions), cancellationToken);
+    }
 
     private static IReadOnlyList<string> BuildHeroLayoutErrors(bool duplicateBlocksDetected, bool textOverlapDetected, bool objectsVisible, IReadOnlyList<string> overlapWarnings)
     {
@@ -1144,7 +1163,7 @@ public sealed class HeroAssetStoryGenerator(
         var guidePanelAllowed = heroContract == "GuideHero";
         var planetGroupingPromptApplied = IsPlanetGroupingHeroFamily(eventType);
         var planetGroupingInstruction = planetGroupingPromptApplied
-            ? $" Create a cinematic realistic twilight sky for the grouped objects: {objectText}. Show each listed object as a bright celestial point arranged along a gentle horizon arc, close enough to read as one grouped sky event but not colliding. Keep the sky scientifically respectful but not a fake star map. Keep the hero clean in the same style as a conjunction hero. No text, no labels, no diagrams, no UI; final text overlays are added by renderer only."
+            ? $" Create a cinematic realistic twilight sky for the grouped objects: {objectText}. Show the grouped planets along a gentle arc with each object visually grouped, close enough to read as one grouped sky event but not colliding. Keep the sky scientifically respectful but not a fake star map. No text, no labels, no watermarks, no diagrams, no UI; final text overlays are added by renderer only."
             : string.Empty;
         var basePrompt = guidePanelAllowed
             ? $"Azure Image2 background only for guide hero. Event-specific astronomy sky for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Deterministic overlay may add compact date/time/direction guide details. No embedded text, no watermark, no logo, no unrelated event imagery.{planetGroupingInstruction}"
@@ -1387,11 +1406,12 @@ public sealed class HeroAssetStoryGenerator(
     {
         var objects = eventObjectContext.ObjectNames
             .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Take(4)
             .Select(value => Clean(value).ToUpperInvariant())
             .ToArray();
-        if (objects.Length > 0)
+        if (objects.Length is > 0 and <= 4)
             return string.Join(" + ", objects);
+        if (objects.Length >= 5)
+            return string.Join(" + ", objects.Take(3).Concat([$"{objects.Length - 3} MORE"]));
 
         return "GROUPED SKY OBJECTS";
     }
@@ -1657,10 +1677,7 @@ public sealed class HeroAssetStoryGenerator(
         var intelligence = request.ProductionContext?.ProductionEventIntelligence;
         var issues = new List<string>();
         if (intelligence is null)
-        {
-            issues.Add("Hero rendering validation failed: ProductionEventIntelligence is required for strategy-driven hero rendering.");
             return issues;
-        }
 
         var serializedContract = JsonSerializer.Serialize(new { heroStory, compositionModel, intelligence.EventType, intelligence.Title }, JsonOptions);
         foreach (var term in BuildHeroForbiddenTerms(intelligence))
