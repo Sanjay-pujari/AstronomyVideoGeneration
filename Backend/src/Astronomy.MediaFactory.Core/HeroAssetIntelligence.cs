@@ -137,6 +137,11 @@ public sealed record HeroLayoutValidationDto(
     public string RawDirectionSource { get; init; } = string.Empty;
     public bool FooterTextCompactValidationPassed { get; init; }
     public bool PlanetGroupingOnlyCustomizationApplied { get; init; }
+    public string HeroContract { get; init; } = string.Empty;
+    public string ValidatorContract { get; init; } = string.Empty;
+    public string RendererContract { get; init; } = string.Empty;
+    public bool ContractMismatch { get; init; }
+    public string ValidationProfileUsed { get; init; } = string.Empty;
 }
 
 

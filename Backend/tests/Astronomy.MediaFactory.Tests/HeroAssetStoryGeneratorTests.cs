@@ -445,6 +445,11 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.False(layoutValidation.GetProperty("textOverlapDetected").GetBoolean());
         Assert.True(layoutValidation.GetProperty("objectsVisible").GetBoolean());
         Assert.Equal(5, layoutValidation.GetProperty("renderedBlocks").GetArrayLength());
+        Assert.Equal("GuideHero", layoutValidation.GetProperty("heroContract").GetString());
+        Assert.Equal("GuideHero", layoutValidation.GetProperty("validatorContract").GetString());
+        Assert.Equal("GuideHero", layoutValidation.GetProperty("rendererContract").GetString());
+        Assert.False(layoutValidation.GetProperty("contractMismatch").GetBoolean());
+        Assert.Equal("GuideHero", layoutValidation.GetProperty("validationProfileUsed").GetString());
         using var reviewDocument = JsonDocument.Parse(await File.ReadAllTextAsync(reviewPath));
         var review = reviewDocument.RootElement;
         Assert.True(review.GetProperty("usesSharedAstronomyVisualComposer").GetBoolean());
