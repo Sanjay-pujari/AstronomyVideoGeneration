@@ -116,7 +116,20 @@ public sealed record HeroLayoutValidationDto(
     IReadOnlyList<HeroVariantLayoutValidationDto> Variants,
     bool IsValid,
     IReadOnlyList<HeroVariantLayoutValidationDto> VariantResults,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors)
+{
+    public string EventFamily { get; init; } = string.Empty;
+    public string RendererPathSelected { get; init; } = string.Empty;
+    public bool PlanetGroupingRendererApplied { get; init; }
+    public bool GenericRendererApplied { get; init; }
+    public bool CompositionModelBuilt { get; init; }
+    public bool FallbackCompositionUsed { get; init; }
+    public string RenderSkippedReason { get; init; } = string.Empty;
+    public IReadOnlyList<string> ExpectedVariants { get; init; } = [];
+    public IReadOnlyList<string> GeneratedVariants { get; init; } = [];
+    public IReadOnlyList<string> MissingVariants { get; init; } = [];
+}
+
 
 public sealed record HeroObjectVisibilityDto(string Object, bool Visible, bool Cropped);
 
