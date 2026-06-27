@@ -1989,6 +1989,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string ResolveHeroValidationContract(string blueprintPath, string layoutValidationPath, string rendererContract)
     {
         if (string.Equals(rendererContract, "GuideHero", StringComparison.OrdinalIgnoreCase)) return "GuideHero";
+        if (string.Equals(rendererContract, "CinematicHero", StringComparison.OrdinalIgnoreCase)) return "CinematicHero";
         var blueprintContract = ReadHeroContractFromBlueprint(blueprintPath);
         if (!string.IsNullOrWhiteSpace(blueprintContract)) return blueprintContract;
         var layoutContract = ReadHeroContractFromLayoutValidation(layoutValidationPath);
