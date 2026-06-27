@@ -122,6 +122,9 @@ public sealed record HeroLayoutValidationDto(
     public string RendererPathSelected { get; init; } = string.Empty;
     public bool PlanetGroupingRendererApplied { get; init; }
     public bool GenericRendererApplied { get; init; }
+    public bool PlanetGroupingPromptApplied { get; init; }
+    public bool PlanetGroupingSubtitleFormatterApplied { get; init; }
+    public bool SharedFooterRendererUsed { get; init; }
     public bool CompositionModelBuilt { get; init; }
     public bool FallbackCompositionUsed { get; init; }
     public string RenderSkippedReason { get; init; } = string.Empty;

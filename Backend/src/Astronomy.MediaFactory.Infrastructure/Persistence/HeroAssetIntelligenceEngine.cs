@@ -702,9 +702,12 @@ public sealed class HeroAssetStoryGenerator(
             errors)
         {
             EventFamily = eventFamily,
-            RendererPathSelected = planetGroupingRendererApplied ? "PlanetGroupingCompactFooter" : "GenericHeroRenderer",
-            PlanetGroupingRendererApplied = planetGroupingRendererApplied,
-            GenericRendererApplied = !planetGroupingRendererApplied,
+            RendererPathSelected = "GenericHeroRenderer",
+            PlanetGroupingRendererApplied = false,
+            GenericRendererApplied = true,
+            PlanetGroupingPromptApplied = planetGroupingRendererApplied,
+            PlanetGroupingSubtitleFormatterApplied = planetGroupingRendererApplied,
+            SharedFooterRendererUsed = true,
             CompositionModelBuilt = HeroCompositionModelIsUsable(compositionModel),
             FallbackCompositionUsed = fallbackCompositionUsed,
             RenderSkippedReason = generatedVariants.Length == 0 ? "Hero renderer produced zero variants." : string.Empty,
@@ -727,6 +730,9 @@ public sealed class HeroAssetStoryGenerator(
             [],
             ["Hero renderer produced zero variants."])
         {
+            RendererPathSelected = "GenericHeroRenderer",
+            GenericRendererApplied = true,
+            SharedFooterRendererUsed = true,
             RenderSkippedReason = "Hero renderer produced zero variants.",
             ExpectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray(),
             GeneratedVariants = [],
@@ -1110,8 +1116,9 @@ public sealed class HeroAssetStoryGenerator(
         Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "hero", familyCode = familyProfile.Family.ToString(), detectedFamily = familyProfile.Family.ToString(), primaryEventTypeCode = SpecialEventSubtypeResolver.Normalize(eventType), selectedProfile = familyProfile.SelectedProfile, profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenTerms = familyProfile.ForbiddenTerms, forbiddenConcepts = familyProfile.ForbiddenTerms, requiredVisualElements = familyProfile.RequiredVisualElements, requiredOverlayElements = familyProfile.RequiredOverlayElements, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
         var heroContract = ResolveHeroContract(context, intelligence);
         var guidePanelAllowed = heroContract == "GuideHero";
-        var planetGroupingInstruction = IsPlanetGroupingHeroFamily(eventType)
-            ? " Create a cinematic realistic twilight sky over Udaipur, Rajasthan. Show Saturn, Mars, Jupiter, and Venus as four bright planetary points arranged along a gentle arc above the eastern horizon, close enough to read as a grouped planet event but not colliding. Keep the sky scientifically respectful but not a fake star map. Keep the hero clean in the same style as a conjunction hero. No text, no labels, no diagrams, no UI; final text overlays are added by renderer only."
+        var planetGroupingPromptApplied = IsPlanetGroupingHeroFamily(eventType);
+        var planetGroupingInstruction = planetGroupingPromptApplied
+            ? $" Create a cinematic realistic twilight sky for the grouped objects: {objectText}. Show each listed object as a bright celestial point arranged along a gentle horizon arc, close enough to read as one grouped sky event but not colliding. Keep the sky scientifically respectful but not a fake star map. Keep the hero clean in the same style as a conjunction hero. No text, no labels, no diagrams, no UI; final text overlays are added by renderer only."
             : string.Empty;
         var basePrompt = guidePanelAllowed
             ? $"Azure Image2 background only for guide hero. Event-specific astronomy sky for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Deterministic overlay may add compact date/time/direction guide details. No embedded text, no watermark, no logo, no unrelated event imagery.{planetGroupingInstruction}"
@@ -1318,7 +1325,7 @@ public sealed class HeroAssetStoryGenerator(
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
     {
         if (IsPlanetGroupingHeroFamily(eventType))
-            return ("GROUPED PLANETS OVER UDAIPUR, RAJASTHAN", "SATURN + MARS + JUPITER + VENUS");
+            return (BuildPlanetGroupingHeroTitle(eventObjectContext, eventTitle), BuildPlanetGroupingHeroSubtitle(eventObjectContext));
         if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
             return (BuildMeteorShowerTitle(eventTitle), "Meteor Shower Peak");
         if (EventContentGuard.IsPlanetConjunction(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
@@ -1338,6 +1345,28 @@ public sealed class HeroAssetStoryGenerator(
                 : value.Equals("portrait", StringComparison.OrdinalIgnoreCase)
                     ? "Portrait"
                     : value;
+
+    private static string BuildPlanetGroupingHeroTitle(EventObjectContext eventObjectContext, string eventTitle)
+    {
+        var headline = Clean(eventObjectContext.ObjectHeadlineText);
+        if (!string.IsNullOrWhiteSpace(headline))
+            return $"GROUPED PLANETS: {headline}";
+
+        return TrimHeroTitle(eventTitle.Contains("group", StringComparison.OrdinalIgnoreCase) ? eventTitle : "Grouped planets");
+    }
+
+    private static string BuildPlanetGroupingHeroSubtitle(EventObjectContext eventObjectContext)
+    {
+        var objects = eventObjectContext.ObjectNames
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Take(4)
+            .Select(value => Clean(value).ToUpperInvariant())
+            .ToArray();
+        if (objects.Length > 0)
+            return string.Join(" + ", objects);
+
+        return "GROUPED SKY OBJECTS";
+    }
 
     private static string BuildPlanetConjunctionHeroTitle(EventObjectContext eventObjectContext, string eventTitle)
     {
@@ -1420,9 +1449,17 @@ public sealed class HeroAssetStoryGenerator(
         var renderedDirectionText = rendered.RenderedDirectionText;
         var renderedCtaText = rendered.RenderedCtaText;
         var titleFitPassed = !string.IsNullOrWhiteSpace(heroTitle) && !heroTitle.EndsWith(",", StringComparison.Ordinal) && heroTitle.Length <= 40 && !string.IsNullOrWhiteSpace(heroSubtitle);
+        var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
+        var planetGroupingApplied = IsPlanetGroupingHeroFamily(eventFamily);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
+            eventFamily,
+            rendererPathSelected = "GenericHeroRenderer",
+            genericRendererApplied = true,
+            planetGroupingPromptApplied = planetGroupingApplied,
+            planetGroupingSubtitleFormatterApplied = planetGroupingApplied,
+            sharedFooterRendererUsed = true,
             provider = "AzureOpenAIForImage",
             deployment,
             model = deployment,

@@ -526,11 +526,46 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(validation.IsValid);
         Assert.True(validation.GenericRendererApplied);
         Assert.False(validation.PlanetGroupingRendererApplied);
+        Assert.Equal("GenericHeroRenderer", validation.RendererPathSelected);
+        Assert.True(validation.SharedFooterRendererUsed);
+        Assert.False(validation.PlanetGroupingPromptApplied);
+        Assert.False(validation.PlanetGroupingSubtitleFormatterApplied);
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.ExpectedVariants);
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.GeneratedVariants);
         Assert.Empty(validation.MissingVariants);
         Assert.DoesNotContain(validation.Errors, error => error.Contains("compact footer", StringComparison.OrdinalIgnoreCase));
     }
+
+
+    [Fact]
+    public void Phase11HeroLayoutValidation_PlanetGroupingKeepsGenericRendererWithIsolatedCustomizations()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("GROUPED PLANETS"),
+            new HeroCompositionSceneBlockDto("planet grouping background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Eastern sky"),
+            new HeroCompositionTextBlockDto("date-time-panel", "7:23 PM IST"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+
+        var method = typeof(HeroAssetStoryGenerator).GetMethod("BuildHeroLayoutValidation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, new[] { "Venus", "Mars", "Jupiter" }, true, "PlanetGrouping", false])!;
+
+        Assert.True(validation.IsValid);
+        Assert.Equal("PlanetGrouping", validation.EventFamily);
+        Assert.Equal("GenericHeroRenderer", validation.RendererPathSelected);
+        Assert.True(validation.GenericRendererApplied);
+        Assert.False(validation.PlanetGroupingRendererApplied);
+        Assert.True(validation.PlanetGroupingPromptApplied);
+        Assert.True(validation.PlanetGroupingSubtitleFormatterApplied);
+        Assert.True(validation.SharedFooterRendererUsed);
+        Assert.Equal(["Landscape", "Square", "Portrait"], validation.ExpectedVariants);
+        Assert.Equal(["Landscape", "Square", "Portrait"], validation.GeneratedVariants);
+        Assert.Empty(validation.MissingVariants);
+    }
+
 
     [Fact]
     public async Task GenerateHeroAssetsAsync_SceneSelectionNonDryRunWritesHeroSceneManifestOnly()
