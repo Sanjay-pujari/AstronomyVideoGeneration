@@ -1291,11 +1291,16 @@ public sealed class HeroAssetStoryGenerator(
     {
         var prompts = AzureHeroPromptBuilderV2.Build(compositionModel, heroStory, selectedHook, intelligence, context);
         var promptPath = Path.Combine(heroAssetsRoot, HeroPromptFileName);
+        var promptEnrichment = AzureHeroPromptBuilderV2.ResolveEventFamilyPromptEnrichment(FirstNonEmpty(intelligence?.EventType, "AstronomyEvent"), FirstNonEmpty(intelligence?.Title, intelligence?.ShortTitle, selectedHook));
         Directory.CreateDirectory(heroAssetsRoot);
         await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new
         {
             promptBuilder = "AzureHeroPromptBuilderV2",
             visualIntent = "CinematicHero",
+            eventFamily = promptEnrichment.EventFamily,
+            eventFamilySpecificEnrichment = promptEnrichment.Enrichment,
+            negativePromptContract = "No observing guide, no Stellarium, no star chart, no labels, no UI, no guide panels, no embedded text.",
+            safeOverlaySpace = "Leave clean safe space for deterministic overlay title and compact footer metadata; do not generate text in that space.",
             compositionModelUsed = HeroCompositionModelIsUsable(compositionModel),
             variants = prompts.Select(p => new { p.Variant, p.FileName, p.Width, p.Height, p.Prompt })
         }, JsonOptions), cancellationToken);
@@ -1443,9 +1448,8 @@ public sealed class HeroAssetStoryGenerator(
             var objects = EventObjectContextBuilder.FromIntelligence(intelligence);
             var objectText = FirstNonEmpty(objects.ObjectListText, heroStory.HeroVisualFocus, compositionModel.VisualBlock.SourceScene, eventTitle);
             var safeSpace = "Leave clean safe space for deterministic overlay title and compact footer metadata; do not generate text in that space.";
-            var basePrompt = $"Visual intent: CinematicHero. Premium YouTube thumbnail style cinematic astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Use dramatic lighting, high contrast, deep cinematic color, premium astrophotography-inspired atmosphere, and a clean event-poster composition. Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no embedded text. {safeSpace}";
-            if (IsSolarEclipse(eventType, eventTitle))
-                basePrompt += " Solar Eclipse enrichment: the eclipse must dominate the frame with a large corona or ring silhouette, dramatic sky glow, minimal horizon, no tiny sun or moon, and no distant observing scene.";
+            var enrichment = ResolveEventFamilyPromptEnrichment(eventType, eventTitle);
+            var basePrompt = $"Visual intent: CinematicHero. Premium YouTube thumbnail style cinematic astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Use dramatic lighting, high contrast, deep cinematic color, premium astrophotography-inspired atmosphere, and a clean event-poster composition. {enrichment.Enrichment} Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, telescope UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no UI, no embedded text. {safeSpace}";
 
             EventContentGuard.ValidateNoForbiddenTerms("AzureHeroPromptBuilderV2", "hero prompt", basePrompt, intelligence?.ForbiddenTerms ?? []);
             return
@@ -1456,9 +1460,29 @@ public sealed class HeroAssetStoryGenerator(
             ];
         }
 
-        private static bool IsSolarEclipse(string eventType, string eventTitle)
-            => (eventType.Contains("solar", StringComparison.OrdinalIgnoreCase) && eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase))
-                || eventTitle.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase);
+        public static (string EventFamily, string Enrichment) ResolveEventFamilyPromptEnrichment(string eventType, string eventTitle)
+        {
+            var text = $"{eventType} {eventTitle}";
+            if (ContainsAll(text, "solar", "eclipse"))
+                return ("SolarEclipse", "Solar Eclipse enrichment: the eclipse must dominate the frame with a large corona or ring silhouette, dramatic sky glow, minimal horizon, no tiny sun or moon, and no distant observing scene.");
+            if (ContainsAll(text, "lunar", "eclipse") || ContainsAll(text, "blood", "moon"))
+                return ("LunarEclipse", "Lunar Eclipse enrichment: show a large red/orange Blood Moon in a dramatic night sky; the moon should dominate 45–65% of the frame; no telescope UI, no labels, no text.");
+            if (ContainsAny(text, "meteor", "shower", "geminid", "perseid"))
+                return ("MeteorShower", "Meteor Shower enrichment: dramatic meteor streaks filling the sky, several bright fireballs, a natural radiant impression without diagrams, Milky Way dark-sky atmosphere, no star chart, no labels, no guide panels.");
+            if (ContainsAny(text, "comet"))
+                return ("Comet", "Comet enrichment: a large comet with glowing coma and long tail in a cinematic deep sky or twilight sky; the comet should dominate the frame; no diagram, no labels, no embedded text.");
+            if (ContainsAny(text, "alignment", "planetaryalignment", "planet parade", "planetparade", "parade"))
+                return ("PlanetaryAlignment", "Planetary Alignment enrichment: multiple bright planets arranged cinematically, clearly visible and larger than real naked-eye scale for thumbnail impact; avoid tiny dots; no labels or text.");
+            if (ContainsAny(text, "conjunction", "planetconjunction", "planetary conjunction", "pairing"))
+                return ("PlanetaryConjunction", "Planetary Conjunction enrichment: large visible planets in a twilight sky, cinematic close composition, planets clearly visible and visually dominant, avoid tiny dots, avoid star chart or observing guide look, optional subtle horizon only, no labels or text in background.");
+            return ("GenericAstronomy", "Generic astronomy hero enrichment: keep the actual event visually dominant, cinematic, close, and not diagrammatic.");
+        }
+
+        private static bool ContainsAll(string text, params string[] terms)
+            => terms.All(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+        private static bool ContainsAny(string text, params string[] terms)
+            => terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 
 

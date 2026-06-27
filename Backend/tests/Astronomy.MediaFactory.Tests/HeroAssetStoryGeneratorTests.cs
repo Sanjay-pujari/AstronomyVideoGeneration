@@ -594,6 +594,81 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
 
+
+    [Theory]
+    [InlineData("PlanetConjunction", "Venus Jupiter Planetary Conjunction", "Planetary Conjunction enrichment", "large visible planets", "visually dominant")]
+    [InlineData("MeteorShower", "Geminid Meteor Shower", "Meteor Shower enrichment", "dramatic meteor streaks", "bright fireballs")]
+    [InlineData("LunarEclipse", "Total Lunar Eclipse Blood Moon", "Lunar Eclipse enrichment", "large red/orange Blood Moon", "45–65%")]
+    [InlineData("Comet", "Comet C/2026 A1", "Comet enrichment", "glowing coma", "long tail")]
+    [InlineData("PlanetaryAlignment", "Planetary Alignment", "Planetary Alignment enrichment", "multiple bright planets", "larger than real naked-eye scale")]
+    public void AzureHeroPromptBuilderV2_EventFamiliesBuildCinematicEnrichedPrompts(string eventType, string title, string enrichmentHeader, string requiredPhrase, string secondRequiredPhrase)
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto(title.ToUpperInvariant()),
+            new HeroCompositionSceneBlockDto($"{title} cinematic background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Eastern sky"),
+            new HeroCompositionTextBlockDto("date-time-panel", "9:00 PM"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+        var story = new HeroAssetStoryDto(
+            EventId,
+            RegionId,
+            "en",
+            title.ToUpperInvariant(),
+            $"{title} crosses the sky.",
+            "Watch the sky.",
+            $"Cinematic {title}.",
+            "Wonder",
+            "ScrollStoppingHeroAsset",
+            new HeroStorySourceDto(title, "eastern sky", "9:00 PM", "rare sky event"),
+            new HeroAssetStoryScoresDto(95, 95, 95, 95),
+            95,
+            DateTimeOffset.Parse("2026-06-27T00:00:00Z"));
+        var builder = typeof(HeroAssetStoryGenerator).GetNestedType("AzureHeroPromptBuilderV2", System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(builder);
+        var method = builder!.GetMethod("Build", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var prompts = (System.Collections.IEnumerable)method!.Invoke(null, [composition, story, title.ToUpperInvariant(), BuildProductionEventIntelligence(eventType, title), null])!;
+        var promptTexts = prompts.Cast<object>()
+            .Select(prompt => (string)((System.Runtime.CompilerServices.ITuple)prompt)[4]!)
+            .ToArray();
+
+        Assert.Equal(3, promptTexts.Length);
+        Assert.All(promptTexts, prompt =>
+        {
+            Assert.Contains("CinematicHero", prompt);
+            Assert.Contains(enrichmentHeader, prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(requiredPhrase, prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(secondRequiredPhrase, prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("observing-guide", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Stellarium", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("labels", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("UI", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("embedded text", prompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("safe space", prompt, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Theory]
+    [InlineData("PlanetConjunction", "Venus Jupiter Planetary Conjunction", "PlanetaryConjunction")]
+    [InlineData("MeteorShower", "Geminid Meteor Shower", "MeteorShower")]
+    [InlineData("LunarEclipse", "Total Lunar Eclipse Blood Moon", "LunarEclipse")]
+    [InlineData("Comet", "Comet C/2026 A1", "Comet")]
+    [InlineData("PlanetaryAlignment", "Planetary Alignment", "PlanetaryAlignment")]
+    public void AzureHeroPromptBuilderV2_EventFamiliesExposeDiagnosticsEnrichmentShape(string eventType, string title, string expectedFamily)
+    {
+        var builder = typeof(HeroAssetStoryGenerator).GetNestedType("AzureHeroPromptBuilderV2", System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(builder);
+        var method = builder!.GetMethod("ResolveEventFamilyPromptEnrichment", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var enrichment = (System.Runtime.CompilerServices.ITuple)method!.Invoke(null, [eventType, title])!;
+
+        Assert.Equal(expectedFamily, (string)enrichment[0]!);
+        Assert.Contains("no", (string)enrichment[1]!, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Phase11HeroLayoutValidation_PlanetGroupingKeepsGenericRendererWithIsolatedCustomizations()
     {
@@ -854,6 +929,33 @@ public sealed class HeroAssetStoryGeneratorTests
                 await File.WriteAllBytesAsync(Path.Combine(profileRoot, $"scene-{sceneNumber:000}.png"), approvedScenePng);
         }
     }
+
+
+    private static ProductionEventIntelligence BuildProductionEventIntelligence(string eventType, string title)
+        => new(
+            "Astronomy",
+            eventType,
+            title,
+            title,
+            DateTimeOffset.Parse("2026-06-27T00:00:00Z"),
+            DateTimeOffset.Parse("2026-06-27T21:00:00Z"),
+            "9:00 PM local",
+            "Evening sky",
+            "Eastern sky",
+            "United States",
+            [title],
+            [],
+            "Cinematic hero",
+            "dark sky",
+            12,
+            $"{title} is visible in the sky.",
+            ["Watch during the viewing window"],
+            [title],
+            ["Open on cinematic event"],
+            [],
+            eventType,
+            RequiredVisualObjects: [title],
+            HeroCopyCandidates: [title.ToUpperInvariant()]);
 
     private static ProductionEventIntelligence BuildMeteorProductionEventIntelligence()
         => new(
