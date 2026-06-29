@@ -713,7 +713,9 @@ public sealed class HeroAssetStoryGenerator(
         var contractMismatch = !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
         var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
         var textOverlapDetected = variants.Any(variant => variant.TextOverlapDetected);
-        var objectsVisible = variants.All(variant => variant.ObjectsVisible);
+        var variantCompositionReports = variants.Select(variant => BuildHeroVariantCompositionReport(variant, objectNames, eventFamily)).ToArray();
+        var compositionQualityPassed = variantCompositionReports.All(report => !report.RequiresRegeneration);
+        var objectsVisible = variants.All(variant => variant.ObjectsVisible) && compositionQualityPassed;
         var overlapWarnings = variants.SelectMany(variant => variant.OverlapWarnings).ToArray();
         var renderedText = ResolveHeroRenderedText(compositionModel);
         var compactTimeText = HeroMetadataNormalizer.NormalizeTime(compositionModel.TimingBlock.Text, eventFamily, string.Empty);
@@ -730,6 +732,7 @@ public sealed class HeroAssetStoryGenerator(
             && footerTextCompactValidationPassed
             && !compositionModel.TimingBlock.Text.Contains("TIME TBD", StringComparison.OrdinalIgnoreCase)
             && !(string.IsNullOrWhiteSpace(compositionModel.CtaBlock.Text) && renderedBlocks.Contains("CTA", StringComparer.OrdinalIgnoreCase));
+        var validationOrder = BuildHeroCompositionValidationOrder();
         var isValid = !duplicateBlocksDetected && !textOverlapDetected && objectsVisible && compositionTextValid;
         var errors = BuildHeroLayoutErrors(duplicateBlocksDetected, textOverlapDetected, objectsVisible, overlapWarnings);
         if (string.IsNullOrWhiteSpace(compositionModel.TimingBlock.Text)) errors = errors.Concat(["Hero timingBlock.text must not be empty."]).ToArray();
@@ -746,6 +749,7 @@ public sealed class HeroAssetStoryGenerator(
         var generatedVariants = variants.Select(variant => NormalizeHeroVariantName(variant.Variant)).ToArray();
         var missingVariants = expectedVariants.Except(generatedVariants, StringComparer.OrdinalIgnoreCase).ToArray();
         if (generatedVariants.Length == 0) errors = errors.Concat(["Hero renderer produced zero variants."]).ToArray();
+        errors = errors.Concat(variantCompositionReports.SelectMany(report => report.Issues.Select(issue => $"{NormalizeHeroVariantName(report.Variant)}: {issue}"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return new HeroLayoutValidationDto(
             renderedBlocks,
             duplicateBlocksDetected,
@@ -781,8 +785,63 @@ public sealed class HeroAssetStoryGenerator(
             ValidatorContract = validatorContract,
             RendererContract = rendererContract,
             ContractMismatch = contractMismatch,
-            ValidationProfileUsed = validationProfileUsed
+            ValidationProfileUsed = validationProfileUsed,
+            ValidationOrder = validationOrder,
+            CompositionReports = variantCompositionReports
         };
+    }
+
+    private static IReadOnlyList<string> BuildHeroCompositionValidationOrder()
+        =>
+        [
+            "Background generation",
+            "Primary object visibility",
+            "Secondary object visibility",
+            "Object cropping",
+            "Object edge margin",
+            "Composition quality",
+            "Overlay layout",
+            "Hook validation"
+        ];
+
+    private static HeroVariantCompositionReportDto BuildHeroVariantCompositionReport(HeroVariantLayoutValidationDto variant, IReadOnlyList<string> objectNames, string eventFamily)
+    {
+        var issues = new List<string>();
+        var normalizedVariant = NormalizeHeroVariantName(variant.Variant);
+        var isConjunction = IsPlanetGroupingHeroFamily(eventFamily) && objectNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 2;
+        var primary = variant.ObjectVisibility.FirstOrDefault();
+        var secondary = variant.ObjectVisibility.Skip(1).FirstOrDefault();
+
+        if (primary is not null && (!primary.Visible || primary.Cropped))
+            issues.Add("Primary planet clipped.");
+
+        if (isConjunction && secondary is null)
+            issues.Add("Secondary planet missing.");
+        else if (isConjunction && secondary is not null)
+        {
+            if (!secondary.Visible)
+                issues.Add("Secondary planet missing.");
+            else if (secondary.Cropped)
+                issues.Add("Secondary planet clipped.");
+        }
+
+        if (isConjunction && normalizedVariant.Equals("Landscape", StringComparison.OrdinalIgnoreCase) && variant.ObjectVisibility.Take(2).Any(v => !v.Visible || v.Cropped))
+            issues.Add("Landscape conjunction requires both planets fully visible.");
+        if (isConjunction && normalizedVariant.Equals("Square", StringComparison.OrdinalIgnoreCase) && variant.ObjectVisibility.Take(2).Any(v => !v.Visible || v.Cropped))
+            issues.Add("Square conjunction requires both planets fully inside frame.");
+        if (isConjunction && normalizedVariant.Equals("Portrait", StringComparison.OrdinalIgnoreCase) && secondary is not null && secondary.Cropped)
+            issues.Add("Portrait conjunction must not crop secondary planet.");
+
+        if (variant.TextOverlapDetected)
+            issues.Add("Overlay layout overlap detected.");
+
+        var distinctIssues = issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new HeroVariantCompositionReportDto(
+            normalizedVariant,
+            distinctIssues.Length == 0 ? "PASS" : string.Join(" ", distinctIssues),
+            BuildHeroCompositionValidationOrder(),
+            distinctIssues,
+            distinctIssues.Length > 0);
     }
 
     private static string ResolveRenderedHeroContract(IReadOnlyList<string> renderedBlocks)
@@ -1131,6 +1190,9 @@ public sealed class HeroAssetStoryGenerator(
         var value = eventFamily?.Trim() ?? string.Empty;
         return value.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
             || value.Equals("GroupedPlanets", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PlanetaryAlignment", StringComparison.OrdinalIgnoreCase)
             || value.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -1308,18 +1370,35 @@ public sealed class HeroAssetStoryGenerator(
 
         var generatedFiles = new List<string> { NormalizePath(promptPath) };
         var variants = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
+        var objectNames = EventObjectContextBuilder.FromIntelligence(intelligence).ObjectNames;
         foreach (var prompt in prompts)
         {
             var backgroundPath = Path.Combine(heroAssetsRoot, $"azure-background-{prompt.Variant}.png");
             var outputPath = Path.Combine(heroAssetsRoot, prompt.FileName);
-            var result = await GenerateHeroWithAzureImage2Async(options, prompt.Prompt, backgroundPath, cancellationToken);
-            if (!result.ProviderSucceeded)
-                throw new InvalidOperationException(result.FailureReason ?? "Azure GPT Image background generation failed.");
+            var effectivePrompt = prompt.Prompt;
+            AzureImage2GenerationResult? result = null;
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                result = await GenerateHeroWithAzureImage2Async(options, effectivePrompt, backgroundPath, cancellationToken);
+                if (!result.ProviderSucceeded)
+                    throw new InvalidOperationException(result.FailureReason ?? "Azure GPT Image background generation failed.");
+
+                var variantSpec = new HeroImageSpec(NormalizeHeroVariantName(prompt.Variant), prompt.FileName, prompt.Width, prompt.Height);
+                var compositionReport = BuildHeroVariantCompositionReport(
+                    BuildHeroVariantLayoutValidation(variantSpec, compositionModel, objectNames),
+                    objectNames,
+                    FirstNonEmpty(intelligence?.EventType, "AstronomyEvent"));
+                if (!compositionReport.RequiresRegeneration || attempt == 2)
+                    break;
+
+                effectivePrompt = StrengthenHeroVariantCompositionPrompt(effectivePrompt, compositionReport);
+            }
+
             await WriteHeroV6OverlayAsync(backgroundPath, outputPath, prompt.Width, prompt.Height, heroStory, selectedHook, compositionModel, intelligence, cancellationToken);
             var hash = await ComputeSha256Async(outputPath, cancellationToken);
             generatedFiles.Add(NormalizePath(backgroundPath));
             generatedFiles.Add(NormalizePath(outputPath));
-            variants.Add((prompt.Variant, prompt.Prompt, prompt.Width, prompt.Height, backgroundPath, outputPath, result, hash));
+            variants.Add((prompt.Variant, effectivePrompt, prompt.Width, prompt.Height, backgroundPath, outputPath, result!, hash));
         }
 
         File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
@@ -1328,6 +1407,16 @@ public sealed class HeroAssetStoryGenerator(
         return new HeroPhysicalWriteResult(generatedFiles, variants.Select(v => NormalizePath(v.ImagePath)).ToArray(), variants.Sum(v => GetHeroFileSize(v.ImagePath)), true, true, null, variants.ToDictionary(v => NormalizeHeroVariantName(v.Variant), v => GetHeroFileSize(v.ImagePath), StringComparer.OrdinalIgnoreCase));
     }
 
+
+    private static string StrengthenHeroVariantCompositionPrompt(string prompt, HeroVariantCompositionReportDto report)
+    {
+        var variantInstruction = report.Variant.Equals("Landscape", StringComparison.OrdinalIgnoreCase)
+            ? "Regeneration correction for landscape: enforce a side-by-side composition with both planets fully visible and comfortably inside the frame."
+            : report.Variant.Equals("Portrait", StringComparison.OrdinalIgnoreCase)
+                ? "Regeneration correction for portrait: enforce a vertical composition with the secondary planet visible and not cropped."
+                : "Regeneration correction for square: enforce a centered composition with both planets fully inside the frame and away from edges.";
+        return $"{prompt} {variantInstruction} Composition failure to correct: {string.Join(" ", report.Issues)} Do not solve this with hook text; solve it by changing planet placement and framing.";
+    }
 
     private static void WriteHeroGenerationConfigurationDiagnostics(HeroCompositionModelDto compositionModel, AzureOpenAIForImageOptions options, int width, int height, string promptPath, string diagnosticsPath)
     {
@@ -1428,9 +1517,9 @@ public sealed class HeroAssetStoryGenerator(
         EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, forbidden);
         return
         [
-            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHero. Composition type: wide cinematic astronomy image. Prompt variation: clean landscape background with safe title space, no cropping. {basePrompt}"),
-            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: CinematicHero. Composition type: vertical cinematic astronomy image. Prompt variation: tall clean background with safe title space, no cropping. {basePrompt}"),
-            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: CinematicHero. Composition type: square cinematic astronomy image. Prompt variation: centered event-specific sky with safe title space, no cropping. {basePrompt}")
+            ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHero. Composition type: wide cinematic astronomy image. Prompt variation: clean landscape background with safe title space, no cropping. Landscape variant-specific composition: side-by-side composition. {basePrompt}"),
+            ("portrait", HeroPortraitFileName, 1080, 1920, $"Visual intent: CinematicHero. Composition type: vertical cinematic astronomy image. Prompt variation: tall clean background with safe title space, no cropping. Portrait variant-specific composition: vertical composition. {basePrompt}"),
+            ("square", HeroSquareFileName, 1080, 1080, $"Visual intent: CinematicHero. Composition type: square cinematic astronomy image. Prompt variation: centered event-specific sky with safe title space, no cropping. Square variant-specific composition: centered composition. {basePrompt}")
         ];
     }
 
@@ -1454,9 +1543,9 @@ public sealed class HeroAssetStoryGenerator(
             EventContentGuard.ValidateNoForbiddenTerms("AzureHeroPromptBuilderV2", "hero prompt", basePrompt, intelligence?.ForbiddenTerms ?? []);
             return
             [
-                ("landscape", HeroLandscapeFileName, 1920, 1080, $"Aspect ratio 16:9 landscape. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}"),
-                ("portrait", HeroPortraitFileName, 1080, 1920, $"Aspect ratio 9:16 portrait. Keep the dominant event large and cinematic with safe overlay space near the upper area and footer. {basePrompt}"),
-                ("square", HeroSquareFileName, 1080, 1080, $"Aspect ratio 1:1 square. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}")
+                ("landscape", HeroLandscapeFileName, 1920, 1080, $"Aspect ratio 16:9 landscape. Landscape variant-specific composition: side-by-side composition; for conjunctions show both planets fully visible, separated horizontally, with neither planet clipped by frame edges. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}"),
+                ("portrait", HeroPortraitFileName, 1080, 1920, $"Aspect ratio 9:16 portrait. Portrait variant-specific composition: vertical composition; for conjunctions stack both planets visibly in frame and do not crop the secondary planet. Keep the dominant event large and cinematic with safe overlay space near the upper area and footer. {basePrompt}"),
+                ("square", HeroSquareFileName, 1080, 1080, $"Aspect ratio 1:1 square. Square variant-specific composition: centered composition; for conjunctions keep both planets fully inside the frame with comfortable edge margin. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}")
             ];
         }
 
