@@ -56,6 +56,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroPromptFileName = "hero-prompt.json";
     private const string HeroGenerationDiagnosticsFileName = "hero-generation-diagnostics.json";
     private const string HeroFileName = "hero-final.png";
+    private const string HeroDevanagariGlyphTestText = "पूर्ण सूर्य ग्रहण समय दिशा तिथि";
     private const string HeroLandscapeFileName = "hero-landscape.png";
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
@@ -1424,7 +1425,8 @@ public sealed class HeroAssetStoryGenerator(
 
         File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
         generatedFiles.Add(NormalizePath(heroPath));
-        await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName), variants, heroStory, selectedHook, compositionModel, intelligence, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
+        var fontDiagnostics = BuildHeroFontDiagnostics(heroStory);
+        await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName), variants, heroStory, selectedHook, compositionModel, intelligence, fontDiagnostics, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
         return new HeroPhysicalWriteResult(generatedFiles, variants.Select(v => NormalizePath(v.ImagePath)).ToArray(), variants.Sum(v => GetHeroFileSize(v.ImagePath)), true, true, null, variants.ToDictionary(v => NormalizeHeroVariantName(v.Variant), v => GetHeroFileSize(v.ImagePath), StringComparer.OrdinalIgnoreCase));
     }
 
@@ -1899,12 +1901,31 @@ public sealed class HeroAssetStoryGenerator(
     {
         if (preferHindiFont)
         {
-            var hindiFamily = FontAssetRegistration.RegisterFont(assetPathResolver, fontOptions.Value.HindiFont, FontAssetRegistration.DevanagariGlyphTest, logger, out _);
+            var hindiFamily = FontAssetRegistration.RegisterFont(assetPathResolver, fontOptions.Value.HindiFont, HeroDevanagariGlyphTestText, logger, out _);
             return hindiFamily.CreateFont(size, style);
         }
 
         var englishFamily = FontAssetRegistration.RegisterFont(assetPathResolver, fontOptions.Value.DefaultEnglishFont, "ABCabc012", logger, out _);
         return englishFamily.CreateFont(size, style);
+    }
+
+    private HeroFontRenderingDiagnostics BuildHeroFontDiagnostics(HeroAssetStoryDto heroStory)
+    {
+        var language = IsHindi(heroStory.Language) ? "hi" : "en";
+        var requestedFont = language == "hi" ? fontOptions.Value.HindiFont : fontOptions.Value.DefaultEnglishFont;
+        var glyphTestText = language == "hi" ? HeroDevanagariGlyphTestText : "ABCabc012";
+        var diagnostics = FontAssetRegistration.RegisterFont(assetPathResolver, requestedFont, glyphTestText, logger, out var assetDiagnostics);
+        var devanagariGlyphSupport = FontAssetRegistration.SupportsGlyphs(diagnostics, HeroDevanagariGlyphTestText);
+        return new HeroFontRenderingDiagnostics(
+            language,
+            requestedFont,
+            assetDiagnostics.ResolvedFont,
+            assetDiagnostics.FontFile,
+            "local FontCollection",
+            devanagariGlyphSupport,
+            HeroDevanagariGlyphTestText,
+            language == "hi" ? assetDiagnostics.GlyphSupport : devanagariGlyphSupport,
+            false);
     }
 
     private static bool ContainsDevanagari(string? text)
@@ -1920,6 +1941,7 @@ public sealed class HeroAssetStoryGenerator(
         string selectedHook,
         HeroCompositionModelDto compositionModel,
         ProductionEventIntelligence? intelligence,
+        HeroFontRenderingDiagnostics fontDiagnostics,
         long totalMs,
         CancellationToken cancellationToken)
     {
@@ -1985,6 +2007,15 @@ public sealed class HeroAssetStoryGenerator(
             missingVariants,
             timingSource = heroStory.HeroStorySource.When,
             directionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where),
+            language = fontDiagnostics.Language,
+            requestedFontFamily = fontDiagnostics.RequestedFontFamily,
+            resolvedFontFamily = fontDiagnostics.ResolvedFontFamily,
+            fontFilePath = NormalizePath(fontDiagnostics.FontFilePath),
+            fontLoadedFrom = fontDiagnostics.FontLoadedFrom,
+            devanagariGlyphSupport = fontDiagnostics.DevanagariGlyphSupport,
+            glyphTestText = fontDiagnostics.GlyphTestText,
+            glyphTestPassed = fontDiagnostics.GlyphTestPassed,
+            typographyResolverUsed = fontDiagnostics.TypographyResolverUsed,
             directionSourceText = FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroAction, heroStory.HeroStorySource.Where),
             rawTimeSource,
             compactTimeText,
@@ -3088,6 +3119,17 @@ public sealed class HeroAssetStoryGenerator(
         bool PhysicalWriteSucceeded,
         string? PhysicalWriteException,
         IReadOnlyDictionary<string, long> GeneratedVariantFileSizes);
+
+    private sealed record HeroFontRenderingDiagnostics(
+        string Language,
+        string RequestedFontFamily,
+        string ResolvedFontFamily,
+        string FontFilePath,
+        string FontLoadedFrom,
+        bool DevanagariGlyphSupport,
+        string GlyphTestText,
+        bool GlyphTestPassed,
+        bool TypographyResolverUsed);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
