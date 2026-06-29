@@ -1967,7 +1967,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var combinedText = NormalizeHeroOverlayText(string.Join(' ', new[] { normalizedHookText, normalizedVisibleText }.Where(value => !string.IsNullOrWhiteSpace(value))));
         var wordCount = CountHeroOverlayWords(normalizedHookText);
         var combinedWordCount = CountHeroOverlayWords(combinedText);
-        var isSentenceLike = IsSentenceLikeHeroOverlayText(combinedText);
+        var isSentenceLike = IsSentenceLikeHeroOverlayText(normalizedHookText);
         var isGuideInstructionLike = IsGuideInstructionLikeHeroOverlayText(combinedText);
         var fitsSafeArea = FitsCinematicHeroSafeArea(normalizedHookText, combinedText, maxWords, renderedLayoutFits);
         var rejectedReason = string.Empty;
@@ -2032,7 +2032,8 @@ public sealed partial class ProductionPipelineExecutionService(
             && ReadNullableBool(root, "heroTextOverlapDetected") != true
             && ReadNullableBool(root, "heroTitleSubtitleOverlap") != true
             && ReadNullableBool(root, "heroTitleMetadataOverlap") != true
-            && ReadNullableBool(root, "heroTitleSafeAreaPassed") == true;
+            && (ReadNullableBool(root, "heroTextSafeAreaPassed") == true
+                || ReadNullableBool(root, "heroTitleSafeAreaPassed") == true);
     }
 
     private static bool? ReadNullableBool(JsonElement root, string propertyName)
