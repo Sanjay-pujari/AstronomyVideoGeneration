@@ -120,7 +120,7 @@ public static class AstronomyVisualCompositionEngine
             DrawMeteorRadiantAndStreaks(ctx, request.Width, request.Height);
 
         DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: false);
-        DrawHeroLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.Labels);
+        DrawHeroLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.Labels, request.Language, request.TypographyResolver);
     }
 
 
@@ -395,32 +395,33 @@ public static class AstronomyVisualCompositionEngine
     }
 
 
-    private static void DrawHeroLabelsAndTypography(IImageProcessingContext ctx, int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
+    private static void DrawHeroLabelsAndTypography(IImageProcessingContext ctx, int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels, string? language, ITypographyResolver? typographyResolver)
     {
         var isPortrait = height > width;
         var isSquare = width == height;
-        var titleFont = ResolveFont(isPortrait ? 76f : isSquare ? 64f : 56f, FontStyle.Bold);
-        var subtitleFont = ResolveFont(isPortrait ? 30f : 26f, FontStyle.Regular);
-        var bodyFont = ResolveFont(isPortrait ? 50f : isSquare ? 42f : 36f, FontStyle.Bold);
-        var portraitCtaFont = ResolveFont(54f, FontStyle.Bold);
-        var squareCtaFont = ResolveFont(46f, FontStyle.Bold);
-        var landscapeCtaFont = ResolveFont(40f, FontStyle.Bold);
-        var landscapeDirectionFont = ResolveFont(40f, FontStyle.Bold);
-        var landscapeTimingFont = ResolveFont(38f, FontStyle.Bold);
+        var resolver = typographyResolver ?? new TypographyResolver();
+        var titleSize = isPortrait ? 76f : isSquare ? 64f : 56f;
+        var subtitleSize = isPortrait ? 30f : 26f;
+        var bodySize = isPortrait ? 50f : isSquare ? 42f : 36f;
+        var portraitCtaSize = 54f;
+        var squareCtaSize = 46f;
+        var landscapeCtaSize = 40f;
+        var landscapeDirectionSize = 40f;
+        var landscapeTimingSize = 38f;
 
         var textBlocks = BuildHeroTemplateTextBlocks(width, height, title, subtitle, labels);
         foreach (var block in textBlocks)
         {
-            var font = block.Name switch
+            var (baseFontSize, fontStyle) = block.Name switch
             {
-                "Hook" => titleFont,
-                "Subtitle" => subtitleFont,
-                "CTA" when isPortrait => portraitCtaFont,
-                "CTA" when isSquare => squareCtaFont,
-                "CTA" => landscapeCtaFont,
-                "Direction" when !isPortrait && !isSquare => landscapeDirectionFont,
-                "Timing" when !isPortrait && !isSquare => landscapeTimingFont,
-                _ => bodyFont
+                "Hook" => (titleSize, FontStyle.Bold),
+                "Subtitle" => (subtitleSize, FontStyle.Regular),
+                "CTA" when isPortrait => (portraitCtaSize, FontStyle.Bold),
+                "CTA" when isSquare => (squareCtaSize, FontStyle.Bold),
+                "CTA" => (landscapeCtaSize, FontStyle.Bold),
+                "Direction" when !isPortrait && !isSquare => (landscapeDirectionSize, FontStyle.Bold),
+                "Timing" when !isPortrait && !isSquare => (landscapeTimingSize, FontStyle.Bold),
+                _ => (bodySize, FontStyle.Bold)
             };
             var color = block.Name switch
             {
@@ -436,7 +437,10 @@ public static class AstronomyVisualCompositionEngine
                 DrawHeroCtaAccent(ctx, block.Bounds, width, height);
             if (block.Name == "Direction")
                 DrawHeroDirectionCueAccent(ctx, block.Bounds, width);
-            var options = new RichTextOptions(font) { Origin = new PointF(block.Bounds.X, block.Bounds.Y), WrappingLength = block.Bounds.Width };
+            var typography = ResolveTypographyFont(resolver, language, ToTypographyRole(block.Name), TypographyAssetKind.Hero, baseFontSize, fontStyle, block.Bounds.Width, width, height);
+            var font = typography.Font;
+            var originY = block.Bounds.Y + (font.Size * typography.BaselinePadding);
+            var options = new RichTextOptions(font) { Origin = new PointF(block.Bounds.X, originY), WrappingLength = typography.WrapWidth, LineSpacing = typography.LineHeight };
             ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(block.Bounds.X + 3, block.Bounds.Y + 3) }, block.Text, Color.Black.WithAlpha(0.72f));
             ctx.DrawText(options, block.Text, color);
         }
@@ -505,6 +509,19 @@ public static class AstronomyVisualCompositionEngine
         var endX = startX + Math.Min(textBounds.Width * 0.56f, width * 0.13f);
         ctx.DrawLine(Color.ParseHex("#FFD48A").WithAlpha(0.34f), Math.Max(1.6f, width * 0.0018f), new PointF(startX, y), new PointF(endX, y));
     }
+
+    private static ResolvedTypography ResolveTypographyFont(ITypographyResolver resolver, string? language, TypographyTextRole role, TypographyAssetKind assetKind, float baseFontSize, FontStyle style, float wrapWidth, int canvasWidth, int canvasHeight)
+        => resolver.Resolve(new TypographyRequest(language, role, assetKind, baseFontSize, style, wrapWidth, canvasWidth, canvasHeight));
+
+    private static TypographyTextRole ToTypographyRole(string blockName) => blockName switch
+    {
+        "Hook" => TypographyTextRole.Title,
+        "Subtitle" => TypographyTextRole.Subtitle,
+        "CTA" => TypographyTextRole.CTA,
+        "Direction" => TypographyTextRole.Badge,
+        "Timing" => TypographyTextRole.Footer,
+        _ => TypographyTextRole.Body
+    };
 
     private static IReadOnlyList<(string Name, string Text, RectangleF Bounds)> BuildHeroTemplateTextBlocks(int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
     {
@@ -647,18 +664,7 @@ public static class AstronomyVisualCompositionEngine
     }
 
     private static Font ResolveFont(float size, FontStyle style)
-    {
-        foreach (var name in new[] { "Inter", "Segoe UI", "Arial", "DejaVu Sans", "Liberation Sans" })
-        {
-            if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, style);
-        }
-
-        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
-            throw new InvalidOperationException("No system fonts available for astronomy visual composition.");
-
-        return fallbackFamily.CreateFont(size, style);
-    }
+        => new TypographyResolver().Resolve(new TypographyRequest("en", TypographyTextRole.Body, TypographyAssetKind.FutureVisualAsset, size, style, size * 12f, 0, 0)).Font;
 }
 
 public sealed record AstronomyVisualCompositionRequest
@@ -695,6 +701,8 @@ public sealed record AstronomyVisualCompositionRequest
         Labels = labels ?? [];
         BackgroundImagePath = backgroundImagePath;
         CompositionMode = compositionMode;
+        Language = language;
+        TypographyResolver = typographyResolver;
     }
 
     public int Width { get; init; }
@@ -712,6 +720,8 @@ public sealed record AstronomyVisualCompositionRequest
     public IReadOnlyList<AstronomyVisualLabel> Labels { get; init; }
     public string? BackgroundImagePath { get; init; }
     public AstronomyVisualCompositionMode CompositionMode { get; init; }
+    public string? Language { get; init; }
+    public ITypographyResolver? TypographyResolver { get; init; }
 }
 
 public sealed record AstronomyVisualPlanetAsset(string Label, string? TexturePath);

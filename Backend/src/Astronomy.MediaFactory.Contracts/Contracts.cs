@@ -449,6 +449,67 @@ public sealed class RenderingOptions
     public OutputCleanupOptions OutputCleanup { get; set; } = new();
 }
 
+
+public sealed class TypographyOptions
+{
+    public const string SectionName = "Typography";
+    public Dictionary<string, TypographyLanguageOptions> Languages { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["en"] = CreateEnglishDefaults(),
+        ["hi"] = new TypographyLanguageOptions
+        {
+            FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Kohinoor Devanagari", "Mangal", "Arial Unicode MS", "DejaVu Sans"],
+            FontSizeScale = 0.94f,
+            LineHeight = 1.24f,
+            BaselinePadding = 0.18f,
+            WrapWidthScale = 0.96f,
+            SafeMarginScaleX = 0.07f,
+            SafeMarginScaleY = 0.075f,
+            Roles = new Dictionary<string, TypographyRoleOptions>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Title"] = new() { FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Mangal", "DejaVu Sans"], FontSizeScale = 0.92f, LineHeight = 1.28f, BaselinePadding = 0.22f, WrapWidthScale = 0.94f },
+                ["Subtitle"] = new() { FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Mangal", "DejaVu Sans"], FontSizeScale = 0.94f, LineHeight = 1.26f, BaselinePadding = 0.20f, WrapWidthScale = 0.95f },
+                ["Footer"] = new() { FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Mangal", "DejaVu Sans"], FontSizeScale = 0.96f, LineHeight = 1.24f, BaselinePadding = 0.18f },
+                ["Body"] = new() { FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Mangal", "DejaVu Sans"], FontSizeScale = 0.96f, LineHeight = 1.24f, BaselinePadding = 0.18f },
+                ["CTA"] = new() { FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Mangal", "DejaVu Sans"], FontSizeScale = 0.94f, LineHeight = 1.24f, BaselinePadding = 0.19f },
+                ["Badge"] = new() { FontFamilies = ["Noto Sans Devanagari", "Nirmala UI", "Mangal", "DejaVu Sans"], FontSizeScale = 0.96f, LineHeight = 1.22f, BaselinePadding = 0.18f }
+            }
+        }
+    };
+
+    public static TypographyLanguageOptions CreateEnglishDefaults() => new()
+    {
+        FontFamilies = ["Inter", "Segoe UI", "Arial", "DejaVu Sans", "Liberation Sans"],
+        FontSizeScale = 1.0f,
+        LineHeight = 1.16f,
+        BaselinePadding = 0.0f,
+        WrapWidthScale = 1.0f,
+        SafeMarginScaleX = 0.06f,
+        SafeMarginScaleY = 0.06f
+    };
+}
+
+public sealed class TypographyLanguageOptions
+{
+    public List<string> FontFamilies { get; set; } = [];
+    public float FontSizeScale { get; set; } = 1.0f;
+    public float LineHeight { get; set; } = 1.16f;
+    public float BaselinePadding { get; set; } = 0.0f;
+    public float WrapWidthScale { get; set; } = 1.0f;
+    public float SafeMarginScaleX { get; set; } = 0.06f;
+    public float SafeMarginScaleY { get; set; } = 0.06f;
+    public Dictionary<string, TypographyRoleOptions> Roles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class TypographyRoleOptions
+{
+    public List<string> FontFamilies { get; set; } = [];
+    public float? FontSizeScale { get; set; }
+    public float? LineHeight { get; set; }
+    public float? BaselinePadding { get; set; }
+    public float? WrapWidthScale { get; set; }
+}
+
 public sealed record VideoEncodingPreset(
     string Name,
     int Width,
