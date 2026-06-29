@@ -684,7 +684,9 @@ public sealed record AstronomyVisualCompositionRequest
         IReadOnlyList<AstronomyReferenceStar>? referenceStars = null,
         IReadOnlyList<AstronomyVisualLabel>? labels = null,
         string? backgroundImagePath = null,
-        AstronomyVisualCompositionMode compositionMode = AstronomyVisualCompositionMode.SceneInfographic)
+        AstronomyVisualCompositionMode compositionMode = AstronomyVisualCompositionMode.SceneInfographic,
+        string? language = null,
+        ITypographyResolver? typographyResolver = null)
     {
         Width = width;
         Height = height;
