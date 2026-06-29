@@ -16,15 +16,15 @@ public sealed class HeroCompositionEngine : IHeroCompositionEngine
         ArgumentNullException.ThrowIfNull(sceneManifest);
         ArgumentNullException.ThrowIfNull(approvedScenes);
 
-        var hookText = Clean(string.IsNullOrWhiteSpace(selectedHook) ? heroStory.HeroHook : selectedHook);
+        var hookText = LocalizeHook(Clean(string.IsNullOrWhiteSpace(selectedHook) ? heroStory.HeroHook : selectedHook), heroStory.Language);
         var visualScene = Clean(sceneManifest.PrimaryScene.SceneId);
         var directionScene = Clean(sceneManifest.SupportScene.SceneId);
         var timingScene = ResolveSceneId(approvedScenes, sceneNumber: 3, AstronomyQuestionTypes.When) ?? "scene-003";
         var ctaScene = ResolveSceneId(approvedScenes, sceneNumber: 6, AstronomyQuestionTypes.Action) ?? sceneManifest.SecondaryScene.SceneId;
 
-        var directionText = ResolveDirectionText(heroStory, approvedScenes, sceneManifest.SupportScene.SceneId);
-        var timingText = ResolveTimingText(heroStory, approvedScenes, timingScene);
-        var ctaText = ResolveCtaText(heroStory, approvedScenes, ctaScene);
+        var directionText = LocalizeDirectionText(ResolveDirectionText(heroStory, approvedScenes, sceneManifest.SupportScene.SceneId), heroStory.Language);
+        var timingText = LocalizeTimingText(ResolveTimingText(heroStory, approvedScenes, timingScene), heroStory.Language);
+        var ctaText = LocalizeCtaText(ResolveCtaText(heroStory, approvedScenes, ctaScene), heroStory.Language);
 
         var validation = BuildValidation(hookText, visualScene, directionText, timingText, ctaText);
         if (!validation.HookPresent || !validation.VisualPresent || !validation.DirectionPresent || !validation.TimingPresent || !validation.CtaPresent)
@@ -38,6 +38,22 @@ public sealed class HeroCompositionEngine : IHeroCompositionEngine
             CtaBlock: new HeroCompositionTextBlockDto(ctaScene, ctaText),
             Validation: validation);
     }
+
+    private static string LocalizeHook(string value, string? language)
+        => IsHindi(language) ? "चरम क्षण को न चूकें" : value;
+
+    private static string LocalizeDirectionText(string value, string? language)
+        => IsHindi(language) ? "दिशा: पश्चिम" : value;
+
+    private static string LocalizeTimingText(string value, string? language)
+        => IsHindi(language) ? "समय: सूर्यास्त के बाद" : value;
+
+    private static string LocalizeCtaText(string value, string? language)
+        => IsHindi(language) ? "आज रात देखें" : value;
+
+    private static bool IsHindi(string? language)
+        => string.Equals(language?.Trim(), "hi", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language?.Trim(), "hi-IN", StringComparison.OrdinalIgnoreCase);
 
     private static HeroCompositionValidationDto BuildValidation(string hookText, string visualScene, string directionText, string timingText, string ctaText)
     {

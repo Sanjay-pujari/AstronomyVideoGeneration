@@ -123,7 +123,7 @@ public sealed class HeroAssetStoryGenerator(
         if (missingSourceTypes.Length > 0)
             warnings.Add($"Hero story source is missing {string.Join(", ", missingSourceTypes)} context; story generation will continue with available golden pilot defaults.");
 
-        var heroStory = BuildHeroStory(request, storySource);
+        var heroStory = LocalizeHeroStory(BuildHeroStory(request, storySource));
         var validationIssues = ValidateStory(heroStory);
         warnings.AddRange(validationIssues);
         var isValid = validationIssues.Count == 0;
@@ -229,7 +229,8 @@ public sealed class HeroAssetStoryGenerator(
             .ThenBy(score => score.Hook)
             .Select(score => score.Hook)
             .ToArray();
-        heroStory = WithSelectedHook(heroStory, selectedHook);
+        heroStory = WithSelectedHook(heroStory, LocalizeHeroHook(selectedHook, heroStory.Language));
+        selectedHook = heroStory.HeroHook;
         var heroContract = ResolveHeroContract(request.ProductionContext, request.ProductionContext?.ProductionEventIntelligence);
         var platformVariants = BuildPlatformVariants(selectedHook, heroStory, heroContract, request.ProductionContext?.ProductionEventIntelligence);
         var blueprint = BuildHeroBlueprint(platformVariants, heroStory, heroContract, request.ProductionContext?.ProductionEventIntelligence);
@@ -280,7 +281,8 @@ public sealed class HeroAssetStoryGenerator(
             .ThenBy(score => score.Hook)
             .Select(score => score.Hook)
             .ToArray();
-        heroStory = WithSelectedHook(heroStory, selectedHook);
+        heroStory = WithSelectedHook(heroStory, LocalizeHeroHook(selectedHook, heroStory.Language));
+        selectedHook = heroStory.HeroHook;
         var platformVariants = blueprint.PlatformVariants;
         var reviewScores = BuildReviewScores();
 
@@ -337,7 +339,8 @@ public sealed class HeroAssetStoryGenerator(
             .ThenBy(score => score.Hook)
             .Select(score => score.Hook)
             .ToArray();
-        heroStory = WithSelectedHook(heroStory, selectedHook);
+        heroStory = WithSelectedHook(heroStory, LocalizeHeroHook(selectedHook, heroStory.Language));
+        selectedHook = heroStory.HeroHook;
         var platformVariants = blueprint.PlatformVariants;
         var reviewScores = BuildReviewScores();
 
@@ -1668,7 +1671,9 @@ public sealed class HeroAssetStoryGenerator(
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
             ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
 
-            var (title, subtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
+            var (title, subtitle) = IsHindi(heroStory.Language)
+                ? (compositionModel.HookBlock.Text, heroStory.HeroMessage)
+                : BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
             var landscape = width > height;
             var square = width == height;
             var portrait = height > width;
@@ -1730,6 +1735,15 @@ public sealed class HeroAssetStoryGenerator(
     private static (string Date, string Time, string Direction) BuildHeroV6MetadataValues(HeroAssetStoryDto heroStory, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence)
     {
         var date = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "DATE TBD";
+        if (IsHindi(heroStory.Language))
+        {
+            var localizedTime = Clean(compositionModel.TimingBlock.Text);
+            var localizedDirection = Clean(compositionModel.DirectionBlock.Text);
+            if (string.IsNullOrWhiteSpace(localizedTime)) throw new InvalidOperationException("Phase 11 Hero rendering failed: timingBlock.text is empty.");
+            if (string.IsNullOrWhiteSpace(localizedDirection)) throw new InvalidOperationException("Phase 11 Hero rendering failed: directionBlock.text is empty.");
+            return ($"तारीख  {date}", localizedTime, localizedDirection);
+        }
+
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var time = HeroMetadataNormalizer.NormalizeTime(FirstNonEmpty(compositionModel.TimingBlock.Text, heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal), eventFamily, string.Empty);
         if (string.IsNullOrWhiteSpace(time)) throw new InvalidOperationException("Phase 11 Hero rendering failed: timingBlock.text is empty.");
@@ -2511,6 +2525,35 @@ public sealed class HeroAssetStoryGenerator(
             DateTimeOffset.UtcNow);
     }
 
+    private static HeroAssetStoryDto LocalizeHeroStory(HeroAssetStoryDto story)
+    {
+        if (!IsHindi(story.Language)) return story;
+        return story with
+        {
+            HeroHook = "चरम क्षण को न चूकें",
+            HeroMessage = "आज रात आसमान का खास दृश्य अपनी पूरी चमक पर होगा।",
+            HeroAction = "सूर्यास्त के बाद पश्चिम की ओर देखें",
+            HeroVisualFocus = "नाटकीय सांध्य आकाश में चमकता खगोलीय दृश्य।",
+            HeroEmotion = "आश्चर्य + तत्परता"
+        };
+    }
+
+    private static HeroAssetBlueprintDto LocalizeHeroBlueprint(HeroAssetBlueprintDto blueprint, string? language)
+    {
+        if (!IsHindi(language)) return blueprint;
+        return blueprint with
+        {
+            VisualNarrative = "स्थानीय दर्शकों के लिए नाटकीय सिनेमैटिक आकाश, जिसमें मुख्य खगोलीय घटना साफ और प्रभावशाली दिखे।"
+        };
+    }
+
+    private static string LocalizeHeroHook(string hook, string? language)
+        => IsHindi(language) ? "चरम क्षण को न चूकें" : hook;
+
+    private static bool IsHindi(string? language)
+        => string.Equals(language?.Trim(), "hi", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language?.Trim(), "hi-IN", StringComparison.OrdinalIgnoreCase);
+
     private static string DeriveHeroHook(HeroStorySourceDto storySource)
     {
         var what = Clean(storySource.What);
@@ -2815,12 +2858,12 @@ public sealed class HeroAssetStoryGenerator(
     private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants, HeroAssetStoryDto heroStory, string heroContract, ProductionEventIntelligence? intelligence)
     {
         var isGuideHero = string.Equals(heroContract, "GuideHero", StringComparison.OrdinalIgnoreCase);
-        return new(
+        return LocalizeHeroBlueprint(new(
             Clean(heroStory.HeroEmotion),
             isGuideHero ? "EducationalObservingPoster" : "CinematicHeroPoster",
             isGuideHero ? Clean(heroStory.HeroVisualFocus) : BuildCinematicHeroVisualFocus(heroStory, intelligence),
             Clean(heroStory.HeroMessage),
-            platformVariants);
+            platformVariants), heroStory.Language);
     }
 
     private static string BuildCinematicHeroVisualFocus(HeroAssetStoryDto heroStory, ProductionEventIntelligence? intelligence)
