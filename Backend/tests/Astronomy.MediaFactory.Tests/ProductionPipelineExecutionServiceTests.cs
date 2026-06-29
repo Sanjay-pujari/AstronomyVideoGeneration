@@ -272,6 +272,67 @@ public sealed class ProductionPipelineExecutionServiceTests
         }
     }
 
+
+    [Fact]
+    public void ValidateHeroVisualStyle_TrustsPassingHeroLayoutValidationContractForPlanetConjunctionHook()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-contract-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var compositionPath = Path.Combine(tempRoot, "hero-composition-model.json");
+        var blueprintPath = Path.Combine(tempRoot, "hero-asset-blueprint.json");
+        var layoutPath = Path.Combine(tempRoot, "hero-layout-validation.json");
+
+        try
+        {
+            File.WriteAllText(compositionPath, """
+            {
+              "hookBlock": { "text": "LOOK FOR JUPITER AND VENUS" },
+              "directionBlock": { "text": "The conjunction will happen when the planets appear about one-third above the horizon" },
+              "timingBlock": { "text": "Tonight after sunset" },
+              "ctaBlock": { "text": "Look west" }
+            }
+            """);
+            File.WriteAllText(blueprintPath, """
+            {
+              "heroContract": "CinematicHero",
+              "eventFamily": "PLANET_CONJUNCTION"
+            }
+            """);
+            File.WriteAllText(layoutPath, """
+            {
+              "eventFamily": "PLANET_CONJUNCTION",
+              "isValid": true,
+              "variants": [
+                { "variant": "Landscape", "fileName": "hero-final.png" }
+              ],
+              "compositionReports": [
+                { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
+              ],
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTextSafeAreaPassed": true,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              }
+            }
+            """);
+
+            var method = GetPrivateStaticMethod("ValidateHeroVisualStyle", typeof(string), typeof(string), typeof(string), typeof(bool));
+            var exception = Record.Exception(() => method.Invoke(null, [compositionPath, blueprintPath, layoutPath, true]));
+
+            Assert.Null(exception);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public void ResolveHeroEventFamily_UsesLayoutValidationEventFamilyWhenCompositionAndBlueprintOmitIt()
     {

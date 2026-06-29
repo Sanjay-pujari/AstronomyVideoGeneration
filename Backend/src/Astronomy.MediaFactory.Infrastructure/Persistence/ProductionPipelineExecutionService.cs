@@ -1889,8 +1889,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ValidateHeroVisualStyle(string compositionModelPath, string blueprintPath, string layoutValidationPath, bool enableStrictHeroOverlayValidation)
     {
-        var errors = new List<string>();
-        TraceHeroValidation($"HeroValidationService INPUT compositionModelPath={compositionModelPath}; blueprintPath={blueprintPath}; layoutValidationPath={layoutValidationPath}; layoutValidationExists={File.Exists(layoutValidationPath)}");
+        TraceHeroValidation($"HeroValidationService INPUT compositionModelPath={compositionModelPath}; blueprintPath={blueprintPath}; layoutValidationPath={layoutValidationPath}; layoutValidationExists={File.Exists(layoutValidationPath)}; EnableStrictHeroOverlayValidation={enableStrictHeroOverlayValidation}");
         var renderedBlocks = ReadRenderedBlocks(layoutValidationPath);
         TraceHeroValidation($"HeroLayoutValidator INTERMEDIATE ReadRenderedBlocks result count={renderedBlocks.Count}; blocks=[{string.Join(", ", renderedBlocks)}]");
         var rendererContract = ResolveRendererContract(compositionModelPath, layoutValidationPath, renderedBlocks);
@@ -1900,69 +1899,100 @@ public sealed partial class ProductionPipelineExecutionService(
         var contractMismatch = !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
         TraceHeroValidation($"HeroCinematicValidator INTERMEDIATE rendererContract={rendererContract}; heroContract={heroContract}; validatorContract={validatorContract}; validationProfileUsed={validationProfileUsed}; contractMismatchExpr=(!string.Equals(rendererContract, validatorContract, OrdinalIgnoreCase)) => {contractMismatch}");
 
-        if (File.Exists(compositionModelPath))
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(compositionModelPath));
-            var root = doc.RootElement;
-            var titleText = ReadNestedString(root, "hookBlock", "text");
-            var visibleText = string.Join(" ", new[]
-            {
-                ReadNestedString(root, "directionBlock", "text"),
-                ReadNestedString(root, "timingBlock", "text"),
-                ReadNestedString(root, "ctaBlock", "text")
-            }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            TraceHeroValidation($"HeroOverlayTextValidator INPUT titleText='{titleText}'; visibleText='{visibleText}'; compositionModelInstanceHash={RuntimeHelpers.GetHashCode(root)}");
-            var renderedLayoutFits = CinematicHeroRenderedLayoutFits(layoutValidationPath);
-            var resolvedHeroEventFamily = ResolveHeroEventFamily(blueprintPath, compositionModelPath, layoutValidationPath);
-            TraceHeroValidation($"HeroOverlayTextValidator INTERMEDIATE validation function CinematicHeroRenderedLayoutFits('{layoutValidationPath}') => {renderedLayoutFits}; ResolveHeroEventFamily => {resolvedHeroEventFamily}; EnableStrictHeroOverlayValidation={enableStrictHeroOverlayValidation}");
-            if (!enableStrictHeroOverlayValidation && renderedLayoutFits)
-            {
-                TraceHeroValidation("HeroOverlayTextValidator TEMPORARY BYPASS active: EnableStrictHeroOverlayValidation=false and rendered layout passed; skipping ValidateCinematicHeroOverlayTextWithRenderedLayout for downstream phase debugging.");
-            }
-            else
-            {
-                var overlayDiagnostics = ValidateCinematicHeroOverlayTextWithRenderedLayout(HeroOverlayRole.Hook, titleText, visibleText, eventFamily: resolvedHeroEventFamily, renderedLayoutFits: renderedLayoutFits);
-                TraceHeroValidation($"HeroOverlayTextValidator OUTPUT FinalDecision={overlayDiagnostics.FinalDecision}; RejectedReason='{overlayDiagnostics.RejectedReason}'");
-                WriteHeroOverlayTextDiagnostics(layoutValidationPath, overlayDiagnostics);
-                if (!overlayDiagnostics.FinalDecision)
-                {
-                    TraceHeroValidation($"HeroValidationService EARLY/ERROR PATH overlayDiagnostics.FinalDecision false; adding error. Responsible assignment is FinalDecision=string.IsNullOrWhiteSpace(rejectedReason) inside ValidateCinematicHeroOverlayTextWithRenderedLayout.");
-                    errors.Add($"Hero overlay text failed cinematic validation: {overlayDiagnostics.RejectedReason}");
-                }
-            }
-            if (validatorContract == "CinematicHero" && !IsSelectedCinematicHeroRenderer(layoutValidationPath) && !string.IsNullOrWhiteSpace(visibleText))
-                errors.Add("CinematicHero must use only a minimal title/subtitle overlay; direction, timing, and CTA text blocks must be empty unless heroContract=GuideHero.");
-        }
-
-        if (File.Exists(layoutValidationPath))
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
-            if (doc.RootElement.TryGetProperty("variants", out var variants) && variants.ValueKind == JsonValueKind.Array && variants.GetArrayLength() == 0)
-                errors.Add("Hero renderer produced zero variants.");
-
-            if (validatorContract == "CinematicHero" && renderedBlocks.Count > 0)
-            {
-                var forbiddenBlocks = renderedBlocks.Where(block => block.Contains("Timing", StringComparison.OrdinalIgnoreCase)
-                    || block.Contains("Direction", StringComparison.OrdinalIgnoreCase)
-                    || block.Contains("CTA", StringComparison.OrdinalIgnoreCase)
-                    || block.Contains("Panel", StringComparison.OrdinalIgnoreCase)
-                    || block.Contains("Bar", StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (forbiddenBlocks.Length > 0)
-                    errors.Add("Hero V3 layout contains forbidden informational blocks: " + string.Join(", ", forbiddenBlocks));
-                if (renderedBlocks.Count > 2)
-                    errors.Add($"Hero V3 layout must use no more than 2 text/visual blocks; actual={renderedBlocks.Count}.");
-            }
-        }
-
+        var layoutSummary = SummarizeHeroLayoutValidation(layoutValidationPath);
         WriteHeroContractDiagnostics(layoutValidationPath, heroContract, validatorContract, rendererContract, contractMismatch, validationProfileUsed);
 
-        if (errors.Count > 0)
+        if (!layoutSummary.Passed)
         {
-            TraceHeroValidation($"Phase11HeroValidator EARLY RETURN/THROW errors.Count={errors.Count}; errors=[{string.Join("; ", errors)}]");
-            throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", errors));
+            TraceHeroValidation($"Phase11HeroValidator EARLY RETURN/THROW layoutSummary.Passed=false; errors=[{string.Join("; ", layoutSummary.Errors)}]");
+            throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", layoutSummary.Errors));
         }
 
-        TraceHeroValidation("Phase11HeroValidator OUTPUT validation passed; no finalDecision=false path reached.");
+        TraceHeroValidation($"Phase11HeroValidator OUTPUT validation passed from hero-layout-validation.json source of truth; summary='{layoutSummary.Summary}'");
+    }
+
+    private sealed record HeroLayoutValidationSummary(bool Passed, string Summary, IReadOnlyList<string> Errors);
+
+    private static HeroLayoutValidationSummary SummarizeHeroLayoutValidation(string layoutValidationPath)
+    {
+        TraceHeroValidation($"HeroLayoutValidator INPUT sourceOfTruth=hero-layout-validation.json; layoutValidationPath={layoutValidationPath}; exists={File.Exists(layoutValidationPath)}");
+        var errors = new List<string>();
+        if (!File.Exists(layoutValidationPath))
+        {
+            errors.Add($"hero-layout-validation.json is required at '{NormalizePath(layoutValidationPath)}'.");
+            return new HeroLayoutValidationSummary(false, "missing hero-layout-validation.json", errors);
+        }
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
+        var root = doc.RootElement;
+        if (!TryGetHeroOverlayDiagnostics(root, out var heroOverlayDiagnostics))
+            errors.Add("hero-layout-validation.json is missing heroOverlayDiagnostics.");
+
+        var layoutIsValid = ReadNullableBool(root, "isValid");
+        var compositionReportsPass = CompositionReportsAllPass(root);
+        var generatedVariantsExist = GeneratedHeroVariantsExist(root);
+        bool? heroTitleClipped = null;
+        bool? heroSubtitleClipped = null;
+        bool? heroTitleOverflowDetected = null;
+        bool? heroTextOverlapDetected = null;
+        bool? heroTitleSubtitleOverlap = null;
+        bool? heroTitleMetadataOverlap = null;
+        bool? heroTextSafeAreaPassed = null;
+        bool? safeArea = null;
+
+        if (errors.Count == 0)
+        {
+            heroTitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroTitleClipped");
+            heroSubtitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroSubtitleClipped");
+            heroTitleOverflowDetected = ReadNullableBool(heroOverlayDiagnostics, "heroTitleOverflowDetected");
+            heroTextOverlapDetected = ReadNullableBool(heroOverlayDiagnostics, "heroTextOverlapDetected");
+            heroTitleSubtitleOverlap = ReadNullableBool(heroOverlayDiagnostics, "heroTitleSubtitleOverlap");
+            heroTitleMetadataOverlap = ReadNullableBool(heroOverlayDiagnostics, "heroTitleMetadataOverlap");
+            heroTextSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTextSafeAreaPassed");
+            safeArea = ReadNullableBool(heroOverlayDiagnostics, "safeArea");
+        }
+
+        if (layoutIsValid != true) errors.Add("hero-layout-validation.json reports isValid != true.");
+        if (!compositionReportsPass) errors.Add("hero-layout-validation.json compositionReports must all PASS with no issues or regeneration requirements.");
+        if (!generatedVariantsExist) errors.Add("hero-layout-validation.json reports no generated variants.");
+        if (heroTitleClipped == true || heroSubtitleClipped == true || heroTitleOverflowDetected == true) errors.Add("hero-layout-validation.json reports clipping or overflow.");
+        if (heroTextOverlapDetected == true || heroTitleSubtitleOverlap == true || heroTitleMetadataOverlap == true) errors.Add("hero-layout-validation.json reports text overlap.");
+        if (heroTextSafeAreaPassed != true) errors.Add("hero-layout-validation.json reports heroTextSafeAreaPassed != true.");
+        if (safeArea == false) errors.Add("hero-layout-validation.json reports safeArea=false.");
+
+        var passed = errors.Count == 0;
+        var summary = $"isValid={layoutIsValid}; compositionReportsPass={compositionReportsPass}; generatedVariantsExist={generatedVariantsExist}; noClipping={heroTitleClipped != true && heroSubtitleClipped != true && heroTitleOverflowDetected != true}; noOverlap={heroTextOverlapDetected != true && heroTitleSubtitleOverlap != true && heroTitleMetadataOverlap != true}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; safeArea={safeArea}; passed={passed}";
+        TraceHeroValidation($"HeroLayoutValidator OUTPUT sourceOfTruthSummary {summary}");
+        return new HeroLayoutValidationSummary(passed, summary, errors);
+    }
+
+    private static bool GeneratedHeroVariantsExist(JsonElement root)
+    {
+        if (!root.TryGetProperty("variants", out var variants) || variants.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var variant in variants.EnumerateArray())
+        {
+            if (variant.ValueKind == JsonValueKind.Object)
+            {
+                if (variant.TryGetProperty("fileName", out var fileName) && fileName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(fileName.GetString()))
+                    return true;
+                if (variant.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(path.GetString()))
+                    return true;
+                if (variant.TryGetProperty("outputPath", out var outputPath) && outputPath.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(outputPath.GetString()))
+                    return true;
+                if (variant.TryGetProperty("imageId", out var imageId) && imageId.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(imageId.GetString()))
+                    return true;
+                if (variant.TryGetProperty("variant", out var variantName) && variantName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(variantName.GetString()))
+                    return true;
+            }
+            else if (variant.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(variant.GetString()))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private const int DefaultMaxHeroOverlayWords = 8;
