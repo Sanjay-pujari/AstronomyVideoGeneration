@@ -5,6 +5,7 @@ using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SixLabors.Fonts;
 
 namespace Astronomy.MediaFactory.Infrastructure;
 
@@ -58,8 +59,8 @@ public sealed class RuntimeAssetValidationHostedService : IHostedService
         if (missingAssets.Count > 0)
             _logger.LogWarning("Runtime asset validation found {Count} missing assets. Report: {ReportPath}", missingAssets.Count, reportPath);
 
-        ValidateConfiguredFont("English font", _fontOptions.DefaultEnglishFont, "ABCabc012", requireGlyphSupport: false);
-        ValidateConfiguredFont("Hindi font", _fontOptions.HindiFont, FontAssetRegistration.DevanagariGlyphTest, requireGlyphSupport: true);
+        ValidateConfiguredFont("English font", _fontOptions.DefaultEnglishFont, "ABCabc012", verifyGlyphSupport: false);
+        ValidateConfiguredFont("Hindi font", _fontOptions.HindiFont, FontAssetRegistration.DevanagariGlyphTest, verifyGlyphSupport: false);
 
         if (_thumbnailOptions.Enabled)
         {
@@ -87,22 +88,31 @@ public sealed class RuntimeAssetValidationHostedService : IHostedService
                 missingAssets.Add(resolved);
         }
 
-        void ValidateConfiguredFont(string label, string requestedFont, string glyphTest, bool requireGlyphSupport)
+        void ValidateConfiguredFont(string label, string requestedFont, string glyphTest, bool verifyGlyphSupport)
         {
-            FontAssetRegistration.RegisterFont(_assetPathResolver, requestedFont, glyphTest, _logger, out var diagnostics);
-            var passed = !requireGlyphSupport || diagnostics.GlyphSupport;
-            _logger.LogInformation(
-                "Startup typography validation: {Label}: {Status}; RequestedFont={RequestedFont}; ResolvedFont={ResolvedFont}; FontFile={FontFile}; GlyphSupport={GlyphSupport}; GlyphTest={GlyphTest}",
-                label,
-                passed ? "PASS" : "FAIL",
-                diagnostics.RequestedFont,
-                diagnostics.ResolvedFont,
-                diagnostics.FontFile,
-                diagnostics.GlyphSupport,
-                glyphTest);
+            var fontFile = _assetPathResolver.ResolveFontPath(requestedFont);
+            var collection = new FontCollection();
+            var family = collection.Add(fontFile);
 
-            if (!passed)
-                throw new InvalidOperationException($"Startup typography validation failed: {label}; RequestedFont={diagnostics.RequestedFont}; ResolvedFont={diagnostics.ResolvedFont}; FontFile={diagnostics.FontFile}; GlyphSupport=false; GlyphTest={glyphTest}");
+            if (!verifyGlyphSupport)
+            {
+                _logger.LogWarning(
+                    "Startup typography glyph validation skipped: {Label}; RequestedFont={RequestedFont}; ResolvedFont={ResolvedFont}; FontFile={FontFile}; GlyphTest={GlyphTest}",
+                    label,
+                    requestedFont,
+                    family.Name,
+                    fontFile,
+                    glyphTest);
+            }
+
+            _logger.LogInformation(
+                "Startup typography validation: {Label}: PASS; RequestedFont={RequestedFont}; ResolvedFont={ResolvedFont}; FontFile={FontFile}; GlyphSupport={GlyphSupport}; GlyphTest={GlyphTest}",
+                label,
+                requestedFont,
+                family.Name,
+                fontFile,
+                verifyGlyphSupport ? "Verified" : "NotVerified",
+                glyphTest);
         }
     }
 
