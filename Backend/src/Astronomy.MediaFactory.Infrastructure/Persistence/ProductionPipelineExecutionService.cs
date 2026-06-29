@@ -2112,6 +2112,8 @@ public sealed partial class ProductionPipelineExecutionService(
             return false;
         }
 
+        var layoutIsValid = ReadNullableBool(root, "isValid");
+        var compositionReportsPass = CompositionReportsAllPass(root);
         var heroTitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroTitleClipped");
         var heroSubtitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroSubtitleClipped");
         var heroTitleOverflowDetected = ReadNullableBool(heroOverlayDiagnostics, "heroTitleOverflowDetected");
@@ -2121,17 +2123,50 @@ public sealed partial class ProductionPipelineExecutionService(
         var heroTextSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTextSafeAreaPassed");
         var heroTitleSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTitleSafeAreaPassed");
         var safeArea = ReadNullableBool(heroOverlayDiagnostics, "safeArea");
-        TraceHeroValidation($"HeroLayoutValidator INPUT source=heroOverlayDiagnostics objectInstanceHash={RuntimeHelpers.GetHashCode(heroOverlayDiagnostics)}; heroTitleClipped={heroTitleClipped}; heroSubtitleClipped={heroSubtitleClipped}; heroTitleOverflowDetected={heroTitleOverflowDetected}; heroTextOverlapDetected={heroTextOverlapDetected}; heroTitleSubtitleOverlap={heroTitleSubtitleOverlap}; heroTitleMetadataOverlap={heroTitleMetadataOverlap}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}; safeArea={safeArea}");
+        TraceHeroValidation($"HeroLayoutValidator INPUT source=heroOverlayDiagnostics objectInstanceHash={RuntimeHelpers.GetHashCode(heroOverlayDiagnostics)}; isValid={layoutIsValid}; compositionReportsPass={compositionReportsPass}; heroTitleClipped={heroTitleClipped}; heroSubtitleClipped={heroSubtitleClipped}; heroTitleOverflowDetected={heroTitleOverflowDetected}; heroTextOverlapDetected={heroTextOverlapDetected}; heroTitleSubtitleOverlap={heroTitleSubtitleOverlap}; heroTitleMetadataOverlap={heroTitleMetadataOverlap}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}; safeArea={safeArea}");
+        var validLayout = TraceHeroValidationBool(layoutIsValid == true, "ReadNullableBool(root, isValid) == true");
+        var allCompositionReportsPass = TraceHeroValidationBool(compositionReportsPass, "CompositionReportsAllPass(root)");
         var noTitleClip = TraceHeroValidationBool(heroTitleClipped != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleClipped) != true");
         var noSubtitleClip = TraceHeroValidationBool(heroSubtitleClipped != true, "ReadNullableBool(heroOverlayDiagnostics, heroSubtitleClipped) != true");
         var noTitleOverflow = TraceHeroValidationBool(heroTitleOverflowDetected != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleOverflowDetected) != true");
         var noTextOverlap = TraceHeroValidationBool(heroTextOverlapDetected != true, "ReadNullableBool(heroOverlayDiagnostics, heroTextOverlapDetected) != true");
         var noTitleSubtitleOverlap = TraceHeroValidationBool(heroTitleSubtitleOverlap != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleSubtitleOverlap) != true");
         var noTitleMetadataOverlap = TraceHeroValidationBool(heroTitleMetadataOverlap != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleMetadataOverlap) != true");
-        var textOrTitleSafeArea = TraceHeroValidationBool(heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true, "heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true");
-        var result = noTitleClip && noSubtitleClip && noTitleOverflow && noTextOverlap && noTitleSubtitleOverlap && noTitleMetadataOverlap && textOrTitleSafeArea;
+        var textSafeAreaPassed = TraceHeroValidationBool(heroTextSafeAreaPassed == true, "heroTextSafeAreaPassed == true");
+        var diagnosticsSafeAreaPassed = TraceHeroValidationBool(safeArea != false, "heroOverlayDiagnostics.safeArea != false");
+        var result = validLayout && allCompositionReportsPass && noTitleClip && noSubtitleClip && noTitleOverflow && noTextOverlap && noTitleSubtitleOverlap && noTitleMetadataOverlap && textSafeAreaPassed && diagnosticsSafeAreaPassed;
         TraceHeroValidation($"HeroLayoutValidator OUTPUT CinematicHeroRenderedLayoutFits => {result}");
         return result;
+    }
+
+    private static bool CompositionReportsAllPass(JsonElement root)
+    {
+        if (!root.TryGetProperty("compositionReports", out var reports) || reports.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var report in reports.EnumerateArray())
+        {
+            if (report.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (report.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String)
+            {
+                if (!string.Equals(status.GetString(), "PASS", StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            else
+            {
+                return false;
+            }
+
+            if (ReadNullableBool(report, "requiresRegeneration") == true)
+                return false;
+
+            if (report.TryGetProperty("issues", out var issues) && issues.ValueKind == JsonValueKind.Array && issues.GetArrayLength() > 0)
+                return false;
+        }
+
+        return true;
     }
 
     private static bool TryGetHeroOverlayDiagnostics(JsonElement root, out JsonElement heroOverlayDiagnostics)

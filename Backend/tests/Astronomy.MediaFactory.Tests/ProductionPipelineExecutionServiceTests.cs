@@ -147,6 +147,7 @@ public sealed class ProductionPipelineExecutionServiceTests
                 "heroTitleClipped": "false",
                 "heroSubtitleClipped": "false",
                 "heroTitleOverflowDetected": "false",
+                "heroTextSafeAreaPassed": "true",
                 "heroTitleSafeAreaPassed": "true",
                 "safeArea": "true"
               }
@@ -199,6 +200,7 @@ public sealed class ProductionPipelineExecutionServiceTests
                 "heroTitleClipped": false,
                 "heroSubtitleClipped": false,
                 "heroTitleOverflowDetected": false,
+                "heroTextSafeAreaPassed": true,
                 "heroTitleSafeAreaPassed": true,
                 "safeArea": true
               }
@@ -219,6 +221,50 @@ public sealed class ProductionPipelineExecutionServiceTests
             Assert.True(renderedLayoutFits);
             Assert.True(ReadBool(diagnostics, "FinalDecision"));
             Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
+
+    [Theory]
+    [InlineData(false, false, true, true, false)]
+    [InlineData(true, true, true, true, false)]
+    [InlineData(true, false, false, true, false)]
+    [InlineData(true, false, true, false, false)]
+    public void CinematicHeroRenderedLayoutFits_RejectsInvalidClippedOrUnsafeLayout(bool isValid, bool heroTitleClipped, bool heroTextSafeAreaPassed, bool compositionReportPasses, bool expected)
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var status = compositionReportPasses ? "PASS" : "FAIL";
+            File.WriteAllText(layoutPath, $$"""
+            {
+              "isValid": {{isValid.ToString().ToLowerInvariant()}},
+              "compositionReports": [
+                { "variant": "Landscape", "status": "{{status}}", "issues": [], "requiresRegeneration": false }
+              ],
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": {{heroTitleClipped.ToString().ToLowerInvariant()}},
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTextSafeAreaPassed": {{heroTextSafeAreaPassed.ToString().ToLowerInvariant()}},
+                "safeArea": true
+              }
+            }
+            """);
+
+            var renderedFitsMethod = typeof(ProductionPipelineExecutionService).GetMethod("CinematicHeroRenderedLayoutFits", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(renderedFitsMethod);
+
+            var renderedLayoutFits = (bool)renderedFitsMethod!.Invoke(null, new object?[] { layoutPath })!;
+
+            Assert.Equal(expected, renderedLayoutFits);
         }
         finally
         {
