@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -57,6 +58,9 @@ public sealed class RuntimeAssetValidationHostedService : IHostedService
         if (missingAssets.Count > 0)
             _logger.LogWarning("Runtime asset validation found {Count} missing assets. Report: {ReportPath}", missingAssets.Count, reportPath);
 
+        ValidateConfiguredFont("English font", _fontOptions.DefaultEnglishFont, "ABCabc012", requireGlyphSupport: false);
+        ValidateConfiguredFont("Hindi font", _fontOptions.HindiFont, FontAssetRegistration.DevanagariGlyphTest, requireGlyphSupport: true);
+
         if (_thumbnailOptions.Enabled)
         {
             var missingFonts = new[] { _fontOptions.DefaultEnglishFont, _fontOptions.HindiFont }
@@ -81,6 +85,24 @@ public sealed class RuntimeAssetValidationHostedService : IHostedService
             checkedPaths.Add(resolved);
             if (!Directory.Exists(resolved))
                 missingAssets.Add(resolved);
+        }
+
+        void ValidateConfiguredFont(string label, string requestedFont, string glyphTest, bool requireGlyphSupport)
+        {
+            FontAssetRegistration.RegisterFont(_assetPathResolver, requestedFont, glyphTest, _logger, out var diagnostics);
+            var passed = !requireGlyphSupport || diagnostics.GlyphSupport;
+            _logger.LogInformation(
+                "Startup typography validation: {Label}: {Status}; RequestedFont={RequestedFont}; ResolvedFont={ResolvedFont}; FontFile={FontFile}; GlyphSupport={GlyphSupport}; GlyphTest={GlyphTest}",
+                label,
+                passed ? "PASS" : "FAIL",
+                diagnostics.RequestedFont,
+                diagnostics.ResolvedFont,
+                diagnostics.FontFile,
+                diagnostics.GlyphSupport,
+                glyphTest);
+
+            if (!passed)
+                throw new InvalidOperationException($"Startup typography validation failed: {label}; RequestedFont={diagnostics.RequestedFont}; ResolvedFont={diagnostics.ResolvedFont}; FontFile={diagnostics.FontFile}; GlyphSupport=false; GlyphTest={glyphTest}");
         }
     }
 

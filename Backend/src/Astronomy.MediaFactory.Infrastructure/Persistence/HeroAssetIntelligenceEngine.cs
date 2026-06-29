@@ -37,7 +37,9 @@ public sealed class HeroAssetStoryGenerator(
     IHttpClientFactory httpClientFactory,
     ILogger<HeroAssetStoryGenerator> logger,
     IHeroAssetSceneSelector sceneSelector,
-    IHeroCompositionEngine compositionEngine) : IHeroAssetStoryGenerator
+    IHeroCompositionEngine compositionEngine,
+    IOptions<ThumbnailFontOptions> fontOptions,
+    IRuntimeAssetPathResolver assetPathResolver) : IHeroAssetStoryGenerator
 {
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
@@ -1685,8 +1687,9 @@ public sealed class HeroAssetStoryGenerator(
 
             var titleSize = landscape ? 104f : square ? 78f : 88f;
             var subtitleSize = landscape ? 46f : square ? 34f : 42f;
-            var titleFont = FitHeroFont(title, titleSize, 42f, maxTextWidth, FontStyle.Bold);
-            var subtitleFont = FitHeroFont(subtitle, subtitleSize, 26f, maxTextWidth, FontStyle.Bold);
+            var preferHindiFont = IsHindi(heroStory.Language) || ContainsDevanagari(title) || ContainsDevanagari(subtitle);
+            var titleFont = FitHeroFont(title, titleSize, 42f, maxTextWidth, FontStyle.Bold, preferHindiFont);
+            var subtitleFont = FitHeroFont(subtitle, subtitleSize, 26f, maxTextWidth, FontStyle.Bold, preferHindiFont);
             var titleBounds = TextMeasurer.MeasureBounds(title, new TextOptions(titleFont));
             var subtitleBounds = TextMeasurer.MeasureBounds(subtitle, new TextOptions(subtitleFont));
             var subtitleY = topY + titleBounds.Height + minimumTitleSubtitleGap;
@@ -1710,7 +1713,7 @@ public sealed class HeroAssetStoryGenerator(
             ctx.Fill(Color.Black.WithAlpha(0.58f), new RectangleF(0, bottomBarY, width, bottomBarHeight));
             ctx.Fill(Color.White.WithAlpha(0.10f), new RectangleF(0, bottomBarY, width, 2));
             var (date, time, direction) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
-            var metaFont = FitHeroFont($"{date}      {time}      {direction}", landscape ? 34f : square ? 26f : 30f, 20f, maxTextWidth, FontStyle.Bold);
+            var metaFont = FitHeroFont($"{date}      {time}      {direction}", landscape ? 34f : square ? 26f : 30f, 20f, maxTextWidth, FontStyle.Bold, preferHindiFont || ContainsDevanagari($"{date}{time}{direction}"));
             var metaBounds = TextMeasurer.MeasureBounds($"{date}      {time}      {direction}", new TextOptions(metaFont));
             var metaY = bottomBarY + (bottomBarHeight - metaBounds.Height) / 2f;
             var dateBounds = TextMeasurer.MeasureBounds(date, new TextOptions(metaFont));
@@ -1775,17 +1778,17 @@ public sealed class HeroAssetStoryGenerator(
             .Trim(' ', '.', ':', '-', '–');
     }
 
-    private static Font FitHeroFont(string text, float preferredSize, float minimumSize, float maxWidth, FontStyle style)
+    private Font FitHeroFont(string text, float preferredSize, float minimumSize, float maxWidth, FontStyle style, bool preferHindiFont)
     {
         var size = preferredSize;
         while (size > minimumSize)
         {
-            var font = ResolveHeroFont(size, style);
+            var font = ResolveHeroFont(size, style, preferHindiFont);
             if (TextMeasurer.MeasureBounds(text, new TextOptions(font)).Width <= maxWidth) return font;
             size -= 2f;
         }
 
-        return ResolveHeroFont(minimumSize, style);
+        return ResolveHeroFont(minimumSize, style, preferHindiFont);
     }
 
     private static (string Title, string Subtitle) BuildHeroOverlayLines(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
@@ -1892,19 +1895,20 @@ public sealed class HeroAssetStoryGenerator(
         return forbidden.Any(term => cleaned.Contains(term, StringComparison.OrdinalIgnoreCase)) ? DefaultHeroHook : cleaned;
     }
 
-    private static Font ResolveHeroFont(float size, FontStyle style)
+    private Font ResolveHeroFont(float size, FontStyle style, bool preferHindiFont)
     {
-        foreach (var name in new[] { "Inter", "Segoe UI", "Arial", "DejaVu Sans", "Liberation Sans" })
+        if (preferHindiFont)
         {
-            if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, style);
+            var hindiFamily = FontAssetRegistration.RegisterFont(assetPathResolver, fontOptions.Value.HindiFont, FontAssetRegistration.DevanagariGlyphTest, logger, out _);
+            return hindiFamily.CreateFont(size, style);
         }
 
-        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
-            throw new InvalidOperationException("No system fonts available for hero image generation.");
-
-        return fallbackFamily.CreateFont(size, style);
+        var englishFamily = FontAssetRegistration.RegisterFont(assetPathResolver, fontOptions.Value.DefaultEnglishFont, "ABCabc012", logger, out _);
+        return englishFamily.CreateFont(size, style);
     }
+
+    private static bool ContainsDevanagari(string? text)
+        => !string.IsNullOrEmpty(text) && text.Any(c => c is >= '\u0900' and <= '\u097F');
 
     private static async Task WriteHeroV6GenerationSummaryDiagnosticsAsync(
         AzureOpenAIForImageOptions options,
