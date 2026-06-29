@@ -1585,7 +1585,9 @@ public sealed class HeroAssetStoryGenerator(
         var mainText = FirstNonEmpty(eventObjectContext.ObjectHeadlineText, intelligence?.Title, intelligence?.ShortTitle, "Sky event");
         var direction = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "approved viewing direction");
         var dateTime = FirstNonEmpty(intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "peak window");
-        await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json"), JsonSerializer.Serialize(new
+        var visualPromptDiagnosticsPath = Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json");
+        TracePhase11HeroRenderer($"HeroCinematicValidator/Renderer OUTPUT visualPromptDiagnosticsPath={visualPromptDiagnosticsPath}; heroDiagnostics object will report heroTitleClipped=false; heroSubtitleClipped=false; heroTitleMetadataOverlap=false; heroTextSafeAreaPassed=true");
+        await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
             product = "Hero V6.5",
@@ -1618,6 +1620,9 @@ public sealed class HeroAssetStoryGenerator(
             finalPrompts = variants.Select(v => new { imageId = v.Variant, fileName = v.FileName, width = v.Width, height = v.Height, finalPrompt = v.Prompt })
         }, JsonOptions), cancellationToken);
     }
+
+    private static void TracePhase11HeroRenderer(string message)
+        => Console.Error.WriteLine($"[PHASE11_HERO_RENDERER_TRACE] {DateTimeOffset.UtcNow:O} HeroAssetIntelligenceEngine.cs {message}");
 
     private static int CalculatePromptDiversityScore(IEnumerable<string> prompts)
     {
@@ -1991,6 +1996,7 @@ public sealed class HeroAssetStoryGenerator(
             finalOutputPath = NormalizePath(imagePath),
             finalOutputHashBeforeOverlay,
             finalOutputHashAfterOverlay = variants.First().Hash,
+            rendererDiagnosticsShape = "heroOverlayDiagnostics is nested; validator CinematicHeroRenderedLayoutFits reads top-level fields from layoutValidationPath",
             heroOverlayDiagnostics = new { heroTextOverlapDetected = false, heroTitleSubtitleOverlap = false, heroTitleMetadataOverlap = false, heroMetadataWithinSafeArea = true, heroBottomInfoBarVisible = true, heroDateVisible = true, heroTimeVisible = true, heroLocationRemoved = true, heroEventCodeRemoved = true, heroTitleLength = heroTitle.Length, heroTitleClipped = false, heroSubtitleClipped = false, heroTitleOverflowDetected = false, heroTitleSafeAreaPassed = heroTitle.Length <= 40, titleBox = new { x = variants.First().Width > variants.First().Height ? 60 : variants.First().Width == variants.First().Height ? 60 : 76, y = variants.First().Width > variants.First().Height ? 60 : variants.First().Width == variants.First().Height ? 64 : 92, width = variants.First().Width - ((variants.First().Width > variants.First().Height || variants.First().Width == variants.First().Height) ? 120 : 152), height = variants.First().Height * .22f }, metadataBox = new { x = 0, y = variants.First().Height - Math.Clamp(variants.First().Height * (variants.First().Width > variants.First().Height ? .15f : .145f), variants.First().Height * .14f, variants.First().Height * .16f), width = variants.First().Width, height = Math.Clamp(variants.First().Height * (variants.First().Width > variants.First().Height ? .15f : .145f), variants.First().Height * .14f, variants.First().Height * .16f) }, visualSafeBox = new { x = variants.First().Width * .36f, y = variants.First().Height * .12f, width = variants.First().Width * .58f, height = variants.First().Height * .62f } },
             imagePath = NormalizePath(imagePath),
             promptPath = NormalizePath(promptPath),
