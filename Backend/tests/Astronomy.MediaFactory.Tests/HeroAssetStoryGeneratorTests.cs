@@ -3,6 +3,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -908,7 +909,7 @@ public sealed class HeroAssetStoryGeneratorTests
         {
             WorkingDirectory = workingDirectory,
             CelestialAssetsRoot = Path.Combine(workingDirectory, "assets", "celestial")
-        }), Options.Create(new AzureOpenAIForImageOptions()), new TestHttpClientFactory(), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector(), new HeroCompositionEngine());
+        }), Options.Create(new AzureOpenAIForImageOptions()), new TestHttpClientFactory(), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector(), new HeroCompositionEngine(), Options.Create(new ThumbnailFontOptions()), new RuntimeAssetPathResolver());
 
     private sealed class TestHttpClientFactory : IHttpClientFactory
     {
