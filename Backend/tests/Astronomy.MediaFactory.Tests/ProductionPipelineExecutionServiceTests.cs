@@ -119,6 +119,85 @@ public sealed class ProductionPipelineExecutionServiceTests
         }
     }
 
+
+    [Fact]
+    public void ValidateCinematicHeroOverlayText_PlanetConjunctionHookPassesWithActualRenderedDiagnostics()
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(layoutPath, """
+            {
+              "eventFamily": "PLANET_CONJUNCTION",
+              "heroTextOverlapDetected": "false",
+              "heroTitleSubtitleOverlap": "false",
+              "heroTitleMetadataOverlap": "false",
+              "heroTitleClipped": "false",
+              "heroSubtitleClipped": "false",
+              "heroTitleOverflowDetected": "false",
+              "heroTitleSafeAreaPassed": "true"
+            }
+            """);
+
+            var renderedFitsMethod = typeof(ProductionPipelineExecutionService).GetMethod("CinematicHeroRenderedLayoutFits", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(renderedFitsMethod);
+            var renderedLayoutFits = (bool)renderedFitsMethod!.Invoke(null, new object?[] { layoutPath })!;
+
+            var diagnostics = InvokeRoleValidationWithRenderedLayout(
+                "Hook",
+                "LOOK FOR JUPITER AND VENUS",
+                "",
+                "PLANET_CONJUNCTION",
+                8,
+                renderedLayoutFits);
+
+            Assert.True(renderedLayoutFits);
+            Assert.True(ReadBool(diagnostics, "FinalDecision"));
+            Assert.Equal("PLANET_CONJUNCTION", ReadString(diagnostics, "EventFamily"));
+            Assert.Equal(5, ReadInt(diagnostics, "WordCount"));
+            Assert.False(ReadBool(diagnostics, "IsSentenceLike"));
+            Assert.True(ReadBool(diagnostics, "IsGuideInstructionLike"));
+            Assert.True(ReadBool(diagnostics, "FitsSafeArea"));
+            Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
+    [Fact]
+    public void ResolveHeroEventFamily_UsesLayoutValidationEventFamilyWhenCompositionAndBlueprintOmitIt()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-family-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var blueprintPath = Path.Combine(tempRoot, "blueprint.json");
+        var compositionPath = Path.Combine(tempRoot, "composition.json");
+        var layoutPath = Path.Combine(tempRoot, "layout.json");
+
+        try
+        {
+            File.WriteAllText(blueprintPath, "{}");
+            File.WriteAllText(compositionPath, "{}");
+            File.WriteAllText(layoutPath, """
+            {
+              "validation": {
+                "eventFamily": "PLANET_CONJUNCTION"
+              }
+            }
+            """);
+
+            var method = GetPrivateStaticMethod("ResolveHeroEventFamily", typeof(string[]));
+            var eventFamily = (string)method.Invoke(null, new object[] { new[] { blueprintPath, compositionPath, layoutPath } })!;
+
+            Assert.Equal("PLANET_CONJUNCTION", eventFamily);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public void ValidateCinematicHeroOverlayText_NarrationRoleRejectsLongNarrationSentenceEvenWhenRenderedLayoutFits()
     {
