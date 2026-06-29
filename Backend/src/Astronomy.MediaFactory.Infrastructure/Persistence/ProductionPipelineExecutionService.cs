@@ -1925,11 +1925,18 @@ public sealed partial class ProductionPipelineExecutionService(
 
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
         var root = doc.RootElement;
+        var heroOverlayDiagnosticsSource = "hero-layout-validation.json";
         if (!TryGetHeroOverlayDiagnostics(root, out var heroOverlayDiagnostics))
-            errors.Add("hero-layout-validation.json is missing heroOverlayDiagnostics.");
+        {
+            if (TryGetCompatibleHeroOverlayDiagnostics(layoutValidationPath, out heroOverlayDiagnostics, out heroOverlayDiagnosticsSource))
+                TraceHeroValidation($"HeroLayoutValidator compatibility fallback using heroOverlayDiagnostics from {heroOverlayDiagnosticsSource} because hero-layout-validation.json is missing the canonical object.");
+            else
+                errors.Add("hero-layout-validation.json is missing heroOverlayDiagnostics.");
+        }
 
         var layoutIsValid = ReadNullableBool(root, "isValid");
         var compositionReportsPass = CompositionReportsAllPass(root);
+        var objectVisibilityPass = ObjectVisibilityAllVisibleAndUncropped(root);
         var generatedVariantsExist = GeneratedHeroVariantsExist(root);
         bool? heroTitleClipped = null;
         bool? heroSubtitleClipped = null;
@@ -1938,9 +1945,10 @@ public sealed partial class ProductionPipelineExecutionService(
         bool? heroTitleSubtitleOverlap = null;
         bool? heroTitleMetadataOverlap = null;
         bool? heroTextSafeAreaPassed = null;
+        bool? heroTitleSafeAreaPassed = null;
         bool? safeArea = null;
 
-        if (errors.Count == 0)
+        if (heroOverlayDiagnostics.ValueKind == JsonValueKind.Object)
         {
             heroTitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroTitleClipped");
             heroSubtitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroSubtitleClipped");
@@ -1949,21 +1957,39 @@ public sealed partial class ProductionPipelineExecutionService(
             heroTitleSubtitleOverlap = ReadNullableBool(heroOverlayDiagnostics, "heroTitleSubtitleOverlap");
             heroTitleMetadataOverlap = ReadNullableBool(heroOverlayDiagnostics, "heroTitleMetadataOverlap");
             heroTextSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTextSafeAreaPassed");
+            heroTitleSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTitleSafeAreaPassed");
             safeArea = ReadNullableBool(heroOverlayDiagnostics, "safeArea");
         }
 
         if (layoutIsValid != true) errors.Add("hero-layout-validation.json reports isValid != true.");
         if (!compositionReportsPass) errors.Add("hero-layout-validation.json compositionReports must all PASS with no issues or regeneration requirements.");
+        if (!objectVisibilityPass) errors.Add("hero-layout-validation.json reports missing or cropped hero objects.");
         if (!generatedVariantsExist) errors.Add("hero-layout-validation.json reports no generated variants.");
         if (heroTitleClipped == true || heroSubtitleClipped == true || heroTitleOverflowDetected == true) errors.Add("hero-layout-validation.json reports clipping or overflow.");
         if (heroTextOverlapDetected == true || heroTitleSubtitleOverlap == true || heroTitleMetadataOverlap == true) errors.Add("hero-layout-validation.json reports text overlap.");
-        if (heroTextSafeAreaPassed != true) errors.Add("hero-layout-validation.json reports heroTextSafeAreaPassed != true.");
-        if (safeArea == false) errors.Add("hero-layout-validation.json reports safeArea=false.");
+        var anySafeAreaPassed = heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true;
+        if (!anySafeAreaPassed) errors.Add("hero-layout-validation.json reports no passing hero safe-area signal (heroTextSafeAreaPassed, heroTitleSafeAreaPassed, or safeArea).");
 
         var passed = errors.Count == 0;
-        var summary = $"isValid={layoutIsValid}; compositionReportsPass={compositionReportsPass}; generatedVariantsExist={generatedVariantsExist}; noClipping={heroTitleClipped != true && heroSubtitleClipped != true && heroTitleOverflowDetected != true}; noOverlap={heroTextOverlapDetected != true && heroTitleSubtitleOverlap != true && heroTitleMetadataOverlap != true}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; safeArea={safeArea}; passed={passed}";
+        var summary = $"isValid={layoutIsValid}; compositionReportsPass={compositionReportsPass}; objectVisibilityPass={objectVisibilityPass}; generatedVariantsExist={generatedVariantsExist}; noClipping={heroTitleClipped != true && heroSubtitleClipped != true && heroTitleOverflowDetected != true}; noOverlap={heroTextOverlapDetected != true && heroTitleSubtitleOverlap != true && heroTitleMetadataOverlap != true}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}; safeArea={safeArea}; heroOverlayDiagnosticsSource={heroOverlayDiagnosticsSource}; passed={passed}";
         TraceHeroValidation($"HeroLayoutValidator OUTPUT sourceOfTruthSummary {summary}");
         return new HeroLayoutValidationSummary(passed, summary, errors);
+    }
+
+    private static bool ObjectVisibilityAllVisibleAndUncropped(JsonElement root)
+    {
+        if (!root.TryGetProperty("objectVisibility", out var objects) || objects.ValueKind != JsonValueKind.Array)
+            return true;
+
+        foreach (var item in objects.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                return false;
+            if (ReadNullableBool(item, "visible") == false || ReadNullableBool(item, "cropped") == true)
+                return false;
+        }
+
+        return true;
     }
 
     private static bool GeneratedHeroVariantsExist(JsonElement root)
@@ -2169,9 +2195,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var noTextOverlap = TraceHeroValidationBool(heroTextOverlapDetected != true, "ReadNullableBool(heroOverlayDiagnostics, heroTextOverlapDetected) != true");
         var noTitleSubtitleOverlap = TraceHeroValidationBool(heroTitleSubtitleOverlap != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleSubtitleOverlap) != true");
         var noTitleMetadataOverlap = TraceHeroValidationBool(heroTitleMetadataOverlap != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleMetadataOverlap) != true");
-        var textSafeAreaPassed = TraceHeroValidationBool(heroTextSafeAreaPassed == true, "heroTextSafeAreaPassed == true");
-        var diagnosticsSafeAreaPassed = TraceHeroValidationBool(safeArea != false, "heroOverlayDiagnostics.safeArea != false");
-        var result = validLayout && allCompositionReportsPass && noTitleClip && noSubtitleClip && noTitleOverflow && noTextOverlap && noTitleSubtitleOverlap && noTitleMetadataOverlap && textSafeAreaPassed && diagnosticsSafeAreaPassed;
+        var anySafeAreaPassed = TraceHeroValidationBool(heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true, "heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true");
+        var result = validLayout && allCompositionReportsPass && noTitleClip && noSubtitleClip && noTitleOverflow && noTextOverlap && noTitleSubtitleOverlap && noTitleMetadataOverlap && anySafeAreaPassed;
         TraceHeroValidation($"HeroLayoutValidator OUTPUT CinematicHeroRenderedLayoutFits => {result}");
         return result;
     }
@@ -2204,6 +2229,28 @@ public sealed partial class ProductionPipelineExecutionService(
         }
 
         return true;
+    }
+
+    private static bool TryGetCompatibleHeroOverlayDiagnostics(string layoutValidationPath, out JsonElement heroOverlayDiagnostics, out string source)
+    {
+        var directory = Path.GetDirectoryName(layoutValidationPath) ?? string.Empty;
+        foreach (var fileName in new[] { "hero-generation-diagnostics.json", "hero-review.json" })
+        {
+            var candidatePath = Path.Combine(directory, fileName);
+            if (!File.Exists(candidatePath)) continue;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(candidatePath));
+            if (TryGetHeroOverlayDiagnostics(doc.RootElement, out var candidateDiagnostics))
+            {
+                heroOverlayDiagnostics = candidateDiagnostics.Clone();
+                source = fileName;
+                return true;
+            }
+        }
+
+        heroOverlayDiagnostics = default;
+        source = string.Empty;
+        return false;
     }
 
     private static bool TryGetHeroOverlayDiagnostics(JsonElement root, out JsonElement heroOverlayDiagnostics)

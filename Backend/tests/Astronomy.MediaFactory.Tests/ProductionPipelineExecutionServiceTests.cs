@@ -333,6 +333,132 @@ public sealed class ProductionPipelineExecutionServiceTests
         }
     }
 
+
+    [Fact]
+    public void SummarizeHeroLayoutValidation_FallsBackToHeroGenerationDiagnosticsWhenLayoutOmitsOverlayDiagnostics()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-summary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var layoutPath = Path.Combine(tempRoot, "hero-layout-validation.json");
+            File.WriteAllText(layoutPath, PassingLayoutJson(heroOverlayDiagnostics: null));
+            File.WriteAllText(Path.Combine(tempRoot, "hero-generation-diagnostics.json"), """
+            {
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              }
+            }
+            """);
+
+            var summary = InvokeHeroLayoutSummary(layoutPath);
+
+            Assert.True(ReadBool(summary, "Passed"));
+            Assert.Contains("hero-generation-diagnostics.json", ReadString(summary, "Summary"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SummarizeHeroLayoutValidation_AcceptsEquivalentSafeAreaSignalsWhenHeroTextSafeAreaIsMissing()
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(layoutPath, PassingLayoutJson("""
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              },
+            """));
+
+            var summary = InvokeHeroLayoutSummary(layoutPath);
+
+            Assert.True(ReadBool(summary, "Passed"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("heroTitleClipped", true)]
+    [InlineData("heroTitleMetadataOverlap", true)]
+    public void SummarizeHeroLayoutValidation_RejectsClippingOverflowOrOverlap(string diagnosticName, bool diagnosticValue)
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(layoutPath, PassingLayoutJson($$"""
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true,
+                "{{diagnosticName}}": {{diagnosticValue.ToString().ToLowerInvariant()}}
+              },
+            """));
+
+            var summary = InvokeHeroLayoutSummary(layoutPath);
+
+            Assert.False(ReadBool(summary, "Passed"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
+    [Fact]
+    public void SummarizeHeroLayoutValidation_RejectsInvalidLayoutEvenWhenDiagnosticsPass()
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(layoutPath, PassingLayoutJson("""
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              },
+            """, isValid: false));
+
+            var summary = InvokeHeroLayoutSummary(layoutPath);
+
+            Assert.False(ReadBool(summary, "Passed"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
     [Fact]
     public void ResolveHeroEventFamily_UsesLayoutValidationEventFamilyWhenCompositionAndBlueprintOmitIt()
     {
@@ -412,6 +538,31 @@ public sealed class ProductionPipelineExecutionServiceTests
         var method = GetPrivateStaticMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", role.GetType(), typeof(string), typeof(string), typeof(string), typeof(int), typeof(bool));
         return method.Invoke(null, [role, text, visibleText, eventFamily, maxWords, renderedLayoutFits])!;
     }
+
+
+    private static object InvokeHeroLayoutSummary(string layoutPath)
+    {
+        var method = GetPrivateStaticMethod("SummarizeHeroLayoutValidation", typeof(string));
+        return method.Invoke(null, [layoutPath])!;
+    }
+
+    private static string PassingLayoutJson(string? heroOverlayDiagnostics, bool isValid = true)
+        => $$"""
+        {
+          "eventFamily": "PLANET_CONJUNCTION",
+          "isValid": {{isValid.ToString().ToLowerInvariant()}},
+          {{heroOverlayDiagnostics ?? string.Empty}}
+          "variants": [
+            { "variant": "Landscape", "fileName": "hero-final.png" }
+          ],
+          "compositionReports": [
+            { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
+          ],
+          "objectsVisible": true,
+          "errors": [],
+          "contractMismatch": false
+        }
+        """;
 
     private static MethodInfo GetPrivateStaticMethod(string name, params Type[] parameterTypes)
     {
