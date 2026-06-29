@@ -1890,12 +1890,15 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ValidateHeroVisualStyle(string compositionModelPath, string blueprintPath, string layoutValidationPath)
     {
         var errors = new List<string>();
+        TraceHeroValidation($"HeroValidationService INPUT compositionModelPath={compositionModelPath}; blueprintPath={blueprintPath}; layoutValidationPath={layoutValidationPath}; layoutValidationExists={File.Exists(layoutValidationPath)}");
         var renderedBlocks = ReadRenderedBlocks(layoutValidationPath);
+        TraceHeroValidation($"HeroLayoutValidator INTERMEDIATE ReadRenderedBlocks result count={renderedBlocks.Count}; blocks=[{string.Join(", ", renderedBlocks)}]");
         var rendererContract = ResolveRendererContract(compositionModelPath, layoutValidationPath, renderedBlocks);
         var heroContract = ResolveHeroValidationContract(blueprintPath, layoutValidationPath, rendererContract);
         var validatorContract = heroContract;
         var validationProfileUsed = validatorContract;
         var contractMismatch = !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
+        TraceHeroValidation($"HeroCinematicValidator INTERMEDIATE rendererContract={rendererContract}; heroContract={heroContract}; validatorContract={validatorContract}; validationProfileUsed={validationProfileUsed}; contractMismatchExpr=(!string.Equals(rendererContract, validatorContract, OrdinalIgnoreCase)) => {contractMismatch}");
 
         if (File.Exists(compositionModelPath))
         {
@@ -1908,11 +1911,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 ReadNestedString(root, "timingBlock", "text"),
                 ReadNestedString(root, "ctaBlock", "text")
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            TraceHeroValidation($"HeroOverlayTextValidator INPUT titleText='{titleText}'; visibleText='{visibleText}'; compositionModelInstanceHash={RuntimeHelpers.GetHashCode(root)}");
             var renderedLayoutFits = CinematicHeroRenderedLayoutFits(layoutValidationPath);
-            var overlayDiagnostics = ValidateCinematicHeroOverlayTextWithRenderedLayout(HeroOverlayRole.Hook, titleText, visibleText, eventFamily: ResolveHeroEventFamily(blueprintPath, compositionModelPath, layoutValidationPath), renderedLayoutFits: renderedLayoutFits);
+            var resolvedHeroEventFamily = ResolveHeroEventFamily(blueprintPath, compositionModelPath, layoutValidationPath);
+            TraceHeroValidation($"HeroOverlayTextValidator INTERMEDIATE validation function CinematicHeroRenderedLayoutFits('{layoutValidationPath}') => {renderedLayoutFits}; ResolveHeroEventFamily => {resolvedHeroEventFamily}");
+            var overlayDiagnostics = ValidateCinematicHeroOverlayTextWithRenderedLayout(HeroOverlayRole.Hook, titleText, visibleText, eventFamily: resolvedHeroEventFamily, renderedLayoutFits: renderedLayoutFits);
+            TraceHeroValidation($"HeroOverlayTextValidator OUTPUT FinalDecision={overlayDiagnostics.FinalDecision}; RejectedReason='{overlayDiagnostics.RejectedReason}'");
             WriteHeroOverlayTextDiagnostics(layoutValidationPath, overlayDiagnostics);
             if (!overlayDiagnostics.FinalDecision)
+            {
+                TraceHeroValidation($"HeroValidationService EARLY/ERROR PATH overlayDiagnostics.FinalDecision false; adding error. Responsible assignment is FinalDecision=string.IsNullOrWhiteSpace(rejectedReason) inside ValidateCinematicHeroOverlayTextWithRenderedLayout.");
                 errors.Add($"Hero overlay text failed cinematic validation: {overlayDiagnostics.RejectedReason}");
+            }
             if (validatorContract == "CinematicHero" && !IsSelectedCinematicHeroRenderer(layoutValidationPath) && !string.IsNullOrWhiteSpace(visibleText))
                 errors.Add("CinematicHero must use only a minimal title/subtitle overlay; direction, timing, and CTA text blocks must be empty unless heroContract=GuideHero.");
         }
@@ -1940,7 +1950,12 @@ public sealed partial class ProductionPipelineExecutionService(
         WriteHeroContractDiagnostics(layoutValidationPath, heroContract, validatorContract, rendererContract, contractMismatch, validationProfileUsed);
 
         if (errors.Count > 0)
+        {
+            TraceHeroValidation($"Phase11HeroValidator EARLY RETURN/THROW errors.Count={errors.Count}; errors=[{string.Join("; ", errors)}]");
             throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", errors));
+        }
+
+        TraceHeroValidation("Phase11HeroValidator OUTPUT validation passed; no finalDecision=false path reached.");
     }
 
     private const int DefaultMaxHeroOverlayWords = 8;
@@ -1990,18 +2005,23 @@ public sealed partial class ProductionPipelineExecutionService(
         var isSentenceLike = isNarrationRole && IsSentenceLikeHeroOverlayText(normalizedHookText);
         var isGuideInstructionLike = IsGuideInstructionLikeHeroOverlayText(combinedText);
         var fitsSafeArea = FitsCinematicHeroSafeArea(normalizedHookText, maxWords);
+        TraceHeroValidation($"HeroOverlayTextValidator INPUT role={role}; hookText='{hookText}'; visibleText='{visibleText}'; eventFamily='{eventFamily}'; maxWords={maxWords}; renderedLayoutFits={renderedLayoutFits}; fitsSafeArea={fitsSafeArea}");
+        TraceHeroValidation($"HeroOverlayTextValidator INTERMEDIATE normalizedHookText='{normalizedHookText}'; normalizedVisibleText='{normalizedVisibleText}'; combinedText='{combinedText}'; wordCount={wordCount}; isNarrationRole={isNarrationRole}; isSentenceLike={isSentenceLike}; isGuideInstructionLike={isGuideInstructionLike}; FitsCinematicHeroSafeArea => {fitsSafeArea}");
         var rejectedReason = string.Empty;
 
-        if (string.IsNullOrWhiteSpace(normalizedHookText))
+        if (TraceHeroValidationBool(string.IsNullOrWhiteSpace(normalizedHookText), "string.IsNullOrWhiteSpace(normalizedHookText)"))
             rejectedReason = $"{role} text is empty.";
-        else if (HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText))
+        else if (TraceHeroValidationBool(HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText), "HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText)"))
             rejectedReason = $"{role} text duplicates another overlay role.";
-        else if (isNarrationRole && isSentenceLike)
+        else if (TraceHeroValidationBool(isNarrationRole && isSentenceLike, "isNarrationRole && isSentenceLike"))
             rejectedReason = "narration text is sentence-like, paragraph-like, multi-clause, or copied story narration.";
-        else if (!fitsSafeArea)
+        else if (TraceHeroValidationBool(!fitsSafeArea, "!fitsSafeArea"))
             rejectedReason = $"{role} text does not fit the cinematic overlay safe area (wordCount={wordCount}, maxWords={maxWords}, maxCharacters={DefaultMaxHeroOverlayCharacters}).";
-        else if (!isNarrationRole && !renderedLayoutFits)
+        else if (TraceHeroValidationBool(!isNarrationRole && !renderedLayoutFits, "!isNarrationRole && !renderedLayoutFits"))
             rejectedReason = $"{role} text failed rendered layout validation (safe area, clipping, or overlap).";
+
+        var finalDecision = string.IsNullOrWhiteSpace(rejectedReason);
+        TraceHeroValidation($"HeroOverlayTextValidator FINAL_DECISION_ASSIGNMENT finalDecision=string.IsNullOrWhiteSpace(rejectedReason) => {finalDecision}; rejectedReason='{rejectedReason}'", line: TraceHeroValidationSourceLine());
 
         return new HeroOverlayTextValidationDiagnostics(
             role.ToString(),
@@ -2014,7 +2034,7 @@ public sealed partial class ProductionPipelineExecutionService(
             isGuideInstructionLike,
             fitsSafeArea,
             string.IsNullOrWhiteSpace(eventFamily) ? "Unknown" : eventFamily,
-            string.IsNullOrWhiteSpace(rejectedReason));
+            finalDecision);
     }
 
     private static string NormalizeHeroOverlayText(string value)
@@ -2044,18 +2064,45 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static bool CinematicHeroRenderedLayoutFits(string layoutValidationPath)
     {
-        if (!File.Exists(layoutValidationPath)) return false;
+        TraceHeroValidation($"HeroLayoutValidator INPUT layoutValidationPath={layoutValidationPath}; exists={File.Exists(layoutValidationPath)}");
+        if (!File.Exists(layoutValidationPath))
+        {
+            TraceHeroValidation("HeroLayoutValidator EARLY RETURN false because layout validation file does not exist.");
+            return false;
+        }
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
         var root = doc.RootElement;
-        return ReadNullableBool(root, "heroTitleClipped") != true
-            && ReadNullableBool(root, "heroSubtitleClipped") != true
-            && ReadNullableBool(root, "heroTitleOverflowDetected") != true
-            && ReadNullableBool(root, "heroTextOverlapDetected") != true
-            && ReadNullableBool(root, "heroTitleSubtitleOverlap") != true
-            && ReadNullableBool(root, "heroTitleMetadataOverlap") != true
-            && (ReadNullableBool(root, "heroTextSafeAreaPassed") == true
-                || ReadNullableBool(root, "heroTitleSafeAreaPassed") == true);
+        var heroTitleClipped = ReadNullableBool(root, "heroTitleClipped");
+        var heroSubtitleClipped = ReadNullableBool(root, "heroSubtitleClipped");
+        var heroTitleOverflowDetected = ReadNullableBool(root, "heroTitleOverflowDetected");
+        var heroTextOverlapDetected = ReadNullableBool(root, "heroTextOverlapDetected");
+        var heroTitleSubtitleOverlap = ReadNullableBool(root, "heroTitleSubtitleOverlap");
+        var heroTitleMetadataOverlap = ReadNullableBool(root, "heroTitleMetadataOverlap");
+        var heroTextSafeAreaPassed = ReadNullableBool(root, "heroTextSafeAreaPassed");
+        var heroTitleSafeAreaPassed = ReadNullableBool(root, "heroTitleSafeAreaPassed");
+        TraceHeroValidation($"HeroLayoutValidator INPUT objectInstanceHash={RuntimeHelpers.GetHashCode(root)}; heroTitleClipped={heroTitleClipped}; heroSubtitleClipped={heroSubtitleClipped}; heroTitleOverflowDetected={heroTitleOverflowDetected}; heroTextOverlapDetected={heroTextOverlapDetected}; heroTitleSubtitleOverlap={heroTitleSubtitleOverlap}; heroTitleMetadataOverlap={heroTitleMetadataOverlap}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}");
+        var noTitleClip = TraceHeroValidationBool(heroTitleClipped != true, "ReadNullableBool(root, heroTitleClipped) != true");
+        var noSubtitleClip = TraceHeroValidationBool(heroSubtitleClipped != true, "ReadNullableBool(root, heroSubtitleClipped) != true");
+        var noTitleOverflow = TraceHeroValidationBool(heroTitleOverflowDetected != true, "ReadNullableBool(root, heroTitleOverflowDetected) != true");
+        var noTextOverlap = TraceHeroValidationBool(heroTextOverlapDetected != true, "ReadNullableBool(root, heroTextOverlapDetected) != true");
+        var noTitleSubtitleOverlap = TraceHeroValidationBool(heroTitleSubtitleOverlap != true, "ReadNullableBool(root, heroTitleSubtitleOverlap) != true");
+        var noTitleMetadataOverlap = TraceHeroValidationBool(heroTitleMetadataOverlap != true, "ReadNullableBool(root, heroTitleMetadataOverlap) != true");
+        var textOrTitleSafeArea = TraceHeroValidationBool(heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true, "heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true");
+        var result = noTitleClip && noSubtitleClip && noTitleOverflow && noTextOverlap && noTitleSubtitleOverlap && noTitleMetadataOverlap && textOrTitleSafeArea;
+        TraceHeroValidation($"HeroLayoutValidator OUTPUT CinematicHeroRenderedLayoutFits => {result}");
+        return result;
     }
+
+    private static bool TraceHeroValidationBool(bool value, string expression, [CallerLineNumber] int line = 0)
+    {
+        TraceHeroValidation($"INTERMEDIATE expression '{expression}' => {value}", line);
+        return value;
+    }
+
+    private static int TraceHeroValidationSourceLine([CallerLineNumber] int line = 0) => line;
+
+    private static void TraceHeroValidation(string message, [CallerLineNumber] int line = 0)
+        => Console.Error.WriteLine($"[PHASE11_HERO_VALIDATION_TRACE] {DateTimeOffset.UtcNow:O} ProductionPipelineExecutionService.cs:{line} {message}");
 
     private static bool? ReadNullableBool(JsonElement root, string propertyName)
     {
