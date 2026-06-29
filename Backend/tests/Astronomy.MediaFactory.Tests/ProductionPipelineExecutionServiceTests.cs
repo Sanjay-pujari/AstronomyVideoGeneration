@@ -58,6 +58,49 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
     }
 
+
+    [Fact]
+    public void ValidateCinematicHeroOverlayText_UsesRenderedLayoutFitForPlanetConjunctionHookWithSubtitle()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var diagnostics = method!.Invoke(null, new object?[]
+        {
+            "LOOK FOR JUPITER AND VENUS",
+            "Planet conjunction in the western evening sky tonight",
+            "Planetary Conjunction",
+            8,
+            true
+        })!;
+
+        Assert.True(ReadBool(diagnostics, "FinalDecision"));
+        Assert.Equal(5, ReadInt(diagnostics, "WordCount"));
+        Assert.True(ReadBool(diagnostics, "FitsSafeArea"));
+        Assert.False(ReadBool(diagnostics, "IsSentenceLike"));
+        Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
+    }
+
+    [Fact]
+    public void ValidateCinematicHeroOverlayText_RejectsLongNarrationSentenceEvenWhenRenderedLayoutFits()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var diagnostics = method!.Invoke(null, new object?[]
+        {
+            "Jupiter and Venus form a conjunction, an apparent alignment in the western evening sky.",
+            "",
+            "Planetary Conjunction",
+            8,
+            true
+        })!;
+
+        Assert.False(ReadBool(diagnostics, "FinalDecision"));
+        Assert.True(ReadBool(diagnostics, "IsSentenceLike"));
+        Assert.Contains("sentence-like narration", ReadString(diagnostics, "RejectedReason"), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool ReadBool(object source, string propertyName)
         => (bool)source.GetType().GetProperty(propertyName)!.GetValue(source)!;
 
