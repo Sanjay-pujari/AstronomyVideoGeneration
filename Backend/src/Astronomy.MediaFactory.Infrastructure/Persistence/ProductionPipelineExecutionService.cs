@@ -2008,20 +2008,44 @@ public sealed partial class ProductionPipelineExecutionService(
         TraceHeroValidation($"HeroOverlayTextValidator INPUT role={role}; hookText='{hookText}'; visibleText='{visibleText}'; eventFamily='{eventFamily}'; maxWords={maxWords}; renderedLayoutFits={renderedLayoutFits}; fitsSafeArea={fitsSafeArea}");
         TraceHeroValidation($"HeroOverlayTextValidator INTERMEDIATE normalizedHookText='{normalizedHookText}'; normalizedVisibleText='{normalizedVisibleText}'; combinedText='{combinedText}'; wordCount={wordCount}; isNarrationRole={isNarrationRole}; isSentenceLike={isSentenceLike}; isGuideInstructionLike={isGuideInstructionLike}; FitsCinematicHeroSafeArea => {fitsSafeArea}");
         var rejectedReason = string.Empty;
+        var finalDecisionFalseLine = 0;
+        var emptyHookText = TraceHeroValidationBool(string.IsNullOrWhiteSpace(normalizedHookText), "string.IsNullOrWhiteSpace(normalizedHookText)");
+        var duplicatedOverlayText = TraceHeroValidationBool(HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText), "HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText)");
+        var narrationSentenceLike = TraceHeroValidationBool(isNarrationRole && isSentenceLike, "isNarrationRole && isSentenceLike");
+        var safeAreaFailed = TraceHeroValidationBool(!fitsSafeArea, "!fitsSafeArea");
+        var renderedLayoutFailed = TraceHeroValidationBool(!isNarrationRole && !renderedLayoutFits, "!isNarrationRole && !renderedLayoutFits");
+        var hookValidationPassed = !emptyHookText && !duplicatedOverlayText && !narrationSentenceLike && !safeAreaFailed;
+        var renderedLayoutPassed = !renderedLayoutFailed;
+        TraceHeroValidation($"HeroOverlayTextValidator TRACE_STATE renderedLayoutPassed={renderedLayoutPassed}; hookValidationPassed={hookValidationPassed}; fitsSafeArea={fitsSafeArea}; isSentenceLike={isSentenceLike}; wordCount={wordCount}; eventFamily='{(string.IsNullOrWhiteSpace(eventFamily) ? "Unknown" : eventFamily)}'");
 
-        if (TraceHeroValidationBool(string.IsNullOrWhiteSpace(normalizedHookText), "string.IsNullOrWhiteSpace(normalizedHookText)"))
+        if (emptyHookText)
+        {
+            finalDecisionFalseLine = TraceHeroValidationSourceLine();
             rejectedReason = $"{role} text is empty.";
-        else if (TraceHeroValidationBool(HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText), "HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText)"))
+        }
+        else if (duplicatedOverlayText)
+        {
+            finalDecisionFalseLine = TraceHeroValidationSourceLine();
             rejectedReason = $"{role} text duplicates another overlay role.";
-        else if (TraceHeroValidationBool(isNarrationRole && isSentenceLike, "isNarrationRole && isSentenceLike"))
+        }
+        else if (narrationSentenceLike)
+        {
+            finalDecisionFalseLine = TraceHeroValidationSourceLine();
             rejectedReason = "narration text is sentence-like, paragraph-like, multi-clause, or copied story narration.";
-        else if (TraceHeroValidationBool(!fitsSafeArea, "!fitsSafeArea"))
+        }
+        else if (safeAreaFailed)
+        {
+            finalDecisionFalseLine = TraceHeroValidationSourceLine();
             rejectedReason = $"{role} text does not fit the cinematic overlay safe area (wordCount={wordCount}, maxWords={maxWords}, maxCharacters={DefaultMaxHeroOverlayCharacters}).";
-        else if (TraceHeroValidationBool(!isNarrationRole && !renderedLayoutFits, "!isNarrationRole && !renderedLayoutFits"))
+        }
+        else if (renderedLayoutFailed)
+        {
+            finalDecisionFalseLine = TraceHeroValidationSourceLine();
             rejectedReason = $"{role} text failed rendered layout validation (safe area, clipping, or overlap).";
+        }
 
         var finalDecision = string.IsNullOrWhiteSpace(rejectedReason);
-        TraceHeroValidation($"HeroOverlayTextValidator FINAL_DECISION_ASSIGNMENT finalDecision=string.IsNullOrWhiteSpace(rejectedReason) => {finalDecision}; rejectedReason='{rejectedReason}'", line: TraceHeroValidationSourceLine());
+        TraceHeroValidation($"HeroOverlayTextValidator FINAL_DECISION_ASSIGNMENT finalDecision=string.IsNullOrWhiteSpace(rejectedReason) => {finalDecision}; falseLine={(finalDecision ? "none" : finalDecisionFalseLine.ToString(CultureInfo.InvariantCulture))}; renderedLayoutPassed={renderedLayoutPassed}; hookValidationPassed={hookValidationPassed}; fitsSafeArea={fitsSafeArea}; isSentenceLike={isSentenceLike}; wordCount={wordCount}; eventFamily='{(string.IsNullOrWhiteSpace(eventFamily) ? "Unknown" : eventFamily)}'; rejectedReason='{rejectedReason}'", line: TraceHeroValidationSourceLine());
 
         return new HeroOverlayTextValidationDiagnostics(
             role.ToString(),
