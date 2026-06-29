@@ -81,6 +81,51 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
     }
 
+
+    [Fact]
+    public void ValidateCinematicHeroOverlayText_PlanetConjunctionLookForHookPassesWhenRenderedDiagnosticsPass()
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(layoutPath, """
+            {
+              "heroTitleClipped": false,
+              "heroSubtitleClipped": false,
+              "heroTitleMetadataOverlap": false,
+              "heroTextSafeAreaPassed": true
+            }
+            """);
+
+            var renderedFitsMethod = typeof(ProductionPipelineExecutionService).GetMethod("CinematicHeroRenderedLayoutFits", BindingFlags.NonPublic | BindingFlags.Static);
+            var validationMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(renderedFitsMethod);
+            Assert.NotNull(validationMethod);
+
+            var renderedLayoutFits = (bool)renderedFitsMethod!.Invoke(null, new object?[] { layoutPath })!;
+            var diagnostics = validationMethod!.Invoke(null, new object?[]
+            {
+                "LOOK FOR JUPITER AND VENUS",
+                "The conjunction will happen when the planets appear about one-third above the horizon",
+                "PLANET_CONJUNCTION",
+                8,
+                renderedLayoutFits
+            })!;
+
+            Assert.True(renderedLayoutFits);
+            Assert.True(ReadBool(diagnostics, "FinalDecision"));
+            Assert.Equal("PLANET_CONJUNCTION", ReadString(diagnostics, "EventFamily"));
+            Assert.Equal(5, ReadInt(diagnostics, "WordCount"));
+            Assert.False(ReadBool(diagnostics, "IsSentenceLike"));
+            Assert.True(ReadBool(diagnostics, "FitsSafeArea"));
+            Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
     [Fact]
     public void ValidateCinematicHeroOverlayText_RejectsLongNarrationSentenceEvenWhenRenderedLayoutFits()
     {
