@@ -1908,8 +1908,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 ReadNestedString(root, "timingBlock", "text"),
                 ReadNestedString(root, "ctaBlock", "text")
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            if ((titleText + " " + visibleText).Contains("LOOK FOR", StringComparison.OrdinalIgnoreCase))
-                errors.Add("Hero overlay must not use narration hook text such as LOOK FOR.");
+            var overlayDiagnostics = ValidateCinematicHeroOverlayText(titleText, visibleText, eventFamily: ResolveHeroEventFamily(blueprintPath, compositionModelPath));
+            WriteHeroOverlayTextDiagnostics(layoutValidationPath, overlayDiagnostics);
+            if (!overlayDiagnostics.FinalDecision)
+                errors.Add($"Hero overlay text failed cinematic validation: {overlayDiagnostics.RejectedReason}");
             if (validatorContract == "CinematicHero" && !IsSelectedCinematicHeroRenderer(layoutValidationPath) && !string.IsNullOrWhiteSpace(visibleText))
                 errors.Add("CinematicHero must use only a minimal title/subtitle overlay; direction, timing, and CTA text blocks must be empty unless heroContract=GuideHero.");
         }
@@ -1938,6 +1940,111 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (errors.Count > 0)
             throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", errors));
+    }
+
+    private const int DefaultMaxHeroOverlayWords = 8;
+    private const int DefaultMaxHeroOverlayCharacters = 64;
+
+    private sealed record HeroOverlayTextValidationDiagnostics(
+        string HookText,
+        string NormalizedHookText,
+        int WordCount,
+        string RejectedReason,
+        bool IsSentenceLike,
+        bool IsGuideInstructionLike,
+        bool FitsSafeArea,
+        string EventFamily,
+        bool FinalDecision);
+
+    private static HeroOverlayTextValidationDiagnostics ValidateCinematicHeroOverlayText(string hookText, string visibleText = "", string eventFamily = "", int maxWords = DefaultMaxHeroOverlayWords)
+    {
+        var normalizedHookText = NormalizeHeroOverlayText(hookText);
+        var normalizedVisibleText = NormalizeHeroOverlayText(visibleText);
+        var combinedText = NormalizeHeroOverlayText(string.Join(' ', new[] { normalizedHookText, normalizedVisibleText }.Where(value => !string.IsNullOrWhiteSpace(value))));
+        var wordCount = CountHeroOverlayWords(normalizedHookText);
+        var combinedWordCount = CountHeroOverlayWords(combinedText);
+        var isSentenceLike = IsSentenceLikeHeroOverlayText(combinedText);
+        var isGuideInstructionLike = IsGuideInstructionLikeHeroOverlayText(combinedText);
+        var fitsSafeArea = FitsCinematicHeroSafeArea(normalizedHookText, combinedText, maxWords);
+        var rejectedReason = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(normalizedHookText))
+            rejectedReason = "hookText is empty.";
+        else if (HasDuplicatedOverlayText(normalizedHookText, normalizedVisibleText))
+            rejectedReason = "hookText duplicates subtitle/footer overlay text.";
+        else if (!fitsSafeArea)
+            rejectedReason = $"hookText does not fit the cinematic overlay safe area (wordCount={wordCount}, combinedWordCount={combinedWordCount}, maxWords={maxWords}, maxCharacters={DefaultMaxHeroOverlayCharacters}).";
+        else if (isSentenceLike)
+            rejectedReason = "hookText is sentence-like narration or explanatory copy.";
+        else if (isGuideInstructionLike && combinedWordCount > maxWords)
+            rejectedReason = "hookText uses long guide-instruction language instead of a short cinematic CTA.";
+
+        return new HeroOverlayTextValidationDiagnostics(
+            hookText ?? string.Empty,
+            normalizedHookText,
+            wordCount,
+            rejectedReason,
+            isSentenceLike,
+            isGuideInstructionLike,
+            fitsSafeArea,
+            string.IsNullOrWhiteSpace(eventFamily) ? "Unknown" : eventFamily,
+            string.IsNullOrWhiteSpace(rejectedReason));
+    }
+
+    private static string NormalizeHeroOverlayText(string value)
+        => string.Join(' ', (value ?? string.Empty).Replace('’', '\'').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim();
+
+    private static int CountHeroOverlayWords(string value)
+        => Regex.Matches(value ?? string.Empty, @"[\p{L}\p{N}]+(?:['-][\p{L}\p{N}]+)?").Count;
+
+    private static bool IsSentenceLikeHeroOverlayText(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var lower = value.ToLowerInvariant();
+        return value.Contains(',') || value.Contains(';') || value.Contains(':')
+            || Regex.IsMatch(value, @"[.!?]\s+[\p{L}\p{N}]")
+            || Regex.IsMatch(lower, @"\b(because|when|where|how|why|therefore|throughout|during|using|about one-third|will happen when|from our viewpoint|apparent alignment|certified eye protection)\b", RegexOptions.CultureInvariant)
+            || CountHeroOverlayWords(value) > DefaultMaxHeroOverlayWords && Regex.IsMatch(lower, @"\b(is|are|was|were|will|form|forms|happen|happens|align|aligns|toward|above|throughout)\b", RegexOptions.CultureInvariant);
+    }
+
+    private static bool IsGuideInstructionLikeHeroOverlayText(string value)
+        => Regex.IsMatch(value ?? string.Empty, @"\b(look|watch|see|toward|above|horizon|sky|west|east|north|south|binoculars|telescope|protection|viewing|observe)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool FitsCinematicHeroSafeArea(string normalizedHookText, string combinedText, int maxWords)
+        => CountHeroOverlayWords(normalizedHookText) <= maxWords
+            && CountHeroOverlayWords(combinedText) <= Math.Max(maxWords, 10)
+            && normalizedHookText.Length <= DefaultMaxHeroOverlayCharacters
+            && !normalizedHookText.Contains('\n')
+            && !normalizedHookText.Contains('\r');
+
+    private static bool HasDuplicatedOverlayText(string normalizedHookText, string normalizedVisibleText)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedHookText) || string.IsNullOrWhiteSpace(normalizedVisibleText)) return false;
+        var hook = normalizedHookText.Trim();
+        return normalizedVisibleText.Equals(hook, StringComparison.OrdinalIgnoreCase)
+            || $" {normalizedVisibleText} ".Contains($" {hook} ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveHeroEventFamily(string blueprintPath, string compositionModelPath)
+    {
+        foreach (var path in new[] { blueprintPath, compositionModelPath })
+        {
+            if (!File.Exists(path)) continue;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            foreach (var name in new[] { "eventFamily", "eventType", "family" })
+                if (doc.RootElement.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String)
+                    return property.GetString() ?? string.Empty;
+        }
+        return string.Empty;
+    }
+
+    private static void WriteHeroOverlayTextDiagnostics(string layoutValidationPath, HeroOverlayTextValidationDiagnostics diagnostics)
+    {
+        if (!File.Exists(layoutValidationPath)) return;
+        var node = JsonNode.Parse(File.ReadAllText(layoutValidationPath))?.AsObject();
+        if (node is null) return;
+        node["heroOverlayTextValidation"] = JsonSerializer.SerializeToNode(diagnostics, JsonOptions);
+        File.WriteAllText(layoutValidationPath, node.ToJsonString(JsonOptions));
     }
 
     private static IReadOnlyList<string> ReadRenderedBlocks(string layoutValidationPath)
