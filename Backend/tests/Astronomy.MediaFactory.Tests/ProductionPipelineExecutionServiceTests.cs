@@ -16,15 +16,14 @@ public sealed class ProductionPipelineExecutionServiceTests
     [InlineData("Lunar Eclipse", "WATCH THE BLOOD MOON", "The Moon will turn red when Earth blocks sunlight from reaching the lunar surface.")]
     [InlineData("Comet", "SEE THE COMET TONIGHT", "Look toward the western sky, about one-third above the horizon.")]
     [InlineData("Planetary Alignment", "LOOK UP TONIGHT", "Mars, Jupiter, Venus, and Saturn are spread across the morning sky because their orbits line up from our viewpoint.")]
-    public void ValidateCinematicHeroOverlayText_AllowsShortCtasAndRejectsNarrationLikeSentences(string eventFamily, string validHook, string invalidHook)
+    public void ValidateCinematicHeroOverlayText_UsesHookPolicyForEventFamilyHooks(string eventFamily, string validHook, string invalidHook)
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayText", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var validDiagnostics = method!.Invoke(null, new object?[] { validHook, "", eventFamily, 8 })!;
-        var invalidDiagnostics = method.Invoke(null, new object?[] { invalidHook, "", eventFamily, 8 })!;
+        var validDiagnostics = InvokeRoleValidation("Hook", validHook, "", eventFamily, 8);
+        var invalidDiagnostics = InvokeRoleValidation("Narration", invalidHook, "", eventFamily, 80);
 
         Assert.True(ReadBool(validDiagnostics, "FinalDecision"));
+        Assert.Equal("Hook", ReadString(validDiagnostics, "Role"));
+        Assert.Equal("OverlayRole:Hook", ReadString(validDiagnostics, "Policy"));
         Assert.Equal(validHook.Replace('’', '\''), ReadString(validDiagnostics, "NormalizedHookText"));
         Assert.Equal(eventFamily, ReadString(validDiagnostics, "EventFamily"));
         Assert.InRange(ReadInt(validDiagnostics, "WordCount"), 1, 8);
@@ -33,9 +32,11 @@ public sealed class ProductionPipelineExecutionServiceTests
         Assert.Equal(string.Empty, ReadString(validDiagnostics, "RejectedReason"));
 
         Assert.False(ReadBool(invalidDiagnostics, "FinalDecision"));
+        Assert.Equal("Narration", ReadString(invalidDiagnostics, "Role"));
+        Assert.Equal("Narration", ReadString(invalidDiagnostics, "Policy"));
         Assert.Equal(eventFamily, ReadString(invalidDiagnostics, "EventFamily"));
         Assert.True(ReadBool(invalidDiagnostics, "IsSentenceLike"));
-        Assert.False(string.IsNullOrWhiteSpace(ReadString(invalidDiagnostics, "RejectedReason")));
+        Assert.Contains("narration", ReadString(invalidDiagnostics, "RejectedReason"), StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -48,10 +49,7 @@ public sealed class ProductionPipelineExecutionServiceTests
     [InlineData("SEE VENUS AND JUPITER")]
     public void ValidateCinematicHeroOverlayText_DoesNotRejectShortGuideOrCtaLanguage(string hook)
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayText", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var diagnostics = method!.Invoke(null, new object?[] { hook, "", "Generic", 8 })!;
+        var diagnostics = InvokeRoleValidation("Hook", hook, "", "Generic", 8);
 
         Assert.True(ReadBool(diagnostics, "FinalDecision"));
         Assert.True(ReadBool(diagnostics, "FitsSafeArea"));
@@ -62,17 +60,13 @@ public sealed class ProductionPipelineExecutionServiceTests
     [Fact]
     public void ValidateCinematicHeroOverlayText_UsesRenderedLayoutFitForPlanetConjunctionHookWithSubtitle()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var diagnostics = method!.Invoke(null, new object?[]
-        {
+        var diagnostics = InvokeRoleValidationWithRenderedLayout(
+            "Hook",
             "LOOK FOR JUPITER AND VENUS",
             "Planet conjunction in the western evening sky tonight",
             "Planetary Conjunction",
             8,
-            true
-        })!;
+            true);
 
         Assert.True(ReadBool(diagnostics, "FinalDecision"));
         Assert.Equal(5, ReadInt(diagnostics, "WordCount"));
@@ -103,14 +97,13 @@ public sealed class ProductionPipelineExecutionServiceTests
             Assert.NotNull(validationMethod);
 
             var renderedLayoutFits = (bool)renderedFitsMethod!.Invoke(null, new object?[] { layoutPath })!;
-            var diagnostics = validationMethod!.Invoke(null, new object?[]
-            {
+            var diagnostics = InvokeRoleValidationWithRenderedLayout(
+                "Hook",
                 "LOOK FOR JUPITER AND VENUS",
                 "The conjunction will happen when the planets appear about one-third above the horizon",
                 "PLANET_CONJUNCTION",
                 8,
-                renderedLayoutFits
-            })!;
+                renderedLayoutFits);
 
             Assert.True(renderedLayoutFits);
             Assert.True(ReadBool(diagnostics, "FinalDecision"));
@@ -127,23 +120,74 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
-    public void ValidateCinematicHeroOverlayText_RejectsLongNarrationSentenceEvenWhenRenderedLayoutFits()
+    public void ValidateCinematicHeroOverlayText_NarrationRoleRejectsLongNarrationSentenceEvenWhenRenderedLayoutFits()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var diagnostics = method!.Invoke(null, new object?[]
-        {
+        var diagnostics = InvokeRoleValidationWithRenderedLayout(
+            "Narration",
             "Jupiter and Venus form a conjunction, an apparent alignment in the western evening sky.",
             "",
             "Planetary Conjunction",
-            8,
-            true
-        })!;
+            80,
+            true);
 
         Assert.False(ReadBool(diagnostics, "FinalDecision"));
         Assert.True(ReadBool(diagnostics, "IsSentenceLike"));
-        Assert.Contains("sentence-like narration", ReadString(diagnostics, "RejectedReason"), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("narration", ReadString(diagnostics, "RejectedReason"), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Solar Eclipse", "LOOK FOR THE ECLIPSE")]
+    [InlineData("Planetary Conjunction", "LOOK FOR JUPITER AND VENUS")]
+    [InlineData("Meteor Shower", "LOOK FOR METEORS")]
+    [InlineData("Lunar Eclipse", "LOOK FOR THE BLOOD MOON")]
+    [InlineData("Comet", "LOOK FOR THE COMET")]
+    [InlineData("Planetary Alignment", "LOOK FOR PLANETS")]
+    public void ValidateCinematicHeroOverlayText_EventFamilyHooksUseHookValidatorNotNarrationValidator(string eventFamily, string hook)
+    {
+        var diagnostics = InvokeRoleValidationWithRenderedLayout("Hook", hook, "", eventFamily, 8, true);
+
+        Assert.True(ReadBool(diagnostics, "FinalDecision"));
+        Assert.Equal("Hook", ReadString(diagnostics, "Role"));
+        Assert.Equal("OverlayRole:Hook", ReadString(diagnostics, "Policy"));
+        Assert.False(ReadBool(diagnostics, "IsSentenceLike"));
+        Assert.Equal(eventFamily, ReadString(diagnostics, "EventFamily"));
+    }
+
+    private static object InvokeRoleValidation(string roleName, string text, string visibleText, string eventFamily, int maxWords)
+    {
+        var role = ParseHeroOverlayRole(roleName);
+        var method = GetPrivateStaticMethod("ValidateCinematicHeroOverlayText", role.GetType(), typeof(string), typeof(string), typeof(string), typeof(int));
+        return method.Invoke(null, [role, text, visibleText, eventFamily, maxWords])!;
+    }
+
+    private static object InvokeRoleValidationWithRenderedLayout(string roleName, string text, string visibleText, string eventFamily, int maxWords, bool renderedLayoutFits)
+    {
+        var role = ParseHeroOverlayRole(roleName);
+        var method = GetPrivateStaticMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", role.GetType(), typeof(string), typeof(string), typeof(string), typeof(int), typeof(bool));
+        return method.Invoke(null, [role, text, visibleText, eventFamily, maxWords, renderedLayoutFits])!;
+    }
+
+    private static MethodInfo GetPrivateStaticMethod(string name, params Type[] parameterTypes)
+    {
+        var method = typeof(ProductionPipelineExecutionService)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .SingleOrDefault(candidate =>
+            {
+                if (candidate.Name != name) return false;
+                var parameters = candidate.GetParameters();
+                return parameters.Length == parameterTypes.Length
+                    && parameters.Select(parameter => parameter.ParameterType).SequenceEqual(parameterTypes);
+            });
+
+        Assert.NotNull(method);
+        return method!;
+    }
+
+    private static object ParseHeroOverlayRole(string roleName)
+    {
+        var roleType = typeof(ProductionPipelineExecutionService).GetNestedType("HeroOverlayRole", BindingFlags.NonPublic);
+        Assert.NotNull(roleType);
+        return Enum.Parse(roleType!, roleName);
     }
 
     private static bool ReadBool(object source, string propertyName)
