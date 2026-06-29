@@ -2072,25 +2072,41 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
         var root = doc.RootElement;
-        var heroTitleClipped = ReadNullableBool(root, "heroTitleClipped");
-        var heroSubtitleClipped = ReadNullableBool(root, "heroSubtitleClipped");
-        var heroTitleOverflowDetected = ReadNullableBool(root, "heroTitleOverflowDetected");
-        var heroTextOverlapDetected = ReadNullableBool(root, "heroTextOverlapDetected");
-        var heroTitleSubtitleOverlap = ReadNullableBool(root, "heroTitleSubtitleOverlap");
-        var heroTitleMetadataOverlap = ReadNullableBool(root, "heroTitleMetadataOverlap");
-        var heroTextSafeAreaPassed = ReadNullableBool(root, "heroTextSafeAreaPassed");
-        var heroTitleSafeAreaPassed = ReadNullableBool(root, "heroTitleSafeAreaPassed");
-        TraceHeroValidation($"HeroLayoutValidator INPUT objectInstanceHash={RuntimeHelpers.GetHashCode(root)}; heroTitleClipped={heroTitleClipped}; heroSubtitleClipped={heroSubtitleClipped}; heroTitleOverflowDetected={heroTitleOverflowDetected}; heroTextOverlapDetected={heroTextOverlapDetected}; heroTitleSubtitleOverlap={heroTitleSubtitleOverlap}; heroTitleMetadataOverlap={heroTitleMetadataOverlap}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}");
-        var noTitleClip = TraceHeroValidationBool(heroTitleClipped != true, "ReadNullableBool(root, heroTitleClipped) != true");
-        var noSubtitleClip = TraceHeroValidationBool(heroSubtitleClipped != true, "ReadNullableBool(root, heroSubtitleClipped) != true");
-        var noTitleOverflow = TraceHeroValidationBool(heroTitleOverflowDetected != true, "ReadNullableBool(root, heroTitleOverflowDetected) != true");
-        var noTextOverlap = TraceHeroValidationBool(heroTextOverlapDetected != true, "ReadNullableBool(root, heroTextOverlapDetected) != true");
-        var noTitleSubtitleOverlap = TraceHeroValidationBool(heroTitleSubtitleOverlap != true, "ReadNullableBool(root, heroTitleSubtitleOverlap) != true");
-        var noTitleMetadataOverlap = TraceHeroValidationBool(heroTitleMetadataOverlap != true, "ReadNullableBool(root, heroTitleMetadataOverlap) != true");
-        var textOrTitleSafeArea = TraceHeroValidationBool(heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true, "heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true");
+        if (!TryGetHeroOverlayDiagnostics(root, out var heroOverlayDiagnostics))
+        {
+            TraceHeroValidation("HeroLayoutValidator EARLY RETURN false because canonical heroOverlayDiagnostics object is missing.");
+            return false;
+        }
+
+        var heroTitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroTitleClipped");
+        var heroSubtitleClipped = ReadNullableBool(heroOverlayDiagnostics, "heroSubtitleClipped");
+        var heroTitleOverflowDetected = ReadNullableBool(heroOverlayDiagnostics, "heroTitleOverflowDetected");
+        var heroTextOverlapDetected = ReadNullableBool(heroOverlayDiagnostics, "heroTextOverlapDetected");
+        var heroTitleSubtitleOverlap = ReadNullableBool(heroOverlayDiagnostics, "heroTitleSubtitleOverlap");
+        var heroTitleMetadataOverlap = ReadNullableBool(heroOverlayDiagnostics, "heroTitleMetadataOverlap");
+        var heroTextSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTextSafeAreaPassed");
+        var heroTitleSafeAreaPassed = ReadNullableBool(heroOverlayDiagnostics, "heroTitleSafeAreaPassed");
+        var safeArea = ReadNullableBool(heroOverlayDiagnostics, "safeArea");
+        TraceHeroValidation($"HeroLayoutValidator INPUT source=heroOverlayDiagnostics objectInstanceHash={RuntimeHelpers.GetHashCode(heroOverlayDiagnostics)}; heroTitleClipped={heroTitleClipped}; heroSubtitleClipped={heroSubtitleClipped}; heroTitleOverflowDetected={heroTitleOverflowDetected}; heroTextOverlapDetected={heroTextOverlapDetected}; heroTitleSubtitleOverlap={heroTitleSubtitleOverlap}; heroTitleMetadataOverlap={heroTitleMetadataOverlap}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}; safeArea={safeArea}");
+        var noTitleClip = TraceHeroValidationBool(heroTitleClipped != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleClipped) != true");
+        var noSubtitleClip = TraceHeroValidationBool(heroSubtitleClipped != true, "ReadNullableBool(heroOverlayDiagnostics, heroSubtitleClipped) != true");
+        var noTitleOverflow = TraceHeroValidationBool(heroTitleOverflowDetected != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleOverflowDetected) != true");
+        var noTextOverlap = TraceHeroValidationBool(heroTextOverlapDetected != true, "ReadNullableBool(heroOverlayDiagnostics, heroTextOverlapDetected) != true");
+        var noTitleSubtitleOverlap = TraceHeroValidationBool(heroTitleSubtitleOverlap != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleSubtitleOverlap) != true");
+        var noTitleMetadataOverlap = TraceHeroValidationBool(heroTitleMetadataOverlap != true, "ReadNullableBool(heroOverlayDiagnostics, heroTitleMetadataOverlap) != true");
+        var textOrTitleSafeArea = TraceHeroValidationBool(heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true, "heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true");
         var result = noTitleClip && noSubtitleClip && noTitleOverflow && noTextOverlap && noTitleSubtitleOverlap && noTitleMetadataOverlap && textOrTitleSafeArea;
         TraceHeroValidation($"HeroLayoutValidator OUTPUT CinematicHeroRenderedLayoutFits => {result}");
         return result;
+    }
+
+    private static bool TryGetHeroOverlayDiagnostics(JsonElement root, out JsonElement heroOverlayDiagnostics)
+    {
+        if (root.TryGetProperty("heroOverlayDiagnostics", out heroOverlayDiagnostics) && heroOverlayDiagnostics.ValueKind == JsonValueKind.Object)
+            return true;
+
+        heroOverlayDiagnostics = default;
+        return false;
     }
 
     private static bool TraceHeroValidationBool(bool value, string expression, [CallerLineNumber] int line = 0)

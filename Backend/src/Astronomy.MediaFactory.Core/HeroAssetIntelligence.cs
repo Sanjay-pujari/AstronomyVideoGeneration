@@ -146,6 +146,22 @@ public sealed record HeroLayoutValidationDto(
     public IReadOnlyList<HeroVariantCompositionReportDto> CompositionReports { get; init; } = [];
 }
 
+public sealed record HeroOverlayDiagnosticsDto(
+    bool HeroTextOverlapDetected,
+    bool HeroTitleSubtitleOverlap,
+    bool HeroTitleMetadataOverlap,
+    bool HeroMetadataWithinSafeArea,
+    bool HeroBottomInfoBarVisible,
+    bool HeroDateVisible,
+    bool HeroTimeVisible,
+    bool HeroLocationRemoved,
+    bool HeroEventCodeRemoved,
+    int HeroTitleLength,
+    bool HeroTitleClipped,
+    bool HeroSubtitleClipped,
+    bool HeroTitleOverflowDetected,
+    bool HeroTitleSafeAreaPassed,
+    bool SafeArea);
 
 public sealed record HeroObjectVisibilityDto(string Object, bool Visible, bool Cropped);
 

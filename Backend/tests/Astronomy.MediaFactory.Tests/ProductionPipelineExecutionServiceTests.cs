@@ -84,10 +84,17 @@ public sealed class ProductionPipelineExecutionServiceTests
         {
             File.WriteAllText(layoutPath, """
             {
-              "heroTitleClipped": false,
-              "heroSubtitleClipped": false,
-              "heroTitleMetadataOverlap": false,
-              "heroTextSafeAreaPassed": true
+              "isValid": true,
+              "compositionReports": [
+                { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
+              ],
+              "heroOverlayDiagnostics": {
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTextSafeAreaPassed": true,
+                "safeArea": true
+              }
             }
             """);
 
@@ -129,13 +136,20 @@ public sealed class ProductionPipelineExecutionServiceTests
             File.WriteAllText(layoutPath, """
             {
               "eventFamily": "PLANET_CONJUNCTION",
-              "heroTextOverlapDetected": "false",
-              "heroTitleSubtitleOverlap": "false",
-              "heroTitleMetadataOverlap": "false",
-              "heroTitleClipped": "false",
-              "heroSubtitleClipped": "false",
-              "heroTitleOverflowDetected": "false",
-              "heroTitleSafeAreaPassed": "true"
+              "isValid": true,
+              "compositionReports": [
+                { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
+              ],
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": "false",
+                "heroTitleSubtitleOverlap": "false",
+                "heroTitleMetadataOverlap": "false",
+                "heroTitleClipped": "false",
+                "heroSubtitleClipped": "false",
+                "heroTitleOverflowDetected": "false",
+                "heroTitleSafeAreaPassed": "true",
+                "safeArea": "true"
+              }
             }
             """);
 
@@ -158,6 +172,52 @@ public sealed class ProductionPipelineExecutionServiceTests
             Assert.False(ReadBool(diagnostics, "IsSentenceLike"));
             Assert.True(ReadBool(diagnostics, "IsGuideInstructionLike"));
             Assert.True(ReadBool(diagnostics, "FitsSafeArea"));
+            Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
+        }
+        finally
+        {
+            if (File.Exists(layoutPath)) File.Delete(layoutPath);
+        }
+    }
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_UsesCanonicalHeroOverlayDiagnosticsForPassingLayoutValidation()
+    {
+        var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(layoutPath, """
+            {
+              "isValid": true,
+              "compositionReports": [
+                { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
+              ],
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              }
+            }
+            """);
+
+            var renderedFitsMethod = typeof(ProductionPipelineExecutionService).GetMethod("CinematicHeroRenderedLayoutFits", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(renderedFitsMethod);
+            var renderedLayoutFits = (bool)renderedFitsMethod!.Invoke(null, new object?[] { layoutPath })!;
+            var diagnostics = InvokeRoleValidationWithRenderedLayout(
+                "Hook",
+                "LOOK FOR JUPITER AND VENUS",
+                "The conjunction will happen when the planets appear about one-third above the horizon",
+                "PLANET_CONJUNCTION",
+                8,
+                renderedLayoutFits);
+
+            Assert.True(renderedLayoutFits);
+            Assert.True(ReadBool(diagnostics, "FinalDecision"));
             Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
         }
         finally
