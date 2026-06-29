@@ -68,7 +68,7 @@ public static class FontAssetRegistration
         if (codePointType is null)
             throw new InvalidOperationException("Unable to verify font glyph support because SixLabors.Fonts CodePoint API was not found.");
 
-        var codePoint = Activator.CreateInstance(codePointType, codePoint);
+        var codePointInstance = Activator.CreateInstance(codePointType, codePoint);
         var colorSupportType = fontAssembly.GetType("SixLabors.Fonts.ColorFontSupport");
         var colorSupport = colorSupportType is null ? null : Enum.ToObject(colorSupportType, 0);
         var methods = typeof(FontFamily).GetMethods(BindingFlags.Instance | BindingFlags.Public);
@@ -78,8 +78,8 @@ public static class FontAssetRegistration
             if (parameters.Length < 2 || parameters[0].ParameterType != codePointType) continue;
 
             object?[] args = parameters.Length == 3
-                ? new object?[] { codePoint, colorSupport, null }
-                : new object?[] { codePoint, null };
+                ? new object?[] { codePointInstance, colorSupport, null }
+                : new object?[] { codePointInstance, null };
             if (method.Invoke(family, args) is bool supported)
                 return supported;
         }
@@ -90,7 +90,7 @@ public static class FontAssetRegistration
             if (parameters.Length < 1 || parameters[0].ParameterType != codePointType) continue;
             try
             {
-                object?[] args = parameters.Length == 2 ? new object?[] { codePoint, colorSupport } : new object?[] { codePoint };
+                object?[] args = parameters.Length == 2 ? new object?[] { codePointInstance, colorSupport } : new object?[] { codePointInstance };
                 return method.Invoke(family, args) is System.Collections.IEnumerable glyphs && glyphs.Cast<object>().Any();
             }
             catch (TargetInvocationException)
