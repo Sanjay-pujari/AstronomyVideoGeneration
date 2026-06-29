@@ -356,13 +356,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
     }
 
     private static Font CreateFont(float size, FontStyle style)
-    {
-        var family = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(family.Name))
-            family = SystemFonts.Collection.Families.First();
-
-        return family.CreateFont(size, style);
-    }
+        => new TypographyResolver().Resolve(new TypographyRequest("en", TypographyTextRole.Title, TypographyAssetKind.Thumbnail, size, style, size * 12f, 0, 0)).Font;
 
     private static PointF FindBrightestPoint(Image<Rgba32> image)
     {

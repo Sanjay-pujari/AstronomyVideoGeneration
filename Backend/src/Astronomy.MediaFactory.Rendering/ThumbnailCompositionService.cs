@@ -498,17 +498,15 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             }
         }
 
-        var preferredNames = preferHindi
-            ? new[] { "Noto Sans Devanagari", "Mangal", "Nirmala UI", "Arial Unicode MS", "DejaVu Sans", "Arial" }
-            : new[] { "Inter", "Arial", "DejaVu Sans", "Liberation Sans" };
-        foreach (var name in preferredNames)
-        {
-            var family = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (!string.IsNullOrWhiteSpace(family.Name))
-                return family.CreateFont(size, style);
-        }
-
-        return SystemFonts.Collection.Families.First().CreateFont(size, style);
+        return new TypographyResolver().Resolve(new TypographyRequest(
+            preferHindi ? "hi" : "en",
+            TypographyTextRole.Title,
+            TypographyAssetKind.Thumbnail,
+            size,
+            style,
+            size * 12f,
+            0,
+            0)).Font;
     }
 
     private IEnumerable<string> BuildConfiguredFontCandidates(bool preferHindi)

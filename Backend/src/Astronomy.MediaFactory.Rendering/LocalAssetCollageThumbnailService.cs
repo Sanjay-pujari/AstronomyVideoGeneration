@@ -1912,13 +1912,15 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     }
 
     private static Font CreateFont(float size, FontStyle style, bool preferHindi)
-    {
-        var families = SystemFonts.Collection.Families;
-        var family = preferHindi ? families.FirstOrDefault(f => f.Name.Contains("Noto", StringComparison.OrdinalIgnoreCase) || f.Name.Contains("Devanagari", StringComparison.OrdinalIgnoreCase)) : default;
-        if (string.IsNullOrWhiteSpace(family.Name)) family = families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(family.Name)) family = families.First();
-        return family.CreateFont(size, style);
-    }
+        => new TypographyResolver().Resolve(new TypographyRequest(
+            preferHindi ? "hi" : "en",
+            TypographyTextRole.Title,
+            TypographyAssetKind.Thumbnail,
+            size,
+            style,
+            size * 12f,
+            0,
+            0)).Font;
 
     private sealed record ThumbnailFontSelection(string Language, string ConfigPath, string FontPath, bool FontExists, bool ContainsDevanagari);
     private sealed record Rc1ThumbnailTemplate(string Name, string Version, RectangleF TitleZone, RectangleF DetailsZone, RectangleF SkyGuideZone, RectangleF TipsZone);
