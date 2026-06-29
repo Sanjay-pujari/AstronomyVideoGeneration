@@ -9,6 +9,63 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class ProductionPipelineExecutionServiceTests
 {
+    [Theory]
+    [InlineData("Solar Eclipse", "TOTAL SOLAR ECLIPSE", "A solar eclipse is rare and dramatic because Moon and Sun align from our viewpoint.")]
+    [InlineData("Planetary Conjunction", "LOOK FOR JUPITER AND VENUS", "Jupiter and Venus form a conjunction, an apparent alignment in Udaipur sky.")]
+    [InlineData("Meteor Shower", "DON'T MISS THIS PEAK", "Watch during 2026-08-12 23:30 using certified eye protection throughout.")]
+    [InlineData("Lunar Eclipse", "WATCH THE BLOOD MOON", "The Moon will turn red when Earth blocks sunlight from reaching the lunar surface.")]
+    [InlineData("Comet", "SEE THE COMET TONIGHT", "Look toward the western sky, about one-third above the horizon.")]
+    [InlineData("Planetary Alignment", "LOOK UP TONIGHT", "Mars, Jupiter, Venus, and Saturn are spread across the morning sky because their orbits line up from our viewpoint.")]
+    public void ValidateCinematicHeroOverlayText_AllowsShortCtasAndRejectsNarrationLikeSentences(string eventFamily, string validHook, string invalidHook)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayText", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var validDiagnostics = method!.Invoke(null, new object?[] { validHook, "", eventFamily, 8 })!;
+        var invalidDiagnostics = method.Invoke(null, new object?[] { invalidHook, "", eventFamily, 8 })!;
+
+        Assert.True(ReadBool(validDiagnostics, "FinalDecision"));
+        Assert.Equal(validHook.Replace('’', '\''), ReadString(validDiagnostics, "NormalizedHookText"));
+        Assert.Equal(eventFamily, ReadString(validDiagnostics, "EventFamily"));
+        Assert.InRange(ReadInt(validDiagnostics, "WordCount"), 1, 8);
+        Assert.True(ReadBool(validDiagnostics, "FitsSafeArea"));
+        Assert.False(ReadBool(validDiagnostics, "IsSentenceLike"));
+        Assert.Equal(string.Empty, ReadString(validDiagnostics, "RejectedReason"));
+
+        Assert.False(ReadBool(invalidDiagnostics, "FinalDecision"));
+        Assert.Equal(eventFamily, ReadString(invalidDiagnostics, "EventFamily"));
+        Assert.True(ReadBool(invalidDiagnostics, "IsSentenceLike"));
+        Assert.False(string.IsNullOrWhiteSpace(ReadString(invalidDiagnostics, "RejectedReason")));
+    }
+
+    [Theory]
+    [InlineData("LOOK UP")]
+    [InlineData("LOOK WEST")]
+    [InlineData("LOOK FOR JUPITER")]
+    [InlineData("LOOK FOR JUPITER AND VENUS")]
+    [InlineData("WATCH THE BLOOD MOON")]
+    [InlineData("PEAK NIGHT")]
+    [InlineData("SEE VENUS AND JUPITER")]
+    public void ValidateCinematicHeroOverlayText_DoesNotRejectShortGuideOrCtaLanguage(string hook)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayText", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var diagnostics = method!.Invoke(null, new object?[] { hook, "", "Generic", 8 })!;
+
+        Assert.True(ReadBool(diagnostics, "FinalDecision"));
+        Assert.True(ReadBool(diagnostics, "FitsSafeArea"));
+        Assert.Equal(string.Empty, ReadString(diagnostics, "RejectedReason"));
+    }
+
+    private static bool ReadBool(object source, string propertyName)
+        => (bool)source.GetType().GetProperty(propertyName)!.GetValue(source)!;
+
+    private static int ReadInt(object source, string propertyName)
+        => (int)source.GetType().GetProperty(propertyName)!.GetValue(source)!;
+
+    private static string ReadString(object source, string propertyName)
+        => (string)source.GetType().GetProperty(propertyName)!.GetValue(source)!;
 
     [Fact]
     public void ResolvePhase15SrtPath_PrefersLanguageScopedSrtOverLegacyUnscopedPath()
