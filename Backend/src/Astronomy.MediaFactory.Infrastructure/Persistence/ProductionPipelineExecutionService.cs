@@ -1909,7 +1909,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 ReadNestedString(root, "ctaBlock", "text")
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
             var renderedLayoutFits = CinematicHeroRenderedLayoutFits(layoutValidationPath);
-            var overlayDiagnostics = ValidateCinematicHeroOverlayTextWithRenderedLayout(HeroOverlayRole.Hook, titleText, visibleText, eventFamily: ResolveHeroEventFamily(blueprintPath, compositionModelPath), renderedLayoutFits: renderedLayoutFits);
+            var overlayDiagnostics = ValidateCinematicHeroOverlayTextWithRenderedLayout(HeroOverlayRole.Hook, titleText, visibleText, eventFamily: ResolveHeroEventFamily(blueprintPath, compositionModelPath, layoutValidationPath), renderedLayoutFits: renderedLayoutFits);
             WriteHeroOverlayTextDiagnostics(layoutValidationPath, overlayDiagnostics);
             if (!overlayDiagnostics.FinalDecision)
                 errors.Add($"Hero overlay text failed cinematic validation: {overlayDiagnostics.RejectedReason}");
@@ -2058,9 +2058,12 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static bool? ReadNullableBool(JsonElement root, string propertyName)
-        => root.TryGetProperty(propertyName, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
-            ? property.GetBoolean()
-            : null;
+    {
+        if (!root.TryGetProperty(propertyName, out var property)) return null;
+        if (property.ValueKind is JsonValueKind.True or JsonValueKind.False) return property.GetBoolean();
+        if (property.ValueKind == JsonValueKind.String && bool.TryParse(property.GetString(), out var value)) return value;
+        return null;
+    }
 
     private static bool HasDuplicatedOverlayText(string normalizedHookText, string normalizedVisibleText)
     {
@@ -2070,16 +2073,33 @@ public sealed partial class ProductionPipelineExecutionService(
             || $" {normalizedVisibleText} ".Contains($" {hook} ", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ResolveHeroEventFamily(string blueprintPath, string compositionModelPath)
+    private static string ResolveHeroEventFamily(params string[] candidatePaths)
     {
-        foreach (var path in new[] { blueprintPath, compositionModelPath })
+        foreach (var path in candidatePaths)
         {
             if (!File.Exists(path)) continue;
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            foreach (var name in new[] { "eventFamily", "eventType", "family" })
-                if (doc.RootElement.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String)
-                    return property.GetString() ?? string.Empty;
+            var eventFamily = ReadHeroEventFamily(doc.RootElement);
+            if (!string.IsNullOrWhiteSpace(eventFamily)) return eventFamily;
         }
+        return string.Empty;
+    }
+
+    private static string ReadHeroEventFamily(JsonElement element)
+    {
+        foreach (var name in new[] { "eventFamily", "eventType", "family" })
+        {
+            if (element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String)
+                return property.GetString() ?? string.Empty;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object) continue;
+            var nestedEventFamily = ReadHeroEventFamily(property.Value);
+            if (!string.IsNullOrWhiteSpace(nestedEventFamily)) return nestedEventFamily;
+        }
+
         return string.Empty;
     }
 
