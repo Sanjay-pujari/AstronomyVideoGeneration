@@ -142,10 +142,14 @@ public sealed record HeroLayoutValidationDto(
     public string RendererContract { get; init; } = string.Empty;
     public bool ContractMismatch { get; init; }
     public string ValidationProfileUsed { get; init; } = string.Empty;
+    public IReadOnlyList<string> ValidationOrder { get; init; } = [];
+    public IReadOnlyList<HeroVariantCompositionReportDto> CompositionReports { get; init; } = [];
 }
 
 
 public sealed record HeroObjectVisibilityDto(string Object, bool Visible, bool Cropped);
+
+public sealed record HeroVariantCompositionReportDto(string Variant, string Status, IReadOnlyList<string> ValidationOrder, IReadOnlyList<string> Issues, bool RequiresRegeneration);
 
 public sealed record HeroVariantLayoutValidationDto(
     string Variant,

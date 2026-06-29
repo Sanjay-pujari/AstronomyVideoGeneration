@@ -1157,4 +1157,68 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("FULL MOON", HeroMetadataNormalizer.NormalizeSubtitle(["Moon"], "Wolf Moon", "NamedFullMoon", "en"));
     }
 
+
+    [Fact]
+    public void Phase11HeroLayoutValidation_ReportsCompositionBeforeHookValidation()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("VENUS AND JUPITER"),
+            new HeroCompositionSceneBlockDto("planet conjunction background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Western sky"),
+            new HeroCompositionTextBlockDto("date-time-panel", "7:23 PM IST"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+        var method = typeof(HeroAssetStoryGenerator).GetMethod("BuildHeroLayoutValidation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var validation = (HeroLayoutValidationDto)method!.Invoke(null, [composition, new[] { "Venus", "Jupiter" }, true, "PlanetConjunction", false])!;
+
+        Assert.Equal("Background generation", validation.ValidationOrder[0]);
+        Assert.Equal("Composition quality", validation.ValidationOrder[5]);
+        Assert.Equal("Overlay layout", validation.ValidationOrder[6]);
+        Assert.Equal("Hook validation", validation.ValidationOrder[7]);
+        Assert.All(validation.CompositionReports, report => Assert.Equal("PASS", report.Status));
+    }
+
+    [Fact]
+    public void AzureHeroPromptBuilderV2_ConjunctionPromptsAreVariantSpecific()
+    {
+        var composition = new HeroCompositionModelDto(
+            new HeroCompositionHookBlockDto("VENUS JUPITER CONJUNCTION"),
+            new HeroCompositionSceneBlockDto("planet conjunction background"),
+            new HeroCompositionTextBlockDto("direction-panel", "Western sky"),
+            new HeroCompositionTextBlockDto("date-time-panel", "7:23 PM IST"),
+            new HeroCompositionTextBlockDto("", ""),
+            new HeroCompositionValidationDto(true, true, true, true, false, 100));
+        var story = new HeroAssetStoryDto(
+            EventId,
+            RegionId,
+            "en",
+            "VENUS JUPITER CONJUNCTION",
+            "Venus and Jupiter appear close together.",
+            "Look west after sunset.",
+            "Two bright planets in twilight.",
+            "Wonder",
+            "ScrollStoppingHeroAsset",
+            new HeroStorySourceDto("Venus Jupiter conjunction", "western sky", "7:23 PM IST", "close planet pairing"),
+            new HeroAssetStoryScoresDto(95, 95, 95, 95),
+            95,
+            DateTimeOffset.Parse("2026-06-27T00:00:00Z"));
+        var builder = typeof(HeroAssetStoryGenerator).GetNestedType("AzureHeroPromptBuilderV2", System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(builder);
+        var method = builder!.GetMethod("Build", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var prompts = ((System.Collections.IEnumerable)method!.Invoke(null, [composition, story, "VENUS JUPITER CONJUNCTION", BuildProductionEventIntelligence("PlanetConjunction", "Venus Jupiter Planetary Conjunction"), null])!)
+            .Cast<object>()
+            .Select(prompt => ((string)((System.Runtime.CompilerServices.ITuple)prompt)[0]!, (string)((System.Runtime.CompilerServices.ITuple)prompt)[4]!))
+            .ToDictionary(x => x.Item1, x => x.Item2, StringComparer.OrdinalIgnoreCase);
+
+        Assert.Contains("side-by-side composition", prompts["landscape"], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("vertical composition", prompts["portrait"], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("do not crop the secondary planet", prompts["portrait"], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("centered composition", prompts["square"], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("both planets fully inside", prompts["square"], StringComparison.OrdinalIgnoreCase);
+    }
+
 }
