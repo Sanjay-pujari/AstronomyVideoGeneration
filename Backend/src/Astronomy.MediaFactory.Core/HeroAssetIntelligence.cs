@@ -144,6 +144,7 @@ public sealed record HeroLayoutValidationDto(
     public string ValidationProfileUsed { get; init; } = string.Empty;
     public IReadOnlyList<string> ValidationOrder { get; init; } = [];
     public IReadOnlyList<HeroVariantCompositionReportDto> CompositionReports { get; init; } = [];
+    public HeroOverlayDiagnosticsDto? HeroOverlayDiagnostics { get; init; }
 }
 
 public sealed record HeroOverlayDiagnosticsDto(

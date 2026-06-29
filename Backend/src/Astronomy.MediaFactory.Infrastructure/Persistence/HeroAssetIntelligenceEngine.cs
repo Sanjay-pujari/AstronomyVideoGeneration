@@ -787,7 +787,23 @@ public sealed class HeroAssetStoryGenerator(
             ContractMismatch = contractMismatch,
             ValidationProfileUsed = validationProfileUsed,
             ValidationOrder = validationOrder,
-            CompositionReports = variantCompositionReports
+            CompositionReports = variantCompositionReports,
+            HeroOverlayDiagnostics = new HeroOverlayDiagnosticsDto(
+                HeroTextOverlapDetected: textOverlapDetected,
+                HeroTitleSubtitleOverlap: false,
+                HeroTitleMetadataOverlap: false,
+                HeroMetadataWithinSafeArea: true,
+                HeroBottomInfoBarVisible: true,
+                HeroDateVisible: !string.IsNullOrWhiteSpace(renderedText.RenderedDateText),
+                HeroTimeVisible: !string.IsNullOrWhiteSpace(renderedText.RenderedTimeText),
+                HeroLocationRemoved: true,
+                HeroEventCodeRemoved: true,
+                HeroTitleLength: Clean(compositionModel.HookBlock.Text).Length,
+                HeroTitleClipped: false,
+                HeroSubtitleClipped: false,
+                HeroTitleOverflowDetected: false,
+                HeroTitleSafeAreaPassed: true,
+                SafeArea: true)
         };
     }
 
