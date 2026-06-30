@@ -36,7 +36,25 @@ public sealed class HeroCompositionEngine : IHeroCompositionEngine
             DirectionBlock: new HeroCompositionTextBlockDto(directionScene, directionText),
             TimingBlock: new HeroCompositionTextBlockDto(timingScene, timingText),
             CtaBlock: new HeroCompositionTextBlockDto(ctaScene, ctaText),
-            Validation: validation);
+            Validation: validation)
+        {
+            TitleBlock = new HeroCompositionTextBlockDto("title-overlay", ResolveLocalizedTitleText(heroStory))
+        };
+    }
+
+    private static string ResolveLocalizedTitleText(HeroAssetStoryDto heroStory)
+    {
+        var title = Clean(heroStory.HeroStorySource.What);
+        if (!IsHindi(heroStory.Language))
+            return title;
+        if (title.Contains("perseid", StringComparison.OrdinalIgnoreCase)) return "पर्सिड्स उल्का वर्षा";
+        if (title.Contains("geminid", StringComparison.OrdinalIgnoreCase)) return "जेमिनिड्स उल्का वर्षा";
+        if (title.Contains("leonid", StringComparison.OrdinalIgnoreCase)) return "लियोनिड्स उल्का वर्षा";
+        if (title.Contains("orionid", StringComparison.OrdinalIgnoreCase)) return "ओरियोनिड्स उल्का वर्षा";
+        if (title.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "उल्का वर्षा";
+        if (title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase)) return "पूर्ण सूर्य ग्रहण";
+        if (title.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase)) return "चंद्र ग्रहण";
+        return title;
     }
 
     private static string LocalizeHook(string value, string? language)

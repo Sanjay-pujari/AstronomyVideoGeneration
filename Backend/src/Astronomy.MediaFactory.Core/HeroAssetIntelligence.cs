@@ -267,7 +267,10 @@ public sealed record HeroCompositionModelDto(
     HeroCompositionTextBlockDto DirectionBlock,
     HeroCompositionTextBlockDto TimingBlock,
     HeroCompositionTextBlockDto CtaBlock,
-    HeroCompositionValidationDto Validation);
+    HeroCompositionValidationDto Validation)
+{
+    public HeroCompositionTextBlockDto TitleBlock { get; init; } = new("", "");
+}
 
 public sealed record HeroCompositionHookBlockDto(string Text);
 
