@@ -1159,6 +1159,43 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
 
+
+    [Theory]
+    [InlineData("PlanetConjunction", "Jupiter Mars Conjunction", "बृहस्पति और मंगल")]
+    [InlineData("SolarEclipse", "Total Solar Eclipse", "पूर्ण सूर्य ग्रहण")]
+    [InlineData("LunarEclipse", "Total Lunar Eclipse", "पूर्ण चंद्र ग्रहण")]
+    [InlineData("MeteorShower", "Geminids Meteor Shower Peak", "जेमिनिड्स उल्का वर्षा")]
+    public void BuildHeroOverlayLines_HindiUsesEventSpecificTitleInsteadOfGenericHook(string eventType, string title, string expectedTitle)
+    {
+        var story = new HeroAssetStoryDto(
+            EventId,
+            RegionId,
+            "hi",
+            "चरम क्षण को न चूकें",
+            "आज रात आसमान का खास दृश्य अपनी पूरी चमक पर होगा।",
+            "सूर्यास्त के बाद पश्चिम की ओर देखें",
+            "नाटकीय सांध्य आकाश में चमकता खगोलीय दृश्य।",
+            "आश्चर्य + तत्परता",
+            "ScrollStoppingHeroAsset",
+            new HeroStorySourceDto(title, "western sky", "7:23 PM IST", "close sky event"),
+            new HeroAssetStoryScoresDto(95, 95, 95, 95),
+            95,
+            DateTimeOffset.Parse("2026-06-27T00:00:00Z"));
+        var intelligence = BuildProductionEventIntelligence(eventType, title) with
+        {
+            PrimaryObjects = eventType == "PlanetConjunction" ? ["Jupiter"] : eventType == "MeteorShower" ? ["Geminids"] : ["Sun"],
+            SecondaryObjects = eventType == "PlanetConjunction" ? ["Mars"] : eventType == "SolarEclipse" ? ["Moon"] : []
+        };
+        var method = typeof(HeroAssetStoryGenerator).GetMethod("BuildHeroOverlayLines", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var result = ((string Title, string Subtitle))method!.Invoke(null, [story, "चरम क्षण को न चूकें", intelligence])!;
+
+        Assert.Equal(expectedTitle, result.Title);
+        Assert.NotEqual("चरम क्षण को न चूकें", result.Title);
+        Assert.Equal("चरम क्षण को न चूकें", result.Subtitle);
+    }
+
     [Fact]
     public void Phase11HeroLayoutValidation_ReportsCompositionBeforeHookValidation()
     {

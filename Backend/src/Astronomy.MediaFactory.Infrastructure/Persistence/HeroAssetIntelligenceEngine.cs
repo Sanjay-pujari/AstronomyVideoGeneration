@@ -1808,8 +1808,12 @@ public sealed class HeroAssetStoryGenerator(
     private static (string Title, string Subtitle) BuildHeroOverlayLines(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence)
     {
         var eventType = FirstNonEmpty(intelligence?.EventType, string.Empty);
-        var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, heroStory.HeroHook, selectedHook, "SKY EVENT");
+        var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook, "SKY EVENT");
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
+
+        if (IsHindi(heroStory.Language))
+            return BuildHindiHeroOverlayLines(heroStory, selectedHook, intelligence, eventType, eventTitle, eventObjectContext);
+
         var family = BuildHeroFamilyDisplayTitle(eventType, eventTitle, eventObjectContext);
         var title = FirstNonEmpty(
             intelligence?.HeroTitle,
@@ -1820,6 +1824,108 @@ public sealed class HeroAssetStoryGenerator(
         return (
             HeroMetadataNormalizer.NormalizeTitle(title, eventType, string.Empty),
             HeroMetadataNormalizer.NormalizeSubtitle(objects, FirstNonEmpty(intelligence?.ShortTitle, family.Subtitle), eventType, string.Empty));
+    }
+
+    private static (string Title, string Subtitle) BuildHindiHeroOverlayLines(
+        HeroAssetStoryDto heroStory,
+        string selectedHook,
+        ProductionEventIntelligence? intelligence,
+        string eventType,
+        string eventTitle,
+        EventObjectContext eventObjectContext)
+    {
+        var title = FirstNonEmpty(
+            ResolveHindiEventTitle(intelligence, eventType, eventTitle, eventObjectContext),
+            LocalizeKnownAstronomyTitle(intelligence?.HeroTitle),
+            LocalizeKnownAstronomyTitle(intelligence?.ShortTitle),
+            LocalizeKnownAstronomyTitle(eventTitle),
+            LocalizeKnownAstronomyTitle(heroStory.HeroStorySource.What),
+            "खगोलीय घटना");
+
+        title = EnsureHindiHeroTitleIsEventSpecific(title, intelligence, eventType, eventTitle, eventObjectContext);
+        var hook = LocalizeHeroHook(FirstNonEmpty(heroStory.HeroHook, selectedHook), heroStory.Language);
+        var subtitle = string.Equals(title, hook, StringComparison.Ordinal)
+            ? FirstNonEmpty(LocalizeKnownAstronomyTitle(intelligence?.ShortTitle), "आज रात का आकाश")
+            : hook;
+        return (title, subtitle);
+    }
+
+    private static string ResolveHindiEventTitle(ProductionEventIntelligence? intelligence, string eventType, string eventTitle, EventObjectContext eventObjectContext)
+    {
+        if (EventContentGuard.IsPlanetConjunction(eventType) || IsPlanetGroupingHeroFamily(eventType) || eventTitle.Contains("conjunction", StringComparison.OrdinalIgnoreCase))
+            return BuildHindiPlanetConjunctionTitle(eventObjectContext, intelligence, eventTitle);
+        if ((eventType.Contains("solar", StringComparison.OrdinalIgnoreCase) && eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) || eventTitle.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase))
+            return "पूर्ण सूर्य ग्रहण";
+        if ((eventType.Contains("lunar", StringComparison.OrdinalIgnoreCase) && eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) || eventTitle.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase))
+            return eventTitle.Contains("total", StringComparison.OrdinalIgnoreCase) ? "पूर्ण चंद्र ग्रहण" : "चंद्र ग्रहण";
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            return $"{ResolveHindiMeteorShowerName(intelligence, eventTitle)} उल्का वर्षा";
+        return string.Empty;
+    }
+
+    private static string BuildHindiPlanetConjunctionTitle(EventObjectContext eventObjectContext, ProductionEventIntelligence? intelligence, string eventTitle)
+    {
+        var objects = eventObjectContext.ObjectNames
+            .Concat(intelligence?.PrimaryObjects ?? [])
+            .Concat(intelligence?.SecondaryObjects ?? [])
+            .Concat(SplitKnownPlanetNames(eventTitle))
+            .Select(ToHindiPlanetName)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .ToArray();
+        return objects.Length >= 2 ? $"{objects[0]} और {objects[1]}" : string.Empty;
+    }
+
+    private static IEnumerable<string> SplitKnownPlanetNames(string value)
+    {
+        var known = new[] { "Jupiter", "Venus", "Mars", "Mercury", "Saturn" };
+        return known.Where(planet => value.Contains(planet, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ToHindiPlanetName(string value)
+    {
+        var clean = Clean(value);
+        if (clean.Contains("jupiter", StringComparison.OrdinalIgnoreCase)) return "बृहस्पति";
+        if (clean.Contains("venus", StringComparison.OrdinalIgnoreCase)) return "शुक्र";
+        if (clean.Contains("mars", StringComparison.OrdinalIgnoreCase)) return "मंगल";
+        if (clean.Contains("mercury", StringComparison.OrdinalIgnoreCase)) return "बुध";
+        if (clean.Contains("saturn", StringComparison.OrdinalIgnoreCase)) return "शनि";
+        return string.Empty;
+    }
+
+    private static string ResolveHindiMeteorShowerName(ProductionEventIntelligence? intelligence, string eventTitle)
+    {
+        var source = FirstNonEmpty((intelligence?.PrimaryObjects ?? []).FirstOrDefault(), intelligence?.ShortTitle, eventTitle);
+        if (source.Contains("geminid", StringComparison.OrdinalIgnoreCase)) return "जेमिनिड्स";
+        if (source.Contains("perseid", StringComparison.OrdinalIgnoreCase)) return "पर्सिड्स";
+        if (source.Contains("leonid", StringComparison.OrdinalIgnoreCase)) return "लियोनिड्स";
+        if (source.Contains("orionid", StringComparison.OrdinalIgnoreCase)) return "ओरियोनिड्स";
+        return Clean(source)
+            .Replace("Meteor Shower Peak", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Meteor Shower", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Peak", "", StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', '-', '–', ':');
+    }
+
+    private static string LocalizeKnownAstronomyTitle(string? value)
+    {
+        var clean = Clean(value);
+        if (string.IsNullOrWhiteSpace(clean)) return string.Empty;
+        if (ContainsDevanagari(clean)) return clean;
+        if (clean.Contains("total solar eclipse", StringComparison.OrdinalIgnoreCase)) return "पूर्ण सूर्य ग्रहण";
+        if (clean.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase)) return "पूर्ण सूर्य ग्रहण";
+        if (clean.Contains("total lunar eclipse", StringComparison.OrdinalIgnoreCase)) return "पूर्ण चंद्र ग्रहण";
+        if (clean.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase)) return "चंद्र ग्रहण";
+        if (clean.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return $"{ResolveHindiMeteorShowerName(null, clean)} उल्का वर्षा";
+        return string.Empty;
+    }
+
+    private static string EnsureHindiHeroTitleIsEventSpecific(string title, ProductionEventIntelligence? intelligence, string eventType, string eventTitle, EventObjectContext eventObjectContext)
+    {
+        var genericHook = LocalizeHeroHook(string.Empty, "hi");
+        if (!string.Equals(title, genericHook, StringComparison.Ordinal) && ContainsDevanagari(title)) return title;
+        return FirstNonEmpty(ResolveHindiEventTitle(intelligence, eventType, eventTitle, eventObjectContext), "खगोलीय घटना");
     }
 
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
@@ -1835,6 +1941,38 @@ public sealed class HeroAssetStoryGenerator(
         if (eventTitle.Contains("moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("moon", StringComparison.OrdinalIgnoreCase))
             return (BuildNamedFullMoonTitle(eventTitle), "January Full Moon");
         return (TrimHeroTitle(eventTitle), Clean(FirstNonEmpty(eventObjectContext.ObjectHeadlineText, eventType, "Astronomy Event")));
+    }
+
+
+
+    private static bool HindiHeroTitleLooksEventSpecific(string title, string eventFamily)
+    {
+        if (!ContainsDevanagari(title)) return false;
+        var eventSpecificTerms = new[] { "सूर्य", "ग्रहण", "चंद्र", "बृहस्पति", "शुक्र", "मंगल", "बुध", "शनि", "उल्का", "वर्षा", "जेमिनिड्स", "पर्सिड्स", "लियोनिड्स", "ओरियोनिड्स" };
+        return eventSpecificTerms.Any(term => title.Contains(term, StringComparison.Ordinal))
+            || (!string.IsNullOrWhiteSpace(eventFamily) && !string.Equals(title, LocalizeHeroHook(string.Empty, "hi"), StringComparison.Ordinal));
+    }
+
+    private static string ResolveHeroRawTitleSource(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, string heroTitle, out string titleSourceField)
+    {
+        if (!string.IsNullOrWhiteSpace(intelligence?.HeroTitle) && string.Equals(heroTitle, intelligence.HeroTitle, StringComparison.OrdinalIgnoreCase))
+        {
+            titleSourceField = "productionEventIntelligence.heroTitle";
+            return intelligence.HeroTitle;
+        }
+        if (!string.IsNullOrWhiteSpace(intelligence?.ShortTitle) && string.Equals(heroTitle, intelligence.ShortTitle, StringComparison.OrdinalIgnoreCase))
+        {
+            titleSourceField = "productionEventIntelligence.shortTitle";
+            return intelligence.ShortTitle;
+        }
+        if (!string.IsNullOrWhiteSpace(intelligence?.Title) && string.Equals(heroTitle, intelligence.Title, StringComparison.OrdinalIgnoreCase))
+        {
+            titleSourceField = "productionEventIntelligence.title";
+            return intelligence.Title;
+        }
+
+        titleSourceField = IsHindi(heroStory.Language) ? "localizedEventTitle" : "normalizedEventTitle";
+        return FirstNonEmpty(heroTitle, intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, heroStory.HeroStorySource.What, selectedHook);
     }
 
     private static string NormalizeHeroVariantName(string value)
@@ -1975,7 +2113,12 @@ public sealed class HeroAssetStoryGenerator(
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var rawTimeSource = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, compositionModel.TimingBlock.Text);
         var rawDirectionSource = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint, compositionModel.DirectionBlock.Text);
-        var rawTitleSource = FirstNonEmpty(intelligence?.HeroTitle, intelligence?.ShortTitle, intelligence?.Title, heroStory.HeroStorySource.What, heroStory.HeroHook, selectedHook);
+        var rawTitleSource = ResolveHeroRawTitleSource(heroStory, selectedHook, intelligence, heroTitle, out var titleSourceField);
+        var localizedTitleText = heroTitle;
+        var hookText = FirstNonEmpty(heroStory.HeroHook, selectedHook);
+        var hookUsedAsTitle = string.Equals(heroTitle, hookText, StringComparison.Ordinal)
+            || (IsHindi(heroStory.Language) && string.Equals(heroTitle, LocalizeHeroHook(hookText, heroStory.Language), StringComparison.Ordinal));
+        var hindiTitleEventSpecificValidationPassed = !IsHindi(heroStory.Language) || (!hookUsedAsTitle && HindiHeroTitleLooksEventSpecific(heroTitle, eventFamily));
         var rawSubtitleSource = string.Join(", ", EventObjectContextBuilder.FromIntelligence(intelligence).ObjectNames);
         var (renderedDateText, _, renderedFooterDirectionText) = BuildHeroV6MetadataValues(heroStory, compositionModel, intelligence);
         var compactTimeText = HeroMetadataNormalizer.NormalizeTime(rawTimeSource, eventFamily, string.Empty);
@@ -2035,6 +2178,11 @@ public sealed class HeroAssetStoryGenerator(
             rawDirectionSource,
             compactDirectionText,
             rawTitleSource,
+            localizedTitleText,
+            titleSourceField,
+            hookText,
+            hookUsedAsTitle,
+            hindiTitleEventSpecificValidationPassed,
             compactTitleText,
             rawSubtitleSource,
             compactSubtitleText,
