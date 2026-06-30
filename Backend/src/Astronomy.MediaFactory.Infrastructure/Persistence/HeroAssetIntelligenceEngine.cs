@@ -455,6 +455,8 @@ public sealed class HeroAssetStoryGenerator(
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    if (planetGroupingRendererApplied)
+                        throw new HeroOverlayRenderingException("PlanetGrouping Phase 11 Hero must use AzureHeroRendererV2 + CinematicHero + HeroV6.5Renderer; GenericHeroRenderer fallback is blocked.", ex);
                     warnings.Add($"Azure hero renderer unavailable; GenericHeroRenderer fallback applied: {ex.Message}");
                     physicalWriteResult = await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, compositionModel, planetAssets, cancellationToken);
                     generatedFiles.AddRange(physicalWriteResult.GeneratedFiles);
@@ -717,7 +719,8 @@ public sealed class HeroAssetStoryGenerator(
             .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel, objectNames))
             .ToArray();
         var renderedBlocks = BuildHeroRenderedBlocks(compositionModel);
-        var rendererContract = ResolveRenderedHeroContract(renderedBlocks);
+        var isPlanetGrouping = IsPlanetGroupingHeroFamily(eventFamily);
+        var rendererContract = isPlanetGrouping ? "CinematicHero" : ResolveRenderedHeroContract(renderedBlocks);
         var heroContract = rendererContract;
         var validatorContract = heroContract;
         var validationProfileUsed = heroContract;
@@ -731,6 +734,9 @@ public sealed class HeroAssetStoryGenerator(
         var renderedText = ResolveHeroRenderedText(compositionModel);
         var compactTimeText = HeroMetadataNormalizer.NormalizeTime(compositionModel.TimingBlock.Text, eventFamily, string.Empty);
         var compactDirectionText = HeroMetadataNormalizer.NormalizeDirection(compositionModel.DirectionBlock.Text, eventFamily, string.Empty);
+        var compactTitleText = isPlanetGrouping
+            ? BuildCompactObjectHeadline(objectNames)
+            : HeroMetadataNormalizer.NormalizeTitle(compositionModel.TitleBlock.Text, eventFamily, string.Empty);
         var footerTextCompactValidationPassed = CountWords(compactTimeText) <= 6
             && CountWords(compactDirectionText) <= 4
             && !System.Text.RegularExpressions.Regex.IsMatch(compactTimeText, @"\b\d{4}-\d{2}-\d{2}\b")
@@ -774,9 +780,9 @@ public sealed class HeroAssetStoryGenerator(
             errors)
         {
             EventFamily = eventFamily,
-            RendererPathSelected = "GenericHeroRenderer",
-            PlanetGroupingRendererApplied = false,
-            GenericRendererApplied = true,
+            RendererPathSelected = isPlanetGrouping ? "AzureHeroRendererV2" : "GenericHeroRenderer",
+            PlanetGroupingRendererApplied = isPlanetGrouping,
+            GenericRendererApplied = !isPlanetGrouping,
             PlanetGroupingPromptApplied = planetGroupingRendererApplied,
             PlanetGroupingSubtitleFormatterApplied = planetGroupingRendererApplied,
             SharedFooterRendererUsed = true,
@@ -788,10 +794,11 @@ public sealed class HeroAssetStoryGenerator(
             MissingVariants = missingVariants,
             CompactTimeText = compactTimeText,
             CompactDirectionText = compactDirectionText,
+            CompactTitleText = compactTitleText,
             RawTimeSource = compositionModel.TimingBlock.Text,
             RawDirectionSource = compositionModel.DirectionBlock.Text,
             FooterTextCompactValidationPassed = footerTextCompactValidationPassed,
-            PlanetGroupingOnlyCustomizationApplied = IsPlanetGroupingHeroFamily(eventFamily) && planetGroupingRendererApplied,
+            PlanetGroupingOnlyCustomizationApplied = isPlanetGrouping && planetGroupingRendererApplied,
             HeroContract = heroContract,
             ValidatorContract = validatorContract,
             RendererContract = rendererContract,
@@ -1225,10 +1232,24 @@ public sealed class HeroAssetStoryGenerator(
     }
 
     private static string ResolvePhase11HeroEventFamily(HeroAssetStoryGenerationRequest request, ProductionEventIntelligence? intelligence)
-        => FirstNonEmpty(ResolveEventFamilyFromIntelligence(intelligence), request.PipelineRequest?.EventType, request.ProductionContext?.EventType, "Generic");
+    {
+        var family = FirstNonEmpty(ResolveEventFamilyFromIntelligence(intelligence), request.PipelineRequest?.EventType, request.ProductionContext?.EventType, "Generic");
+        return IsExplicitPlanetGroupingHeroFamily(family) ? "PlanetGrouping" : family;
+    }
 
     private static string ResolveEventFamilyFromIntelligence(ProductionEventIntelligence? intelligence)
-        => FirstNonEmpty(intelligence?.EventType, intelligence?.StrategyId, string.Empty);
+    {
+        var family = FirstNonEmpty(intelligence?.EventType, intelligence?.StrategyId, string.Empty);
+        return IsExplicitPlanetGroupingHeroFamily(family) ? "PlanetGrouping" : family;
+    }
+
+    private static bool IsExplicitPlanetGroupingHeroFamily(string? eventFamily)
+    {
+        var value = eventFamily?.Trim() ?? string.Empty;
+        return value.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PlanetaryGrouping", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool IsPlanetGroupingHeroFamily(string? eventFamily)
     {
@@ -1238,6 +1259,7 @@ public sealed class HeroAssetStoryGenerator(
             || value.Equals("PlanetConjunction", StringComparison.OrdinalIgnoreCase)
             || value.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase)
             || value.Equals("PlanetaryAlignment", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("PlanetaryGrouping", StringComparison.OrdinalIgnoreCase)
             || value.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -1405,6 +1427,7 @@ public sealed class HeroAssetStoryGenerator(
             promptBuilder = "AzureHeroPromptBuilderV2",
             visualIntent = "CinematicHero",
             eventFamily = promptEnrichment.EventFamily,
+            planetGroupingPromptApplied = string.Equals(promptEnrichment.EventFamily, "PlanetGrouping", StringComparison.OrdinalIgnoreCase),
             eventFamilySpecificEnrichment = promptEnrichment.Enrichment,
             negativePromptContract = "No observing guide, no Stellarium, no star chart, no labels, no UI, no guide panels, no embedded text.",
             safeOverlaySpace = "Leave clean safe space for deterministic overlay title and compact footer metadata; do not generate text in that space.",
@@ -1613,6 +1636,8 @@ public sealed class HeroAssetStoryGenerator(
                 return ("MeteorShower", "Meteor Shower enrichment: dramatic meteor streaks filling the sky, several bright fireballs, a natural radiant impression without diagrams, Milky Way dark-sky atmosphere, no star chart, no labels, no guide panels.");
             if (ContainsAny(text, "comet"))
                 return ("Comet", "Comet enrichment: a large comet with glowing coma and long tail in a cinematic deep sky or twilight sky; the comet should dominate the frame; no diagram, no labels, no embedded text.");
+            if (ContainsAny(text, "planet_grouping", "planetgrouping", "planetarygrouping", "planet grouping", "grouped planets"))
+                return ("PlanetGrouping", "Planet grouping enrichment: show multiple planets as a realistic sky grouping, with all key planets visible, comfortable spacing, no guide panels, no labels, no star chart, no UI. Use cinematic twilight/night sky, realistic planet textures, and clear visual hierarchy.");
             if (ContainsAny(text, "alignment", "planetaryalignment", "planet parade", "planetparade", "parade"))
                 return ("PlanetaryAlignment", "Planetary Alignment enrichment: multiple bright planets arranged cinematically, clearly visible and larger than real naked-eye scale for thumbnail impact; avoid tiny dots; no labels or text.");
             if (ContainsAny(text, "conjunction", "planetconjunction", "planetary conjunction", "pairing"))
@@ -1779,7 +1804,9 @@ public sealed class HeroAssetStoryGenerator(
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var compactTitleText = IsHindi(heroStory.Language)
             ? localizedTitleText
-            : HeroMetadataNormalizer.NormalizeTitle(FirstNonEmpty(compositionModel.TitleBlock.Text, localizedTitleText), eventFamily, heroStory.Language);
+            : IsPlanetGroupingHeroFamily(eventFamily)
+                ? BuildPlanetGroupingHeroTitle(eventObjectContext, eventTitle)
+                : HeroMetadataNormalizer.NormalizeTitle(FirstNonEmpty(compositionModel.TitleBlock.Text, localizedTitleText), eventFamily, heroStory.Language);
         var localizedEventTitle = IsHindi(heroStory.Language) ? LocalizeKnownAstronomyTitle(eventTitle) : eventTitle;
         var hookText = FirstNonEmpty(heroStory.HeroHook, selectedHook, compositionModel.HookBlock.Text);
         if (IsHindi(heroStory.Language))
@@ -1895,15 +1922,19 @@ public sealed class HeroAssetStoryGenerator(
             return BuildHindiHeroOverlayLines(heroStory, selectedHook, intelligence, eventType, eventTitle, eventObjectContext);
 
         var family = BuildHeroFamilyDisplayTitle(eventType, eventTitle, eventObjectContext);
-        var title = FirstNonEmpty(
-            intelligence?.HeroTitle,
-            intelligence?.ShortTitle,
-            family.Title,
-            TrimHeroTitle(eventTitle));
+        var title = IsExplicitPlanetGroupingHeroFamily(eventType)
+            ? FirstNonEmpty(family.Title, intelligence?.HeroTitle, intelligence?.ShortTitle, TrimHeroTitle(eventTitle))
+            : FirstNonEmpty(
+                intelligence?.HeroTitle,
+                intelligence?.ShortTitle,
+                family.Title,
+                TrimHeroTitle(eventTitle));
         var objects = eventObjectContext.ObjectNames.Count > 0 ? eventObjectContext.ObjectNames : (intelligence?.PrimaryObjects ?? []).Concat(intelligence?.SecondaryObjects ?? []);
         return (
             HeroMetadataNormalizer.NormalizeTitle(title, eventType, string.Empty),
-            HeroMetadataNormalizer.NormalizeSubtitle(objects, FirstNonEmpty(intelligence?.ShortTitle, family.Subtitle), eventType, string.Empty));
+            IsExplicitPlanetGroupingHeroFamily(eventType)
+                ? family.Subtitle
+                : HeroMetadataNormalizer.NormalizeSubtitle(objects, FirstNonEmpty(intelligence?.ShortTitle, family.Subtitle), eventType, string.Empty));
     }
 
     private static (string Title, string Subtitle) BuildHindiHeroOverlayLines(
@@ -2010,7 +2041,7 @@ public sealed class HeroAssetStoryGenerator(
 
     private static (string Title, string Subtitle) BuildHeroFamilyDisplayTitle(string eventType, string eventTitle, EventObjectContext eventObjectContext)
     {
-        if (IsPlanetGroupingHeroFamily(eventType))
+        if (IsExplicitPlanetGroupingHeroFamily(eventType))
             return (BuildPlanetGroupingHeroTitle(eventObjectContext, eventTitle), BuildPlanetGroupingHeroSubtitle(eventObjectContext));
         if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) || eventTitle.Contains("meteor", StringComparison.OrdinalIgnoreCase))
             return (BuildMeteorShowerTitle(eventTitle), "Meteor Shower Peak");
@@ -2066,26 +2097,30 @@ public sealed class HeroAssetStoryGenerator(
 
     private static string BuildPlanetGroupingHeroTitle(EventObjectContext eventObjectContext, string eventTitle)
     {
-        var headline = Clean(eventObjectContext.ObjectHeadlineText);
+        var headline = BuildCompactObjectHeadline(eventObjectContext.ObjectNames);
         if (!string.IsNullOrWhiteSpace(headline))
-            return $"GROUPED PLANETS: {headline}";
+            return headline;
 
         return TrimHeroTitle(eventTitle.Contains("group", StringComparison.OrdinalIgnoreCase) ? eventTitle : "Grouped planets");
     }
 
-    private static string BuildPlanetGroupingHeroSubtitle(EventObjectContext eventObjectContext)
+    private static string BuildCompactObjectHeadline(IEnumerable<string> objectNames)
     {
-        var objects = eventObjectContext.ObjectNames
+        var objects = objectNames
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => Clean(value).ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (objects.Length is > 0 and <= 4)
+        if (objects.Length is > 0 and <= 3)
             return string.Join(" + ", objects);
-        if (objects.Length >= 5)
-            return string.Join(" + ", objects.Take(3).Concat([$"{objects.Length - 3} MORE"]));
+        if (objects.Length >= 4)
+            return string.Join(" + ", objects.Take(3).Concat(["MORE"]));
 
-        return "GROUPED SKY OBJECTS";
+        return string.Empty;
     }
+
+    private static string BuildPlanetGroupingHeroSubtitle(EventObjectContext eventObjectContext)
+        => "PLANET GROUPING";
 
     private static string BuildPlanetConjunctionHeroTitle(EventObjectContext eventObjectContext, string eventTitle)
     {

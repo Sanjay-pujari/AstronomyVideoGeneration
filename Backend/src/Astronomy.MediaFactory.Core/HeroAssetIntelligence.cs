@@ -133,6 +133,7 @@ public sealed record HeroLayoutValidationDto(
     public IReadOnlyList<string> MissingVariants { get; init; } = [];
     public string CompactTimeText { get; init; } = string.Empty;
     public string CompactDirectionText { get; init; } = string.Empty;
+    public string CompactTitleText { get; init; } = string.Empty;
     public string RawTimeSource { get; init; } = string.Empty;
     public string RawDirectionSource { get; init; } = string.Empty;
     public bool FooterTextCompactValidationPassed { get; init; }

@@ -602,6 +602,7 @@ public sealed class HeroAssetStoryGeneratorTests
     [InlineData("LunarEclipse", "Total Lunar Eclipse Blood Moon", "Lunar Eclipse enrichment", "large red/orange Blood Moon", "45–65%")]
     [InlineData("Comet", "Comet C/2026 A1", "Comet enrichment", "glowing coma", "long tail")]
     [InlineData("PlanetaryAlignment", "Planetary Alignment", "Planetary Alignment enrichment", "multiple bright planets", "larger than real naked-eye scale")]
+    [InlineData("PLANET_GROUPING", "Saturn Mars Jupiter Planet Grouping", "Planet grouping enrichment", "comfortable spacing", "clear visual hierarchy")]
     public void AzureHeroPromptBuilderV2_EventFamiliesBuildCinematicEnrichedPrompts(string eventType, string title, string enrichmentHeader, string requiredPhrase, string secondRequiredPhrase)
     {
         var composition = new HeroCompositionModelDto(
@@ -657,6 +658,7 @@ public sealed class HeroAssetStoryGeneratorTests
     [InlineData("LunarEclipse", "Total Lunar Eclipse Blood Moon", "LunarEclipse")]
     [InlineData("Comet", "Comet C/2026 A1", "Comet")]
     [InlineData("PlanetaryAlignment", "Planetary Alignment", "PlanetaryAlignment")]
+    [InlineData("PLANET_GROUPING", "Saturn Mars Jupiter Planet Grouping", "PlanetGrouping")]
     public void AzureHeroPromptBuilderV2_EventFamiliesExposeDiagnosticsEnrichmentShape(string eventType, string title, string expectedFamily)
     {
         var builder = typeof(HeroAssetStoryGenerator).GetNestedType("AzureHeroPromptBuilderV2", System.Reflection.BindingFlags.NonPublic);
@@ -671,7 +673,7 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
     [Fact]
-    public void Phase11HeroLayoutValidation_PlanetGroupingKeepsGenericRendererWithIsolatedCustomizations()
+    public void Phase11HeroLayoutValidation_PlanetGroupingUsesStableCinematicAzureContract()
     {
         var composition = new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto("GROUPED PLANETS"),
@@ -688,12 +690,15 @@ public sealed class HeroAssetStoryGeneratorTests
 
         Assert.True(validation.IsValid);
         Assert.Equal("PlanetGrouping", validation.EventFamily);
-        Assert.Equal("GenericHeroRenderer", validation.RendererPathSelected);
-        Assert.True(validation.GenericRendererApplied);
-        Assert.False(validation.PlanetGroupingRendererApplied);
+        Assert.Equal("AzureHeroRendererV2", validation.RendererPathSelected);
+        Assert.False(validation.GenericRendererApplied);
+        Assert.True(validation.PlanetGroupingRendererApplied);
         Assert.True(validation.PlanetGroupingPromptApplied);
         Assert.True(validation.PlanetGroupingSubtitleFormatterApplied);
         Assert.True(validation.SharedFooterRendererUsed);
+        Assert.Equal("CinematicHero", validation.HeroContract);
+        Assert.Equal("CinematicHero", validation.RendererContract);
+        Assert.Equal("CinematicHero", validation.ValidationProfileUsed);
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.ExpectedVariants);
         Assert.Equal(["Landscape", "Square", "Portrait"], validation.GeneratedVariants);
         Assert.Empty(validation.MissingVariants);
@@ -983,7 +988,7 @@ public sealed class HeroAssetStoryGeneratorTests
             new HeroCompositionTextBlockDto("cta", hook),
             new HeroCompositionValidationDto(true, true, true, true, true, 100));
 
-    private static (string RenderedTitleText, string RenderedTitleSource, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle, bool TitleResolverUsed) InvokeHeroV65TitleResolver(
+    private static (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string CompactTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle, bool TitleResolverUsed) InvokeHeroV65TitleResolver(
         HeroAssetStoryDto story,
         string selectedHook,
         HeroCompositionModelDto composition,
@@ -995,6 +1000,8 @@ public sealed class HeroAssetStoryGeneratorTests
         return (
             (string)tuple[0]!,
             (string)tuple[1]!,
+            (string)tuple[2]!,
+            (string)tuple[5]!,
             (string)tuple[6]!,
             (bool)tuple[7]!,
             (bool)tuple[8]!,
@@ -1282,6 +1289,24 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal(expectedTitle, resolved.RenderedTitleText);
         Assert.NotEqual("DON'T MISS THE PEAK", resolved.RenderedTitleText);
         Assert.True(resolved.TitleResolverUsed);
+    }
+
+    [Fact]
+    public void HeroV65TitleResolver_PlanetGroupingUsesCompactObjectHeadlineAndShortSubtitle()
+    {
+        var story = BuildHeroStory("en", "Grouped planets over Udaipur with Saturn Mars Jupiter and Venus", "DON'T MISS THE PEAK");
+        var intelligence = BuildProductionEventIntelligence("PLANET_GROUPING", "Grouped planets over Udaipur with Saturn Mars Jupiter and Venus") with
+        {
+            PrimaryObjects = ["Saturn", "Mars", "Jupiter", "Venus"],
+            SecondaryObjects = []
+        };
+        var composition = BuildComposition("GROUPED PLANETS OVER UDAIPUR");
+
+        var resolved = InvokeHeroV65TitleResolver(story, "DON'T MISS THE PEAK", composition, intelligence);
+
+        Assert.Equal("SATURN + MARS + JUPITER + MORE", resolved.RenderedTitleText);
+        Assert.Equal("PLANET GROUPING", resolved.RenderedSubtitleText);
+        Assert.Equal("SATURN + MARS + JUPITER + MORE", resolved.CompactTitleText);
     }
 
     [Fact]
