@@ -1775,6 +1775,7 @@ public sealed class HeroAssetStoryGenerator(
     {
         var (localizedTitleText, defaultSubtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
         var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook);
+        var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
         var compactTitleText = IsHindi(heroStory.Language)
             ? localizedTitleText
