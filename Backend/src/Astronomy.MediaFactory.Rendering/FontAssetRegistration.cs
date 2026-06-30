@@ -43,7 +43,14 @@ public static class FontAssetRegistration
             diagnostics.GlyphSupport);
 
         if (!glyphSupport)
-            throw new InvalidOperationException($"Configured font does not contain all required glyphs. RequestedFont={diagnostics.RequestedFont}; ResolvedFont={diagnostics.ResolvedFont}; FontFile={diagnostics.FontFile}; GlyphSupport=false; GlyphTest={glyphTest}");
+        {
+            logger?.LogWarning(
+                "Font glyph support could not be verified or is incomplete; continuing with resolved font. RequestedFont={RequestedFont}; ResolvedFont={ResolvedFont}; FontFile={FontFile}; GlyphTest={GlyphTest}",
+                diagnostics.RequestedFont,
+                diagnostics.ResolvedFont,
+                diagnostics.FontFile,
+                glyphTest);
+        }
 
         return family;
     }
@@ -52,12 +59,19 @@ public static class FontAssetRegistration
     {
         if (string.IsNullOrEmpty(glyphTest)) return true;
 
-        foreach (var rune in glyphTest.EnumerateRunes())
+        try
         {
-            if (!SupportsGlyph(family, rune.Value)) return false;
-        }
+            foreach (var rune in glyphTest.EnumerateRunes())
+            {
+                if (!SupportsGlyph(family, rune.Value)) return false;
+            }
 
-        return true;
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static bool SupportsGlyph(FontFamily family, int codePoint)

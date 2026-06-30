@@ -448,6 +448,11 @@ public sealed class HeroAssetStoryGenerator(
                     generatedFiles.AddRange(azureResult.GeneratedFiles);
                     await ApplySelectedHeroRendererContractAsync(layoutValidationPath, "AzureHeroRendererV2", "CinematicHero", genericRendererApplied: false, cinematicHeroPromptApplied: true, cancellationToken);
                 }
+                catch (Exception ex) when (ex is HeroOverlayRenderingException)
+                {
+                    warnings.Add($"Azure hero renderer overlay failed after Azure path; GenericHeroRenderer fallback is blocked: {ex.Message}");
+                    throw;
+                }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     warnings.Add($"Azure hero renderer unavailable; GenericHeroRenderer fallback applied: {ex.Message}");
@@ -1416,7 +1421,14 @@ public sealed class HeroAssetStoryGenerator(
                 effectivePrompt = StrengthenHeroVariantCompositionPrompt(effectivePrompt, compositionReport);
             }
 
-            await WriteHeroV6OverlayAsync(backgroundPath, outputPath, prompt.Width, prompt.Height, heroStory, selectedHook, compositionModel, intelligence, cancellationToken);
+            try
+            {
+                await WriteHeroV6OverlayAsync(backgroundPath, outputPath, prompt.Width, prompt.Height, heroStory, selectedHook, compositionModel, intelligence, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new HeroOverlayRenderingException("Phase 11 Hero Azure background generation completed, but deterministic overlay rendering failed. GenericHeroRenderer fallback is not allowed for overlay/font failures.", ex);
+            }
             var hash = await ComputeSha256Async(outputPath, cancellationToken);
             generatedFiles.Add(NormalizePath(backgroundPath));
             generatedFiles.Add(NormalizePath(outputPath));
@@ -2015,6 +2027,7 @@ public sealed class HeroAssetStoryGenerator(
             devanagariGlyphSupport = fontDiagnostics.DevanagariGlyphSupport,
             glyphTestText = fontDiagnostics.GlyphTestText,
             glyphTestPassed = fontDiagnostics.GlyphTestPassed,
+            fontWarning = fontDiagnostics.GlyphTestPassed ? null : "Font glyph support could not be verified or is incomplete; AzureHeroRendererV2 and CinematicHero path were preserved.",
             typographyResolverUsed = fontDiagnostics.TypographyResolverUsed,
             directionSourceText = FirstNonEmpty(compositionModel.DirectionBlock.Text, heroStory.HeroAction, heroStory.HeroStorySource.Where),
             rawTimeSource,
@@ -3119,6 +3132,8 @@ public sealed class HeroAssetStoryGenerator(
         bool PhysicalWriteSucceeded,
         string? PhysicalWriteException,
         IReadOnlyDictionary<string, long> GeneratedVariantFileSizes);
+
+    private sealed class HeroOverlayRenderingException(string message, Exception innerException) : Exception(message, innerException);
 
     private sealed record HeroFontRenderingDiagnostics(
         string Language,
