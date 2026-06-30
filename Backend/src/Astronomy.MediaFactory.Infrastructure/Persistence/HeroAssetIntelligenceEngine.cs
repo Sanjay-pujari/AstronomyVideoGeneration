@@ -1767,7 +1767,7 @@ public sealed class HeroAssetStoryGenerator(
         await image.SaveAsPngAsync(outputPath, cancellationToken);
     }
 
-    private static (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string RenderedSubtitleSource, string LocalizedTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle) ResolveHeroV6OverlayTitleAndSubtitle(
+    private static (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string RenderedSubtitleSource, string LocalizedTitleText, string CompactTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle, bool TitleResolverUsed) ResolveHeroV6OverlayTitleAndSubtitle(
         HeroAssetStoryDto heroStory,
         string selectedHook,
         HeroCompositionModelDto compositionModel,
@@ -1776,34 +1776,46 @@ public sealed class HeroAssetStoryGenerator(
         var (localizedTitleText, defaultSubtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
         var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook);
         var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
-        var compactTitleText = HeroMetadataNormalizer.NormalizeTitle(FirstNonEmpty(compositionModel.TitleBlock.Text, localizedTitleText), eventFamily, heroStory.Language);
+        var compactTitleText = IsHindi(heroStory.Language)
+            ? localizedTitleText
+            : HeroMetadataNormalizer.NormalizeTitle(FirstNonEmpty(compositionModel.TitleBlock.Text, localizedTitleText), eventFamily, heroStory.Language);
         var localizedEventTitle = IsHindi(heroStory.Language) ? LocalizeKnownAstronomyTitle(eventTitle) : eventTitle;
         var hookText = FirstNonEmpty(heroStory.HeroHook, selectedHook, compositionModel.HookBlock.Text);
         if (IsHindi(heroStory.Language))
             hookText = LocalizeHeroHook(hookText, heroStory.Language);
 
-        var (title, titleSource) = FirstNonEmptyWithSource(
+        var (title, titleSource) = HeroTitleResolver.Resolve(
+            heroStory.Language,
             ("localizedTitleText", localizedTitleText),
             ("compactTitleText", compactTitleText),
             ("localizedEventTitle", localizedEventTitle),
+            ("localizedObjectHeadline", LocalizeKnownAstronomyTitle(eventObjectContext.ObjectHeadlineText)),
             ("eventTitle", eventTitle),
+            ("objectHeadline", eventObjectContext.ObjectHeadlineText),
             ("hookBlock.text", compositionModel.HookBlock.Text));
         var subtitle = FirstNonEmpty(defaultSubtitle, hookText, heroStory.HeroMessage);
         var subtitleSource = string.Equals(subtitle, defaultSubtitle, StringComparison.Ordinal) ? "normalizedSubtitleText"
             : string.Equals(subtitle, hookText, StringComparison.Ordinal) ? "hookText"
             : "heroMessage";
-        var hookUsedAsTitle = string.Equals(localizedTitleText, hookText, StringComparison.Ordinal)
-            || (IsHindi(heroStory.Language) && string.Equals(localizedTitleText, LocalizeHeroHook(hookText, heroStory.Language), StringComparison.Ordinal));
-        return (title, titleSource, subtitle, subtitleSource, localizedTitleText, hookText, hookUsedAsTitle, string.Equals(title, localizedTitleText, StringComparison.Ordinal));
+        var hookUsedAsTitle = string.Equals(title, hookText, StringComparison.Ordinal);
+        return (title, titleSource, subtitle, subtitleSource, localizedTitleText, compactTitleText, hookText, hookUsedAsTitle, string.Equals(title, localizedTitleText, StringComparison.Ordinal), true);
     }
 
-    private static void ValidateHeroV6RenderedTitle(HeroAssetStoryDto heroStory, (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string RenderedSubtitleSource, string LocalizedTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle) overlayText)
+    private static void ValidateHeroV6RenderedTitle(HeroAssetStoryDto heroStory, (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string RenderedSubtitleSource, string LocalizedTitleText, string CompactTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle, bool TitleResolverUsed) overlayText)
     {
-        if (IsHindi(heroStory.Language) && !string.IsNullOrWhiteSpace(overlayText.LocalizedTitleText) && !string.Equals(overlayText.RenderedTitleText, overlayText.LocalizedTitleText, StringComparison.Ordinal))
-            throw new InvalidOperationException($"Phase 11 Hero rendering failed: Hindi renderedTitleText must equal localizedTitleText. renderedTitleText={overlayText.RenderedTitleText}; localizedTitleText={overlayText.LocalizedTitleText}; renderedTitleSource={overlayText.RenderedTitleSource}");
+        if (!IsEnglish(heroStory.Language) && !string.IsNullOrWhiteSpace(overlayText.LocalizedTitleText) && !string.Equals(overlayText.RenderedTitleText, overlayText.LocalizedTitleText, StringComparison.Ordinal) && !string.Equals(overlayText.RenderedTitleText, overlayText.CompactTitleText, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Phase 11 Hero rendering failed: non-English renderedTitleText must equal localizedTitleText or compactTitleText. renderedTitleText={overlayText.RenderedTitleText}; localizedTitleText={overlayText.LocalizedTitleText}; compactTitleText={overlayText.CompactTitleText}; renderedTitleSource={overlayText.RenderedTitleSource}");
         if (!overlayText.HookUsedAsTitle && string.Equals(overlayText.RenderedTitleText, overlayText.HookText, StringComparison.Ordinal))
             throw new InvalidOperationException("Phase 11 Hero rendering failed: renderedTitleText matched hookText while hookUsedAsTitle=false.");
+        if (!string.IsNullOrWhiteSpace(overlayText.LocalizedTitleText) && IsKnownGenericHeroHook(overlayText.RenderedTitleText))
+            throw new InvalidOperationException("Phase 11 Hero rendering failed: renderedTitleText is a known generic hook despite an event-specific title being available.");
     }
+
+    private static bool IsEnglish(string? language) => string.IsNullOrWhiteSpace(language) || language.StartsWith("en", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsKnownGenericHeroHook(string? value)
+        => string.Equals(Clean(value), "चरम क्षण को न चूकें", StringComparison.Ordinal)
+        || string.Equals(Clean(value), "DON'T MISS THE PEAK", StringComparison.OrdinalIgnoreCase);
 
     private static (string Value, string Source) FirstNonEmptyWithSource(params (string Source, string? Value)[] candidates)
     {
@@ -2193,10 +2205,12 @@ public sealed class HeroAssetStoryGenerator(
         var compactTitleText = heroTitle;
         var compactSubtitleText = heroSubtitle;
         var overlayText = ResolveHeroV6OverlayTitleAndSubtitle(heroStory, selectedHook, compositionModel, intelligence);
-        if (IsHindi(heroStory.Language) && !string.IsNullOrWhiteSpace(localizedTitleText) && !overlayText.TitleMatchedLocalizedTitle)
-            throw new InvalidOperationException($"Phase 11 Hero rendering validation failed: Hindi renderedTitleText must equal localizedTitleText. renderedTitleText={overlayText.RenderedTitleText}; localizedTitleText={localizedTitleText}; renderedTitleSource={overlayText.RenderedTitleSource}");
-        if (!hookUsedAsTitle && string.Equals(overlayText.RenderedTitleText, hookText, StringComparison.Ordinal))
+        if (!IsEnglish(heroStory.Language) && !string.IsNullOrWhiteSpace(localizedTitleText) && !string.Equals(overlayText.RenderedTitleText, localizedTitleText, StringComparison.Ordinal) && !string.Equals(overlayText.RenderedTitleText, overlayText.CompactTitleText, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Phase 11 Hero rendering validation failed: non-English renderedTitleText must equal localizedTitleText or compactTitleText. renderedTitleText={overlayText.RenderedTitleText}; localizedTitleText={localizedTitleText}; compactTitleText={overlayText.CompactTitleText}; renderedTitleSource={overlayText.RenderedTitleSource}");
+        if (!overlayText.HookUsedAsTitle && string.Equals(overlayText.RenderedTitleText, overlayText.HookText, StringComparison.Ordinal))
             throw new InvalidOperationException("Phase 11 Hero rendering validation failed: renderedTitleText matched hookText while hookUsedAsTitle=false.");
+        if (!string.IsNullOrWhiteSpace(localizedTitleText) && IsKnownGenericHeroHook(overlayText.RenderedTitleText))
+            throw new InvalidOperationException("Phase 11 Hero rendering validation failed: renderedTitleText is a known generic hook despite an event-specific title being available.");
         var footerTextCompactValidationPassed = !string.IsNullOrWhiteSpace(compactTimeText) && !string.IsNullOrWhiteSpace(compactDirectionText) && CountWords(compactDirectionText) <= 4 && !System.Text.RegularExpressions.Regex.IsMatch(compactTimeText, @"\b\d{4}-\d{2}-\d{2}\b") && !ContainsRawRegionId(compactTimeText) && !ContainsRawRegionId(compactDirectionText);
         var renderedTimeText = rendered.RenderedTimeText;
         var renderedDirectionText = rendered.RenderedDirectionText;
@@ -2253,14 +2267,15 @@ public sealed class HeroAssetStoryGenerator(
             localizedTitleText,
             titleSourceField,
             hookText,
-            hookUsedAsTitle,
+            hookUsedAsTitle = overlayText.HookUsedAsTitle,
             hindiTitleEventSpecificValidationPassed,
-            compactTitleText,
+            compactTitleText = overlayText.CompactTitleText,
             renderedTitleText = overlayText.RenderedTitleText,
             renderedTitleSource = overlayText.RenderedTitleSource,
             renderedSubtitleText = overlayText.RenderedSubtitleText,
             renderedSubtitleSource = overlayText.RenderedSubtitleSource,
             titleMatchedLocalizedTitle = overlayText.TitleMatchedLocalizedTitle,
+            titleResolverUsed = overlayText.TitleResolverUsed,
             rawSubtitleSource,
             compactSubtitleText,
             heroMetadataNormalizerUsed = true,
