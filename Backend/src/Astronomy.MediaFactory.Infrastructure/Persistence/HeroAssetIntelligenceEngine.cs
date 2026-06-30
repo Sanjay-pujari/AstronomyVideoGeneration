@@ -1163,6 +1163,12 @@ public sealed class HeroAssetStoryGenerator(
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         var heroContract = ResolveHeroContract(request.ProductionContext, intelligence);
         var titleOverlay = HeroMetadataNormalizer.NormalizeTitle(BuildCinematicHeroTitleOverlay(eventObjectContext, eventTitle, eventType, selectedHook), eventType, request.Language);
+        var normalizedTitleBlockText = IsHindi(request.Language)
+            ? BuildHeroOverlayLines(heroStory, selectedHook, intelligence).Title
+            : titleOverlay;
+        var normalizedHookBlockText = IsHindi(request.Language)
+            ? LocalizeHeroHook(FirstNonEmpty(heroStory.HeroHook, selectedHook), request.Language)
+            : titleOverlay;
         var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Date from event intelligence";
         var rawTimeText = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow);
         var timeText = HeroMetadataNormalizer.NormalizeTime(rawTimeText, eventType, request.Language);
@@ -1174,12 +1180,15 @@ public sealed class HeroAssetStoryGenerator(
             : BuildCinematicHeroBackgroundPrompt(eventTitle, eventType, objectText);
 
         return new HeroCompositionModelDto(
-            new HeroCompositionHookBlockDto(titleOverlay),
+            new HeroCompositionHookBlockDto(normalizedHookBlockText),
             new HeroCompositionSceneBlockDto(prompt),
             new HeroCompositionTextBlockDto("direction-panel", directionText),
             new HeroCompositionTextBlockDto("date-time-panel", timeText),
             new HeroCompositionTextBlockDto(heroContract == "GuideHero" ? "object-labels" : "", heroContract == "GuideHero" ? objectText : ""),
-            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(directionText), !string.IsNullOrWhiteSpace(timeText), heroContract == "GuideHero" && !string.IsNullOrWhiteSpace(objectText), !string.IsNullOrWhiteSpace(directionText) && !string.IsNullOrWhiteSpace(timeText) ? 100 : 70));
+            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(directionText), !string.IsNullOrWhiteSpace(timeText), heroContract == "GuideHero" && !string.IsNullOrWhiteSpace(objectText), !string.IsNullOrWhiteSpace(directionText) && !string.IsNullOrWhiteSpace(timeText) ? 100 : 70))
+        {
+            TitleBlock = new HeroCompositionTextBlockDto("title-overlay", normalizedTitleBlockText)
+        };
     }
 
 
@@ -1197,13 +1206,22 @@ public sealed class HeroAssetStoryGenerator(
         var rawDirection = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint, "Follow event safety guidance");
         var time = HeroMetadataNormalizer.NormalizeTime(rawTime, eventFamily, request.Language);
         var direction = HeroMetadataNormalizer.NormalizeDirection(rawDirection, eventFamily, request.Language);
+        var normalizedTitleBlockText = IsHindi(request.Language)
+            ? BuildHeroOverlayLines(heroStory, selectedHook, intelligence).Title
+            : Clean(eventTitle);
+        var normalizedHookBlockText = IsHindi(request.Language)
+            ? LocalizeHeroHook(FirstNonEmpty(heroStory.HeroHook, selectedHook), request.Language)
+            : Clean(eventTitle);
         return new HeroCompositionModelDto(
-            new HeroCompositionHookBlockDto(Clean(eventTitle)),
+            new HeroCompositionHookBlockDto(normalizedHookBlockText),
             new HeroCompositionSceneBlockDto($"generic astronomy hero background for {Clean(eventTitle)} with subtitle {Clean(subtitle)}"),
             new HeroCompositionTextBlockDto("direction-panel", direction),
             new HeroCompositionTextBlockDto("date-time-panel", time),
             new HeroCompositionTextBlockDto("", ""),
-            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(direction), !string.IsNullOrWhiteSpace(time), false, !string.IsNullOrWhiteSpace(direction) && !string.IsNullOrWhiteSpace(time) ? 90 : 70));
+            new HeroCompositionValidationDto(true, true, !string.IsNullOrWhiteSpace(direction), !string.IsNullOrWhiteSpace(time), false, !string.IsNullOrWhiteSpace(direction) && !string.IsNullOrWhiteSpace(time) ? 90 : 70))
+        {
+            TitleBlock = new HeroCompositionTextBlockDto("title-overlay", normalizedTitleBlockText)
+        };
     }
 
     private static string ResolvePhase11HeroEventFamily(HeroAssetStoryGenerationRequest request, ProductionEventIntelligence? intelligence)
@@ -1682,14 +1700,14 @@ public sealed class HeroAssetStoryGenerator(
     private async Task WriteHeroV6OverlayAsync(string backgroundPath, string outputPath, int width, int height, HeroAssetStoryDto heroStory, string selectedHook, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence, CancellationToken cancellationToken)
     {
         using var image = await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken);
+        var overlayText = ResolveHeroV6OverlayTitleAndSubtitle(heroStory, selectedHook, compositionModel, intelligence);
+        ValidateHeroV6RenderedTitle(heroStory, overlayText);
         image.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
             ctx.Fill(Color.Black.WithAlpha(0.12f), new RectangleF(0, 0, width, height));
 
-            var (title, subtitle) = IsHindi(heroStory.Language)
-                ? (compositionModel.HookBlock.Text, heroStory.HeroMessage)
-                : BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
+            var (title, subtitle) = (overlayText.RenderedTitleText, overlayText.RenderedSubtitleText);
             var landscape = width > height;
             var square = width == height;
             var portrait = height > width;
@@ -1747,6 +1765,55 @@ public sealed class HeroAssetStoryGenerator(
         });
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
         await image.SaveAsPngAsync(outputPath, cancellationToken);
+    }
+
+    private static (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string RenderedSubtitleSource, string LocalizedTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle) ResolveHeroV6OverlayTitleAndSubtitle(
+        HeroAssetStoryDto heroStory,
+        string selectedHook,
+        HeroCompositionModelDto compositionModel,
+        ProductionEventIntelligence? intelligence)
+    {
+        var (localizedTitleText, defaultSubtitle) = BuildHeroOverlayLines(heroStory, selectedHook, intelligence);
+        var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook);
+        var eventFamily = ResolveEventFamilyFromIntelligence(intelligence);
+        var compactTitleText = HeroMetadataNormalizer.NormalizeTitle(FirstNonEmpty(compositionModel.TitleBlock.Text, localizedTitleText), eventFamily, heroStory.Language);
+        var localizedEventTitle = IsHindi(heroStory.Language) ? LocalizeKnownAstronomyTitle(eventTitle) : eventTitle;
+        var hookText = FirstNonEmpty(heroStory.HeroHook, selectedHook, compositionModel.HookBlock.Text);
+        if (IsHindi(heroStory.Language))
+            hookText = LocalizeHeroHook(hookText, heroStory.Language);
+
+        var (title, titleSource) = FirstNonEmptyWithSource(
+            ("localizedTitleText", localizedTitleText),
+            ("compactTitleText", compactTitleText),
+            ("localizedEventTitle", localizedEventTitle),
+            ("eventTitle", eventTitle),
+            ("hookBlock.text", compositionModel.HookBlock.Text));
+        var subtitle = FirstNonEmpty(defaultSubtitle, hookText, heroStory.HeroMessage);
+        var subtitleSource = string.Equals(subtitle, defaultSubtitle, StringComparison.Ordinal) ? "normalizedSubtitleText"
+            : string.Equals(subtitle, hookText, StringComparison.Ordinal) ? "hookText"
+            : "heroMessage";
+        var hookUsedAsTitle = string.Equals(localizedTitleText, hookText, StringComparison.Ordinal)
+            || (IsHindi(heroStory.Language) && string.Equals(localizedTitleText, LocalizeHeroHook(hookText, heroStory.Language), StringComparison.Ordinal));
+        return (title, titleSource, subtitle, subtitleSource, localizedTitleText, hookText, hookUsedAsTitle, string.Equals(title, localizedTitleText, StringComparison.Ordinal));
+    }
+
+    private static void ValidateHeroV6RenderedTitle(HeroAssetStoryDto heroStory, (string RenderedTitleText, string RenderedTitleSource, string RenderedSubtitleText, string RenderedSubtitleSource, string LocalizedTitleText, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle) overlayText)
+    {
+        if (IsHindi(heroStory.Language) && !string.IsNullOrWhiteSpace(overlayText.LocalizedTitleText) && !string.Equals(overlayText.RenderedTitleText, overlayText.LocalizedTitleText, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Phase 11 Hero rendering failed: Hindi renderedTitleText must equal localizedTitleText. renderedTitleText={overlayText.RenderedTitleText}; localizedTitleText={overlayText.LocalizedTitleText}; renderedTitleSource={overlayText.RenderedTitleSource}");
+        if (!overlayText.HookUsedAsTitle && string.Equals(overlayText.RenderedTitleText, overlayText.HookText, StringComparison.Ordinal))
+            throw new InvalidOperationException("Phase 11 Hero rendering failed: renderedTitleText matched hookText while hookUsedAsTitle=false.");
+    }
+
+    private static (string Value, string Source) FirstNonEmptyWithSource(params (string Source, string? Value)[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            var value = Clean(candidate.Value);
+            if (!string.IsNullOrWhiteSpace(value))
+                return (value, candidate.Source);
+        }
+        return (string.Empty, string.Empty);
     }
 
     private static (string Date, string Time, string Direction) BuildHeroV6MetadataValues(HeroAssetStoryDto heroStory, HeroCompositionModelDto compositionModel, ProductionEventIntelligence? intelligence)
@@ -2125,6 +2192,11 @@ public sealed class HeroAssetStoryGenerator(
         var compactDirectionText = HeroMetadataNormalizer.NormalizeDirection(rawDirectionSource, eventFamily, string.Empty);
         var compactTitleText = heroTitle;
         var compactSubtitleText = heroSubtitle;
+        var overlayText = ResolveHeroV6OverlayTitleAndSubtitle(heroStory, selectedHook, compositionModel, intelligence);
+        if (IsHindi(heroStory.Language) && !string.IsNullOrWhiteSpace(localizedTitleText) && !overlayText.TitleMatchedLocalizedTitle)
+            throw new InvalidOperationException($"Phase 11 Hero rendering validation failed: Hindi renderedTitleText must equal localizedTitleText. renderedTitleText={overlayText.RenderedTitleText}; localizedTitleText={localizedTitleText}; renderedTitleSource={overlayText.RenderedTitleSource}");
+        if (!hookUsedAsTitle && string.Equals(overlayText.RenderedTitleText, hookText, StringComparison.Ordinal))
+            throw new InvalidOperationException("Phase 11 Hero rendering validation failed: renderedTitleText matched hookText while hookUsedAsTitle=false.");
         var footerTextCompactValidationPassed = !string.IsNullOrWhiteSpace(compactTimeText) && !string.IsNullOrWhiteSpace(compactDirectionText) && CountWords(compactDirectionText) <= 4 && !System.Text.RegularExpressions.Regex.IsMatch(compactTimeText, @"\b\d{4}-\d{2}-\d{2}\b") && !ContainsRawRegionId(compactTimeText) && !ContainsRawRegionId(compactDirectionText);
         var renderedTimeText = rendered.RenderedTimeText;
         var renderedDirectionText = rendered.RenderedDirectionText;
@@ -2184,6 +2256,11 @@ public sealed class HeroAssetStoryGenerator(
             hookUsedAsTitle,
             hindiTitleEventSpecificValidationPassed,
             compactTitleText,
+            renderedTitleText = overlayText.RenderedTitleText,
+            renderedTitleSource = overlayText.RenderedTitleSource,
+            renderedSubtitleText = overlayText.RenderedSubtitleText,
+            renderedSubtitleSource = overlayText.RenderedSubtitleSource,
+            titleMatchedLocalizedTitle = overlayText.TitleMatchedLocalizedTitle,
             rawSubtitleSource,
             compactSubtitleText,
             heroMetadataNormalizerUsed = true,
