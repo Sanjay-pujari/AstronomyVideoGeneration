@@ -958,6 +958,49 @@ public sealed class HeroAssetStoryGeneratorTests
             RequiredVisualObjects: [title],
             HeroCopyCandidates: [title.ToUpperInvariant()]);
 
+    private static HeroAssetStoryDto BuildHeroStory(string language, string title, string hook)
+        => new(
+            EventId,
+            RegionId,
+            language,
+            hook,
+            "A concise astronomy hero message.",
+            "Look toward the eastern sky",
+            "Cinematic astronomy hero background.",
+            "Wonder + urgency",
+            "ScrollStoppingHeroAsset",
+            new HeroStorySourceDto(title, "eastern sky", "9:00 PM local", "bright astronomy event"),
+            new HeroAssetStoryScoresDto(95, 95, 95, 95),
+            95,
+            DateTimeOffset.Parse("2026-06-27T00:00:00Z"));
+
+    private static HeroCompositionModelDto BuildComposition(string hook)
+        => new(
+            new HeroCompositionHookBlockDto(hook),
+            new HeroCompositionSceneBlockDto("cinematic sky"),
+            new HeroCompositionTextBlockDto("direction", "Eastern sky"),
+            new HeroCompositionTextBlockDto("timing", "9:00 PM local"),
+            new HeroCompositionTextBlockDto("cta", hook),
+            new HeroCompositionValidationDto(true, true, true, true, true, 100));
+
+    private static (string RenderedTitleText, string RenderedTitleSource, string HookText, bool HookUsedAsTitle, bool TitleMatchedLocalizedTitle, bool TitleResolverUsed) InvokeHeroV65TitleResolver(
+        HeroAssetStoryDto story,
+        string selectedHook,
+        HeroCompositionModelDto composition,
+        ProductionEventIntelligence intelligence)
+    {
+        var method = typeof(HeroAssetIntelligenceEngine).GetMethod("ResolveHeroV6OverlayTitleAndSubtitle", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        var tuple = (System.Runtime.CompilerServices.ITuple)method!.Invoke(null, [story, selectedHook, composition, intelligence])!;
+        return (
+            (string)tuple[0]!,
+            (string)tuple[1]!,
+            (string)tuple[6]!,
+            (bool)tuple[7]!,
+            (bool)tuple[8]!,
+            (bool)tuple[9]!);
+    }
+
     private static ProductionEventIntelligence BuildMeteorProductionEventIntelligence()
         => new(
             "Astronomy",
@@ -1194,6 +1237,51 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal(expectedTitle, result.Title);
         Assert.NotEqual("चरम क्षण को न चूकें", result.Title);
         Assert.Equal("चरम क्षण को न चूकें", result.Subtitle);
+    }
+
+    [Theory]
+    [InlineData("SolarEclipse", "Total Solar Eclipse", "Sun", "Moon", "पूर्ण सूर्य ग्रहण")]
+    [InlineData("MeteorShower", "Perseids Meteor Shower Peak", "Perseids", "", "पर्सिड्स उल्का वर्षा")]
+    [InlineData("MeteorShower", "Geminids Meteor Shower Peak", "Geminids", "", "जेमिनिड्स उल्का वर्षा")]
+    [InlineData("PlanetConjunction", "Jupiter Venus Conjunction", "Jupiter", "Venus", "बृहस्पति और शुक्र")]
+    [InlineData("PlanetConjunction", "Jupiter Mars Conjunction", "Jupiter", "Mars", "बृहस्पति और मंगल")]
+    public void HeroV65TitleResolver_HindiUsesLocalizedEventTitleInsteadOfGenericHook(string eventType, string title, string primaryObject, string secondaryObject, string expectedTitle)
+    {
+        var story = BuildHeroStory("hi", title, "चरम क्षण को न चूकें");
+        var intelligence = BuildProductionEventIntelligence(eventType, title) with
+        {
+            PrimaryObjects = string.IsNullOrWhiteSpace(primaryObject) ? [] : [primaryObject],
+            SecondaryObjects = string.IsNullOrWhiteSpace(secondaryObject) ? [] : [secondaryObject]
+        };
+        var composition = BuildComposition("चरम क्षण को न चूकें") with
+        {
+            TitleBlock = new HeroCompositionTextBlockDto("", "")
+        };
+
+        var resolved = InvokeHeroV65TitleResolver(story, "चरम क्षण को न चूकें", composition, intelligence);
+
+        Assert.Equal(expectedTitle, resolved.RenderedTitleText);
+        Assert.Equal("localizedTitleText", resolved.RenderedTitleSource);
+        Assert.Equal("चरम क्षण को न चूकें", resolved.HookText);
+        Assert.False(resolved.HookUsedAsTitle);
+        Assert.True(resolved.TitleMatchedLocalizedTitle);
+        Assert.True(resolved.TitleResolverUsed);
+    }
+
+    [Theory]
+    [InlineData("SolarEclipse", "Total Solar Eclipse", "TOTAL SOLAR ECLIPSE")]
+    [InlineData("MeteorShower", "Perseids Meteor Shower Peak", "PERSEIDS METEOR SHOWER PEAK")]
+    [InlineData("PlanetConjunction", "Jupiter Venus Conjunction", "JUPITER VENUS CONJUNCTION")]
+    public void HeroV65TitleResolver_EnglishKeepsEventSpecificTitleBehavior(string eventType, string title, string expectedTitle)
+    {
+        var story = BuildHeroStory("en", title, "DON'T MISS THE PEAK");
+        var composition = BuildComposition("DON'T MISS THE PEAK");
+
+        var resolved = InvokeHeroV65TitleResolver(story, "DON'T MISS THE PEAK", composition, BuildProductionEventIntelligence(eventType, title));
+
+        Assert.Equal(expectedTitle, resolved.RenderedTitleText);
+        Assert.NotEqual("DON'T MISS THE PEAK", resolved.RenderedTitleText);
+        Assert.True(resolved.TitleResolverUsed);
     }
 
     [Fact]
