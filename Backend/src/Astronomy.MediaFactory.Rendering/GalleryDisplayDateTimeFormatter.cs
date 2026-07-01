@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Astronomy.MediaFactory.Core;
 
 namespace Astronomy.MediaFactory.Rendering;
 
@@ -23,7 +24,7 @@ public static class GalleryDisplayDateTimeFormatter
             ? FormatDate(local.Value.DateTime, culture)
             : TryParseDateOnly(eventDate, out var dateOnly)
                 ? FormatDate(dateOnly, culture)
-                : isHindi ? "तारीख उपलब्ध नहीं" : "Date TBD";
+                : (isHindi ? "तारीख उपलब्ध नहीं" : "Date TBD");
         var timeText = local is not null
             ? FormatTime(local.Value.DateTime, tz, isHindi)
             : FormatFreeTextTime(localTime, isHindi);
