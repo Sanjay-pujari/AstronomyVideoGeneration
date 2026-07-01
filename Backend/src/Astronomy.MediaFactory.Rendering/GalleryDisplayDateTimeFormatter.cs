@@ -7,6 +7,8 @@ namespace Astronomy.MediaFactory.Rendering;
 public static class GalleryDisplayDateTimeFormatter
 {
     private static readonly CultureInfo EnglishCulture = CultureInfo.GetCultureInfo("en-US");
+    private static readonly CultureInfo HindiCulture = CultureInfo.GetCultureInfo("hi-IN");
+
     public static GalleryDisplayDateTime Format(string? eventDate, string? localTime, string? timezone, string? language)
     {
         var isHindi = LocalizationResolver.IsHindi(language);
