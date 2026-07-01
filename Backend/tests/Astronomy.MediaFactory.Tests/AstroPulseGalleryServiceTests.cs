@@ -29,7 +29,7 @@ public sealed class AstroPulseGalleryServiceTests
     [MemberData(nameof(RequiredGalleryCoverage))]
     public void GalleryV3_Topics_PreserveEducationalSequence_ForRequiredEventLanguageAndAspectCoverage(string eventType, string language, AstroPulseGalleryAspect aspect)
     {
-        var context = new AstroPulseGalleryService.GalleryContext(eventType, eventType, "story", "visual", "July 1, 2026", "9 PM", "US", language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues(eventType, eventType, [eventType], [], [], []), []);
+        var context = new AstroPulseGalleryService.GalleryContext(eventType, eventType, "story", "visual", "July 1, 2026", "9 PM", "US", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues(eventType, eventType, [eventType], [], [], []), []);
 
         var topics = AstroPulseGalleryService.BuildTopics(context);
 
@@ -46,7 +46,7 @@ public sealed class AstroPulseGalleryServiceTests
     [InlineData("hi", true)]
     public void GalleryV3_Topics_LocalizeMetadataAndOverlayText(string language, bool expectHindi)
     {
-        var context = new AstroPulseGalleryService.GalleryContext("Meteor Shower", "Meteor Shower", "story", "visual", "July 1, 2026", "9 PM", "US", language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("Meteor Shower", "Meteor Shower", ["Perseids"], [], [], []), []);
+        var context = new AstroPulseGalleryService.GalleryContext("Meteor Shower", "Meteor Shower", "story", "visual", "July 1, 2026", "9 PM", "US", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("Meteor Shower", "Meteor Shower", ["Perseids"], [], [], []), []);
 
         var topics = AstroPulseGalleryService.BuildTopics(context);
         var text = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
@@ -59,7 +59,7 @@ public sealed class AstroPulseGalleryServiceTests
     [InlineData("hi", "तारीख: 14 दिस॰ 2026", "समय: रात 11:30 बजे IST")]
     public void GalleryV3_Topics_FormatIsoTimestampsAsLocalizedDisplayText(string language, string expectedDate, string expectedTime)
     {
-        var context = new AstroPulseGalleryService.GalleryContext("Meteor Shower", "Meteor Shower", "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T18:00:00+00:00", "India", language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("Meteor Shower", "Meteor Shower", ["Perseids"], [], [], []), []);
+        var context = new AstroPulseGalleryService.GalleryContext("Meteor Shower", "Meteor Shower", "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T18:00:00+00:00", "India", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("Meteor Shower", "Meteor Shower", ["Perseids"], [], [], []), []);
 
         var topics = AstroPulseGalleryService.BuildTopics(context);
         var text = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
