@@ -1786,6 +1786,19 @@ public sealed partial class ProductionPipelineExecutionService(
         var observationGuidePath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "observation-guide-v2.json");
         if (!File.Exists(validationPath))
             errors.Add($"phase-13-validation.json is required at '{NormalizePath(validationPath)}'.");
+        else
+        {
+            using var validationDoc = JsonDocument.Parse(File.ReadAllText(validationPath));
+            var validationRoot = validationDoc.RootElement;
+            if (string.Equals(GetJsonString(validationRoot, "status", string.Empty), "Failed", StringComparison.OrdinalIgnoreCase)
+                || GetJsonBool(validationRoot, "validationPassed", true) == false)
+            {
+                var validationErrors = validationRoot.TryGetProperty("validationErrors", out var validationErrorsElement) && validationErrorsElement.ValueKind == JsonValueKind.Array
+                    ? validationErrorsElement.EnumerateArray().Select(item => item.GetString()).Where(message => !string.IsNullOrWhiteSpace(message)).ToArray()
+                    : [];
+                errors.Add(validationErrors.Length > 0 ? string.Join("; ", validationErrors) : $"phase-13-validation.json reported Failed at '{NormalizePath(validationPath)}'.");
+            }
+        }
         if (!File.Exists(observationGuidePath))
             errors.Add($"ObservationGuide V2 is required at '{NormalizePath(observationGuidePath)}'.");
 
@@ -13281,6 +13294,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static bool GetJsonBool(JsonElement element, string name)
         => element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.True;
+
+    private static bool? GetJsonBool(JsonElement element, string name, bool? fallback)
+        => element.TryGetProperty(name, out var property) && (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False) ? property.GetBoolean() : fallback;
 
     private static int GetJsonInt(JsonElement element, string name, int fallback)
         => element.TryGetProperty(name, out var property) && property.TryGetInt32(out var value) ? value : fallback;
