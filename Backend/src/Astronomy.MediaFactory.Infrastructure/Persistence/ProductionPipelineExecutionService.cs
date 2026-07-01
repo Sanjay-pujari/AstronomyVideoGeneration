@@ -12118,9 +12118,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase13GalleryGuideDiagnostics = phaseNo == 13
             ? BuildPhase13GalleryGuideDiagnostics(context)
             : null;
-        var phase13ShortNarrationDiagnostics = phaseNo == 13
-            ? ReadPhase13ShortNarrationDiagnostics(outputFiles, context)
-            : null;
+        var phase13ShortNarrationDiagnostics = (Phase13ShortNarrationDiagnostics?)null;
         var phase14NarrationDiagnostics = phaseNo == 14
             ? ReadPhase14NarrationDiagnostics(outputFiles, context)
             : null;

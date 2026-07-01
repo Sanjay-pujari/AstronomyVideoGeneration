@@ -215,6 +215,39 @@ public sealed class AstroPulseGalleryServiceTests
         Assert.Contains("NotoSansDevanagari-Bold.ttf", diagnosticsJson);
     }
 
+
+    [Theory]
+    [InlineData("MeteorShower", "Meteor Shower", "en")]
+    [InlineData("MeteorShower", "Meteor Shower", "hi")]
+    [InlineData("FullMoon", "Wolf Moon", "en")]
+    [InlineData("FullMoon", "Wolf Moon", "hi")]
+    [InlineData("PlanetPairing", "Mars and Jupiter Close Pairing", "en")]
+    [InlineData("PlanetPairing", "Mars and Jupiter Close Pairing", "hi")]
+    public void GalleryV3_Phase13ValidationContract_PassesRequiredEventLanguageMatrix(string eventType, string eventName, string language)
+    {
+        var context = new AstroPulseGalleryService.GalleryContext(eventType, eventName, "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T18:00:00+00:00", "India", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues(eventType, eventName, ResolveObjects(eventType, eventName), [], [], []), [], eventName, eventType);
+
+        var validation = AstroPulseGalleryService.BuildPhase13ValidationContractForTesting(context, AstroPulseGalleryAspect.Landscape);
+        var json = System.Text.Json.JsonSerializer.Serialize(validation);
+
+        Assert.DoesNotContain("FAIL", json);
+        Assert.Contains("\"validationPassed\":true", json);
+        Assert.Contains("Phase13GalleryOnly", json);
+        if (language == "hi")
+        {
+            var topics = AstroPulseGalleryService.BuildTopics(context);
+            var overlayText = string.Join(" ", topics.SelectMany(t => t.TextBlocks).Concat(topics.Select(t => t.LocalizedEducationalRole)).Concat(topics.Select(t => t.FooterLabel)));
+            Assert.Contains(overlayText, c => c >= 'ऀ' && c <= 'ॿ');
+        }
+    }
+
+    private static string[] ResolveObjects(string eventType, string eventName)
+        => eventType.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase)
+            ? ["Mars", "Jupiter"]
+            : eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase)
+                ? [eventName, "Moon"]
+                : [eventName];
+
     public static IEnumerable<object[]> GalleryAspects()
     {
         yield return [AstroPulseGalleryAspect.Landscape];
