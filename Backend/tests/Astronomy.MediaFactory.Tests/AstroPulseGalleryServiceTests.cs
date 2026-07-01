@@ -157,6 +157,38 @@ public sealed class AstroPulseGalleryServiceTests
         Assert.Contains("moonSubtypeVisualAttributes", diagnosticsJson);
     }
 
+    [Theory]
+    [InlineData("hi", "मंगल और बृहस्पति की करीबी जोड़ी", "मंगल", "बृहस्पति")]
+    [InlineData("en", "Mars and Jupiter Close Pairing", "Mars", "Jupiter")]
+    public void GalleryContentContract_PlanetPairing_ResolvesLocalizedTitleObjectsAndProvider(string language, string expectedTitle, string expectedMars, string expectedJupiter)
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("PlanetPairing", "Mars and Jupiter Close Pairing", "story", "visual", "2026-08-12T00:30:00+00:00", "2026-08-12T05:30:00+05:30", "East", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("PlanetPairing", "Mars and Jupiter Close Pairing", ["Mars", "Jupiter"], [], [], []), [], "Mars and Jupiter Close Pairing", "PlanetGrouping");
+
+        var contract = AstroPulseGalleryService.ResolveGalleryContentContractForTesting(context);
+        var promptText = string.Join(" ", contract.PromptHints);
+
+        Assert.Equal("PlanetPairingGalleryContentProvider", contract.Diagnostics["selectedProvider"]);
+        Assert.Equal(expectedTitle, contract.LocalizedTitle);
+        Assert.Contains(expectedMars, contract.LocalizedPrimaryObjects);
+        Assert.Contains(expectedJupiter, contract.LocalizedPrimaryObjects);
+        Assert.Contains("Mars reddish-orange", promptText);
+        Assert.Contains("Jupiter bright cream/white", promptText);
+        Assert.DoesNotContain("meteor", promptText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GalleryContentContract_SolarEclipseHindi_UsesSpecificProviderAndLocalizedObjects()
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("SolarEclipse", "Solar Eclipse", "story", "visual", "2026-08-12T17:30:00+00:00", "2026-08-12T17:30:00+00:00", "India", "hi", "hi", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("SolarEclipse", "Solar Eclipse", ["Sun", "Moon"], [], [], []), []);
+
+        var contract = AstroPulseGalleryService.ResolveGalleryContentContractForTesting(context);
+
+        Assert.Equal("SolarEclipseGalleryContentProvider", contract.Diagnostics["selectedProvider"]);
+        Assert.Equal("सूर्य ग्रहण", contract.LocalizedTitle);
+        Assert.Contains("सूर्य", contract.LocalizedPrimaryObjects);
+        Assert.Contains("चंद्रमा", contract.LocalizedPrimaryObjects);
+    }
+
     [Fact]
     public async Task GalleryV3_LoadContext_RequestLanguageOverridesEnglishIntelligenceForHindiPhase13()
     {
