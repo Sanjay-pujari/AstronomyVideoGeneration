@@ -19,7 +19,7 @@ public static class GalleryDisplayDateTimeFormatter
             : TryParseInstant(eventDate, out var eventDateInstant)
                 ? eventDateInstant
                 : (DateTimeOffset?)null;
-        var local = sourceInstant is null ? null : TimeZoneInfo.ConvertTime(sourceInstant.Value, tz);
+        var local = sourceInstant is null ? (DateTimeOffset?)null : TimeZoneInfo.ConvertTime(sourceInstant.Value, tz);
         var dateText = local is not null
             ? FormatDate(local.Value.DateTime, culture)
             : TryParseDateOnly(eventDate, out var dateOnly)
