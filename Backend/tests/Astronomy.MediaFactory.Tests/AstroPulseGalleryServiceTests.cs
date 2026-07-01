@@ -78,6 +78,59 @@ public sealed class AstroPulseGalleryServiceTests
         Assert.True(aspect.Height > 0);
     }
 
+
+    [Theory]
+    [InlineData("MeteorShower", "en", false)]
+    [InlineData("MeteorShower", "hi", true)]
+    [InlineData("SolarEclipse", "hi", true)]
+    public void GalleryV3_Phase13Only_PreservesRequestedLanguageForAcceptanceEvents(string eventType, string language, bool expectHindi)
+    {
+        var context = new AstroPulseGalleryService.GalleryContext(eventType, eventType, "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T18:00:00+00:00", "India", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues(eventType, eventType, [eventType], [], [], []), []);
+
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var overlayText = string.Join(" ", topics.SelectMany(t => t.TextBlocks).Concat(topics.Select(t => t.LocalizedEducationalRole)).Concat(topics.Select(t => t.FooterLabel)));
+
+        Assert.Equal(expectHindi, overlayText.Any(c => c >= '\u0900' && c <= '\u097F'));
+        if (expectHindi)
+        {
+            Assert.DoesNotContain("Opening view", overlayText);
+            Assert.DoesNotContain("What happens", overlayText);
+            Assert.DoesNotContain("Where to look", overlayText);
+            Assert.DoesNotContain("When to observe", overlayText);
+            Assert.DoesNotContain("Key objects", overlayText);
+            Assert.DoesNotContain("Viewing checklist", overlayText);
+            Assert.DoesNotContain("2026-12-14T", overlayText);
+            Assert.Contains("तारीख", overlayText);
+            Assert.Contains("समय", overlayText);
+        }
+    }
+
+    [Fact]
+    public async Task GalleryV3_LoadContext_RequestLanguageOverridesEnglishIntelligenceForHindiPhase13()
+    {
+        var planRoot = Path.Combine(Path.GetTempPath(), $"astropulse-gallery-context-{Guid.NewGuid():N}");
+        var galleryRoot = Path.Combine(planRoot, "gallery");
+        var inputRoot = Path.Combine(planRoot, "plan-input");
+        Directory.CreateDirectory(galleryRoot);
+        Directory.CreateDirectory(inputRoot);
+        await File.WriteAllTextAsync(Path.Combine(inputRoot, "content-plan-production-request.json"), """
+        { "language": "hi", "eventType": "MeteorShower", "title": "Meteor Shower" }
+        """);
+        await File.WriteAllTextAsync(Path.Combine(inputRoot, "production-event-intelligence.json"), """
+        { "language": "en", "eventType": "MeteorShower", "title": "Meteor Shower", "eventDate": "2026-12-14T06:00:00+00:00", "localPeakTime": "2026-12-14T18:00:00+00:00", "resolvedObjectNames": ["Perseids"] }
+        """);
+
+        var context = AstroPulseGalleryService.LoadGalleryContextForTesting(galleryRoot);
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var diagnostics = AstroPulseGalleryService.BuildGalleryLocalizationDiagnostics(context, topics, AstroPulseGalleryAspect.Landscape);
+        var diagnosticsJson = System.Text.Json.JsonSerializer.Serialize(diagnostics);
+
+        Assert.Equal("hi", context.RequestedLanguage);
+        Assert.Equal("hi", context.Language);
+        Assert.Contains("उल्का वर्षा", diagnosticsJson);
+        Assert.Contains("NotoSansDevanagari-Bold.ttf", diagnosticsJson);
+    }
+
     public static IEnumerable<object[]> GalleryAspects()
     {
         yield return [AstroPulseGalleryAspect.Landscape];

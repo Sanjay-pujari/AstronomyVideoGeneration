@@ -44,6 +44,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var galleryContext = LoadGalleryContext(outputDirectory);
         var topics = BuildTopics(galleryContext);
         var localizationDiagnostics = BuildGalleryLocalizationDiagnostics(galleryContext, topics, aspect);
+        var localizationValidation = ValidateGalleryLocalization(galleryContext, topics, aspect);
         var images = new List<object>();
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var imagePaths = new List<string>();
@@ -76,7 +77,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var visualPromptDiagnosticsPath = Path.Combine(outputDirectory, "visual-prompt-diagnostics.json");
         var validationPath = Path.Combine(outputDirectory, "phase-13-validation.json");
         var observationGuidePath = Path.Combine(outputDirectory, "observation-guide-v2.json");
-        var valid = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6;
+        var valid = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6 && localizationValidation.ValidationPassed;
 
         var promptPreview = string.Join(Environment.NewLine, topics.Select(t => t.AzureImage2Prompt));
         EventContentGuard.ValidateNoForbiddenTerms("AstroPulseGalleryService", "gallery prompt", promptPreview, galleryContext.ForbiddenTerms);
@@ -86,9 +87,9 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V3.5", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f) }, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new { accepted = valid, style = "social-media carousel", rejectedStyle = "PowerPoint infographic slide deck", galleryTopicsGenerated = topics.Count, noSharedBackground = true, noDuplicateConcepts = topics.Select(t => t.Concept).Distinct(StringComparer.OrdinalIgnoreCase).Count() == topics.Count, noDuplicateImageHashes = hashes.Count == topics.Count, mobileReadable = true, oneEducationalMessagePerImage = true, storySequencingApplied = true, sharedFooterApplied = true, skyVisualDominant = true, textAreaMaxPercent = 25 }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(observationGuidePath, JsonSerializer.Serialize(new { guideVersion = "V2", oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, eventFamily = galleryContext.EventType, outputPath = observationGuidePath, tips = BuildObservationGuideTips(galleryContext.EventType, galleryContext.Language) }, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, language = galleryContext.Language, requestedLanguage = galleryContext.RequestedLanguage, resolvedLanguage = galleryContext.Language, localizationDiagnostics, aspectVariant = aspect.Name, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = Array.Empty<string>() }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, language = galleryContext.Language, requestedLanguage = galleryContext.RequestedLanguage, resolvedLanguage = galleryContext.Language, localizationDiagnostics, aspectVariant = aspect.Name, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = localizationValidation.Warnings, validationErrors = localizationValidation.Errors }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(BuildVisualPromptDiagnostics(galleryContext, topics), JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid && File.Exists(observationGuidePath) ? "Succeeded" : "Failed", galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), observationGuideExists = File.Exists(observationGuidePath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, validationParityChecklist = BuildValidationChecklist(galleryContext, topics, imagePaths, hashes, azureCalls, aspect), phase12Executed = false, thumbnailRegenerationOccurred = false, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f), localizationDiagnostics } }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid && File.Exists(observationGuidePath) ? "Succeeded" : "Failed", galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), observationGuideExists = File.Exists(observationGuidePath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, validationParityChecklist = BuildValidationChecklist(galleryContext, topics, imagePaths, hashes, azureCalls, aspect), validationWarnings = localizationValidation.Warnings, validationErrors = localizationValidation.Errors, validationPassed = valid && File.Exists(observationGuidePath), phase12Executed = false, thumbnailRegenerationOccurred = false, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f), localizationDiagnostics } }, JsonOptions), cancellationToken);
         return new AstroPulseGalleryResult(outputDirectory, imagePaths, reviewPath, manifestPath, diagnosticsPath, validationPath);
     }
 
@@ -168,7 +169,32 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         };
     }
 
-    private static object BuildValidationChecklist(GalleryContext context, IReadOnlyList<GalleryTopic> topics, IReadOnlyList<string> imagePaths, HashSet<string> hashes, int azureCalls, AstroPulseGalleryAspect aspect) => new { hindiLocalization = LocalizationResolver.IsHindi(context.Language) ? topics.SelectMany(t => t.TextBlocks).Any(ContainsDevanagari) : true, sharedFooter = true, validationParity = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6, promptRefinement = topics.All(t => t.AzureImage2Prompt.Contains("one educational idea", StringComparison.OrdinalIgnoreCase) || t.AzureImage2Prompt.Contains("Educational role", StringComparison.OrdinalIgnoreCase)), diagnostics = true, educationalOverlay = topics.All(t => !string.IsNullOrWhiteSpace(t.EducationalRole)), storySequencing = topics.Select(t => t.Number).SequenceEqual(Enumerable.Range(1, 6)), aspectSupported = aspect.Width > 0 && aspect.Height > 0 };
+    private static object BuildValidationChecklist(GalleryContext context, IReadOnlyList<GalleryTopic> topics, IReadOnlyList<string> imagePaths, HashSet<string> hashes, int azureCalls, AstroPulseGalleryAspect aspect)
+    {
+        var localization = ValidateGalleryLocalization(context, topics, aspect);
+        return new { hindiLocalization = localization.HindiLocalization, sharedFooter = true, validationParity = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6, promptRefinement = topics.All(t => t.AzureImage2Prompt.Contains("one educational idea", StringComparison.OrdinalIgnoreCase) || t.AzureImage2Prompt.Contains("Educational role", StringComparison.OrdinalIgnoreCase)), diagnostics = true, educationalOverlay = topics.All(t => !string.IsNullOrWhiteSpace(t.EducationalRole)), storySequencing = topics.Select(t => t.Number).SequenceEqual(Enumerable.Range(1, 6)), aspectSupported = aspect.Width > 0 && aspect.Height > 0 };
+    }
+
+    private static GalleryLocalizationValidation ValidateGalleryLocalization(GalleryContext context, IReadOnlyList<GalleryTopic> topics, AstroPulseGalleryAspect aspect)
+    {
+        var errors = new List<string>();
+        var warnings = new List<string>();
+        var requestedHindi = LocalizationResolver.IsHindi(context.RequestedLanguage);
+        var resolvedHindi = LocalizationResolver.IsHindi(context.Language);
+        if (requestedHindi && !resolvedHindi)
+            errors.Add("Gallery Hindi localization not applied: requested hi but resolved en.");
+
+        var typography = ResolveGalleryFont(resolvedHindi, TypographyTextRole.Title, Math.Clamp(aspect.Width / 26f, 36, 66), FontStyle.Bold, aspect);
+        var overlayText = string.Join(" ", topics.SelectMany(t => t.TextBlocks).Concat(topics.Select(t => t.LocalizedEducationalRole)).Concat(topics.Select(t => t.FooterLabel)));
+        var hasHindiOverlay = ContainsDevanagari(overlayText);
+        var hasHindiFont = typography.DevanagariGlyphSupport && (ContainsDevanagari(typography.FontFamily) || typography.FontPath.Contains("Devanagari", StringComparison.OrdinalIgnoreCase) || typography.FontPath.Contains("NotoSans", StringComparison.OrdinalIgnoreCase));
+        var hindiLocalization = requestedHindi ? resolvedHindi && hasHindiOverlay && hasHindiFont : true;
+        if (requestedHindi && !hasHindiOverlay)
+            errors.Add("Gallery Hindi localization not applied: requested hi but overlay text does not contain Devanagari.");
+        if (requestedHindi && !hasHindiFont)
+            errors.Add("Gallery Hindi localization not applied: requested hi but Hindi font was not selected.");
+        return new GalleryLocalizationValidation(hindiLocalization, errors.Count == 0, warnings, errors);
+    }
 
     private static bool ContainsDevanagari(string value) => !string.IsNullOrEmpty(value) && value.Any(c => c >= '\u0900' && c <= '\u097F');
 
@@ -212,6 +238,8 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static async Task<byte[]> ExtractAzureImage2BytesAsync(HttpClient http, string payload, CancellationToken ct) { using var doc = JsonDocument.Parse(payload); var first = doc.RootElement.GetProperty("data")[0]; if (first.TryGetProperty("b64_json", out var b64) && !string.IsNullOrWhiteSpace(b64.GetString())) return Convert.FromBase64String(b64.GetString()!); if (first.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())) return await http.GetByteArrayAsync(url.GetString()!, ct); throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content."); }
     private static async Task<string> ComputeHashAsync(string path, CancellationToken ct) { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
 
+    public static GalleryContext LoadGalleryContextForTesting(string outputDirectory) => LoadGalleryContext(outputDirectory);
+
     private static GalleryContext LoadGalleryContext(string outputDirectory)
     {
         var root = Directory.GetParent(outputDirectory)?.FullName ?? outputDirectory;
@@ -226,10 +254,40 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var familyResolution = EventFamilyResolver.ResolveWithDiagnostics(eventType, null, ReadStringArray(doc.RootElement, "primaryObjects"), ReadStringArray(doc.RootElement, "secondaryObjects"), title);
         var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, eventType);
         Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "gallery", familyCode = familyProfile.Family.ToString(), detectedFamily = familyProfile.Family.ToString(), primaryEventTypeCode = SpecialEventSubtypeResolver.Normalize(eventType), selectedProfile = familyProfile.SelectedProfile, profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenTerms = familyProfile.ForbiddenTerms, forbiddenConcepts = familyProfile.ForbiddenTerms, requiredVisualElements = familyProfile.RequiredVisualElements, requiredOverlayElements = familyProfile.RequiredOverlayElements, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
-        var requestedLanguage = FirstNonEmpty(FirstString(doc.RootElement, "requestedLanguage", "language"), "en");
-        var resolvedLanguage = FirstNonEmpty(FirstString(doc.RootElement, "language", "resolvedLanguage", "requestedLanguage"), requestedLanguage, "en");
+        var requestedLanguage = ResolveRequestedGalleryLanguage(root, doc.RootElement);
+        var resolvedLanguage = ResolveGalleryLanguage(requestedLanguage, FirstString(doc.RootElement, "resolvedLanguage", "language", "requestedLanguage"));
         var localizedTitle = ResolveLocalizedTitle(doc.RootElement, title, eventType, resolvedLanguage);
         return new(eventType, string.IsNullOrWhiteSpace(localizedTitle) ? "Selected astronomy event" : localizedTitle, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), FirstString(doc.RootElement, "eventDate", "date", "targetDate"), FirstString(doc.RootElement, "localPeakTime", "bestViewingWindowLocal", "preferredViewingWindow"), FirstString(doc.RootElement, "visibilityRegion", "locationName", "regionName", "regionId"), requestedLanguage, resolvedLanguage, FirstNonEmpty(FirstString(doc.RootElement, "timezone", "timeZone", "TimeZone"), "Asia/Kolkata"), eventObjectContext, forbidden);
+    }
+
+
+    private static string ResolveRequestedGalleryLanguage(string root, JsonElement intelligenceRoot)
+    {
+        var requestPath = Path.Combine(root, "plan-input", "content-plan-production-request.json");
+        var requestLanguage = ReadLanguageFromJsonFile(requestPath, "requestedLanguage", "language");
+        return FirstNonEmpty(requestLanguage, FirstString(intelligenceRoot, "requestedLanguage", "language"), "en").ToLowerInvariant();
+    }
+
+    private static string ResolveGalleryLanguage(string requestedLanguage, string intelligenceLanguage)
+    {
+        var requested = FirstNonEmpty(requestedLanguage, "en").ToLowerInvariant();
+        var intelligence = FirstNonEmpty(intelligenceLanguage, requested).ToLowerInvariant();
+        if (LocalizationResolver.IsHindi(requested)) return "hi";
+        return LocalizationResolver.IsHindi(intelligence) ? "hi" : "en";
+    }
+
+    private static string ReadLanguageFromJsonFile(string path, params string[] propertyNames)
+    {
+        if (!File.Exists(path)) return string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return FirstString(doc.RootElement, propertyNames);
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
     }
 
     public static List<GalleryTopic> BuildTopics(GalleryContext context)
@@ -313,8 +371,8 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             var v when v.Contains("meteor", StringComparison.OrdinalIgnoreCase) => "उल्का वर्षा",
             var v when v.Contains("perseid", StringComparison.OrdinalIgnoreCase) => "Perseids उल्का वर्षा",
             var v when v.Contains("geminid", StringComparison.OrdinalIgnoreCase) => "Geminids उल्का वर्षा",
-            var v when v.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase) => "सूर्य ग्रहण",
-            var v when v.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase) => "चंद्र ग्रहण",
+            var v when v.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase) || v.Contains("solareclipse", StringComparison.OrdinalIgnoreCase) => "सूर्य ग्रहण",
+            var v when v.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase) || v.Contains("lunareclipse", StringComparison.OrdinalIgnoreCase) => "चंद्र ग्रहण",
             var v when v.Equals("Moon", StringComparison.OrdinalIgnoreCase) => "चंद्रमा",
             var v when v.Equals("Sun", StringComparison.OrdinalIgnoreCase) => "सूर्य",
             _ => value
@@ -367,6 +425,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     private sealed record GalleryLocalization(string Language, string Title, IReadOnlyDictionary<string, string> SceneLabels, string CtaText, string FooterLabel);
     private sealed record GalleryFontSelection(Font Font, string FontFamily, string FontPath, bool DevanagariGlyphSupport);
+    private sealed record GalleryLocalizationValidation(bool HindiLocalization, bool ValidationPassed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 
     private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
 
