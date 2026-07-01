@@ -193,7 +193,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var root = Directory.GetParent(outputDirectory)?.FullName ?? outputDirectory;
         var path = Path.Combine(root, "plan-input", "production-event-intelligence.json");
         if (!File.Exists(path))
-            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, "Date TBD", "Best local viewing window", "Your location", "en", EventObjectContextBuilder.FromJsonValues("AstronomyEvent", "Selected astronomy event", [], [], [], ["selected sky event"]), []);
+            return new("AstronomyEvent", "Selected astronomy event", string.Empty, string.Empty, "Date TBD", "Best local viewing window", "Your location", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("AstronomyEvent", "Selected astronomy event", [], [], [], ["selected sky event"]), []);
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var eventType = FirstString(doc.RootElement, "eventType", "strategyId");
         var title = FirstString(doc.RootElement, "title", "shortTitle");
@@ -202,7 +202,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var familyResolution = EventFamilyResolver.ResolveWithDiagnostics(eventType, null, ReadStringArray(doc.RootElement, "primaryObjects"), ReadStringArray(doc.RootElement, "secondaryObjects"), title);
         var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, eventType);
         Console.WriteLine("[EventFamilyProfileSelected] " + JsonSerializer.Serialize(new { surface = "gallery", familyCode = familyProfile.Family.ToString(), detectedFamily = familyProfile.Family.ToString(), primaryEventTypeCode = SpecialEventSubtypeResolver.Normalize(eventType), selectedProfile = familyProfile.SelectedProfile, profileName = familyProfile.GetType().Name, profileVersion = EventFamilyProfiles.Version, resolverReason = familyResolution.Reason, resolverInput = familyResolution.Input, forbiddenTerms = familyProfile.ForbiddenTerms, forbiddenConcepts = familyProfile.ForbiddenTerms, requiredVisualElements = familyProfile.RequiredVisualElements, requiredOverlayElements = familyProfile.RequiredOverlayElements, allowedConcepts = familyProfile is MoonFamilyProfile moon ? moon.AllowedConcepts : Array.Empty<string>() }, JsonOptions));
-        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), FirstString(doc.RootElement, "eventDate", "date", "targetDate"), FirstString(doc.RootElement, "localPeakTime", "bestViewingWindowLocal", "preferredViewingWindow"), FirstString(doc.RootElement, "visibilityRegion", "locationName", "regionName", "regionId"), FirstNonEmpty(FirstString(doc.RootElement, "language", "requestedLanguage"), "en"), eventObjectContext, forbidden);
+        return new(eventType, string.IsNullOrWhiteSpace(title) ? "Selected astronomy event" : title, FirstString(doc.RootElement, "storyTheme"), FirstString(doc.RootElement, "visualTheme"), FirstString(doc.RootElement, "eventDate", "date", "targetDate"), FirstString(doc.RootElement, "localPeakTime", "bestViewingWindowLocal", "preferredViewingWindow"), FirstString(doc.RootElement, "visibilityRegion", "locationName", "regionName", "regionId"), FirstNonEmpty(FirstString(doc.RootElement, "language", "requestedLanguage"), "en"), FirstNonEmpty(FirstString(doc.RootElement, "timezone", "timeZone", "TimeZone"), "Asia/Kolkata"), eventObjectContext, forbidden);
     }
 
     public static List<GalleryTopic> BuildTopics(GalleryContext context)
@@ -225,10 +225,11 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     private static string[] BuildGalleryV3MetadataBlocks(GalleryContext context)
     {
+        var formatter = GalleryDisplayDateTimeFormatter.Format(context.EventDate, context.LocalTime, context.Timezone, context.Language);
         return
         [
-            $"{Localize(context.Language, "Date", "तारीख")}: {FirstNonEmpty(context.EventDate, "date TBD")}",
-            $"{Localize(context.Language, "Time", "समय")}: {FirstNonEmpty(context.LocalTime, "best local window")}"
+            $"{Localize(context.Language, "Date", "तारीख")}: {formatter.DateText}",
+            $"{Localize(context.Language, "Time", "समय")}: {formatter.TimeText}"
         ];
     }
 
@@ -253,7 +254,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static string[] ReadStringArray(JsonElement root, string propertyName) { var values = new List<string>(); CollectArrayValues(root, propertyName, values); return values.ToArray(); }
     private static void CollectArrayValues(JsonElement e, string name, List<string> values) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (p.NameEquals(name) && p.Value.ValueKind == JsonValueKind.Array) values.AddRange(p.Value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Where(x => !string.IsNullOrWhiteSpace(x))); else CollectArrayValues(p.Value, name, values); } else if (e.ValueKind == JsonValueKind.Array) foreach (var item in e.EnumerateArray()) CollectArrayValues(item, name, values); }
 
-    public sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, string EventDate, string LocalTime, string Location, string Language, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms);
+    public sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, string EventDate, string LocalTime, string Location, string Language, string Timezone, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms);
 
     public sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string VisualIntent, string OverlayStyle, string AzureImage2Prompt, string EducationalRole);
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
