@@ -134,6 +134,29 @@ public sealed class AstroPulseGalleryServiceTests
         }
     }
 
+    [Theory]
+    [InlineData("Wolf Moon", "en", "Wolf Moon", "cold winter")]
+    [InlineData("Wolf Moon", "hi", "वुल्फ पूर्णिमा", "cold winter")]
+    [InlineData("Strawberry Moon", "en", "Strawberry Moon", "rose-gold")]
+    [InlineData("Strawberry Moon", "hi", "स्ट्रॉबेरी पूर्णिमा", "rose-gold")]
+    public void GalleryV3_Phase13Only_MoonEventsUseSpecificTitlesAndVisualCues(string eventTitle, string language, string expectedTitle, string expectedPromptCue)
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("FullMoon", eventTitle, "story", "visual", "2026-01-03T06:00:00+00:00", "2026-01-03T18:00:00+00:00", "India", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("FullMoon", eventTitle, [eventTitle, "Moon"], [], [], []), [], eventTitle, "FullMoon");
+
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var overlayText = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
+        var promptText = string.Join(" ", topics.Select(t => t.AzureImage2Prompt));
+        var diagnosticsJson = System.Text.Json.JsonSerializer.Serialize(AstroPulseGalleryService.BuildGalleryLocalizationDiagnostics(context, topics, AstroPulseGalleryAspect.Landscape));
+
+        Assert.Contains(expectedTitle, overlayText);
+        Assert.DoesNotContain("Moon Guide", overlayText);
+        Assert.DoesNotContain("चंद्रमा गाइड", overlayText);
+        Assert.Contains(expectedPromptCue, promptText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("localizedEventTitle", diagnosticsJson);
+        Assert.Contains("eventSubtype", diagnosticsJson);
+        Assert.Contains("moonSubtypeVisualAttributes", diagnosticsJson);
+    }
+
     [Fact]
     public async Task GalleryV3_LoadContext_RequestLanguageOverridesEnglishIntelligenceForHindiPhase13()
     {
