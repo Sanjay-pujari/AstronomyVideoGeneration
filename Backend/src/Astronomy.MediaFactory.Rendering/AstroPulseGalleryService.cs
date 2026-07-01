@@ -45,6 +45,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var topics = BuildTopics(galleryContext);
         var localizationDiagnostics = BuildGalleryLocalizationDiagnostics(galleryContext, topics, aspect);
         var localizationValidation = ValidateGalleryLocalization(galleryContext, topics, aspect);
+        var observationDisplay = BuildObservationDisplay(galleryContext);
         var images = new List<object>();
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var imagePaths = new List<string>();
@@ -87,9 +88,9 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V3.5", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f) }, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new { accepted = valid, style = "social-media carousel", rejectedStyle = "PowerPoint infographic slide deck", galleryTopicsGenerated = topics.Count, noSharedBackground = true, noDuplicateConcepts = topics.Select(t => t.Concept).Distinct(StringComparer.OrdinalIgnoreCase).Count() == topics.Count, noDuplicateImageHashes = hashes.Count == topics.Count, mobileReadable = true, oneEducationalMessagePerImage = true, storySequencingApplied = true, sharedFooterApplied = true, skyVisualDominant = true, textAreaMaxPercent = 25 }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(observationGuidePath, JsonSerializer.Serialize(new { guideVersion = "V2", oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, eventFamily = galleryContext.EventType, outputPath = observationGuidePath, tips = BuildObservationGuideTips(galleryContext.EventType, galleryContext.Language) }, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, language = galleryContext.Language, requestedLanguage = galleryContext.RequestedLanguage, resolvedLanguage = galleryContext.Language, localizationDiagnostics, aspectVariant = aspect.Name, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = localizationValidation.Warnings, validationErrors = localizationValidation.Errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, contentDiagnostics, aspect, outputCount = imagePaths.Count, azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, maxTextAreaPercent = 25, language = galleryContext.Language, requestedLanguage = galleryContext.RequestedLanguage, resolvedLanguage = galleryContext.Language, localizationDiagnostics, aspectVariant = aspect.Name, azureImage2BackgroundsGeneratedSeparately = true, deterministicMinimalOverlay = true, localFallbackUsed = false, validationWarnings = localizationValidation.Warnings, validationErrors = localizationValidation.Errors, observationDisplay.eventPeakUtc, observationDisplay.localPeakTime, observationDisplay.displayedObservationTime, observationDisplay.observationTimeSource, observationDisplay.eventFamilyRuleApplied }, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(BuildVisualPromptDiagnostics(galleryContext, topics), JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid && File.Exists(observationGuidePath) ? "Succeeded" : "Failed", galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), observationGuideExists = File.Exists(observationGuidePath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, validationParityChecklist = BuildValidationChecklist(galleryContext, topics, imagePaths, hashes, azureCalls, aspect), validationWarnings = localizationValidation.Warnings, validationErrors = localizationValidation.Errors, validationPassed = valid && File.Exists(observationGuidePath), phase12Executed = false, thumbnailRegenerationOccurred = false, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f), localizationDiagnostics } }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = valid && File.Exists(observationGuidePath) ? "Succeeded" : "Failed", galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), observationGuideExists = File.Exists(observationGuidePath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, validationParityChecklist = BuildValidationChecklist(galleryContext, topics, imagePaths, hashes, azureCalls, aspect), validationWarnings = localizationValidation.Warnings, validationErrors = localizationValidation.Errors, observationDisplay.eventPeakUtc, observationDisplay.localPeakTime, observationDisplay.displayedObservationTime, observationDisplay.observationTimeSource, observationDisplay.eventFamilyRuleApplied, validationPassed = valid && File.Exists(observationGuidePath), phase12Executed = false, thumbnailRegenerationOccurred = false, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f), localizationDiagnostics } }, JsonOptions), cancellationToken);
         return new AstroPulseGalleryResult(outputDirectory, imagePaths, reviewPath, manifestPath, diagnosticsPath, validationPath);
     }
 
@@ -193,6 +194,8 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             errors.Add("Gallery Hindi localization not applied: requested hi but overlay text does not contain Devanagari.");
         if (requestedHindi && !hasHindiFont)
             errors.Add("Gallery Hindi localization not applied: requested hi but Hindi font was not selected.");
+        if (ObservationDisplayTextResolver.ViolatesMeteorDaytimeRule(ResolveObservationDisplay(context)))
+            errors.Add("Meteor shower observation time cannot be displayed as daytime peak time.");
         return new GalleryLocalizationValidation(hindiLocalization, errors.Count == 0, warnings, errors);
     }
 
@@ -311,12 +314,21 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     private static string[] BuildGalleryV3MetadataBlocks(GalleryContext context)
     {
-        var formatter = GalleryDisplayDateTimeFormatter.Format(context.EventDate, context.LocalTime, context.Timezone, context.Language);
+        var display = ResolveObservationDisplay(context);
         return
         [
-            $"{Localize(context.Language, "Date", "तारीख")}: {formatter.DateText}",
-            $"{Localize(context.Language, "Time", "समय")}: {formatter.TimeText}"
+            $"{Localize(context.Language, "Date", "तारीख")}: {display.DisplayDate}",
+            $"{Localize(context.Language, "Time", "समय")}: {display.DisplayTime}"
         ];
+    }
+
+    private static ObservationDisplayText ResolveObservationDisplay(GalleryContext context)
+        => ObservationDisplayTextResolver.Resolve(context.EventDate, context.LocalTime, context.LocalTime, context.Language, context.EventType, context.Timezone);
+
+    private static GalleryObservationDisplayDiagnostics BuildObservationDisplay(GalleryContext context)
+    {
+        var display = ResolveObservationDisplay(context);
+        return new GalleryObservationDisplayDiagnostics(display.EventPeakUtc, display.LocalPeakTime, display.DisplayedObservationTime, display.ObservationTimeSource, display.EventFamilyRuleApplied);
     }
 
     private static string Localize(string language, string english, string hindi) => LocalizationResolver.IsHindi(language) ? hindi : english;
@@ -402,6 +414,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             fontFamily = titleTypography.FontFamily,
             fontPath = titleTypography.FontPath,
             devanagariGlyphSupport = titleTypography.DevanagariGlyphSupport,
+            observationDisplay = BuildObservationDisplay(context),
             localizationFallbacks = fallbacks,
             missingLocalizationFields = missing,
             overlayTextPreview = topics.Select(t => new { imageId = $"gallery-{t.Number:00}", t.TextBlocks, educationalRole = t.LocalizedEducationalRole, footer = t.FooterLabel })
@@ -419,11 +432,13 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             fontFamily = typography.FontFamily,
             fontPath = typography.FontPath,
             devanagariGlyphSupport = typography.DevanagariGlyphSupport,
+            observationDisplay = BuildObservationDisplay(context),
             overlayTextPreview = topics.Select(t => new { imageId = $"gallery-{t.Number:00}", title = t.TextBlocks.FirstOrDefault(), subtitle = t.TextBlocks.Skip(1).FirstOrDefault(), sceneLabel = t.LocalizedEducationalRole, footer = t.FooterLabel })
         };
     }
 
     private sealed record GalleryLocalization(string Language, string Title, IReadOnlyDictionary<string, string> SceneLabels, string CtaText, string FooterLabel);
+    private sealed record GalleryObservationDisplayDiagnostics(string eventPeakUtc, string localPeakTime, string displayedObservationTime, string observationTimeSource, string eventFamilyRuleApplied);
     private sealed record GalleryFontSelection(Font Font, string FontFamily, string FontPath, bool DevanagariGlyphSupport);
     private sealed record GalleryLocalizationValidation(bool HindiLocalization, bool ValidationPassed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 
