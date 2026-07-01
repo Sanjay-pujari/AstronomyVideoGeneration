@@ -55,9 +55,9 @@ public sealed class AstroPulseGalleryServiceTests
     }
 
     [Theory]
-    [InlineData("en", "Date: Dec 14, 2026", "Time: 11:30 PM IST")]
-    [InlineData("hi", "तारीख: 14 दिस॰ 2026", "समय: रात 11:30 बजे IST")]
-    public void GalleryV3_Topics_FormatIsoTimestampsAsLocalizedDisplayText(string language, string expectedDate, string expectedTime)
+    [InlineData("en", "Date: Dec 14, 2026", "Time: After midnight to pre-dawn")]
+    [InlineData("hi", "तारीख: 14 दिस॰ 2026", "समय: आधी रात के बाद से भोर तक")]
+    public void GalleryV3_Topics_FormatMeteorTimestampsAsObservationWindowText(string language, string expectedDate, string expectedTime)
     {
         var context = new AstroPulseGalleryService.GalleryContext("Meteor Shower", "Meteor Shower", "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T18:00:00+00:00", "India", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("Meteor Shower", "Meteor Shower", ["Perseids"], [], [], []), []);
 
@@ -68,6 +68,35 @@ public sealed class AstroPulseGalleryServiceTests
         Assert.Contains(expectedTime, text);
         Assert.DoesNotContain("2026-12-14T", text);
         Assert.DoesNotContain("+00:00", text);
+        Assert.DoesNotContain("11:30 AM IST", text);
+        Assert.DoesNotContain("सुबह 11:30 बजे IST", text);
+    }
+
+
+    [Fact]
+    public void GalleryV3_Topics_MeteorDaytimePeakUsesNightObservationGuidance()
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("MeteorShower", "Geminids Meteor Shower Peak", "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T06:00:00+00:00", "India", "en", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("MeteorShower", "Geminids Meteor Shower Peak", ["Geminids"], [], [], []), []);
+
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var text = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
+
+        Assert.Contains("Date: Dec 14, 2026", text);
+        Assert.Contains("Time: After midnight to pre-dawn", text);
+        Assert.DoesNotContain("11:30 AM IST", text);
+    }
+
+    [Fact]
+    public void GalleryV3_Topics_NonMeteorFamilyStillUsesEventSpecificLocalTime()
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("SolarEclipse", "Solar Eclipse", "story", "visual", "2026-08-12T17:30:00+00:00", "2026-08-12T17:30:00+00:00", "India", "en", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("SolarEclipse", "Solar Eclipse", ["Sun", "Moon"], [], [], []), []);
+
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var text = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
+
+        Assert.Contains("Date: Aug 12, 2026", text);
+        Assert.Contains("Time: 11:00 PM IST", text);
+        Assert.DoesNotContain("After midnight to pre-dawn", text);
     }
 
     [Theory]
