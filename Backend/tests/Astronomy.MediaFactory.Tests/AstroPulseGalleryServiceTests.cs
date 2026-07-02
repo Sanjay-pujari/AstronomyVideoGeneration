@@ -87,7 +87,7 @@ public sealed class AstroPulseGalleryServiceTests
     }
 
     [Fact]
-    public void GalleryV3_Topics_NonMeteorFamilyStillUsesEventSpecificLocalTime()
+    public void GalleryV3_Topics_SolarEclipseSuppressesUnverifiedNightGlobalPeakConversion()
     {
         var context = new AstroPulseGalleryService.GalleryContext("SolarEclipse", "Solar Eclipse", "story", "visual", "2026-08-12T17:30:00+00:00", "2026-08-12T17:30:00+00:00", "India", "en", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("SolarEclipse", "Solar Eclipse", ["Sun", "Moon"], [], [], []), []);
 
@@ -95,8 +95,23 @@ public sealed class AstroPulseGalleryServiceTests
         var text = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
 
         Assert.Contains("Date: Aug 12, 2026", text);
-        Assert.Contains("Time: 11:00 PM IST", text);
+        Assert.Contains("Time: Check local visibility", text);
+        Assert.DoesNotContain("11:00 PM IST", text);
         Assert.DoesNotContain("After midnight to pre-dawn", text);
+    }
+
+
+    [Fact]
+    public void GalleryV3_Topics_VerifiedPlanetPairingUsesObservationInfoLocalWindow()
+    {
+        var observation = ObservationIntelligenceResolver.Resolve(new ObservationIntelligenceInput("PlanetPairing", "PlanetPairing", "2026-06-07T11:30:00Z", "2026-06-07T17:00:00+05:30", "Pre-dawn eastern sky", "Pre-dawn eastern sky", "IN-RJ", "Udaipur", "Asia/Kolkata", "en", true, "Visible", "East", "28 degrees", true));
+        var context = new AstroPulseGalleryService.GalleryContext("PlanetPairing", "Jupiter Venus Conjunction", "story", "visual", "2026-06-07T11:30:00Z", "2026-06-07T17:00:00+05:30", "Udaipur", "en", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("PlanetPairing", "Jupiter Venus Conjunction", ["Jupiter", "Venus"], [], [], []), [], "Jupiter Venus Conjunction", "PlanetPairing", ObservationInfo: observation);
+
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var text = string.Join(" ", topics.SelectMany(t => t.TextBlocks));
+
+        Assert.Contains("Time: Pre-dawn eastern sky", text);
+        Assert.DoesNotContain("5:00 PM IST", text);
     }
 
     [Theory]
