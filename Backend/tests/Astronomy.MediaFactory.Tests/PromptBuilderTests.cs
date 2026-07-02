@@ -113,7 +113,7 @@ public sealed class PromptBuilderTests
         Assert.Contains("LandscapeProfile", landscape);
         Assert.Contains("wide cinematic framing", landscape);
         Assert.Contains("PortraitProfile", portrait);
-        Assert.Contains("phone-first composition", portrait);
+        Assert.Contains("phone-first layout guidance", portrait);
         Assert.Contains("SquareProfile", square);
         Assert.Contains("centered balanced composition", square);
         Assert.DoesNotContain("phone-first composition", landscape);
@@ -133,13 +133,13 @@ public sealed class PromptBuilderTests
         Assert.Equal("LandscapeStrategy", landscape.StorytellingStrategy.Name);
         Assert.Equal("PortraitStrategy", portrait.StorytellingStrategy.Name);
         Assert.Equal("SquareStrategy", square.StorytellingStrategy.Name);
-        Assert.Contains("Observation card", landscape.StorytellingStrategy.AllowedSections);
+        Assert.Contains("Observation Card", landscape.StorytellingStrategy.AllowedSections);
         Assert.True(landscape.StorytellingStrategy.FooterEnabled);
         Assert.True(landscape.StorytellingStrategy.ObservationCardEnabled);
         Assert.False(portrait.StorytellingStrategy.FooterEnabled);
         Assert.False(portrait.StorytellingStrategy.ObservationCardEnabled);
-        Assert.Contains("Maximum one observation hint", portrait.StorytellingStrategy.AllowedSections);
-        Assert.Contains("Compact observation card", square.StorytellingStrategy.AllowedSections);
+        Assert.Contains("One Observation Hint", portrait.StorytellingStrategy.AllowedSections);
+        Assert.Contains("Compact Observation", square.StorytellingStrategy.AllowedSections);
         Assert.True(square.StorytellingStrategy.ObservationCardEnabled);
         Assert.NotEqual(landscape.StorytellingStrategy.MaximumTextBudget, portrait.StorytellingStrategy.MaximumTextBudget);
         Assert.NotEqual(landscape.StorytellingStrategy.MaximumTextBudget, square.StorytellingStrategy.MaximumTextBudget);
@@ -150,7 +150,62 @@ public sealed class PromptBuilderTests
         Assert.DoesNotContain("LandscapeStrategy", portrait.Prompt);
     }
 
-    private static ThumbnailPromptContract BuildThumbnailContract(string profile, string aspectRatio)
+    [Fact]
+    public void PromptAssembler_FiltersSections_ByPlatformStorytellingStrategy()
+    {
+        var builder = new ThumbnailPromptBuilder();
+
+        var portrait = builder.Build(BuildThumbnailContract("portrait", "9:16",
+        [
+            new PromptSection("title", "Title", 10, "Moon", true),
+            new PromptSection("dominant", "Dominant Object", 20, "Large Moon", true),
+            new PromptSection("hint", "One Observation Hint", 30, "East after sunset", false),
+            new PromptSection("footer", "Footer", 40, "Footer tips", false),
+            new PromptSection("equipment", "Equipment", 50, "Telescope table", false),
+            new PromptSection("quality", "Quality Rules", 60, "Native vertical thumbnail", true)
+        ]));
+
+        Assert.Contains("ONE OBSERVATION HINT", portrait.Prompt);
+        Assert.DoesNotContain("FOOTER:", portrait.Prompt);
+        Assert.DoesNotContain("EQUIPMENT:", portrait.Prompt);
+        Assert.Contains("footer", portrait.AssemblyReport!.ExcludedSections);
+        Assert.Contains("equipment", portrait.AssemblyReport!.ExcludedSections);
+    }
+
+    [Fact]
+    public void PromptAssembler_ProducesLandscapeRichness_AndSquareInformationBudget()
+    {
+        var builder = new ThumbnailPromptBuilder();
+
+        var landscape = builder.Build(BuildThumbnailContract("landscape", "16:9",
+        [
+            new PromptSection("title", "Title", 10, "Moon", true),
+            new PromptSection("dominant", "Dominant Object", 20, "Large Moon", true),
+            new PromptSection("observation", "Observation Card", 30, "Date, best time, direction", true),
+            new PromptSection("equipment", "Equipment", 40, "Naked eye", false),
+            new PromptSection("safety", "Safety", 50, "Safe naked-eye viewing", false),
+            new PromptSection("footer", "Footer", 60, "Look east", false),
+            new PromptSection("quality", "Quality Rules", 70, "Native landscape thumbnail", true)
+        ]));
+
+        var square = builder.Build(BuildThumbnailContract("square", "1:1",
+        [
+            new PromptSection("title", "Title", 10, "Moon", true),
+            new PromptSection("dominant", "Dominant Object", 20, "Large Moon", true),
+            new PromptSection("compact", "Compact Observation", 30, "East after sunset", false),
+            new PromptSection("extra", "Compact Observation", 40, "Naked eye", false),
+            new PromptSection("overflow", "Compact Observation", 50, "Clear horizon", false),
+            new PromptSection("quality", "Quality Rules", 60, "Native square thumbnail", true)
+        ]));
+
+        Assert.Contains("OBSERVATION CARD", landscape.Prompt);
+        Assert.Contains("EQUIPMENT", landscape.Prompt);
+        Assert.Contains("FOOTER", landscape.Prompt);
+        Assert.DoesNotContain("overflow", square.AssemblyReport!.IncludedSections);
+        Assert.Contains("overflow", square.AssemblyReport!.ExcludedSections);
+    }
+
+    private static ThumbnailPromptContract BuildThumbnailContract(string profile, string aspectRatio, IReadOnlyList<PromptSection>? sections = null)
         => new(
             "1.0",
             new ThumbnailEventIdentity("event-1", "Moon", "Observation guide", "Moon", "FullMoon"),
@@ -162,5 +217,6 @@ public sealed class PromptBuilderTests
             new ThumbnailPromptInstructions("Base event-specific wording that must remain unchanged.", "negative", ["Moon"], []),
             new ThumbnailBrand("natural title case", "premium", ["en"]),
             new ThumbnailValidation(["contract valid"], ["moon only"], ["native aspect"]),
-            new ThumbnailPromptDiagnostics("test", "test", "test", "test", DateTimeOffset.UtcNow));
+            new ThumbnailPromptDiagnostics("test", "test", "test", "test", DateTimeOffset.UtcNow),
+            sections);
 }

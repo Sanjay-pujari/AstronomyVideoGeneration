@@ -36,8 +36,12 @@ flowchart LR
     K[Knowledge] --> O[ObservationInfo]
     O --> E[EventDisplayContract]
     E --> P[ThumbnailPromptContract]
-    P --> C[CompositionProfile]
-    C --> AI[AI Image Model]
+    P --> F[FamilyPromptProvider]
+    F --> S[PlatformStorytellingStrategy]
+    S --> C[CompositionProfile]
+    C --> A[PromptAssembler]
+    A --> PV[PromptValidator]
+    PV --> AI[AI Image Model]
     AI --> V[ThumbnailValidator]
     V --> Pub[Publishing]
 ```
@@ -106,7 +110,8 @@ Required conceptual fields:
 | `secondarySubjects` | Optional supporting bodies, environment cues, or sky context. |
 | `scientificFacts` | Required facts that must remain visible or true in the generated image. |
 | `visualStrategy` | Salience, contrast, camera perspective, color guidance, scale cues, atmosphere, negative space. |
-| `promptText` | Provider-ready positive prompt generated from knowledge and display contracts. |
+| `promptSections` | Reusable prioritized `PromptSection` collection emitted by family prompt providers before platform filtering. |
+| `promptText` | Provider-ready positive prompt assembled deterministically from validated prompt sections. |
 | `negativePrompt` | Forbidden visuals, misleading compositions, unsafe depictions, text artifacts, distortions. |
 | `titleCandidates` | Localized metadata/title options for publishing surfaces; not instructions to bake text into the image. |
 | `brandingHints` | Brand mood, quality bar, watermark policy, and optional non-intrusive identity constraints. |
@@ -182,6 +187,26 @@ The architecture must support these families through knowledge/provider/configur
 - Galaxy
 - Deep Sky Objects
 - Special Events
+
+
+## Prompt Assembly Pipeline
+
+Thumbnail prompt creation now uses a deterministic assembly pipeline instead of one large family-owned string:
+
+```mermaid
+flowchart LR
+    K[Knowledge] --> O[ObservationInfo]
+    O --> E[EventDisplayContract]
+    E --> T[ThumbnailPromptContract]
+    T --> F[FamilyPromptProvider]
+    F --> S[PlatformStorytellingStrategy]
+    S --> C[CompositionProfile]
+    C --> A[PromptAssembler]
+    A --> V[PromptValidator]
+    V --> AI[AI Provider]
+```
+
+`PlatformStorytellingStrategy` decides which information sections may exist for landscape, portrait, and square outputs. `CompositionProfile` controls only framing, negative space, object dominance, safe text area, and layout guidance. `PromptAssembler` filters unsupported `PromptSection` entries, applies the strategy and profile, removes incompatible sections, and emits `PromptAssemblyReport.json` diagnostics. `PromptValidator` rejects missing landscape observation cards, portrait footer/table leakage, square density overflow, and contradictory instructions before the prompt reaches the AI provider.
 
 ## 10. Validation Strategy
 
