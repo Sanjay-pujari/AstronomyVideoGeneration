@@ -158,8 +158,8 @@ public sealed class AstroPulseGalleryServiceTests
     }
 
     [Theory]
-    [InlineData("hi", "मंगल और बृहस्पति की करीबी जोड़ी", "मंगल", "बृहस्पति")]
-    [InlineData("en", "Mars and Jupiter Close Pairing", "Mars", "Jupiter")]
+    [InlineData("hi", "मंगल–बृहस्पति करीबी", "मंगल", "बृहस्पति")]
+    [InlineData("en", "Mars–Jupiter Pairing", "Mars", "Jupiter")]
     public void GalleryContentContract_PlanetPairing_ResolvesLocalizedTitleObjectsAndProvider(string language, string expectedTitle, string expectedMars, string expectedJupiter)
     {
         var context = new AstroPulseGalleryService.GalleryContext("PlanetPairing", "Mars and Jupiter Close Pairing", "story", "visual", "2026-08-12T00:30:00+00:00", "2026-08-12T05:30:00+05:30", "East", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("PlanetPairing", "Mars and Jupiter Close Pairing", ["Mars", "Jupiter"], [], [], []), [], "Mars and Jupiter Close Pairing", "PlanetGrouping");
@@ -184,9 +184,38 @@ public sealed class AstroPulseGalleryServiceTests
         var contract = AstroPulseGalleryService.ResolveGalleryContentContractForTesting(context);
 
         Assert.Equal("SolarEclipseGalleryContentProvider", contract.Diagnostics["selectedProvider"]);
-        Assert.Equal("सूर्य ग्रहण", contract.LocalizedTitle);
+        Assert.Equal("सूर्य–चंद्रमा सूर्य ग्रहण", contract.LocalizedTitle);
         Assert.Contains("सूर्य", contract.LocalizedPrimaryObjects);
         Assert.Contains("चंद्रमा", contract.LocalizedPrimaryObjects);
+    }
+
+    [Theory]
+    [InlineData("PlanetConjunction", "Jupiter and Venus Conjunction", "hi", "बृहस्पति–शुक्र युति")]
+    [InlineData("PlanetPairing", "Mars and Jupiter Close Pairing", "hi", "मंगल–बृहस्पति करीबी")]
+    [InlineData("MeteorShower", "Geminids Meteor Shower Peak", "hi", "जेमिनिड्स उल्का वर्षा")]
+    [InlineData("FullMoon", "Strawberry Moon", "hi", "स्ट्रॉबेरी पूर्णिमा")]
+    [InlineData("SolarEclipse", "Solar Eclipse", "hi", "सूर्य–चंद्रमा सूर्य ग्रहण")]
+    [InlineData("PlanetConjunction", "Jupiter and Venus Conjunction", "en", "Jupiter–Venus Conjunction")]
+    public void GalleryEventDisplayContract_ResolvesTitlesFromActionAndObjects(string eventType, string eventName, string language, string expectedTitle)
+    {
+        var objects = eventType switch
+        {
+            "PlanetConjunction" => new[] { "Jupiter", "Venus" },
+            "PlanetPairing" => new[] { "Mars", "Jupiter" },
+            "MeteorShower" => ["Geminids"],
+            "SolarEclipse" => ["Sun", "Moon"],
+            _ => [eventName, "Moon"]
+        };
+        var context = new AstroPulseGalleryService.GalleryContext(eventType, eventName, "story", "visual", "2026-12-14T06:00:00+00:00", "2026-12-14T18:00:00+00:00", "India", language, language, "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues(eventType, eventName, objects, [], [], []), [], eventName, eventType);
+
+        var contract = AstroPulseGalleryService.ResolveGalleryContentContractForTesting(context);
+
+        Assert.Equal(expectedTitle, contract.DisplayTitle);
+        Assert.Equal(expectedTitle, contract.LocalizedTitle);
+        Assert.DoesNotContain("guide:", contract.DisplayTitle, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Astronomical Event", contract.DisplayTitle, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("खगोलीय घटना", contract.DisplayTitle, StringComparison.OrdinalIgnoreCase);
+        Assert.True(contract.DisplayShortTitle.Length <= contract.MaxTitleChars);
     }
 
     [Fact]
