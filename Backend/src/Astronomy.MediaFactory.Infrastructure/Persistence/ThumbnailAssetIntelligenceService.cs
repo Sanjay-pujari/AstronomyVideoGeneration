@@ -49,6 +49,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailStorytellingStrategyFileName = "thumbnail-storytelling-strategy.json";
     private const string ThumbnailPromptContractFileName = "thumbnail-prompt-contract.json";
     private const string VisualPromptDiagnosticsFileName = "visual-prompt-diagnostics.json";
+    private const string PromptAssemblyReportFileName = "PromptAssemblyReport.json";
     private static readonly string[] ThumbnailRc3RequiredArtifactFileNames =
     [
         ThumbnailPromptContractFileName,
@@ -56,6 +57,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ThumbnailStorytellingStrategyFileName,
         ThumbnailGenerationDiagnosticsFileName,
         VisualPromptDiagnosticsFileName,
+        PromptAssemblyReportFileName,
         "thumbnail-landscape-prompt.txt",
         "thumbnail-portrait-prompt.txt",
         "thumbnail-square-prompt.txt"
@@ -276,6 +278,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         var compositionProfileDiagnostics = BuildThumbnailCompositionProfileDiagnostics(contracts, prompts);
         var storytellingStrategyDiagnostics = BuildThumbnailStorytellingStrategyDiagnostics(contracts, prompts);
+        var promptAssemblyReportPath = Path.Combine(thumbnailRoot, PromptAssemblyReportFileName);
+        await File.WriteAllTextAsync(promptAssemblyReportPath, JsonSerializer.Serialize(new
+        {
+            thumbnailVersion = "V8",
+            generatedUtc = DateTimeOffset.UtcNow,
+            reports = prompts.Select(prompt => prompt.AssemblyReport).Where(report => report is not null).ToArray()
+        }, JsonOptions), cancellationToken);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var failures = new List<string>();
@@ -476,7 +485,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextBoxesRemoved: false);
         return BuildImageGenerationResponse(
             request,
-            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Append(NormalizePath(contractJsonPath)).Append(NormalizePath(compositionProfilePath)).Append(NormalizePath(visualPromptDiagnosticsPath)).Concat(promptPaths.Values).ToArray(),
+            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Append(NormalizePath(contractJsonPath)).Append(NormalizePath(compositionProfilePath)).Append(NormalizePath(visualPromptDiagnosticsPath)).Append(NormalizePath(promptAssemblyReportPath)).Concat(promptPaths.Values).ToArray(),
             validation,
             requestedRenderer: ThumbnailV8AiNativeRendererName,
             actualRendererUsed: ThumbnailV8AiNativeRendererName,
@@ -536,6 +545,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 prompt.SelectedPromptBuilder,
                 prompt.SelectedFamilyTemplate,
                 prompt.PromptSummary,
+                prompt.AssemblyReport,
                 promptFileName = $"thumbnail-{prompt.Name}-prompt.txt",
                 promptUniqueHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt)))
             }).ToArray()
@@ -2917,7 +2927,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
 
-    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string NegativePrompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary);
+    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string NegativePrompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary, PromptAssemblyReport? AssemblyReport);
 
     private static class ThumbnailV8AiNativePromptBuilder
     {
@@ -3180,7 +3190,8 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
             result.NegativePrompt,
             contract.Diagnostics.SelectedPromptBuilder,
             contract.Diagnostics.SelectedFamilyTemplate,
-            contract.Diagnostics.PromptSummary);
+            contract.Diagnostics.PromptSummary,
+            result.AssemblyReport);
     }
 
     private static ThumbnailPromptContract Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language, string prompt, string builder, string template, string summary)
@@ -3200,7 +3211,8 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
             new ThumbnailPromptInstructions(sanitizedPrompt, negativePrompt, primaryObjects, c.Current.ForbiddenObjectNames ?? []),
             new ThumbnailBrand("Natural title case, mobile-readable typography, no technical identifiers", "premium dark blue and gold astronomy magazine style", [FirstNonEmpty(language, c.Current.Language, "en"), "Do not bake location names into the image"]),
             new ThumbnailValidation(["No null required fields", "Aspect-native image generation", "Renderer consumes contract only"], ["Render only required event objects", "Preserve event family safety and observation truth"], ["No cropping from another aspect ratio", "Respect safe zones and mobile readability"]),
-            new ThumbnailPromptDiagnostics("ThumbnailV8AiNativePromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow));
+            new ThumbnailPromptDiagnostics("ThumbnailV8AiNativePromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow),
+            BuildPromptSections(aspect, c, template, summary, primaryObjects));
     }
 
     private static string SanitizeThumbnailV8PromptText(string value)
@@ -3212,6 +3224,40 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
         sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+over\s*(?=[;,.\n])", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s{2,}", " ", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         return sanitized.Trim();
+    }
+
+
+    private static IReadOnlyList<PromptSection> BuildPromptSections(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string family, string summary, IReadOnlyList<string> primaryObjects)
+    {
+        var objectText = primaryObjects.Count > 0 ? string.Join(" + ", primaryObjects) : c.Title;
+        var observationFacts = new[]
+        {
+            $"Date {c.DateText}",
+            $"Best time {c.BestTime}",
+            $"Direction {c.Direction}",
+            string.IsNullOrWhiteSpace(c.Separation) ? string.Empty : $"Separation {c.Separation}",
+            $"Equipment {c.Equipment}"
+        }.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+
+        var safety = family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)
+            ? "If this is a solar eclipse, communicate certified eclipse glasses / solar filter required; lunar eclipse remains safe for naked-eye viewing."
+            : "Keep observation guidance safe, practical, and scientifically trustworthy.";
+
+        return
+        [
+            new PromptSection("core-title", "Title", 10, $"Visible title text: '{c.Title}'. Use natural title case and mobile-readable typography.", true),
+            new PromptSection("core-subtitle", "Subtitle", 20, $"Visible subtitle text: '{c.EventType}'. Keep it short and subordinate to the title.", false),
+            new PromptSection("family-visual-scene", "Visual Scene", 30, $"{summary} Show only these event objects: {objectText}. No random planets, invented celestial objects, location text, watermark, database identifiers, or snake case.", true),
+            new PromptSection("dominant-object", "Dominant Object", 40, $"Make the event subject immediately recognizable: {objectText}. Celestial objects must drive the visual hierarchy and remain scientifically plausible.", true),
+            new PromptSection("observation-card", "Observation Card", 50, "Educational observation card fields: " + string.Join("; ", observationFacts) + ".", true),
+            new PromptSection("one-observation-hint", "One Observation Hint", 55, $"One compact observation hint only: {c.Direction} / {c.BestTime}.", false),
+            new PromptSection("compact-observation", "Compact Observation", 60, $"Compact observation: {c.Direction}, {c.BestTime}.", false),
+            new PromptSection("equipment", "Equipment", 70, $"Equipment cue: {c.Equipment}.", false),
+            new PromptSection("safety", "Safety", 80, safety, family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)),
+            new PromptSection("cta", "CTA", 90, "Short action cue: watch the sky tonight.", false),
+            new PromptSection("footer", "Footer", 100, "Short footer tips may appear only on rich landscape layouts: look direction, best time, equipment.", false),
+            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate final finished thumbnail image at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium astronomy magazine style, sharp typography, clean spacing, no overlapping text, no placeholder panels, no cropping, no squeezing.", true)
+        ];
     }
 
     private static string HumanizeThumbnailV8Text(string value)
