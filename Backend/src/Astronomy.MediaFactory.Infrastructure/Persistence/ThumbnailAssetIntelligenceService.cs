@@ -843,10 +843,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         var result = await new ThumbnailV7CinematicOverlayRenderer(
                 thumbnailOptions?.Value.AssetRootPath ?? "assets/celestial",
-                async (prompt, outputPath, ct) =>
+                async (generationRequest, ct) =>
                 {
-                    var generation = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, prompt, outputPath, ct);
-                    return new ThumbnailV7AzureImage2GenerationResult(generation.ProviderCalled, generation.ProviderSucceeded, generation.AzureRequestMs, generation.ImageDownloadMs, generation.FailureReason);
+                    var generation = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, generationRequest.Prompt, generationRequest.RawOutputPath, ct, $"{generationRequest.RequestedWidth}x{generationRequest.RequestedHeight}");
+                    return new ThumbnailV7AzureImage2GenerationResult(generation.ProviderCalled, generation.ProviderSucceeded, generation.AzureRequestMs, generation.ImageDownloadMs, generation.ProviderName, generation.ProviderModelName, generation.ProviderRequestId, generation.GenerationStartedUtc, generation.GenerationEndedUtc, generation.DurationMs, generation.FailureReason);
                 })
             .RenderAsync(request, thumbnailRoot, request.OverwriteExisting, cancellationToken);
         await WriteThumbnailV7Phase12ValidationAsync(thumbnailRoot, result.Diagnostics, cancellationToken);
@@ -2916,31 +2916,34 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("Thumbnail V5 guide validation failed: landscape, portrait, and square variants must execute their approved guide layout templates.");
     }
 
-    private async Task<AzureImage2GenerationResult> GenerateThumbnailWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken)
+    private async Task<AzureImage2GenerationResult> GenerateThumbnailWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, CancellationToken cancellationToken, string requestedSize = "1792x1024")
     {
         EnsureAzureImage2Configured(options, "Phase 12 Thumbnail");
         var endpoint = options.Endpoint.TrimEnd('/');
         var deployment = Uri.EscapeDataString(options.ImageDeployment.Trim());
         const string apiVersion = "2024-10-21";
         var requestUri = $"{endpoint}/openai/deployments/{deployment}/images/generations?api-version={apiVersion}";
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(new { prompt = promptText, n = 1, size = "1792x1024" }) };
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(new { prompt = promptText, n = 1, size = requestedSize }) };
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         await AddAzureImage2AuthorizationAsync(request, options, cancellationToken);
         Console.WriteLine($"Azure Image2 HTTP request start: POST {requestUri}");
+        var generationStartedUtc = DateTimeOffset.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         try
         {
             using var response = await httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
             var payload = await response.Content.ReadAsStringAsync(cancellationToken);
             stopwatch.Stop();
+            var generationEndedUtc = DateTimeOffset.UtcNow;
+            var providerRequestId = response.Headers.TryGetValues("x-request-id", out var requestIds) ? requestIds.FirstOrDefault() : null;
             Console.WriteLine($"Azure Image2 HTTP request end: {(int)response.StatusCode} {response.StatusCode} in {stopwatch.ElapsedMilliseconds} ms");
-            if (!response.IsSuccessStatusCode) return new(true, false, stopwatch.ElapsedMilliseconds, 0, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}): {payload}");
+            if (!response.IsSuccessStatusCode) return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, providerRequestId, generationStartedUtc, generationEndedUtc, stopwatch.ElapsedMilliseconds, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}): {payload}");
             var downloadStopwatch = Stopwatch.StartNew();
             var imageBytes = await ExtractAzureImage2BytesAsync(httpClientFactory.CreateClient(), payload, cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(imagePath) ?? ResolveWorkingDirectoryRoot());
             await File.WriteAllBytesAsync(imagePath, imageBytes, cancellationToken);
             downloadStopwatch.Stop();
-            return new(true, true, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, null);
+            return new(true, true, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, "AzureOpenAI", options.ImageDeployment, providerRequestId, generationStartedUtc, generationEndedUtc, stopwatch.ElapsedMilliseconds + downloadStopwatch.ElapsedMilliseconds, null);
         }
         catch (OperationCanceledException)
         {
@@ -2950,7 +2953,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             stopwatch.Stop();
             Console.WriteLine($"Azure Image2 HTTP request end: provider exception in {stopwatch.ElapsedMilliseconds} ms: {ex.Message}");
-            return new(true, false, stopwatch.ElapsedMilliseconds, 0, ex.ToString());
+            return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, null, generationStartedUtc, DateTimeOffset.UtcNow, stopwatch.ElapsedMilliseconds, ex.ToString());
         }
     }
 
@@ -2984,7 +2987,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content.");
     }
 
-    private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
+    private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? ProviderName, string? ProviderModelName, string? ProviderRequestId, DateTimeOffset? GenerationStartedUtc, DateTimeOffset? GenerationEndedUtc, long? DurationMs, string? FailureReason);
 
     private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string NegativePrompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary, PromptAssemblyReport? AssemblyReport);
 

@@ -3,6 +3,8 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -79,4 +81,43 @@ public sealed class ThumbnailV7CinematicOverlayRendererTests
         Assert.False(promptJson.Contains("Mercury", StringComparison.OrdinalIgnoreCase));
         Assert.False(promptJson.Contains("thumbnail-review.json", StringComparison.OrdinalIgnoreCase));
     }
+    [Fact]
+    public async Task RenderAsync_WithProvider_WritesRawVerificationArtifactsPerAspect()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "thumb-v7-provider-" + Guid.NewGuid().ToString("N"));
+        var request = new ThumbnailAssetGenerationRequest
+        {
+            EventId = "geminid-meteor-shower",
+            RegionId = "US",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = new ProductionPipelineExecutionContext(
+                true, null, null, null, false,
+                EventType: "MeteorShower",
+                ProductionEventIntelligence: new ProductionEventIntelligence(
+                    "Astronomy", "MeteorShower", "Geminid Meteor Shower", "Geminids", new DateTimeOffset(2026, 12, 14, 0, 0, 0, TimeSpan.Zero), null,
+                    "2:00 AM", "After midnight", "northeast sky", "United States", ["Radiant"], [], "Excellent", "Low", null, null,
+                    [], [], [], [], [], ResolvedObjectNames: ["Radiant"]))
+        };
+
+        var result = await new ThumbnailV7CinematicOverlayRenderer(
+            azureImage2Generator: async (generationRequest, ct) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(generationRequest.RawOutputPath)!);
+                using var image = new Image<Rgba32>(generationRequest.RequestedWidth, generationRequest.RequestedHeight, Color.DarkBlue);
+                await image.SaveAsPngAsync(generationRequest.RawOutputPath, ct);
+                return new ThumbnailV7AzureImage2GenerationResult(true, true, 11, 3, "TestProvider", "TestModel", $"req-{generationRequest.Aspect}", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 14, null);
+            }).RenderAsync(request, root, overwriteExisting: true, CancellationToken.None);
+
+        Assert.Contains(result.OutputFiles, p => p.EndsWith("thumbnail-generation-metadata.json"));
+        Assert.Contains(result.OutputFiles, p => p.EndsWith("thumbnail-processing-log.json"));
+        Assert.Contains(result.OutputFiles, p => p.EndsWith("thumbnail-prompt-diff.md"));
+        Assert.All(new[] { "thumbnail-landscape-raw.png", "thumbnail-square-raw.png", "thumbnail-portrait-raw.png", "thumbnail-generation-metadata.json", "thumbnail-processing-log.json", "thumbnail-prompt-diff.md" }, file => Assert.True(File.Exists(Path.Combine(root, file)), file));
+
+        using var metadata = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "thumbnail-generation-metadata.json")));
+        Assert.Equal("PASS", metadata.RootElement.GetProperty("validation").GetProperty("status").GetString());
+        Assert.Equal(3, metadata.RootElement.GetProperty("providerCalls").GetArrayLength());
+        Assert.Contains("Hashes unique: true", await File.ReadAllTextAsync(Path.Combine(root, "thumbnail-prompt-diff.md")));
+    }
+
 }

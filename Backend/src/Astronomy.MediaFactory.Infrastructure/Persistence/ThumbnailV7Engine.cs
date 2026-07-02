@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using SixLabors.Fonts;
@@ -24,9 +26,9 @@ public class ThumbnailV7CinematicOverlayRenderer
     private readonly ThumbnailV7CinematicOverlayComposer _composer = new();
     private readonly ThumbnailV7VariantRenderer _renderer = new();
     private readonly ThumbnailV7Validator _validator = new();
-    private readonly Func<string, string, CancellationToken, Task<ThumbnailV7AzureImage2GenerationResult>>? _azureImage2Generator;
+    private readonly Func<ThumbnailV7AzureImage2Request, CancellationToken, Task<ThumbnailV7AzureImage2GenerationResult>>? _azureImage2Generator;
 
-    public ThumbnailV7CinematicOverlayRenderer(string celestialAssetsRoot = "assets/celestial", Func<string, string, CancellationToken, Task<ThumbnailV7AzureImage2GenerationResult>>? azureImage2Generator = null)
+    public ThumbnailV7CinematicOverlayRenderer(string celestialAssetsRoot = "assets/celestial", Func<ThumbnailV7AzureImage2Request, CancellationToken, Task<ThumbnailV7AzureImage2GenerationResult>>? azureImage2Generator = null)
     {
         _azureImage2Generator = azureImage2Generator;
     }
@@ -46,27 +48,46 @@ public class ThumbnailV7CinematicOverlayRenderer
         var writes = new List<ThumbnailV7OutputWrite>();
         var sceneKey = "ThumbnailV7PerVariantBackground";
         var backgroundResults = new Dictionary<string, ThumbnailV7VariantBackground>(StringComparer.OrdinalIgnoreCase);
+        var providerCalls = new List<ThumbnailV7ProviderCallLog>();
+        var processingLogs = new List<ThumbnailV7ProcessingLog>();
         foreach (var variant in ThumbnailV7VariantRenderer.Variants)
         {
             var variantBackgroundPath = Path.Combine(thumbnailRoot, $"v7-background-{variant.Name}.png");
+            var rawPath = Path.Combine(thumbnailRoot, $"thumbnail-{variant.Name}-raw.png");
             var normalizedVariantBackgroundPath = NormalizePath(variantBackgroundPath);
             var variantPrompt = backgroundPrompts[variant.Name];
-            ThumbnailV7AzureImage2GenerationResult azureResult = new(false, false, 0, 0, "Azure Image2 generator was not provided to Thumbnail V7 renderer.");
+            var promptHash = ComputeSha256Hex(Encoding.UTF8.GetBytes(variantPrompt));
+            ThumbnailV7AzureImage2GenerationResult azureResult = new(false, false, 0, 0, null, null, null, null, null, null, "Azure Image2 generator was not provided to Thumbnail V7 renderer.");
             LogThumbnailV7BackgroundTrace(RendererName, variantPrompt, "Pending", normalizedVariantBackgroundPath, File.Exists(variantBackgroundPath), GetFileSize(variantBackgroundPath), sceneKey + ":" + variant.Name);
             if (_azureImage2Generator is not null)
-                azureResult = await _azureImage2Generator(variantPrompt, variantBackgroundPath, cancellationToken);
+            {
+                var generationStartedUtc = DateTimeOffset.UtcNow;
+                azureResult = await _azureImage2Generator(new ThumbnailV7AzureImage2Request(variant.Name, variantPrompt, variant.Width, variant.Height, rawPath), cancellationToken);
+                var generationEndedUtc = DateTimeOffset.UtcNow;
+                if (File.Exists(rawPath)) File.Copy(rawPath, variantBackgroundPath, overwrite: true);
+                azureResult = azureResult with
+                {
+                    GenerationStartedUtc = azureResult.GenerationStartedUtc ?? generationStartedUtc,
+                    GenerationEndedUtc = azureResult.GenerationEndedUtc ?? generationEndedUtc,
+                    DurationMs = azureResult.DurationMs ?? Math.Max(0, (long)(generationEndedUtc - generationStartedUtc).TotalMilliseconds)
+                };
+            }
             var exists = File.Exists(variantBackgroundPath);
             var generated = azureResult.ProviderSucceeded && exists;
             LogThumbnailV7BackgroundTrace(RendererName, variantPrompt, azureResult.ProviderCalled ? (azureResult.ProviderSucceeded ? "Succeeded" : $"Failed: {azureResult.FailureReason}") : "NotCalled", generated ? normalizedVariantBackgroundPath : "procedural-fallback", exists, GetFileSize(variantBackgroundPath), sceneKey + ":" + variant.Name);
-            backgroundResults[variant.Name] = new ThumbnailV7VariantBackground(variant.Name, variantBackgroundPath, variantPrompt, azureResult, generated);
+            backgroundResults[variant.Name] = new ThumbnailV7VariantBackground(variant.Name, variantBackgroundPath, rawPath, variantPrompt, promptHash, azureResult, generated, variant.Width, variant.Height);
+            providerCalls.Add(ThumbnailV7ProviderCallLog.From(variant, variantPrompt, promptHash, azureResult));
+            processingLogs.Add(new ThumbnailV7ProcessingLog(variant.Name, NormalizePath(rawPath), ["No post-processing before raw save"], []));
 
             var path = Path.Combine(thumbnailRoot, variant.FileName);
             await _renderer.RenderAsync(path, variant.Width, variant.Height, profile, observation, plan, composition, generated ? variantBackgroundPath : null, cancellationToken);
+            processingLogs.Add(new ThumbnailV7ProcessingLog(variant.Name, NormalizePath(path), [], ["copy raw provider bytes to V7 background path", "resize/stretch background to final canvas", "canvas overlay composition", "save final PNG"]));
             writes.Add(new ThumbnailV7OutputWrite(path, RendererName));
         }
 
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), Path.Combine(thumbnailRoot, "thumbnail-final.png"), overwrite: true);
         writes.Insert(0, new ThumbnailV7OutputWrite(Path.Combine(thumbnailRoot, "thumbnail-final.png"), RendererName));
+        var verification = await WriteThumbnailVerificationArtifactsAsync(thumbnailRoot, backgroundResults, writes, providerCalls, processingLogs, cancellationToken);
         var validation = _validator.Validate(thumbnailRoot, plan, composition, writes, observation, backgroundResults);
         var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v7-diagnostics.json");
         var promptPath = Path.Combine(thumbnailRoot, "thumbnail-prompt.json");
@@ -76,8 +97,53 @@ public class ThumbnailV7CinematicOverlayRenderer
         outputFiles.AddRange(backgroundResults.Values.Where(b => b.Generated).Select(b => NormalizePath(b.Path)));
         outputFiles.Add(NormalizePath(promptPath));
         outputFiles.Add(NormalizePath(diagnosticsPath));
+        outputFiles.AddRange(verification.Select(NormalizePath));
         return new ThumbnailV7Result(outputFiles, diagnosticsPath, validation);
     }
+
+
+    private static async Task<IReadOnlyList<string>> WriteThumbnailVerificationArtifactsAsync(string thumbnailRoot, IReadOnlyDictionary<string, ThumbnailV7VariantBackground> backgrounds, IReadOnlyList<ThumbnailV7OutputWrite> writes, IReadOnlyList<ThumbnailV7ProviderCallLog> providerCalls, IReadOnlyList<ThumbnailV7ProcessingLog> processingLogs, CancellationToken cancellationToken)
+    {
+        var metadataPath = Path.Combine(thumbnailRoot, "thumbnail-generation-metadata.json");
+        var processingPath = Path.Combine(thumbnailRoot, "thumbnail-processing-log.json");
+        var diffPath = Path.Combine(thumbnailRoot, "thumbnail-prompt-diff.md");
+        var validationReasons = new List<string>();
+        var expected = ThumbnailV7VariantRenderer.Variants.ToDictionary(v => v.Name, StringComparer.OrdinalIgnoreCase);
+        var hashes = backgrounds.Values.Select(b => b.PromptHash).ToArray();
+        if (hashes.Distinct(StringComparer.OrdinalIgnoreCase).Count() != hashes.Length) validationReasons.Add("any two aspect prompt hashes are identical");
+        foreach (var bg in backgrounds.Values)
+        {
+            if (!expected.TryGetValue(bg.VariantName, out var variant) || bg.RequestedWidth != variant.Width || bg.RequestedHeight != variant.Height) validationReasons.Add($"{bg.VariantName} requested size is wrong");
+            if (!File.Exists(bg.RawPath))
+            {
+                validationReasons.Add($"{bg.VariantName} raw provider output is missing");
+            }
+            else
+            {
+                using var image = Image.Load(bg.RawPath);
+                if (image.Width != bg.RequestedWidth || image.Height != bg.RequestedHeight) validationReasons.Add($"{bg.VariantName} raw image dimensions do not match requested dimensions; expected {bg.RequestedWidth}x{bg.RequestedHeight}, got {image.Width}x{image.Height}");
+            }
+        }
+        if (SameBytes(backgrounds.GetValueOrDefault("portrait")?.RawPath, backgrounds.GetValueOrDefault("landscape")?.RawPath)) validationReasons.Add("portrait is generated from landscape bytes");
+        if (SameBytes(backgrounds.GetValueOrDefault("square")?.RawPath, backgrounds.GetValueOrDefault("landscape")?.RawPath)) validationReasons.Add("square is generated from landscape bytes");
+        if (processingLogs.Any(l => l.RawSaveOperations.Any(op => !op.Equals("No post-processing before raw save", StringComparison.Ordinal)))) validationReasons.Add("hidden resize/crop happens before raw save");
+        var metadata = backgrounds.Values.Select(bg => new { aspect = bg.VariantName, requestedWidth = bg.RequestedWidth, requestedHeight = bg.RequestedHeight, returnedWidth = ReadWidth(bg.RawPath), returnedHeight = ReadHeight(bg.RawPath), promptHash = bg.PromptHash, promptFilePath = NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-prompt.json")), rawImagePath = NormalizePath(bg.RawPath), finalImagePath = NormalizePath(Path.Combine(thumbnailRoot, $"thumbnail-{bg.VariantName}.png")), providerRequestId = bg.AzureResult.ProviderRequestId, generationDurationMs = bg.AzureResult.DurationMs ?? bg.AzureResult.AzureRequestMs + bg.AzureResult.ImageDownloadMs, generatedIndependently = !SameBytes(bg.RawPath, backgrounds.Values.FirstOrDefault(x => x.VariantName != bg.VariantName)?.RawPath) }).ToArray();
+        await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(new { providerCalls, metadata, validation = new { status = validationReasons.Count == 0 ? "PASS" : "FAIL", reasons = validationReasons } }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(processingPath, JsonSerializer.Serialize(processingLogs, JsonOptions), cancellationToken);
+        var unique = hashes.Distinct(StringComparer.OrdinalIgnoreCase).Count() == hashes.Length;
+        var lines = new List<string> { "# Thumbnail Prompt Diff", "", $"Validation: {(validationReasons.Count == 0 ? "PASS" : "FAIL")}", "", $"Hashes unique: {unique.ToString().ToLowerInvariant()}", "" };
+        foreach (var bg in backgrounds.Values.OrderBy(b => b.VariantName)) lines.AddRange([ $"## {bg.VariantName}", $"- prompt hash: `{bg.PromptHash}`", $"- requested size: {bg.RequestedWidth}x{bg.RequestedHeight}", $"- key creative-directing phrases detected: {string.Join(", ", DetectCreativePhrases(bg.Prompt))}", "" ]);
+        if (validationReasons.Count > 0) lines.AddRange(["## Failure Reasons", ..validationReasons.Select(r => $"- {r}")]);
+        await File.WriteAllTextAsync(diffPath, string.Join(Environment.NewLine, lines), cancellationToken);
+        return [metadataPath, processingPath, diffPath];
+    }
+
+    private static int? ReadWidth(string path) { if (!File.Exists(path)) return null; using var image = Image.Load(path); return image.Width; }
+    private static int? ReadHeight(string path) { if (!File.Exists(path)) return null; using var image = Image.Load(path); return image.Height; }
+    private static bool SameBytes(string? a, string? b) => !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b) && File.Exists(a) && File.Exists(b) && ComputeFileHash(a) == ComputeFileHash(b);
+    private static string ComputeFileHash(string path) => ComputeSha256Hex(File.ReadAllBytes(path));
+    private static string ComputeSha256Hex(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static string[] DetectCreativePhrases(string prompt) => new[] { "background-only", "cinematic", "twilight", "reserved", "overlay-safe", "National Geographic quality", "No text", "No labels", "No UI" }.Where(p => prompt.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
 
     private static void LogThumbnailV7BackgroundTrace(string renderer, string backgroundPrompt, string azureImage2Call, string backgroundImagePath, bool fileExists, long fileSize, string sceneKey)
     {
@@ -435,6 +501,13 @@ public sealed record ThumbnailV7InfoCard(string Label, string Value);
 public sealed record ThumbnailV7Composition(bool OverlapDetected, int InformationAreaPercent, int VisualAreaPercent);
 public sealed record ThumbnailV7Variant(string Name, string FileName, int Width, int Height);
 public sealed record ThumbnailV7OutputWrite(string Path, string WriterComponent);
-public sealed record ThumbnailV7VariantBackground(string VariantName, string Path, string Prompt, ThumbnailV7AzureImage2GenerationResult AzureResult, bool Generated);
-public sealed record ThumbnailV7AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
+public sealed record ThumbnailV7VariantBackground(string VariantName, string Path, string RawPath, string Prompt, string PromptHash, ThumbnailV7AzureImage2GenerationResult AzureResult, bool Generated, int RequestedWidth, int RequestedHeight);
+public sealed record ThumbnailV7AzureImage2Request(string Aspect, string Prompt, int RequestedWidth, int RequestedHeight, string RawOutputPath);
+public sealed record ThumbnailV7AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? ProviderName, string? ProviderModelName, string? ProviderRequestId, DateTimeOffset? GenerationStartedUtc, DateTimeOffset? GenerationEndedUtc, long? DurationMs, string? FailureReason);
+public sealed record ThumbnailV7ProviderCallLog(string Aspect, string PromptHash, int PromptLength, string RequestedSize, string? ProviderName, string? ProviderModelName, string? ProviderRequestId, DateTimeOffset? GenerationStartUtc, DateTimeOffset? GenerationEndUtc, long? DurationMs)
+{
+    public static ThumbnailV7ProviderCallLog From(ThumbnailV7Variant variant, string prompt, string promptHash, ThumbnailV7AzureImage2GenerationResult result)
+        => new(variant.Name, promptHash, prompt.Length, $"{variant.Width}x{variant.Height}", result.ProviderName, result.ProviderModelName, result.ProviderRequestId, result.GenerationStartedUtc, result.GenerationEndedUtc, result.DurationMs ?? result.AzureRequestMs + result.ImageDownloadMs);
+}
+public sealed record ThumbnailV7ProcessingLog(string Aspect, string Path, IReadOnlyList<string> RawSaveOperations, IReadOnlyList<string> PostProviderOperations);
 public sealed record ThumbnailV7Diagnostics(string ThumbnailVersion, string SelectedRenderer, string Validator, string BackgroundPromptSource, string SelectedTemplate, bool BackgroundGenerated, bool BackgroundFallbackUsed, string? AzureImage2Error, string? BackgroundImagePath, string? LandscapeBackgroundPath, string? PortraitBackgroundPath, string? SquareBackgroundPath, string BackgroundMode, bool CropFromLandscape, bool VectorIconsUsed, bool EmojiIconsUsed, bool ObservationCardRendered, bool FooterRendered, bool OldValidationBlocked, bool ThumbnailReviewJsonRequired, bool ManualCelestialAssetPlacement, bool V6RendererExecuted, bool V6ValidatorExecuted, bool DashboardCardsAppear, bool ExtraObjectsDetected, bool V5RendererExecuted, bool MercuryAppears, IReadOnlyList<string> OutputFiles, int InformationAreaPercent, int VisualAreaPercent, bool OverlapDetected);
