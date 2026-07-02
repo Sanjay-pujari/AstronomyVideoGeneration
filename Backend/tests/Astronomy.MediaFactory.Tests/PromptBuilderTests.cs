@@ -97,4 +97,41 @@ public sealed class PromptBuilderTests
         Assert.Contains("<BEGIN_ASTRONOMY_INPUT_JSON>", prompt);
         Assert.Contains("Selected because score=0.92", prompt);
     }
+
+    [Fact]
+    public void ThumbnailPromptBuilder_InjectsDistinctCompositionProfiles_PerAspectRatio()
+    {
+        var builder = new ThumbnailPromptBuilder();
+
+        var landscape = builder.Build(BuildThumbnailContract("landscape", "16:9")).Prompt;
+        var portrait = builder.Build(BuildThumbnailContract("portrait", "9:16")).Prompt;
+        var square = builder.Build(BuildThumbnailContract("square", "1:1")).Prompt;
+
+        Assert.NotEqual(landscape, portrait);
+        Assert.NotEqual(landscape, square);
+        Assert.NotEqual(portrait, square);
+        Assert.Contains("LandscapeProfile", landscape);
+        Assert.Contains("wide cinematic framing", landscape);
+        Assert.Contains("PortraitProfile", portrait);
+        Assert.Contains("phone-first composition", portrait);
+        Assert.Contains("SquareProfile", square);
+        Assert.Contains("centered balanced composition", square);
+        Assert.DoesNotContain("phone-first composition", landscape);
+        Assert.DoesNotContain("wide cinematic framing", portrait);
+        Assert.DoesNotContain("centered balanced composition", landscape);
+    }
+
+    private static ThumbnailPromptContract BuildThumbnailContract(string profile, string aspectRatio)
+        => new(
+            "1.0",
+            new ThumbnailEventIdentity("event-1", "Moon", "Observation guide", "Moon", "FullMoon"),
+            new ThumbnailDisplay("Moon", "Moon", "Moon", ["Moon"]),
+            new ThumbnailObjects(["Moon"], [], new Dictionary<string, string> { ["Moon"] = "Moon" }),
+            new ThumbnailObservation(null, "Tonight", "After sunset", "East", "Visible"),
+            new ThumbnailVisual("Moon over horizon", "premium", "observe the event", "CTR"),
+            new ThumbnailPlatform("Thumbnail", aspectRatio, profile, 100, 100),
+            new ThumbnailPromptInstructions("Base event-specific wording that must remain unchanged.", "negative", ["Moon"], []),
+            new ThumbnailBrand("natural title case", "premium", ["en"]),
+            new ThumbnailValidation(["contract valid"], ["moon only"], ["native aspect"]),
+            new ThumbnailPromptDiagnostics("test", "test", "test", "test", DateTimeOffset.UtcNow));
 }
