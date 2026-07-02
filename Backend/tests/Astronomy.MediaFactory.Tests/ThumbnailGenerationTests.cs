@@ -1280,4 +1280,66 @@ public sealed class ThumbnailGenerationTests
         await image.SaveAsJpegAsync(path);
     }
 
+
+    [Theory]
+    [InlineData("landscape", "16:9", "LandscapeDirector")]
+    [InlineData("portrait", "9:16", "PortraitDirector")]
+    [InlineData("square", "1:1", "SquareDirector")]
+    public void ThumbnailPromptBuilder_IncludesVisualDirectingProfileAndAntiDistortionRules(string profile, string aspectRatio, string expectedDirector)
+    {
+        var contract = BuildPromptContract(profile, aspectRatio, "Planetary");
+
+        var result = new ThumbnailPromptBuilder().Build(contract);
+
+        Assert.Contains(expectedDirector, result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PlanetaryDirector", result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("native aspect composition", result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no stretched landscape", result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no squeezed portrait", result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no cropped square", result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("circular celestial bodies", result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("physically correct astronomical geometry", result.NegativePrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Eclipse", "EclipseDirector")]
+    [InlineData("Moon", "MoonDirector")]
+    [InlineData("Meteor", "MeteorDirector")]
+    [InlineData("Planetary", "PlanetaryDirector")]
+    public void ThumbnailPromptBuilder_UsesFamilyDirectorVocabularyWithoutRenderingLogic(string family, string expectedDirector)
+    {
+        var contract = BuildPromptContract("landscape", "16:9", family);
+
+        var result = new ThumbnailPromptBuilder().Build(contract);
+
+        Assert.Contains(expectedDirector, result.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ThumbnailRenderer", result.Prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ThumbnailPromptContract BuildPromptContract(string profile, string aspectRatio, string family)
+    {
+        var width = aspectRatio == "9:16" ? 2160 : aspectRatio == "1:1" ? 2160 : 3840;
+        var height = aspectRatio == "16:9" ? 2160 : aspectRatio == "1:1" ? 2160 : 3840;
+        return new ThumbnailPromptContract(
+            "1.0",
+            new ThumbnailEventIdentity("test-event", family + " Event", "Observation guide", family, family),
+            new ThumbnailDisplay(family + " Event", family + " Event", family, [family + " Event"]),
+            new ThumbnailObjects([family], [], new Dictionary<string, string> { [family] = family }),
+            new ThumbnailObservation(null, "After sunset", "After Sunset", "West", "Visible"),
+            new ThumbnailVisual("cinematic astronomy", "premium documentary", "observation essentials", "click-through recognition"),
+            new ThumbnailPlatform("Thumbnail", aspectRatio, profile, width, height),
+            new ThumbnailPromptInstructions("Clean astronomy artwork", ThumbnailArtworkPromptRules.NegativePrompt, [family], []),
+            new ThumbnailBrand("Renderer adds typography", "premium dark blue and gold", ["en"]),
+            new ThumbnailValidation(["No null required fields"], ["Scientific geometry"], ["Native aspect only"]),
+            new ThumbnailPromptDiagnostics("test", "test", family, "test summary", DateTimeOffset.UtcNow),
+            [
+                new PromptSection("visual-scene", "Visual Scene", 10, "Clean astronomy scene", true),
+                new PromptSection("dominant-object", "Dominant Object", 20, family, true),
+                new PromptSection("observation-card", "Observation Card", 30, "Renderer adds observation card", true),
+                new PromptSection("one-observation-hint", "One Observation Hint", 40, "West / After Sunset", false),
+                new PromptSection("compact-observation", "Compact Observation", 50, "West / After Sunset", false),
+                new PromptSection("quality-rules", "Quality Rules", 100, "Native clean artwork", true)
+            ]);
+    }
+
 }
