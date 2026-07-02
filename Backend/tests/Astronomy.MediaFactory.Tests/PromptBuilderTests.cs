@@ -121,6 +121,35 @@ public sealed class PromptBuilderTests
         Assert.DoesNotContain("centered balanced composition", landscape);
     }
 
+    [Fact]
+    public void ThumbnailPromptBuilder_InjectsDistinctPlatformStorytellingStrategies_PerAspectRatio()
+    {
+        var builder = new ThumbnailPromptBuilder();
+
+        var landscape = builder.Build(BuildThumbnailContract("landscape", "16:9"));
+        var portrait = builder.Build(BuildThumbnailContract("portrait", "9:16"));
+        var square = builder.Build(BuildThumbnailContract("square", "1:1"));
+
+        Assert.Equal("LandscapeStrategy", landscape.StorytellingStrategy.Name);
+        Assert.Equal("PortraitStrategy", portrait.StorytellingStrategy.Name);
+        Assert.Equal("SquareStrategy", square.StorytellingStrategy.Name);
+        Assert.Contains("Observation card", landscape.StorytellingStrategy.AllowedSections);
+        Assert.True(landscape.StorytellingStrategy.FooterEnabled);
+        Assert.True(landscape.StorytellingStrategy.ObservationCardEnabled);
+        Assert.False(portrait.StorytellingStrategy.FooterEnabled);
+        Assert.False(portrait.StorytellingStrategy.ObservationCardEnabled);
+        Assert.Contains("Maximum one observation hint", portrait.StorytellingStrategy.AllowedSections);
+        Assert.Contains("Compact observation card", square.StorytellingStrategy.AllowedSections);
+        Assert.True(square.StorytellingStrategy.ObservationCardEnabled);
+        Assert.NotEqual(landscape.StorytellingStrategy.MaximumTextBudget, portrait.StorytellingStrategy.MaximumTextBudget);
+        Assert.NotEqual(landscape.StorytellingStrategy.MaximumTextBudget, square.StorytellingStrategy.MaximumTextBudget);
+        Assert.Contains("LandscapeStrategy", landscape.Prompt);
+        Assert.Contains("PortraitStrategy", portrait.Prompt);
+        Assert.Contains("SquareStrategy", square.Prompt);
+        Assert.DoesNotContain("PortraitStrategy", landscape.Prompt);
+        Assert.DoesNotContain("LandscapeStrategy", portrait.Prompt);
+    }
+
     private static ThumbnailPromptContract BuildThumbnailContract(string profile, string aspectRatio)
         => new(
             "1.0",

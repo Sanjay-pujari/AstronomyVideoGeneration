@@ -46,12 +46,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
     private const string ThumbnailV8DiagnosticsFileName = "thumbnail-v8-diagnostics.json";
     private const string ThumbnailCompositionProfileFileName = "thumbnail-composition-profile.json";
+    private const string ThumbnailStorytellingStrategyFileName = "thumbnail-storytelling-strategy.json";
     private const string ThumbnailPromptContractFileName = "thumbnail-prompt-contract.json";
     private const string VisualPromptDiagnosticsFileName = "visual-prompt-diagnostics.json";
     private static readonly string[] ThumbnailRc3RequiredArtifactFileNames =
     [
         ThumbnailPromptContractFileName,
         ThumbnailCompositionProfileFileName,
+        ThumbnailStorytellingStrategyFileName,
         ThumbnailGenerationDiagnosticsFileName,
         VisualPromptDiagnosticsFileName,
         "thumbnail-landscape-prompt.txt",
@@ -273,6 +275,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var prompts = contracts.Select(contract => ToPrompt(contract, promptBuilder)).ToArray();
         var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         var compositionProfileDiagnostics = BuildThumbnailCompositionProfileDiagnostics(contracts, prompts);
+        var storytellingStrategyDiagnostics = BuildThumbnailStorytellingStrategyDiagnostics(contracts, prompts);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var failures = new List<string>();
@@ -309,6 +312,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(contractJsonPath, JsonSerializer.Serialize(new { thumbnailVersion = "V8", contracts }, JsonOptions), cancellationToken);
         var compositionProfilePath = Path.Combine(thumbnailRoot, ThumbnailCompositionProfileFileName);
         await File.WriteAllTextAsync(compositionProfilePath, JsonSerializer.Serialize(compositionProfileDiagnostics, JsonOptions), cancellationToken);
+        var storytellingStrategyPath = Path.Combine(thumbnailRoot, ThumbnailStorytellingStrategyFileName);
+        await File.WriteAllTextAsync(storytellingStrategyPath, JsonSerializer.Serialize(storytellingStrategyDiagnostics, JsonOptions), cancellationToken);
         var promptJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptFileName);
         await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
         {
@@ -377,6 +382,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             promptFilePaths = promptPaths,
             visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
+            storytellingStrategyPath = NormalizePath(storytellingStrategyPath),
             promptContractPath = NormalizePath(contractJsonPath),
             generatedUtc = DateTimeOffset.UtcNow
         };
@@ -437,6 +443,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             promptFilePaths = promptPaths,
             visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
+            storytellingStrategyPath = NormalizePath(storytellingStrategyPath),
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
             promptOnly = false,
@@ -655,6 +662,51 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     "ThumbnailPromptBuilder consumed ThumbnailPromptContract and injected a resolved CompositionProfile.",
                     "Each aspect ratio receives a native optimized prompt.",
                     "Renderer changes are not required for composition profile selection."
+                }
+            },
+            generatedUtc = DateTimeOffset.UtcNow
+        };
+    }
+
+    private static object BuildThumbnailStorytellingStrategyDiagnostics(IReadOnlyList<ThumbnailPromptContract> contracts, IReadOnlyList<ThumbnailV8Prompt> prompts)
+    {
+        var entries = contracts.Select(contract =>
+        {
+            var strategy = PlatformStorytellingStrategies.Resolve(contract);
+            var prompt = prompts.First(p => string.Equals(p.Name, contract.Platform.CompositionProfile, StringComparison.OrdinalIgnoreCase));
+            return new
+            {
+                selectedStrategy = strategy.Name,
+                compositionProfile = contract.Platform.CompositionProfile,
+                aspectRatio = contract.Platform.AspectRatio,
+                informationDensity = strategy.InformationDensity,
+                allowedSections = strategy.AllowedSections,
+                textBudget = strategy.MaximumTextBudget,
+                iconBudget = strategy.MaximumIconCount,
+                footerEnabled = strategy.FooterEnabled,
+                observationCardEnabled = strategy.ObservationCardEnabled,
+                footerPolicy = strategy.FooterPolicy,
+                observationCardPolicy = strategy.ObservationCardPolicy,
+                ctaPolicy = strategy.CtaPolicy,
+                promptUniqueHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt)))
+            };
+        }).ToArray();
+        var selectedStrategies = entries.Select(e => e.selectedStrategy).ToArray();
+        return new
+        {
+            thumbnailVersion = "V8",
+            strategyCount = entries.Length,
+            strategies = entries,
+            validation = new
+            {
+                landscapeDoesNotReusePortraitStrategy = selectedStrategies.Contains("LandscapeStrategy", StringComparer.OrdinalIgnoreCase) && selectedStrategies.Contains("PortraitStrategy", StringComparer.OrdinalIgnoreCase),
+                portraitDoesNotReuseLandscapeStrategy = selectedStrategies.Contains("PortraitStrategy", StringComparer.OrdinalIgnoreCase) && selectedStrategies.Contains("LandscapeStrategy", StringComparer.OrdinalIgnoreCase),
+                squareIsIndependent = selectedStrategies.Contains("SquareStrategy", StringComparer.OrdinalIgnoreCase),
+                notes = new[]
+                {
+                    "PlatformStorytellingStrategy defines what information exists per platform.",
+                    "CompositionProfile remains responsible for where content is placed.",
+                    "ThumbnailPromptBuilder consumes ThumbnailPromptContract, PlatformStorytellingStrategy, and CompositionProfile."
                 }
             },
             generatedUtc = DateTimeOffset.UtcNow
