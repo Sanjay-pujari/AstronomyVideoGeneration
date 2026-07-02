@@ -3152,19 +3152,18 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
     }
 
     private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
-Generate final finished thumbnail image: {{posterType}}.
-Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. 4K quality. Generate independently for this exact format; do not crop landscape and do not reuse another aspect-ratio prompt. No extra celestial objects. No location text. No city, region, country, or coordinates. No watermark. No branding.
+Generate clean cinematic artwork only for deterministic thumbnail rendering: {{posterType}} background artwork.
+The AI image is NOT the final thumbnail. Do not include any text, typography, logos, UI, observation cards, icons, labels, buttons, CTA elements, panels, callouts, footers, watermarks, brand marks, captions, numerals, badges, or data boxes. The deterministic ThumbnailRenderer will render all presentation elements later. 4K quality. Generate independently for this exact format; do not crop landscape and do not reuse another aspect-ratio prompt. No extra celestial objects. No location text. No city, region, country, or coordinates.
 OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
-TITLE TEXT: "{{c.Title}}"
-SUBTITLE TEXT: "{{c.EventType}}"
-MOBILE INFORMATION LIMIT: maximum visible information is Date, Best Time, Direction, Separation when available, Equipment. Do not display time-span blocks, long date ranges, city names, region names, country names, coordinates, location names, or scientific descriptions.
-PORTRAIT LOCK: when aspect is 9:16, title area maximum 12%, information area maximum 20%, celestial object area minimum 35%, and objects remain the primary visual focus in a unique Shorts/Reels composition.
-TEXT STYLE RULE: Render natural title case words only. Do not render underscores, snake case, database field names, technical identifiers, or all-caps event codes.
+RENDERER PRESENTATION DATA (do not draw in artwork): title {{c.Title}}; subtitle {{c.EventType}}.
+MOBILE INFORMATION LIMIT: renderer-owned visible information is Date, Best Time, Direction, Separation when available, Equipment. Do not display any of it in the AI artwork.
+PORTRAIT LOCK: when aspect is 9:16, preserve clean negative space for renderer presentation while keeping celestial object area minimum 35% and the primary visual focus in a unique Shorts/Reels composition.
+ARTWORK PURITY RULE: no readable words, no typographic marks, no fake lettering, no UI glyphs, no icons, no panels.
 """;
 
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
-DATA TO RENDER IN THE IMAGE:
+DATA FOR RENDERER-OWNED PRESENTATION (do not render as text in the image):
 - Date: {{c.DateText}}
 - Best Time: {{c.BestTime}}
 - Direction: {{c.Direction}}
@@ -3172,10 +3171,10 @@ DATA TO RENDER IN THE IMAGE:
 - Separation: {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}
 - Objects to render visually, not as observation-card fields: {{objectText}}
 - Footer tips: use the three short tips specified in the family template above.
-QUALITY RULES: sharp readable typography, no watermark, no branding, no location text, no text outside canvas, no overlapping text, professional infographic UI, polished icons, premium dark blue and gold palette. Information area must be 20% of canvas or less.
-CTR INSTRUCTIONS: This is a professional YouTube thumbnail and social cover. Optimize for maximum click-through rate, mobile readability, large celestial objects, large typography, strong visual hierarchy, and clean premium astronomy-magazine design.
+QUALITY RULES: clean cinematic artwork, no watermark, no branding, no location text, no text outside canvas, no professional infographic UI, no polished icons, premium dark blue and gold atmosphere. Reserve quiet negative space for deterministic renderer overlays without drawing boxes or layout guides.
+CTR INSTRUCTIONS: Optimize the artwork for click-through recognition through large celestial objects, high contrast, atmospheric depth, and strong visual hierarchy. Renderer adds typography and branded UI.
 AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers.
-NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping.
+NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping, no text, no typography, no logos, no UI, no observation cards, no icons, no labels, no buttons, no watermarks.
 """;
 
     private static ThumbnailV8Prompt ToPrompt(ThumbnailPromptContract contract, ThumbnailPromptBuilder builder)
@@ -3197,7 +3196,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
     private static ThumbnailPromptContract Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language, string prompt, string builder, string template, string summary)
     {
         var sanitizedPrompt = SanitizeThumbnailV8PromptText(prompt);
-        var negativePrompt = "no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping";
+        var negativePrompt = ThumbnailArtworkPromptRules.NegativePrompt;
         var primaryObjects = c.Objects.Count > 0 ? c.Objects : [c.Title];
         var observationInfo = c.Intelligence?.ObservationInfo;
         return new ThumbnailPromptContract(
@@ -3245,18 +3244,18 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
 
         return
         [
-            new PromptSection("core-title", "Title", 10, $"Visible title text: '{c.Title}'. Use natural title case and mobile-readable typography.", true),
-            new PromptSection("core-subtitle", "Subtitle", 20, $"Visible subtitle text: '{c.EventType}'. Keep it short and subordinate to the title.", false),
+            new PromptSection("renderer-title", "Quality Rules", 10, $"Renderer will add title '{c.Title}'; do not draw it in the artwork.", true),
+            new PromptSection("renderer-subtitle", "Quality Rules", 20, $"Renderer will add subtitle '{c.EventType}'; do not draw it in the artwork.", false),
             new PromptSection("family-visual-scene", "Visual Scene", 30, $"{summary} Show only these event objects: {objectText}. No random planets, invented celestial objects, location text, watermark, database identifiers, or snake case.", true),
             new PromptSection("dominant-object", "Dominant Object", 40, $"Make the event subject immediately recognizable: {objectText}. Celestial objects must drive the visual hierarchy and remain scientifically plausible.", true),
-            new PromptSection("observation-card", "Observation Card", 50, "Educational observation card fields: " + string.Join("; ", observationFacts) + ".", true),
+            new PromptSection("observation-card", "Observation Card", 50, "Renderer will add observation card fields: " + string.Join("; ", observationFacts) + ". Do not draw a card, panel, icon, or label in the artwork.", true),
             new PromptSection("one-observation-hint", "One Observation Hint", 55, $"One compact observation hint only: {c.Direction} / {c.BestTime}.", false),
             new PromptSection("compact-observation", "Compact Observation", 60, $"Compact observation: {c.Direction}, {c.BestTime}.", false),
             new PromptSection("equipment", "Equipment", 70, $"Equipment cue: {c.Equipment}.", false),
             new PromptSection("safety", "Safety", 80, safety, family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)),
             new PromptSection("cta", "CTA", 90, "Short action cue: watch the sky tonight.", false),
             new PromptSection("footer", "Footer", 100, "Short footer tips may appear only on rich landscape layouts: look direction, best time, equipment.", false),
-            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate final finished thumbnail image at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium astronomy magazine style, sharp typography, clean spacing, no overlapping text, no placeholder panels, no cropping, no squeezing.", true)
+            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate clean artwork only at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium cinematic astronomy style, no typography, no UI, no placeholder panels, no cropping, no squeezing.", true)
         ];
     }
 

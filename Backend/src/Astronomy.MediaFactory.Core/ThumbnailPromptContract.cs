@@ -129,11 +129,13 @@ public sealed class PromptAssembler
         }
         EnforceInformationBudget(strategy, included, removed);
         var prompt = string.Join(Environment.NewLine, included.Select(s => $"{s.Category.ToUpperInvariant()}: {s.Content.Trim()}"));
-        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance).Trim();
+        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance, ThumbnailArtworkPromptRules.PositiveArtworkOnlyInstruction).Trim();
         PromptValidator.Validate(contract, included, prompt, strategy);
         var report = new PromptAssemblyReport(contract.EventIdentity.EventName, contract.EventIdentity.EventFamily, contract.Platform.CompositionProfile, contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty, profile.Name, strategy.Name, included.Select(s => s.Id).ToArray(), sections.Select(s => s.Id).Except(included.Select(s => s.Id), StringComparer.OrdinalIgnoreCase).ToArray(), removed, prompt.Length, CountWords(prompt));
-        return new ThumbnailPromptBuildResult(prompt, contract.Prompt.NegativePrompt, strategy, report);
+        return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
+
+    private static string AppendArtworkNegativeRules(string negativePrompt) => string.IsNullOrWhiteSpace(negativePrompt) ? ThumbnailArtworkPromptRules.NegativePrompt : negativePrompt + ", " + ThumbnailArtworkPromptRules.NegativePrompt;
 
     private static IReadOnlyList<PromptSection> BuildLegacySections(ThumbnailPromptContract contract) =>
     [
