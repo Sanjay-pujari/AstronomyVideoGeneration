@@ -74,6 +74,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var manifestPath = Path.Combine(outputDirectory, "gallery-manifest.json");
         var localizationDiagnosticsPath = Path.Combine(outputDirectory, "gallery-localization.json");
         var galleryContentContractPath = Path.Combine(outputDirectory, "gallery-content-contract.json");
+        var galleryEventDisplayContractPath = Path.Combine(outputDirectory, "gallery-event-display-contract.json");
         var overlayDiagnosticsPath = Path.Combine(outputDirectory, "gallery-overlay.json");
         var reviewPath = Path.Combine(outputDirectory, "gallery-review.json");
         var diagnosticsPath = Path.Combine(outputDirectory, "gallery-generation-diagnostics.json");
@@ -87,8 +88,9 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
         var promptPreview = string.Join(Environment.NewLine, topics.Select(t => t.AzureImage2Prompt));
         EventContentGuard.ValidateNoForbiddenTerms("AstroPulseGalleryService", "gallery prompt", promptPreview, contract.ForbiddenTerms);
-        var contentDiagnostics = EventContentGuard.BuildDiagnostics(13, "AstroPulseGalleryService", galleryContext.EventType, galleryContext.StoryTheme, galleryContext.VisualTheme, ["production-event-intelligence.json", "content-plan-production-request.json", "gallery-content-contract.json"], promptPreview, contract.ForbiddenTerms);
+        var contentDiagnostics = EventContentGuard.BuildDiagnostics(13, "AstroPulseGalleryService", galleryContext.EventType, galleryContext.StoryTheme, galleryContext.VisualTheme, ["production-event-intelligence.json", "content-plan-production-request.json", "gallery-content-contract.json", "gallery-event-display-contract.json"], promptPreview, contract.ForbiddenTerms);
         await File.WriteAllTextAsync(galleryContentContractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(galleryEventDisplayContractPath, JsonSerializer.Serialize(BuildEventDisplayContractDiagnostics(contract), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(localizationDiagnosticsPath, JsonSerializer.Serialize(localizationDiagnostics, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(overlayDiagnosticsPath, JsonSerializer.Serialize(BuildGalleryOverlayDiagnostics(galleryContext, topics, aspect), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { phase = 13, product = "Gallery V3.5", eventName = galleryContext.Title, architecture = "unique Azure Image2 background per carousel topic + deterministic minimal overlay", aspect, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f) }, diagnostics = contentDiagnostics, images }, JsonOptions), cancellationToken);
@@ -124,12 +126,32 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var pad = a.Width * .055f;
         var bottomPaddingPx = Math.Clamp(a.Height * .10f, 84f, 128f);
         var lineStep = a.Height * .075f;
-        var top = a.Height - bottomPaddingPx - lineStep * Math.Max(0, topic.TextBlocks.Count - 1) - Math.Clamp(a.Width / 26f, 36, 66);
+        var titleLines = WrapOverlayTitle(topic.TextBlocks[0], a);
+        var top = a.Height - bottomPaddingPx - lineStep * Math.Max(0, topic.TextBlocks.Count - 1 + titleLines.Count - 1) - Math.Clamp(a.Width / 26f, 36, 66);
         ctx.DrawText($"{topic.Number:00}/06 · {topic.LocalizedEducationalRole}", footer, Color.White.WithAlpha(.78f), new PointF(pad, Math.Max(a.Height * .055f, 28f)));
-        ctx.DrawText(topic.TextBlocks[0], title, Color.White, new PointF(pad, top));
+        for (var line = 0; line < titleLines.Count; line++)
+            ctx.DrawText(titleLines[line], title, Color.White, new PointF(pad, top + lineStep * line));
         for (var i = 1; i < topic.TextBlocks.Count; i++)
-            ctx.DrawText(topic.TextBlocks[i], body, i == 1 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(pad, top + a.Height * (.075f * i)));
+            ctx.DrawText(topic.TextBlocks[i], body, i == 1 ? Color.FromRgb(170, 233, 255) : Color.White, new PointF(pad, top + a.Height * (.075f * (i + titleLines.Count - 1))));
         ctx.DrawText(topic.FooterLabel, footer, Color.White.WithAlpha(.62f), new PointF(pad, a.Height - Math.Clamp(a.Height * .035f, 28f, 52f)));
+    }
+
+    private static IReadOnlyList<string> WrapOverlayTitle(string title, AstroPulseGalleryAspect aspect)
+    {
+        var maxChars = aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase) ? 24 : 34;
+        title = CleanGalleryTitle(title);
+        if (title.Length <= maxChars) return [title];
+        var parts = title.Split('–', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length > 1) return [string.Join("–", parts.Take(parts.Length - 1)), parts[^1]];
+        var words = title.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var first = string.Empty;
+        var second = string.Empty;
+        foreach (var word in words)
+        {
+            if ((first + " " + word).Trim().Length <= maxChars) first = (first + " " + word).Trim();
+            else second = (second + " " + word).Trim();
+        }
+        return string.IsNullOrWhiteSpace(second) ? [first] : [first, second.Length <= maxChars ? second : second[..maxChars].TrimEnd()];
     }
 
 
@@ -340,16 +362,16 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     public static List<GalleryTopic> BuildTopics(GalleryContentContract contract)
     {
-        var title = CleanGalleryTitle(contract.LocalizedTitle);
+        var title = CleanGalleryTitle(FirstNonEmpty(contract.DisplayShortTitle, contract.DisplayTitle, contract.LocalizedTitle));
         var objectText = contract.LocalizedPrimaryObjects.Count > 0 ? string.Join(", ", contract.LocalizedPrimaryObjects) : title;
         var metadata = new[] { $"{Localize(contract.Language, "Date", "तारीख")}: {contract.DisplayDate}", $"{Localize(contract.Language, "Time", "समय")}: {contract.DisplayTime}" };
         var languageName = LocalizationResolver.LanguageDisplayName(contract.Language);
-        var basePrompt = $"Event name: {contract.EventName}. Event family: {contract.EventFamily}. Event subtype: {contract.EventSubtype}. Localized event title: {contract.LocalizedTitle}. Date: {metadata[0]}. Time: {metadata[1]}. Direction: {contract.Direction}. Observation window: {contract.ObservationWindow}. Resolved object names: {objectText}. Visual hints: {string.Join("; ", contract.VisualHints)}. Prompt hints: {string.Join("; ", contract.PromptHints)}. Output language: {languageName}. Forbidden terms policy: exclude event-profile forbidden concepts. Preserve Gallery V3 design: unique realistic background, no embedded text, deterministic overlay space, one educational idea per slide.";
+        var basePrompt = $"Event name: {contract.EventName}. Event family: {contract.EventFamily}. Event subtype: {contract.EventSubtype}. Localized event title: {contract.DisplayTitle}. Date: {metadata[0]}. Time: {metadata[1]}. Direction: {contract.Direction}. Observation window: {contract.ObservationWindow}. Resolved object names: {objectText}. Visual hints: {string.Join("; ", contract.VisualHints)}. Prompt hints: {string.Join("; ", contract.PromptHints)}. Output language: {languageName}. Forbidden terms policy: exclude event-profile forbidden concepts. Preserve Gallery V3 design: unique realistic background, no embedded text, deterministic overlay space, one educational idea per slide.";
         return contract.SceneContents.Select((scene, i) => new GalleryTopic(
             i + 1,
             scene.SceneRole,
             scene.VisualIntent,
-            [CleanGalleryTitle(scene.Title), scene.Subtitle, scene.DetailText],
+            [CleanGalleryTitle(FirstNonEmpty(scene.Title, contract.DisplayShortTitle, contract.DisplayTitle)), scene.Subtitle, scene.DetailText],
             scene.VisualIntent,
             scene.OverlayStyle,
             $"{basePrompt} Asset purpose: {scene.SceneRole}. Visual intent: {scene.VisualIntent}. Educational role: {scene.LocalizedSceneLabel}. Event-specific prompt: {scene.PromptHint}. Required objects: {string.Join(", ", scene.RequiredObjects)}. Forbidden objects: {string.Join(", ", scene.ForbiddenObjects)}. No embedded text. No labels. No watermark.",
@@ -360,6 +382,45 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     }
 
     public static List<GalleryTopic> BuildTopics(GalleryContext context) => BuildTopics(GalleryContentResolver.Resolve(context));
+
+    private static object BuildEventDisplayContractDiagnostics(GalleryContentContract contract) => new
+    {
+        contract.EventName,
+        contract.EventAction,
+        contract.EventType,
+        contract.EventFamily,
+        contract.EventSubtype,
+        contract.Language,
+        contract.PrimaryObjects,
+        contract.LocalizedPrimaryObjects,
+        contract.SecondaryObjects,
+        contract.LocalizedSecondaryObjects,
+        contract.DisplayTitle,
+        contract.DisplayShortTitle,
+        contract.DisplaySubtitle,
+        contract.DisplayDate,
+        contract.DisplayTime,
+        contract.ObservationWindow,
+        contract.Direction,
+        contract.VisualIdentity,
+        contract.VisualHints,
+        contract.PromptHints,
+        contract.ForbiddenTerms,
+        contract.SceneContents,
+        contract.ValidationRules,
+        titleResolutionInputs = contract.Diagnostics.TryGetValue("titleResolutionInputs", out var tri) ? tri : string.Empty,
+        titleResolutionOutput = contract.Diagnostics.TryGetValue("titleResolutionOutput", out var tro) ? tro : contract.DisplayTitle,
+        objectLocalization = contract.Diagnostics.TryGetValue("objectLocalization", out var ol) ? ol : string.Empty,
+        actionLocalization = contract.Diagnostics.TryGetValue("actionLocalization", out var al) ? al : string.Empty,
+        selectedProvider = contract.Diagnostics.TryGetValue("selectedProvider", out var sp) ? sp : string.Empty,
+        providerRole = contract.Diagnostics.TryGetValue("providerRole", out var pr) ? pr : string.Empty,
+        observationRuleApplied = contract.Diagnostics.TryGetValue("observationRuleApplied", out var ora) ? ora : string.Empty,
+        textFitResult = contract.Diagnostics.TryGetValue("textFitResult", out var tfr) ? tfr : string.Empty,
+        fallbackUsed = contract.Diagnostics.TryGetValue("fallbackUsed", out var fu) && bool.TryParse(fu, out var fub) && fub,
+        warnings = contract.ValidationRules.Where(r => r.StartsWith("WARN:", StringComparison.OrdinalIgnoreCase)).ToArray(),
+        errors = contract.ValidationRules.Where(r => r.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)).ToArray(),
+        diagnostics = contract.Diagnostics
+    };
 
     private static GalleryContext NormalizeGalleryContext(GalleryContext context)
     {
@@ -469,7 +530,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         {
             var v when v.Contains("meteor", StringComparison.OrdinalIgnoreCase) => "उल्का वर्षा",
             var v when v.Contains("perseid", StringComparison.OrdinalIgnoreCase) => "Perseids उल्का वर्षा",
-            var v when v.Contains("geminid", StringComparison.OrdinalIgnoreCase) => "Geminids उल्का वर्षा",
+            var v when v.Contains("geminid", StringComparison.OrdinalIgnoreCase) => "जेमिनिड्स",
             var v when v.Contains("wolf moon", StringComparison.OrdinalIgnoreCase) => "वुल्फ पूर्णिमा",
             var v when v.Contains("strawberry moon", StringComparison.OrdinalIgnoreCase) => "स्ट्रॉबेरी पूर्णिमा",
             var v when v.Contains("blue moon", StringComparison.OrdinalIgnoreCase) => "ब्लू मून",
@@ -478,8 +539,17 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             var v when v.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase) || v.Contains("solareclipse", StringComparison.OrdinalIgnoreCase) => "सूर्य ग्रहण",
             var v when v.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase) || v.Contains("lunareclipse", StringComparison.OrdinalIgnoreCase) => "चंद्र ग्रहण",
             var v when v.Equals("Mars", StringComparison.OrdinalIgnoreCase) => "मंगल",
+            var v when v.Equals("Mercury", StringComparison.OrdinalIgnoreCase) => "बुध",
+            var v when v.Equals("Venus", StringComparison.OrdinalIgnoreCase) => "शुक्र",
             var v when v.Equals("Jupiter", StringComparison.OrdinalIgnoreCase) => "बृहस्पति",
+            var v when v.Equals("Saturn", StringComparison.OrdinalIgnoreCase) => "शनि",
+            var v when v.Equals("Uranus", StringComparison.OrdinalIgnoreCase) => "अरुण",
+            var v when v.Equals("Neptune", StringComparison.OrdinalIgnoreCase) => "वरुण",
             var v when v.Equals("Comet", StringComparison.OrdinalIgnoreCase) => "धूमकेतु",
+            var v when v.Equals("Constellation", StringComparison.OrdinalIgnoreCase) => "नक्षत्र",
+            var v when v.Equals("Nebula", StringComparison.OrdinalIgnoreCase) => "नीहारिका",
+            var v when v.Equals("Galaxy", StringComparison.OrdinalIgnoreCase) => "आकाशगंगा",
+            var v when v.Equals("Star Cluster", StringComparison.OrdinalIgnoreCase) => "तारागुच्छ",
             var v when v.Equals("Moon", StringComparison.OrdinalIgnoreCase) => "चंद्रमा",
             var v when v.Equals("Sun", StringComparison.OrdinalIgnoreCase) => "सूर्य",
             _ => value
@@ -593,9 +663,17 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         string EventFamily,
         string EventSubtype,
         string Language,
+        string EventAction,
+        string EventType,
         string LocalizedTitle,
         string TitleSource,
         string LocalizedShortTitle,
+        string DisplayTitle,
+        string DisplayShortTitle,
+        string DisplaySubtitle,
+        int MaxTitleLines,
+        int MaxTitleChars,
+        IReadOnlyList<string> PreferredLineBreaks,
         IReadOnlyList<string> PrimaryObjects,
         IReadOnlyList<string> LocalizedPrimaryObjects,
         IReadOnlyList<string> SecondaryObjects,
@@ -604,6 +682,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         string DisplayTime,
         string ObservationWindow,
         string Direction,
+        IReadOnlyDictionary<string, string> VisualIdentity,
         IReadOnlyList<GallerySceneContent> SceneContents,
         IReadOnlyList<string> VisualHints,
         IReadOnlyList<string> PromptHints,
@@ -658,8 +737,13 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             var errors = new List<string>();
             var warnings = new List<string>();
             if (provider is GenericGalleryProvider) warnings.Add("Generic fallback Gallery provider used.");
+            if (string.IsNullOrWhiteSpace(contract.ObservationWindow)) warnings.Add("Observation window missing.");
             if (!string.IsNullOrWhiteSpace(contract.EventName) && contract.TitleSource == "genericFamilyTitle")
                 errors.Add("LocalizedTitle resolved to generic family title while EventName exists.");
+            if ((contract.DisplayTitle.Equals("Astronomical Event", StringComparison.OrdinalIgnoreCase) || contract.DisplayTitle.Equals("खगोलीय घटना", StringComparison.OrdinalIgnoreCase)) && (!string.IsNullOrWhiteSpace(contract.EventName) || contract.PrimaryObjects.Count > 0))
+                errors.Add("Generic display title used while eventName or primary objects exist.");
+            if (contract.DisplayTitle.Length > contract.MaxTitleChars && string.IsNullOrWhiteSpace(contract.DisplayShortTitle))
+                errors.Add("displayTitle exceeds safe limits without fallback.");
             if (LocalizationResolver.IsHindi(contract.Language))
             {
                 foreach (var pair in contract.PrimaryObjects.Concat(contract.SecondaryObjects).Zip(contract.LocalizedPrimaryObjects.Concat(contract.LocalizedSecondaryObjects)))
@@ -672,7 +756,10 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             foreach (var scene in contract.SceneContents)
             {
                 var prompt = scene.PromptHint;
-                foreach (var required in scene.RequiredObjects.Where(r => !prompt.Contains(r, StringComparison.OrdinalIgnoreCase) && !contract.PromptHints.Any(h => h.Contains(r, StringComparison.OrdinalIgnoreCase))))
+                foreach (var required in scene.RequiredObjects.Where(r =>
+                    !prompt.Contains(r, StringComparison.OrdinalIgnoreCase) &&
+                    !prompt.Contains(LocalizeAstronomyTerm(r), StringComparison.OrdinalIgnoreCase) &&
+                    !contract.PromptHints.Any(h => h.Contains(r, StringComparison.OrdinalIgnoreCase) || h.Contains(LocalizeAstronomyTerm(r), StringComparison.OrdinalIgnoreCase))))
                     errors.Add($"Prompt lacks required object: {required}.");
                 foreach (var forbidden in scene.ForbiddenObjects.Concat(contract.ForbiddenTerms).Where(f => !string.IsNullOrWhiteSpace(f) && prompt.Contains(f, StringComparison.OrdinalIgnoreCase)))
                     errors.Add($"Forbidden term appears in prompt: {forbidden}.");
@@ -706,7 +793,22 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
                 Scene("gallery-05", "Key objects", labels["Key objects"], title.title, labels["Key objects"], string.Join(", ", localized), "ObjectCloseup", promptHint, primary),
                 Scene("gallery-06", "Viewing checklist", labels["Viewing checklist"], title.title, labels["Viewing checklist"], Localize(context.Language, "Save this guide", "यह गाइड सेव करें"), "EmotionalClosing", promptHint, primary)
             };
-            return new(context.EventName, context.EventFamily, context.EventSubtype, context.Language, title.title, title.source, title.title, primary, localized, [], [], display.DisplayDate, display.DisplayTime, display.DisplayedObservationTime, ResolveDirection(context), scenes, BuildVisualHints(context), hints, BuildForbiddenTerms(context), BuildValidationRules(context), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["titleResolutionPriorityUsed"] = title.source, ["observationRuleApplied"] = display.EventFamilyRuleApplied, ["footerLabel"] = BuildGalleryLocalization(context).FooterLabel });
+            var eventAction = ResolveEventAction(context);
+            var resolvedTitle = ResolvePresentationTitle(context, eventAction, primary, localized);
+            var diagnostics = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["titleResolutionPriorityUsed"] = resolvedTitle.Source,
+                ["titleResolutionInputs"] = $"eventAction={eventAction}; primaryObjects={string.Join(",", primary)}; localizedPrimaryObjects={string.Join(",", localized)}; eventName={context.EventName}",
+                ["titleResolutionOutput"] = resolvedTitle.DisplayTitle,
+                ["objectLocalization"] = string.Join(" | ", primary.Zip(localized, (a, b) => $"{a}->{b}")),
+                ["actionLocalization"] = LocalizeEventAction(eventAction, context.Language),
+                ["observationRuleApplied"] = display.EventFamilyRuleApplied,
+                ["providerRole"] = "enrichment only: timing, visual identity, prompt hints, forbidden terms, validation rules",
+                ["footerLabel"] = BuildGalleryLocalization(context).FooterLabel,
+                ["textFitResult"] = resolvedTitle.DisplayTitle.Length <= resolvedTitle.MaxTitleChars ? "fits" : "shortTitleFallbackRequired",
+                ["fallbackUsed"] = (resolvedTitle.Source.Contains("fallback", StringComparison.OrdinalIgnoreCase)).ToString()
+            };
+            return new(context.EventName, context.EventFamily, context.EventSubtype, context.Language, eventAction, context.EventType, resolvedTitle.DisplayTitle, resolvedTitle.Source, resolvedTitle.DisplayShortTitle, resolvedTitle.DisplayTitle, resolvedTitle.DisplayShortTitle, resolvedTitle.DisplaySubtitle, resolvedTitle.MaxTitleLines, resolvedTitle.MaxTitleChars, resolvedTitle.PreferredLineBreaks, primary, localized, [], [], display.DisplayDate, display.DisplayTime, display.DisplayedObservationTime, ResolveDirection(context), BuildVisualIdentity(context), scenes.Select(s => s with { Title = resolvedTitle.DisplayShortTitle }).ToArray(), BuildVisualHints(context), hints, BuildForbiddenTerms(context), BuildValidationRules(context), diagnostics);
         }
 
         protected static GallerySceneContent Scene(string id, string role, string label, string title, string subtitle, string detail, string intent, string prompt, IReadOnlyList<string> required)
@@ -721,6 +823,78 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             var resolved = ResolveGalleryEventTitle(default, c.EventName, c.EventType, c.Language, c.EventFamily);
             return (FirstNonEmpty(c.LocalizedEventTitle, resolved.LocalizedEventTitle, c.EventName), FirstNonEmpty(c.TitleSource, resolved.TitleSource));
         }
+    }
+
+    private sealed record PresentationTitle(string DisplayTitle, string DisplayShortTitle, string DisplaySubtitle, int MaxTitleLines, int MaxTitleChars, IReadOnlyList<string> PreferredLineBreaks, string Source);
+
+    private static PresentationTitle ResolvePresentationTitle(GalleryContext context, string eventAction, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> localizedPrimaryObjects)
+    {
+        var hi = LocalizationResolver.IsHindi(context.Language);
+        var localizedAction = LocalizeEventAction(eventAction, context.Language);
+        var knownMoonTitle = LocalizeMoonSubtypeTitle(ResolveMoonSubtype(context.EventName), context.Language);
+        var objectTitle = localizedPrimaryObjects.Count > 0 ? string.Join(hi ? "–" : "–", localizedPrimaryObjects.Take(3)) : string.Empty;
+        var title = FirstNonEmpty(knownMoonTitle, objectTitle.Length > 0 ? ComposeTitle(objectTitle, eventAction, localizedAction, hi) : string.Empty, context.EventName, hi ? "खगोलीय घटना" : "Astronomical Event");
+        title = RemoveGuidePrefix(title);
+        var shortTitle = title.Length <= 34 ? title : FirstNonEmpty(objectTitle.Length > 0 ? ComposeTitle(objectTitle, eventAction, localizedAction, hi) : string.Empty, title);
+        if (shortTitle.Length > 42) shortTitle = shortTitle[..42].TrimEnd(' ', '-', '–', ':');
+        var subtitle = localizedPrimaryObjects.Count > 0 ? string.Join(", ", localizedPrimaryObjects) : Localize(context.Language, "Observation guide", "अवलोकन गाइड");
+        var source = !string.IsNullOrWhiteSpace(knownMoonTitle) ? "localizedMoonSubtypeTitle" : localizedPrimaryObjects.Count > 0 ? "eventActionPlusPrimaryObjects" : "genericFallbackNoEventNameOrObjects";
+        return new(title, shortTitle, subtitle, 2, 42, localizedPrimaryObjects.Count > 1 ? localizedPrimaryObjects.ToArray() : [], source);
+    }
+
+    private static string ComposeTitle(string objectTitle, string eventAction, string localizedAction, bool hi)
+    {
+        if (eventAction.Equals("Meteor Shower Peak", StringComparison.OrdinalIgnoreCase) || eventAction.Equals("Peak", StringComparison.OrdinalIgnoreCase))
+            return hi ? $"{objectTitle} उल्का वर्षा" : $"{objectTitle} Peak";
+        if (eventAction.Equals("Full Moon", StringComparison.OrdinalIgnoreCase)) return objectTitle;
+        if (eventAction.Equals("Close Pairing", StringComparison.OrdinalIgnoreCase)) return hi ? $"{objectTitle} करीबी" : $"{objectTitle} Pairing";
+        return string.IsNullOrWhiteSpace(localizedAction) ? objectTitle : $"{objectTitle} {localizedAction}";
+    }
+
+    private static string ResolveEventAction(GalleryContext c)
+    {
+        var source = FirstNonEmpty(c.EventName, c.EventType, c.EventFamily);
+        if (ContainsAny(source, "Close Pairing", "Pairing")) return "Close Pairing";
+        if (ContainsAny(source, "Grouping", "Alignment")) return "Planet Grouping";
+        if (ContainsAny(source, "Meteor") && ContainsAny(source, "Peak")) return "Meteor Shower Peak";
+        if (ContainsAny(source, "Meteor")) return "Meteor Shower";
+        if (ContainsAny(source, "Solar Eclipse", "SolarEclipse")) return "Solar Eclipse";
+        if (ContainsAny(source, "Lunar Eclipse", "LunarEclipse")) return "Lunar Eclipse";
+        if (ContainsAny(source, "Eclipse")) return "Eclipse";
+        if (ContainsAny(source, "Supermoon", "Super Moon")) return "Supermoon";
+        if (ContainsAny(source, "Full Moon", "FullMoon", "Moon")) return "Full Moon";
+        if (ContainsAny(source, "Comet")) return "Comet Visibility";
+        if (ContainsAny(source, "Constellation")) return "Constellation Guide";
+        if (ContainsAny(source, "Deep Sky", "Nebula", "Galaxy", "Cluster")) return "Deep Sky Object";
+        if (ContainsAny(source, "Conjunction")) return "Conjunction";
+        return FirstNonEmpty(c.EventSubtype, c.EventFamily, c.EventType, "Astronomical Event");
+    }
+
+    private static string LocalizeEventAction(string action, string language)
+    {
+        if (!LocalizationResolver.IsHindi(language)) return action switch { "Meteor Shower Peak" => "Peak", _ => action };
+        return action switch
+        {
+            "Conjunction" => "युति", "Close Pairing" => "करीबी", "Planet Grouping" => "ग्रह समूह",
+            "Meteor Shower" => "उल्का वर्षा", "Meteor Shower Peak" => "उल्का वर्षा", "Peak" => "चरम",
+            "Full Moon" => "पूर्णिमा", "Supermoon" => "सुपरमून", "Eclipse" => "ग्रहण",
+            "Solar Eclipse" => "सूर्य ग्रहण", "Lunar Eclipse" => "चंद्र ग्रहण", "Comet Visibility" => "धूमकेतु दृश्यता",
+            "Constellation Guide" => "नक्षत्र गाइड", "Deep Sky Object" => "गहरे आकाश की वस्तु", _ => action
+        };
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildVisualIdentity(GalleryContext context)
+        => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["family"] = context.EventFamily,
+            ["subtype"] = context.EventSubtype,
+            ["moonSubtypeVisualAttributes"] = context.MoonSubtypeVisualAttributes
+        };
+
+    private static string RemoveGuidePrefix(string value)
+    {
+        var clean = value.Replace("Conjunction guide:", "", StringComparison.OrdinalIgnoreCase).Replace("guide:", "", StringComparison.OrdinalIgnoreCase).Trim();
+        return clean;
     }
 
     private sealed class MeteorGalleryProvider : GalleryFamilyProviderBase
@@ -770,7 +944,12 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
 
     private static string[] BuildObservationGuideTips(string eventType, string language) => LocalizationResolver.IsHindi(language) ? eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? ["अंधेरा खुला आसमान चुनें", "रेडिएंट क्षेत्र की ओर देखें", "आँखों को समय दें"] : eventType.Contains("moon", StringComparison.OrdinalIgnoreCase) ? ["स्थानीय उदय समय देखें", "क्षितिज रेखा का उपयोग करें", "दूरबीन वैकल्पिक है"] : ["तारीख और समय जाँचें", "बताई गई दिशा में देखें", "साफ क्षितिज चुनें"] : eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? ["Find a dark open sky", "Face the radiant area", "Give your eyes time"] : eventType.Contains("moon", StringComparison.OrdinalIgnoreCase) ? ["Check the local rise time", "Use the horizon line", "Binoculars are optional"] : ["Check the date and time", "Face the suggested sky direction", "Use a clear horizon"];
 
-    private static string CleanGalleryTitle(string value) => LimitOverlay(value, 5) is var clean && clean.Length > 32 ? clean[..32].TrimEnd() : clean;
+    private static string CleanGalleryTitle(string value)
+    {
+        var clean = RemoveGuidePrefix(value ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(clean)) return "Sky event";
+        return clean.Length <= 42 ? clean : clean[..42].TrimEnd(' ', '-', '–', ':');
+    }
     private static string CleanObjectName(string value) => (value ?? string.Empty).Trim().TrimEnd('.', ';', ':', ',');
     private static bool IsCleanObjectName(string value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 32 && !value.Contains('.') && !value.Contains("Look for", StringComparison.OrdinalIgnoreCase) && !value.Contains("Best viewing", StringComparison.OrdinalIgnoreCase) && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3;
 
