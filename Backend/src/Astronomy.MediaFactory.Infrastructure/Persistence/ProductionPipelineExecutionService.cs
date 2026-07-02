@@ -12078,7 +12078,77 @@ public sealed partial class ProductionPipelineExecutionService(
         var root = Path.Combine(outputRoot, "plan-input");
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "content-plan-production-request.json"), JsonSerializer.Serialize(request, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(root, "production-event-intelligence.json"), JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "production-event-intelligence.json"), JsonSerializer.Serialize(WithObservationInfo(intelligence), JsonOptions), cancellationToken);
+    }
+
+    private static ProductionEventIntelligence WithObservationInfo(ProductionEventIntelligence intelligence)
+        => intelligence.ObservationInfo is not null ? intelligence : intelligence with { ObservationInfo = BuildProductionObservationInfo(intelligence) };
+
+    private static ProductionObservationInfo BuildProductionObservationInfo(ProductionEventIntelligence intelligence)
+    {
+        var family = FirstNonEmpty(intelligence.StrategyId, intelligence.EventType);
+        var isMeteor = ContainsToken(family + " " + intelligence.Title, "Meteor");
+        var isSolarEclipse = ContainsToken(family + " " + intelligence.Title, "SolarEclipse") || (ContainsToken(family + " " + intelligence.Title, "Solar") && ContainsToken(family + " " + intelligence.Title, "Eclipse"));
+        var hasWindow = !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal) || !string.IsNullOrWhiteSpace(intelligence.PreferredViewingWindow);
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var displayPolicy = "ShowCheckLocalCircumstances";
+        var visibilityStatus = "Unverified";
+        var displayTime = "Check local visibility";
+        var displayWindow = string.Empty;
+        var reason = "Global peak is not a local observation time.";
+        var confidence = "low";
+
+        if (isMeteor)
+        {
+            displayPolicy = "ShowBestViewingWindow";
+            visibilityStatus = "Visible";
+            displayTime = "After midnight to pre-dawn";
+            displayWindow = displayTime;
+            reason = "Meteor shower peaks are translated into practical night observing guidance.";
+            confidence = "medium";
+        }
+        else if (isSolarEclipse)
+        {
+            warnings.Add("Local solar eclipse circumstances unavailable; global peak not used as display time.");
+            reason = "Solar eclipse display requires verified daylight local circumstances.";
+        }
+        else if (hasWindow)
+        {
+            displayPolicy = "ShowBestViewingWindow";
+            visibilityStatus = "Unverified";
+            displayTime = FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow, "Check local visibility");
+            displayWindow = displayTime;
+            warnings.Add("Best-viewing fallback used without explicit local visibility verification.");
+            reason = "Best viewing window supplied; local visibility remains unverified.";
+        }
+        else
+        {
+            warnings.Add("Local visibility unavailable; raw global peak conversion suppressed.");
+        }
+
+        return new ProductionObservationInfo(
+            intelligence.EventType,
+            family,
+            intelligence.VisibilityRegion ?? string.Empty,
+            intelligence.VisibilityRegion ?? string.Empty,
+            string.Empty,
+            intelligence.PeakUtc?.ToString("O", CultureInfo.InvariantCulture),
+            visibilityStatus.Equals("Visible", StringComparison.OrdinalIgnoreCase),
+            visibilityStatus,
+            displayPolicy,
+            intelligence.EventDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            displayTime,
+            displayWindow,
+            FirstNonEmpty(intelligence.BestViewingWindowLocal, intelligence.PreferredViewingWindow),
+            intelligence.SkyDirectionHint ?? string.Empty,
+            intelligence.AltitudeDegrees?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            intelligence.ViewingSafetyRules ?? Array.Empty<string>(),
+            reason,
+            "ProductionPipelineObservationInfo",
+            confidence,
+            warnings,
+            errors);
     }
 
     private static IReadOnlyList<string> ReadPhase18Warnings(ProductionPhaseContext context)
@@ -13545,7 +13615,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var path = Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(WithObservationInfo(intelligence), JsonOptions), cancellationToken);
         return path;
     }
 

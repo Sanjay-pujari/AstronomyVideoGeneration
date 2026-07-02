@@ -44,7 +44,31 @@ public sealed record ProductionEventIntelligence(
     string? EventSpecificStrategySource = null,
     bool DownstreamHardcodingDetected = false,
     IReadOnlyList<string>? RelativeObjectOrder = null,
-    string? HeroTitle = null);
+    string? HeroTitle = null,
+    ProductionObservationInfo? ObservationInfo = null);
+
+public sealed record ProductionObservationInfo(
+    string EventType,
+    string EventFamily,
+    string RegionId,
+    string LocationName,
+    string Timezone,
+    string? GlobalPeakUtc,
+    bool IsVisibleLocally,
+    string VisibilityStatus,
+    string DisplayPolicy,
+    string? DisplayDate,
+    string DisplayTime,
+    string DisplayWindowLocal,
+    string BestViewingWindowLocal,
+    string Direction,
+    string AltitudeInfo,
+    IReadOnlyList<string> SafetyNotes,
+    string Reason,
+    string Source,
+    string Confidence,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
 
 public sealed record MediaEventStrategyDefinition(
     string EventType,
