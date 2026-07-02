@@ -255,7 +255,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         Console.WriteLine("ThumbnailV8AiNativeRenderer executing");
         Directory.CreateDirectory(thumbnailRoot);
         DeleteThumbnailV8ForbiddenOutputs(thumbnailRoot);
-        var prompts = ThumbnailV8AiNativePromptBuilder.BuildPrompts(request);
+        var contracts = ThumbnailV8AiNativePromptBuilder.BuildContracts(request);
+        var promptBuilder = new ThumbnailPromptBuilder();
+        var prompts = contracts.Select(contract => ThumbnailV8AiNativePromptBuilder.ToPrompt(contract, promptBuilder)).ToArray();
         var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -289,6 +291,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
         promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         await WriteThumbnailV8ManifestAsync(request, thumbnailRoot, cancellationToken);
+        var contractJsonPath = Path.Combine(thumbnailRoot, "thumbnail-prompt-contract.json");
+        await File.WriteAllTextAsync(contractJsonPath, JsonSerializer.Serialize(new { thumbnailVersion = "V8", contracts }, JsonOptions), cancellationToken);
         var promptJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptFileName);
         await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
         {
@@ -353,6 +357,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
             promptFilePaths = promptPaths,
+            promptContractPath = NormalizePath(contractJsonPath),
             generatedUtc = DateTimeOffset.UtcNow
         };
         await File.WriteAllTextAsync(v8DiagnosticsPath, JsonSerializer.Serialize(v8Diagnostics, JsonOptions), cancellationToken);
@@ -441,7 +446,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextBoxesRemoved: false);
         return BuildImageGenerationResponse(
             request,
-            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Concat(promptPaths.Values).ToArray(),
+            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Append(NormalizePath(contractJsonPath)).Concat(promptPaths.Values).ToArray(),
             validation,
             requestedRenderer: ThumbnailV8AiNativeRendererName,
             actualRendererUsed: ThumbnailV8AiNativeRendererName,
@@ -2731,7 +2736,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
 
-    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary);
+    private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string NegativePrompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary);
 
     private static class ThumbnailV8AiNativePromptBuilder
     {
@@ -2742,7 +2747,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16. Generate a native mobile-first composition for YouTube Shorts, Instagram Reels, and Facebook Reels; this is not a squeezed or cropped landscape layout. Title area maximum 12% of canvas. Information area maximum 20% of canvas. Celestial object area minimum 35% of canvas and primary visual focus. Create portrait-specific vertical balance, not landscape side-panel composition.")
         ];
 
-        public static IReadOnlyList<ThumbnailV8Prompt> BuildPrompts(ThumbnailAssetGenerationRequest request)
+        public static IReadOnlyList<ThumbnailPromptContract> BuildContracts(ThumbnailAssetGenerationRequest request)
         {
             var current = BuildCurrentEventLock(request);
             var intelligence = request.ProductionContext?.ProductionEventIntelligence;
@@ -2762,7 +2767,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 Tips: [],
                 Objects: objects);
 
-            return AspectSpecs.Select(aspect => builder.Build(aspect, context)).ToArray();
+            return AspectSpecs.Select(aspect => builder.Build(aspect, context, request.EventId, request.Language)).ToArray();
         }
 
         private static IThumbnailV8FamilyPromptBuilder SelectBuilder(ThumbnailV8Family family)
@@ -2860,12 +2865,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private interface IThumbnailV8FamilyPromptBuilder
     {
-        ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext context);
+        ThumbnailPromptContract Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext context, string eventId, string language);
     }
 
     private sealed class PlanetaryObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
     {
-        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        public ThumbnailPromptContract Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language)
         {
             var objectText = c.Objects.Count > 0 ? string.Join(" + ", c.Objects) : "event planets only";
             var prompt = CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
@@ -2883,13 +2888,13 @@ Large recognizable realistic celestial bodies.
 Do not render planets as tiny points of light.
 PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact panels, elegant glow, clean spacing, no overlapping elements, no cropped celestial objects.
 """ + CommonData(c, objectText);
-            return Final(aspect, c, prompt, nameof(PlanetaryObservationGuidePromptBuilder), "Planetary", $"Planetary guide with aspect-native observation card, {objectText} only, planet callouts, West marker, short footer tips.");
+            return Final(aspect, c, eventId, language, prompt, nameof(PlanetaryObservationGuidePromptBuilder), "Planetary", $"Planetary guide with aspect-native observation card, {objectText} only, planet callouts, West marker, short footer tips.");
         }
     }
 
     private sealed class MeteorObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
     {
-        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        public ThumbnailPromptContract Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language)
         {
             var name = ResolveMeteorShowerTitle(c.Current, c.Intelligence, c.Objects);
             var prompt = CommonOpening(aspect, c, "Meteor shower observation guide poster") + $$"""
@@ -2898,13 +2903,13 @@ VISUAL SCENE: dark realistic night sky with a clear radiant marker, multiple nat
 UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon, Equipment. Include a strong direction cue and bottom footer tips: Dark Sky, Look Up, 20 Min Eyes.
 EVENT NAME AND TITLE RULE: use exactly a natural shower event name such as "Perseids Meteor Shower", "Geminids Meteor Shower", or "Quadrantids Meteor Shower"; optional peak form is "{ShowerName} Meteor Shower Peak". Never render split titles like "Geminids + Meteors". Make the radiant and meteor streaks the visual focus.
 """ + CommonData(c, name);
-            return Final(aspect, c, prompt, nameof(MeteorObservationGuidePromptBuilder), "Meteor", "Meteor shower guide with radiant marker, meteor streaks, aspect-native observation card, direction cue, short footer tips, no planets.");
+            return Final(aspect, c, eventId, language, prompt, nameof(MeteorObservationGuidePromptBuilder), "Meteor", "Meteor shower guide with radiant marker, meteor streaks, aspect-native observation card, direction cue, short footer tips, no planets.");
         }
     }
 
     private sealed class MoonObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
     {
-        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        public ThumbnailPromptContract Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language)
         {
             var moonType = FirstNonEmpty(ResolveMoonPhaseName(c.Current), c.Title, "Full Moon");
             var prompt = CommonOpening(aspect, c, "Professional full moon observation guide") + $$"""
@@ -2912,13 +2917,13 @@ FAMILY-SPECIFIC TEMPLATE: professional full moon observation guide.
 VISUAL SCENE: one large realistic Moon as the hero object, detailed lunar texture, atmospheric horizon and subtle landscape silhouette. Moon type title must be visible: {{moonType}} (Wolf Moon / Blue Moon / Strawberry Moon style when applicable). No extra planets or unrelated celestial objects.
 UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon Type, Equipment. Include elegant Moon callout, atmospheric horizon direction cue, and footer tips: Find Horizon, Moonrise, Naked Eye.
 """ + CommonData(c, moonType);
-            return Final(aspect, c, prompt, nameof(MoonObservationGuidePromptBuilder), "Moon", $"Moon guide with visually dominant realistic {moonType}, aspect-native observation card, moonrise/direction/best time/equipment, short footer tips.");
+            return Final(aspect, c, eventId, language, prompt, nameof(MoonObservationGuidePromptBuilder), "Moon", $"Moon guide with visually dominant realistic {moonType}, aspect-native observation card, moonrise/direction/best time/equipment, short footer tips.");
         }
     }
 
     private sealed class EclipseObservationGuidePromptBuilder : IThumbnailV8FamilyPromptBuilder
     {
-        public ThumbnailV8Prompt Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c)
+        public ThumbnailPromptContract Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language)
         {
             var solar = IsSolarEclipse(c.Current);
             var eventName = ResolveEclipseEventName(c.Current, c.Intelligence);
@@ -2929,7 +2934,7 @@ UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation car
 TITLE RULE: primary title must be the actual eclipse event name "{{eventName}}". Never generate or render "Sun + Moon" as the title.
 SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOLAR FILTER REQUIRED. Never look at the Sun directly without approved protection." : "Lunar eclipse safety: safe to view with eyes or binoculars; note direction and peak time clearly.")}}
 """ + CommonData(c, eventName);
-            return Final(aspect, c, prompt, nameof(EclipseObservationGuidePromptBuilder), "Eclipse", "Eclipse guide with realistic alignment, aspect-native timing/safety card, solar safety when applicable, short footer tips.");
+            return Final(aspect, c, eventId, language, prompt, nameof(EclipseObservationGuidePromptBuilder), "Eclipse", "Eclipse guide with realistic alignment, aspect-native timing/safety card, solar safety when applicable, short footer tips.");
         }
     }
 
@@ -2982,8 +2987,40 @@ AVOID: dense information, small text, tiny icons, scientific report layout, gene
 NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping.
 """;
 
-    private static ThumbnailV8Prompt Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string prompt, string builder, string template, string summary)
-        => new(aspect.Name, aspect.Width, aspect.Height, aspect.AspectRatio, SanitizeThumbnailV8PromptText(prompt), builder, template, summary);
+    private static ThumbnailV8Prompt ToPrompt(ThumbnailPromptContract contract, ThumbnailPromptBuilder builder)
+    {
+        var result = builder.Build(contract);
+        return new ThumbnailV8Prompt(
+            contract.Platform.CompositionProfile,
+            contract.Platform.Width,
+            contract.Platform.Height,
+            contract.Platform.AspectRatio,
+            result.Prompt,
+            result.NegativePrompt,
+            contract.Diagnostics.SelectedPromptBuilder,
+            contract.Diagnostics.SelectedFamilyTemplate,
+            contract.Diagnostics.PromptSummary);
+    }
+
+    private static ThumbnailPromptContract Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language, string prompt, string builder, string template, string summary)
+    {
+        var sanitizedPrompt = SanitizeThumbnailV8PromptText(prompt);
+        var negativePrompt = "no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping";
+        var primaryObjects = c.Objects.Count > 0 ? c.Objects : [c.Title];
+        var observationInfo = c.Intelligence?.ObservationInfo;
+        return new ThumbnailPromptContract(
+            "1.0",
+            new ThumbnailEventIdentity(FirstNonEmpty(eventId, c.Current.SourceExternalEventId, c.Current.PlanId), c.Title, FirstNonEmpty(c.Current.ContentStrategy, "Observation guide"), template, c.Current.EventType),
+            new ThumbnailDisplay(c.Title, c.Title, FirstNonEmpty(c.Current.ShortTitle, c.Title), [c.Title]),
+            new ThumbnailObjects(primaryObjects, c.Current.SecondaryObjects ?? [], primaryObjects.ToDictionary(value => value, value => value, StringComparer.OrdinalIgnoreCase)),
+            new ThumbnailObservation(observationInfo, FirstNonEmpty(c.Current.BestViewingWindowLocal, observationInfo?.DisplayWindowLocal, c.BestTime), c.BestTime, c.Direction, FirstNonEmpty(observationInfo?.VisibilityStatus, "Visibility derived from current event intelligence")),
+            new ThumbnailVisual(FirstNonEmpty(c.Intelligence?.VisualTheme, summary), "premium high-salience astronomy discovery", "communicate the event and observation essentials without renderer business logic", "maximize click-through recognition while preserving scientific trust"),
+            new ThumbnailPlatform("Thumbnail", aspect.AspectRatio, aspect.Name, aspect.Width, aspect.Height),
+            new ThumbnailPromptInstructions(sanitizedPrompt, negativePrompt, primaryObjects, c.Current.ForbiddenObjectNames ?? []),
+            new ThumbnailBrand("Natural title case, mobile-readable typography, no technical identifiers", "premium dark blue and gold astronomy magazine style", [FirstNonEmpty(language, c.Current.Language, "en"), "Do not bake location names into the image"]),
+            new ThumbnailValidation(["No null required fields", "Aspect-native image generation", "Renderer consumes contract only"], ["Render only required event objects", "Preserve event family safety and observation truth"], ["No cropping from another aspect ratio", "Respect safe zones and mobile readability"]),
+            new ThumbnailPromptDiagnostics("ThumbnailV8AiNativePromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow));
+    }
 
     private static string SanitizeThumbnailV8PromptText(string value)
     {
