@@ -258,7 +258,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         DeleteThumbnailV8ForbiddenOutputs(thumbnailRoot);
         var contracts = ThumbnailV8AiNativePromptBuilder.BuildContracts(request);
         var promptBuilder = new ThumbnailPromptBuilder();
-        var prompts = contracts.Select(contract => ThumbnailV8AiNativePromptBuilder.ToPrompt(contract, promptBuilder)).ToArray();
+        var prompts = contracts.Select(contract => ToPrompt(contract, promptBuilder)).ToArray();
         var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         var compositionProfileDiagnostics = BuildThumbnailCompositionProfileDiagnostics(contracts, prompts);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
