@@ -432,6 +432,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICelestialAssetPackExtractor, CelestialAssetPackExtractor>();
         services.AddScoped<ICinematicThumbnailService, LocalAssetCollageThumbnailService>();
         services.AddScoped<IThumbnailGenerationService, LocalAssetCollageThumbnailService>();
+        services.AddScoped<IThumbnailRenderer, ThumbnailRenderer>();
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
         services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
