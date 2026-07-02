@@ -46,6 +46,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
     private const string ThumbnailV8DiagnosticsFileName = "thumbnail-v8-diagnostics.json";
     private const string ThumbnailCompositionProfileFileName = "thumbnail-composition-profile.json";
+    private const string ThumbnailPromptContractFileName = "thumbnail-prompt-contract.json";
+    private const string VisualPromptDiagnosticsFileName = "visual-prompt-diagnostics.json";
+    private static readonly string[] ThumbnailRc3RequiredArtifactFileNames =
+    [
+        ThumbnailPromptContractFileName,
+        ThumbnailCompositionProfileFileName,
+        ThumbnailGenerationDiagnosticsFileName,
+        VisualPromptDiagnosticsFileName,
+        "thumbnail-landscape-prompt.txt",
+        "thumbnail-portrait-prompt.txt",
+        "thumbnail-square-prompt.txt"
+    ];
     private const string ThumbnailV8AiNativeRendererName = "ThumbnailV8AiNativeRenderer";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -293,7 +305,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
         promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         await WriteThumbnailV8ManifestAsync(request, thumbnailRoot, cancellationToken);
-        var contractJsonPath = Path.Combine(thumbnailRoot, "thumbnail-prompt-contract.json");
+        var contractJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptContractFileName);
         await File.WriteAllTextAsync(contractJsonPath, JsonSerializer.Serialize(new { thumbnailVersion = "V8", contracts }, JsonOptions), cancellationToken);
         var compositionProfilePath = Path.Combine(thumbnailRoot, ThumbnailCompositionProfileFileName);
         await File.WriteAllTextAsync(compositionProfilePath, JsonSerializer.Serialize(compositionProfileDiagnostics, JsonOptions), cancellationToken);
@@ -309,6 +321,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, prompt.Prompt }).ToArray()
         }, JsonOptions), cancellationToken);
         var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
+        var visualPromptDiagnosticsPath = Path.Combine(thumbnailRoot, VisualPromptDiagnosticsFileName);
+        await WriteThumbnailV8VisualPromptDiagnosticsAsync(visualPromptDiagnosticsPath, request, contracts, prompts, promptValidation, cancellationToken);
         var diagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName);
         var v8DiagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailV8DiagnosticsFileName);
         var v8Diagnostics = new
@@ -361,6 +375,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
             promptFilePaths = promptPaths,
+            visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
             promptContractPath = NormalizePath(contractJsonPath),
             generatedUtc = DateTimeOffset.UtcNow
@@ -420,6 +435,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validator = "ThumbnailV8Validator",
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
+            visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
@@ -427,6 +443,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             fallbackUsed = false,
             generatedUtc = DateTimeOffset.UtcNow
         }, JsonOptions), cancellationToken);
+        ValidateThumbnailRc3RequiredArtifacts(thumbnailRoot);
         EnsureNoV7ThumbnailJsonOutputs(thumbnailRoot);
 
         var validation = new ThumbnailLayoutValidationDto(
@@ -452,7 +469,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextBoxesRemoved: false);
         return BuildImageGenerationResponse(
             request,
-            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Append(NormalizePath(contractJsonPath)).Append(NormalizePath(compositionProfilePath)).Concat(promptPaths.Values).ToArray(),
+            allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Append(NormalizePath(contractJsonPath)).Append(NormalizePath(compositionProfilePath)).Append(NormalizePath(visualPromptDiagnosticsPath)).Concat(promptPaths.Values).ToArray(),
             validation,
             requestedRenderer: ThumbnailV8AiNativeRendererName,
             actualRendererUsed: ThumbnailV8AiNativeRendererName,
@@ -462,6 +479,71 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             photoCinematicRendererCompleted: false,
             outputWriteSource: ThumbnailV8AiNativeRendererName,
             thumbnailLayoutValidationPath: NormalizePath(diagnosticsPath));
+    }
+
+    private static async Task WriteThumbnailV8VisualPromptDiagnosticsAsync(
+        string visualPromptDiagnosticsPath,
+        ThumbnailAssetGenerationRequest request,
+        IReadOnlyList<ThumbnailPromptContract> contracts,
+        IReadOnlyList<ThumbnailV8Prompt> prompts,
+        ThumbnailV8PromptValidationDiagnostics promptValidation,
+        CancellationToken cancellationToken)
+    {
+        await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
+        {
+            thumbnailVersion = "V8",
+            product = "Thumbnail V8 AI Native",
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            renderer = ThumbnailV8AiNativeRendererName,
+            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            promptContractGenerated = true,
+            compositionProfileGenerated = true,
+            promptGenerationChanged = false,
+            renderingBehaviorChanged = false,
+            eventId = request.EventId,
+            regionId = request.RegionId,
+            language = request.Language,
+            validationPassed = promptValidation.FinalPromptPassedValidation,
+            forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
+            promptContracts = contracts.Select(contract => new
+            {
+                contract.EventIdentity.EventId,
+                request.Language,
+                contract.EventIdentity.EventName,
+                contract.EventIdentity.EventFamily,
+                contract.Platform.CompositionProfile,
+                contract.Platform.AspectRatio,
+                contract.Platform.Width,
+                contract.Platform.Height,
+                contract.Visual.VisualIdentity,
+                contract.Objects.PrimaryObjects,
+                headline = contract.Display.DisplayTitle,
+                informationFields = new[] { contract.Observation.BestViewingWindow, contract.Observation.Direction, contract.Observation.Visibility }.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray()
+            }).ToArray(),
+            finalPrompts = prompts.Select(prompt => new
+            {
+                prompt.Name,
+                prompt.Width,
+                prompt.Height,
+                prompt.AspectRatio,
+                prompt.SelectedPromptBuilder,
+                prompt.SelectedFamilyTemplate,
+                prompt.PromptSummary,
+                promptFileName = $"thumbnail-{prompt.Name}-prompt.txt",
+                promptUniqueHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt)))
+            }).ToArray()
+        }, JsonOptions), cancellationToken);
+    }
+
+    private static void ValidateThumbnailRc3RequiredArtifacts(string thumbnailRoot)
+    {
+        var missing = ThumbnailRc3RequiredArtifactFileNames
+            .Select(fileName => Path.Combine(thumbnailRoot, fileName))
+            .Where(path => !File.Exists(path))
+            .Select(NormalizePath)
+            .ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException("Thumbnail RC3 diagnostics persistence validation failed: missing required artifact(s): " + string.Join(", ", missing));
     }
 
     private static void DeleteThumbnailV8ForbiddenOutputs(string thumbnailRoot)
