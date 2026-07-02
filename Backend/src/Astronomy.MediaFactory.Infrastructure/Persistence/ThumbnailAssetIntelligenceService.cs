@@ -50,6 +50,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailPromptContractFileName = "thumbnail-prompt-contract.json";
     private const string VisualPromptDiagnosticsFileName = "visual-prompt-diagnostics.json";
     private const string PromptAssemblyReportFileName = "PromptAssemblyReport.json";
+    private const string VisualDirectingProfileFileName = "visual-directing-profile.json";
     private static readonly string[] ThumbnailRc3RequiredArtifactFileNames =
     [
         ThumbnailPromptContractFileName,
@@ -58,6 +59,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ThumbnailGenerationDiagnosticsFileName,
         VisualPromptDiagnosticsFileName,
         PromptAssemblyReportFileName,
+        VisualDirectingProfileFileName,
         "thumbnail-landscape-prompt.txt",
         "thumbnail-portrait-prompt.txt",
         "thumbnail-square-prompt.txt"
@@ -278,6 +280,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         var compositionProfileDiagnostics = BuildThumbnailCompositionProfileDiagnostics(contracts, prompts);
         var storytellingStrategyDiagnostics = BuildThumbnailStorytellingStrategyDiagnostics(contracts, prompts);
+        var visualDirectingProfileDiagnostics = BuildVisualDirectingProfileDiagnostics(contracts, prompts);
         var promptAssemblyReportPath = Path.Combine(thumbnailRoot, PromptAssemblyReportFileName);
         await File.WriteAllTextAsync(promptAssemblyReportPath, JsonSerializer.Serialize(new
         {
@@ -323,6 +326,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(compositionProfilePath, JsonSerializer.Serialize(compositionProfileDiagnostics, JsonOptions), cancellationToken);
         var storytellingStrategyPath = Path.Combine(thumbnailRoot, ThumbnailStorytellingStrategyFileName);
         await File.WriteAllTextAsync(storytellingStrategyPath, JsonSerializer.Serialize(storytellingStrategyDiagnostics, JsonOptions), cancellationToken);
+        var visualDirectingProfilePath = Path.Combine(thumbnailRoot, VisualDirectingProfileFileName);
+        await File.WriteAllTextAsync(visualDirectingProfilePath, JsonSerializer.Serialize(visualDirectingProfileDiagnostics, JsonOptions), cancellationToken);
         var promptJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptFileName);
         await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
         {
@@ -673,6 +678,60 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     "Each aspect ratio receives a native optimized prompt.",
                     "Renderer changes are not required for composition profile selection."
                 }
+            },
+            generatedUtc = DateTimeOffset.UtcNow
+        };
+    }
+
+    private static object BuildVisualDirectingProfileDiagnostics(IReadOnlyList<ThumbnailPromptContract> contracts, IReadOnlyList<ThumbnailV8Prompt> prompts)
+    {
+        var entries = contracts.Select(contract =>
+        {
+            var profile = VisualDirectingProfiles.Resolve(contract);
+            var familyDirector = FamilyDirectors.Resolve(contract);
+            var prompt = prompts.First(p => string.Equals(p.Name, contract.Platform.CompositionProfile, StringComparison.OrdinalIgnoreCase));
+            return new
+            {
+                selectedProfile = profile.Name,
+                compositionProfile = contract.Platform.CompositionProfile,
+                aspectRatio = contract.Platform.AspectRatio,
+                camera = profile.CameraLanguage,
+                lens = profile.LensLanguage,
+                composition = profile.ArtisticComposition,
+                documentaryDirection = profile.DocumentaryDirection,
+                dominantSubject = profile.DominantObjectStrategy,
+                negativeSpace = profile.NegativeSpaceGuidance,
+                environmentalStorytelling = profile.EnvironmentalStorytelling,
+                artDirection = profile.PromptAdditions,
+                antiDistortionRules = profile.AntiDistortionRules,
+                familyDirector = new
+                {
+                    familyDirector.Name,
+                    familyDirector.Family,
+                    familyDirector.ArtisticVocabulary,
+                    familyDirector.PromptAdditions
+                },
+                promptContainsVisualDirectingProfile = prompt.Prompt.Contains(profile.Name, StringComparison.OrdinalIgnoreCase),
+                promptContainsFamilyDirector = prompt.Prompt.Contains(familyDirector.Name, StringComparison.OrdinalIgnoreCase),
+                promptContainsAntiDistortionRules = prompt.Prompt.Contains("native aspect composition", StringComparison.OrdinalIgnoreCase)
+                    && prompt.Prompt.Contains("circular celestial bodies", StringComparison.OrdinalIgnoreCase)
+                    && prompt.NegativePrompt.Contains("physically correct astronomical geometry", StringComparison.OrdinalIgnoreCase)
+            };
+        }).ToArray();
+
+        return new
+        {
+            thumbnailVersion = "V8",
+            profileCount = entries.Length,
+            profiles = entries,
+            validation = new
+            {
+                landscapeDirectorPresent = entries.Any(e => e.selectedProfile == "LandscapeDirector"),
+                portraitDirectorPresent = entries.Any(e => e.selectedProfile == "PortraitDirector"),
+                squareDirectorPresent = entries.Any(e => e.selectedProfile == "SquareDirector"),
+                allPromptsIncludeArtDirection = entries.All(e => e.promptContainsVisualDirectingProfile && e.promptContainsFamilyDirector),
+                allPromptsIncludeAntiDistortionRules = entries.All(e => e.promptContainsAntiDistortionRules),
+                rendererUnchanged = "VisualDirectingProfile is consumed by ThumbnailPromptBuilder before image generation; ThumbnailRenderer, Hero, and Gallery are not modified."
             },
             generatedUtc = DateTimeOffset.UtcNow
         };
@@ -3255,7 +3314,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
             new PromptSection("safety", "Safety", 80, safety, family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)),
             new PromptSection("cta", "CTA", 90, "Short action cue: watch the sky tonight.", false),
             new PromptSection("footer", "Footer", 100, "Short footer tips may appear only on rich landscape layouts: look direction, best time, equipment.", false),
-            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate clean artwork only at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium cinematic astronomy style, no typography, no UI, no placeholder panels, no cropping, no squeezing.", true)
+            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate clean artwork only at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium cinematic astronomy style, no typography, no UI, no placeholder panels, no cropping, no squeezing. Require native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, and physically correct astronomical geometry.", true)
         ];
     }
 

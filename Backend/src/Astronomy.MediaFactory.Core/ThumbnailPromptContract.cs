@@ -12,7 +12,9 @@ public sealed record ThumbnailPromptContract(
     ThumbnailBrand Brand,
     ThumbnailValidation Validation,
     ThumbnailPromptDiagnostics Diagnostics,
-    IReadOnlyList<PromptSection>? PromptSections = null);
+    IReadOnlyList<PromptSection>? PromptSections = null,
+    VisualDirectingProfile? VisualDirectingProfile = null,
+    FamilyDirector? FamilyDirector = null);
 
 public sealed record ThumbnailEventIdentity(string EventId, string EventName, string EventAction, string EventFamily, string EventSubtype);
 public sealed record ThumbnailDisplay(string DisplayTitle, string LocalizedTitle, string DisplayShortTitle, IReadOnlyList<string> TitleCandidates);
@@ -24,6 +26,86 @@ public sealed record ThumbnailPromptInstructions(string PositivePrompt, string N
 public sealed record ThumbnailBrand(string TypographyPolicy, string BrandStyle, IReadOnlyList<string> LocalizationRules);
 public sealed record ThumbnailValidation(IReadOnlyList<string> ValidationRules, IReadOnlyList<string> ScientificRules, IReadOnlyList<string> PlatformRules);
 public sealed record ThumbnailPromptDiagnostics(string Source, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary, DateTimeOffset GeneratedUtc);
+
+
+public sealed record VisualDirectingProfile(
+    string Name,
+    string CameraLanguage,
+    string LensLanguage,
+    string ArtisticComposition,
+    string DocumentaryDirection,
+    string DominantObjectStrategy,
+    string EnvironmentalStorytelling,
+    string NegativeSpaceGuidance,
+    IReadOnlyList<string> PromptAdditions,
+    IReadOnlyList<string> AntiDistortionRules)
+{
+    public string PromptGuidance => string.Join(" ", PromptAdditions.Concat(AntiDistortionRules));
+}
+
+public sealed record FamilyDirector(
+    string Name,
+    string Family,
+    IReadOnlyList<string> ArtisticVocabulary,
+    IReadOnlyList<string> PromptAdditions)
+{
+    public string PromptGuidance => string.Join(" ", PromptAdditions);
+}
+
+public static class VisualDirectingProfiles
+{
+    public static VisualDirectingProfile Resolve(ThumbnailPromptContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        return contract.VisualDirectingProfile ?? Resolve(contract.Platform.CompositionProfile, contract.Platform.AspectRatio);
+    }
+
+    public static VisualDirectingProfile Resolve(string profileName, string aspectRatio)
+    {
+        var normalizedProfile = Normalize(profileName);
+        var normalizedAspect = Normalize(aspectRatio);
+        if (normalizedProfile.Contains("landscape", StringComparison.OrdinalIgnoreCase) || normalizedAspect is "16:9" or "16x9") return LandscapeDirector;
+        if (normalizedProfile.Contains("portrait", StringComparison.OrdinalIgnoreCase) || normalizedAspect is "9:16" or "9x16") return PortraitDirector;
+        if (normalizedProfile.Contains("square", StringComparison.OrdinalIgnoreCase) || normalizedAspect is "1:1" or "1x1") return SquareDirector;
+        throw new InvalidOperationException($"Visual directing profile validation failed: unsupported profile '{profileName}' for aspect ratio '{aspectRatio}'.");
+    }
+
+    public static readonly IReadOnlyList<string> UniversalAntiDistortionRules =
+    [
+        "ANTI-DISTORTION: compose natively for the requested aspect ratio; never stretch, squeeze, pad, or crop another ratio.",
+        "ANTI-DISTORTION: no stretched landscape, no squeezed portrait, no cropped square.",
+        "ANTI-DISTORTION: all celestial bodies must remain circular with physically correct astronomical geometry."
+    ];
+
+    public static readonly VisualDirectingProfile LandscapeDirector = new("LandscapeDirector", "wide documentary establishing camera, horizon-aware lateral staging", "moderate wide cinema lens language with natural perspective", "intentionally wide left-to-right cinematic composition", "premium observational documentary still, calm but high-salience", "dominant subject uses width without becoming distorted", "landscape silhouette, horizon glow, and sky scale tell the viewing story", "reserve broad edge-safe breathing room for renderer-owned presentation", ["VISUAL DIRECTING PROFILE: LandscapeDirector.", "Compose as an intentionally wide 16:9 astronomy documentary frame with lateral sky scale and horizon context."], UniversalAntiDistortionRules);
+    public static readonly VisualDirectingProfile PortraitDirector = new("PortraitDirector", "vertical mobile-first documentary camera with foreground-to-sky depth", "portrait telephoto/compressed depth language without squeezing objects", "intentionally vertical stacked composition with tall sky hierarchy", "phone-first observational documentary poster still", "dominant subject anchors the vertical frame and is not a landscape crop", "vertical atmosphere, horizon-to-zenith depth, and layered sky tell the story", "keep top and bottom breathing room; avoid side-panel landscape logic", ["VISUAL DIRECTING PROFILE: PortraitDirector.", "Compose as an intentionally vertical 9:16 mobile astronomy frame; never derive it from a landscape composition."], UniversalAntiDistortionRules);
+    public static readonly VisualDirectingProfile SquareDirector = new("SquareDirector", "balanced centered documentary camera", "natural standard lens language with minimal edge distortion", "intentionally balanced 1:1 radial or centered composition", "compact feed-ready observational documentary still", "dominant subject is centered or center-weighted and fully visible", "environment supports symmetry and compact context", "balanced negative space on all sides; no cropped square feel", ["VISUAL DIRECTING PROFILE: SquareDirector.", "Compose as an intentionally balanced native 1:1 astronomy frame with fully visible celestial geometry."], UniversalAntiDistortionRules);
+
+    private static string Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().Replace('_', ':');
+}
+
+public static class FamilyDirectors
+{
+    public static FamilyDirector Resolve(ThumbnailPromptContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        return contract.FamilyDirector ?? Resolve(contract.EventIdentity.EventFamily);
+    }
+
+    public static FamilyDirector Resolve(string family)
+    {
+        var normalized = (family ?? string.Empty).Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase);
+        if (normalized.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return EclipseDirector;
+        if (normalized.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return MoonDirector;
+        if (normalized.Contains("Meteor", StringComparison.OrdinalIgnoreCase)) return MeteorDirector;
+        return PlanetaryDirector;
+    }
+
+    public static readonly FamilyDirector EclipseDirector = new("EclipseDirector", "Eclipse", ["corona", "alignment", "limb light", "umbra", "dramatic sky"], ["FAMILY DIRECTOR: EclipseDirector contributes art vocabulary only: precise Sun-Moon-Earth alignment, corona/umbra drama, physically correct eclipse geometry."]);
+    public static readonly FamilyDirector MoonDirector = new("MoonDirector", "Moon", ["lunar maria", "terminator detail", "silver texture", "moonrise atmosphere"], ["FAMILY DIRECTOR: MoonDirector contributes art vocabulary only: detailed lunar surface texture, circular Moon disk, atmospheric moonrise, calm silver contrast."]);
+    public static readonly FamilyDirector MeteorDirector = new("MeteorDirector", "Meteor", ["radiant", "natural streaks", "dark sky", "anticipation", "wide sky"], ["FAMILY DIRECTOR: MeteorDirector contributes art vocabulary only: radiant-centered meteor streaks, natural dark-sky atmosphere, directional energy without invented planets."]);
+    public static readonly FamilyDirector PlanetaryDirector = new("PlanetaryDirector", "Planetary", ["planetary pairing", "twilight ecliptic", "scale contrast", "clean separation"], ["FAMILY DIRECTOR: PlanetaryDirector contributes art vocabulary only: realistic planetary disks/points, twilight ecliptic spacing, clean conjunction hierarchy, no extra planets."]);
+}
 
 public sealed record PromptSection(
     string Id,
@@ -116,7 +198,7 @@ public sealed class PromptAssembler
     public ThumbnailPromptBuildResult Assemble(ThumbnailPromptContract contract)
     {
         ArgumentNullException.ThrowIfNull(contract); ThumbnailPromptContractValidator.Validate(contract);
-        var profile = ThumbnailCompositionProfiles.Resolve(contract); var strategy = PlatformStorytellingStrategies.Resolve(contract);
+        var profile = ThumbnailCompositionProfiles.Resolve(contract); var strategy = PlatformStorytellingStrategies.Resolve(contract); var directing = VisualDirectingProfiles.Resolve(contract); var familyDirector = FamilyDirectors.Resolve(contract);
         var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildLegacySections(contract);
         var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); var included = new List<PromptSection>();
         foreach (var section in sections.OrderBy(s => s.Priority).ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase))
@@ -129,13 +211,17 @@ public sealed class PromptAssembler
         }
         EnforceInformationBudget(strategy, included, removed);
         var prompt = string.Join(Environment.NewLine, included.Select(s => $"{s.Category.ToUpperInvariant()}: {s.Content.Trim()}"));
-        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance, ThumbnailArtworkPromptRules.PositiveArtworkOnlyInstruction).Trim();
+        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance, directing.PromptGuidance, familyDirector.PromptGuidance, ThumbnailArtworkPromptRules.PositiveArtworkOnlyInstruction).Trim();
         PromptValidator.Validate(contract, included, prompt, strategy);
         var report = new PromptAssemblyReport(contract.EventIdentity.EventName, contract.EventIdentity.EventFamily, contract.Platform.CompositionProfile, contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty, profile.Name, strategy.Name, included.Select(s => s.Id).ToArray(), sections.Select(s => s.Id).Except(included.Select(s => s.Id), StringComparer.OrdinalIgnoreCase).ToArray(), removed, prompt.Length, CountWords(prompt));
         return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
 
-    private static string AppendArtworkNegativeRules(string negativePrompt) => string.IsNullOrWhiteSpace(negativePrompt) ? ThumbnailArtworkPromptRules.NegativePrompt : negativePrompt + ", " + ThumbnailArtworkPromptRules.NegativePrompt;
+    private static string AppendArtworkNegativeRules(string negativePrompt)
+    {
+        const string antiDistortion = "native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, physically correct astronomical geometry";
+        return string.IsNullOrWhiteSpace(negativePrompt) ? ThumbnailArtworkPromptRules.NegativePrompt + ", " + antiDistortion : negativePrompt + ", " + ThumbnailArtworkPromptRules.NegativePrompt + ", " + antiDistortion;
+    }
 
     private static IReadOnlyList<PromptSection> BuildLegacySections(ThumbnailPromptContract contract) =>
     [
