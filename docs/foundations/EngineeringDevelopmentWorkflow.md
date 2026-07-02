@@ -216,7 +216,15 @@ Before implementation, ask:
 
 If the answer is no, stop and return to Engineering Design Review.
 
+Before asking AI to generate a final asset, ask:
+
+> Should the platform render deterministic presentation elements instead?
+
+If the asset needs text, localization, branding, safety, or layout consistency, prefer a deterministic renderer for those presentation elements and treat AI generation as an input asset.
+
 ## Renderer Rule
+
+AI output should be treated as an asset, not the final product, whenever text, localization, branding, safety, or layout consistency matters. Renderers own deterministic presentation elements and must consume contracts rather than relying on AI-baked typography, icons, logos, cards, CTAs, or layout.
 
 Renderers render.
 

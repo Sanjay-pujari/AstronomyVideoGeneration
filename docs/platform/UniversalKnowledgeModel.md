@@ -28,7 +28,9 @@ In this flow, Knowledge is not a passive database. It is the stable contract tha
 
 > Platform owns capabilities. Domains own knowledge. Assets consume knowledge.
 
-The platform owns reusable capabilities such as validation, localization, reasoning, prompt planning, media assembly, and publishing. Each domain owns its facts, terminology, relationships, educational priorities, visual conventions, and validation constraints. Assets do not duplicate domain logic; they consume UKM objects through platform contracts.
+Knowledge owns facts. AI owns creative scene generation. Renderers own branded localized presentation.
+
+The platform owns reusable capabilities such as validation, localization, reasoning, prompt planning, media assembly, and publishing. Each domain owns its facts, terminology, relationships, educational priorities, visual conventions, and validation constraints. Assets do not duplicate domain logic; they consume UKM objects through platform contracts. AI-generated assets must remain grounded in UKM facts, while renderer-owned presentation must remain deterministic, localized, brand-safe, and contract-driven.
 
 ## 4. UKM Building Blocks
 
