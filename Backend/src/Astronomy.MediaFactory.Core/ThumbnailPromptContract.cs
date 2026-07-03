@@ -250,31 +250,25 @@ public sealed class ThumbnailPromptTemplateRenderer
 
 public sealed class ThumbnailPromptWriterV9
 {
-    public ThumbnailPromptBuildResult Write(ThumbnailPromptContract contract)
+    public ThumbnailPromptBuildResult Write(ThumbnailPromptContract contract) => CreativeBriefPromptBuilder.Build(contract);
+}
+
+internal static class CreativeBriefPromptBuilder
+{
+    public static ThumbnailPromptBuildResult Build(ThumbnailPromptContract contract)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ThumbnailPromptContractValidator.Validate(contract);
 
         var strategy = PlatformStorytellingStrategies.Resolve(contract);
         var profile = ThumbnailCompositionProfiles.Resolve(contract);
-        var directing = VisualDirectingProfiles.Resolve(contract);
-        var familyDirector = FamilyDirectors.Resolve(contract);
         var language = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
         var terms = LocalizedPromptTerms.For(language);
-        var isPortrait = IsPortrait(contract);
-        var isSquare = contract.Platform.CompositionProfile.Contains("square", StringComparison.OrdinalIgnoreCase) || contract.Platform.AspectRatio is "1:1" or "1x1";
-        var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
-        sections = sections.Select(section => section.Category.Contains("Observation", StringComparison.OrdinalIgnoreCase)
-            ? section with { Content = BuildObservationPrompt(contract, terms, isPortrait, isSquare) }
-            : section).ToArray();
-        var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var included = FilterSections(contract, strategy, sections, removed);
-        EnforceInformationBudget(strategy, included, removed);
-
-        var prompt = string.Join(Environment.NewLine, included.Select(s => $"{s.Category.ToUpperInvariant()}: {s.Content.Trim()}"));
-        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance, directing.PromptGuidance, familyDirector.PromptGuidance, ThumbnailArtworkPromptRules.PositiveArtworkOnlyInstruction).Trim();
-        var duplicateSectionsRemoved = RemoveDuplicateLines(ref prompt);
-        PromptValidatorV9.Validate(contract, included, prompt, strategy);
+        var fields = ThumbnailFieldFormatter.Format(contract.Observation, language);
+        var aspect = ResolveAspect(contract);
+        var objectLabels = string.Join(" and ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
+        var prompt = string.Join(Environment.NewLine, BuildSections(contract, aspect, terms, fields, objectLabels)).Trim();
+        PromptValidatorV9.Validate(contract, [], prompt, strategy);
 
         var report = new PromptAssemblyReport(
             contract.EventIdentity.EventName,
@@ -283,72 +277,74 @@ public sealed class ThumbnailPromptWriterV9
             contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty,
             profile.Name,
             strategy.Name,
-            included.Select(s => s.Id).ToArray(),
-            sections.Select(s => s.Id).Except(included.Select(s => s.Id), StringComparer.OrdinalIgnoreCase).Concat(Enumerable.Repeat("duplicate-section", duplicateSectionsRemoved)).ToArray(),
-            removed,
+            ["creative-brief"],
+            [],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             prompt.Length,
             CountWords(prompt));
 
-        return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
+        return new ThumbnailPromptBuildResult(prompt, PromptAssembler.AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
 
-    private static bool IsPortrait(ThumbnailPromptContract contract) =>
-        contract.Platform.CompositionProfile.Contains("portrait", StringComparison.OrdinalIgnoreCase) ||
-        contract.Platform.AspectRatio is "9:16" or "9x16";
-
-    private static string BuildObservationPrompt(ThumbnailPromptContract contract, LocalizedPromptTerms terms, bool isPortrait, bool isSquare)
+    private static IEnumerable<string> BuildSections(ThumbnailPromptContract contract, string aspect, LocalizedPromptTerms terms, ThumbnailFormattedGuideFields fields, string objectLabels)
     {
-        var fields = ThumbnailFieldFormatter.Format(contract.Observation, terms.Language);
-
-        if (isPortrait)
-            return $"portrait cover badge: {terms.Title}; {terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}. Date, Best Time, and Direction only; no equipment, no separation, no observation window, no bottom strip, no guide table, no action prompt; keep planets circular.";
-
-        if (isSquare)
+        var size = $"{contract.Platform.Width}x{contract.Platform.Height}";
+        var subtitle = contract.EventIdentity.EventSubtype.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) ? "Planet Conjunction" : contract.EventIdentity.EventAction;
+        var card = $"{terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}" + (string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}");
+        var title = contract.Display.LocalizedTitle;
+        var intent = aspect switch
         {
-            var equipmentText = string.IsNullOrWhiteSpace(fields.Equipment) ? string.Empty : $"; {terms.Equipment}: {fields.Equipment}";
-            var separationText = string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}";
-            return $"medium-density square guide fields: {terms.Title}; {terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}{equipmentText}{separationText}. No action prompt; no squeezed landscape composition.";
-        }
+            "portrait" => "Create a premium YouTube Shorts cover that feels designed natively for mobile discovery, not an empty poster or cropped landscape.",
+            "square" => "Create a balanced premium astronomy feed thumbnail with the same clean documentary design language as the wide and vertical covers.",
+            _ => "Create a stable premium YouTube astronomy thumbnail with cinematic polish, clear science context, and strong first-glance recognition."
+        };
+        var canvas = aspect switch
+        {
+            "portrait" => $"2160x3840 native 9:16 composition; keep the requested output proportional to this vertical poster design even when rendered at {size}.",
+            "square" => $"{size} native 1:1 composition; centered, balanced, and never a crop from another aspect ratio.",
+            _ => $"{size} native 16:9 composition; wide horizon-aware layout with safe title and card zones."
+        };
+        var composition = aspect switch
+        {
+            "portrait" => "Large cinematic title at the top, large circular Jupiter and Venus in the center with Jupiter dominant and Venus supportive, compact premium observation card at the bottom; fill the frame with purposeful sky depth.",
+            "square" => "Center-weighted celestial pairing, readable title area, compact observation card, symmetrical breathing room, and no squeezed landscape or tall-poster leftovers.",
+            _ => "Wide twilight sky with an elegant horizon cue, dominant Jupiter-Venus pairing, readable title area, and one premium glass observation card."
+        };
+        var typography = aspect switch
+        {
+            "portrait" => $"Large top title: {title}. Compact bottom card only: {card}. Use bold high-contrast typography with mobile readability.",
+            "square" => $"Title: {title}. Subtitle: {subtitle}. Compact card: {card}. Keep text large enough for mobile feed readability.",
+            _ => $"Title: {title}. Subtitle: {subtitle}. Premium glass card: {card}. Keep all UI integrated into the final image."
+        };
 
-        var landscapeSeparation = string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}";
-        return $"premium landscape glass observation card: {terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}{landscapeSeparation}; {terms.ObjectLabels}: every primary object. Do not render action-prompt text, long date ranges, technical wording, internal IDs, or footer tips.";
+        yield return $"Creative Intent: {intent}";
+        yield return $"Canvas & Aspect: {canvas}";
+        yield return $"Subject: {objectLabels} conjunction in the western twilight sky; render the primary objects visibly and label only when it improves clarity.";
+        yield return $"Composition: {composition}";
+        yield return $"Information to Render: {card}. Use absolute date and time only.";
+        yield return $"Typography & UI: {typography}";
+        yield return "Scientific Accuracy: Keep planets circular, separated naturally, and astronomically plausible; do not invent extra celestial objects or distort the sky geometry.";
+        yield return "Visual Style: Premium dark blue and gold astronomy documentary look, atmospheric depth, subtle horizon glow, polished integrated thumbnail UI, high contrast, clean negative space.";
+        yield return "Negative Rules: No relative-day or urgency phrases; no post-processing overlay instructions; no repeated quality blocks; no stretched or oval planets; no watermark, clutter, tiny text, random planets, empty poster look, or external branding.";
+        yield return "Final Objective: Deliver one complete final thumbnail that is clean, accurate, premium, and ready to publish.";
+    }
+
+    private static string ResolveAspect(ThumbnailPromptContract contract)
+    {
+        if (contract.Platform.CompositionProfile.Contains("portrait", StringComparison.OrdinalIgnoreCase) || contract.Platform.AspectRatio is "9:16" or "9x16") return "portrait";
+        if (contract.Platform.CompositionProfile.Contains("square", StringComparison.OrdinalIgnoreCase) || contract.Platform.AspectRatio is "1:1" or "1x1") return "square";
+        return "landscape";
     }
 
     private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
+    private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
-    private sealed record LocalizedPromptTerms(string Language, string Title, string Subtitle, string Date, string BestTime, string Direction, string Separation, string Equipment, string FooterTips, string Cta, string ObjectLabels)
+    private sealed record LocalizedPromptTerms(string Language, string Date, string BestTime, string Direction, string Separation, string Equipment)
     {
         public static LocalizedPromptTerms For(string language) => language == "hi"
-            ? new LocalizedPromptTerms("hi", "शीर्षक", "उपशीर्षक", "तारीख", "सबसे अच्छा समय", "दिशा", "दूरी", "उपकरण", "नीचे के सुझाव", "कार्रवाई", "वस्तु लेबल")
-            : new LocalizedPromptTerms("en", "Title", "Subtitle", "Date", "Best Time", "Direction", "Separation", "Equipment", "Footer tips", "CTA", "Object labels");
+            ? new LocalizedPromptTerms("hi", "तारीख", "सबसे अच्छा समय", "दिशा", "दूरी", "उपकरण")
+            : new LocalizedPromptTerms("en", "Date", "Best Time", "Direction", "Separation", "Equipment");
     }
-
-    private static List<PromptSection> FilterSections(ThumbnailPromptContract contract, PlatformStorytellingStrategy strategy, IReadOnlyList<PromptSection> sections, Dictionary<string, string> removed)
-    {
-        var included = new List<PromptSection>();
-        foreach (var section in sections.OrderBy(s => s.Priority).ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase))
-        {
-            if (!Supports(section.SupportedPlatforms, contract.Platform.CompositionProfile, contract.Platform.AspectRatio, contract.Platform.Platform)) { removed[section.Id] = "Unsupported platform/profile/aspect ratio"; continue; }
-            if (!Supports(section.SupportedLanguages, contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty)) { removed[section.Id] = "Unsupported language"; continue; }
-            if (!Supports(section.SupportedFamilies, contract.EventIdentity.EventFamily)) { removed[section.Id] = "Unsupported family"; continue; }
-            if (!strategy.AllowsCategory(section.Category)) { removed[section.Id] = $"Section category '{section.Category}' is not allowed by {strategy.Name}"; continue; }
-            included.Add(section);
-        }
-        return included;
-    }
-
-    private static int RemoveDuplicateLines(ref string prompt)
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); var removed = 0; var lines = new List<string>();
-        foreach (var line in prompt.Split('\n')) { var key = line.Trim(); if (key.Length > 0 && !seen.Add(key)) { removed++; continue; } lines.Add(line.TrimEnd()); }
-        prompt = string.Join(Environment.NewLine, lines).Trim(); return removed;
-    }
-
-    public static IReadOnlyList<PromptSection> BuildDefaultSections(ThumbnailPromptContract contract) => PromptAssembler.BuildDefaultSections(contract);
-    private static bool Supports(IReadOnlyList<string>? allowed, params string[] values) => allowed is null || allowed.Count == 0 || allowed.Any(a => values.Any(v => !string.IsNullOrWhiteSpace(v) && (string.Equals(a, v, StringComparison.OrdinalIgnoreCase) || v.Contains(a, StringComparison.OrdinalIgnoreCase) || a.Contains(v, StringComparison.OrdinalIgnoreCase))));
-    public static void EnforceInformationBudget(PlatformStorytellingStrategy strategy, List<PromptSection> included, Dictionary<string, string> removed) => PromptAssembler.EnforceInformationBudget(strategy, included, removed);
-    public static string AppendArtworkNegativeRules(string negativePrompt) => PromptAssembler.AppendArtworkNegativeRules(negativePrompt);
-    private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
 
 public sealed record ThumbnailFormattedGuideFields(string DateDisplay, string BestTimeDisplay, string DirectionDisplay, string EquipmentDisplay, string? SeparationDisplay)
@@ -526,27 +522,7 @@ public static class PlatformStorytellingStrategies
 
 public sealed class PromptAssembler
 {
-    public ThumbnailPromptBuildResult Assemble(ThumbnailPromptContract contract)
-    {
-        ArgumentNullException.ThrowIfNull(contract); ThumbnailPromptContractValidator.Validate(contract);
-        var profile = ThumbnailCompositionProfiles.Resolve(contract); var strategy = PlatformStorytellingStrategies.Resolve(contract); var directing = VisualDirectingProfiles.Resolve(contract); var familyDirector = FamilyDirectors.Resolve(contract);
-        var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
-        var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); var included = new List<PromptSection>();
-        foreach (var section in sections.OrderBy(s => s.Priority).ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase))
-        {
-            if (!Supports(section.SupportedPlatforms, contract.Platform.CompositionProfile, contract.Platform.AspectRatio, contract.Platform.Platform)) { removed[section.Id] = "Unsupported platform/profile/aspect ratio"; continue; }
-            if (!Supports(section.SupportedLanguages, contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty)) { removed[section.Id] = "Unsupported language"; continue; }
-            if (!Supports(section.SupportedFamilies, contract.EventIdentity.EventFamily)) { removed[section.Id] = "Unsupported family"; continue; }
-            if (!strategy.AllowsCategory(section.Category)) { removed[section.Id] = $"Section category '{section.Category}' is not allowed by {strategy.Name}"; continue; }
-            included.Add(section);
-        }
-        EnforceInformationBudget(strategy, included, removed);
-        var prompt = string.Join(Environment.NewLine, included.Select(s => $"{s.Category.ToUpperInvariant()}: {s.Content.Trim()}"));
-        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance, directing.PromptGuidance, familyDirector.PromptGuidance, ThumbnailArtworkPromptRules.PositiveArtworkOnlyInstruction).Trim();
-        PromptValidatorV9.Validate(contract, included, prompt, strategy);
-        var report = new PromptAssemblyReport(contract.EventIdentity.EventName, contract.EventIdentity.EventFamily, contract.Platform.CompositionProfile, contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty, profile.Name, strategy.Name, included.Select(s => s.Id).ToArray(), sections.Select(s => s.Id).Except(included.Select(s => s.Id), StringComparer.OrdinalIgnoreCase).ToArray(), removed, prompt.Length, CountWords(prompt));
-        return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
-    }
+    public ThumbnailPromptBuildResult Assemble(ThumbnailPromptContract contract) => CreativeBriefPromptBuilder.Build(contract);
 
     public static string AppendArtworkNegativeRules(string negativePrompt)
     {
