@@ -383,7 +383,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             validator = "PromptValidatorV9",
-            promptWriterVersion = "V9.2",
+            promptWriterVersion = "V9.3",
             promptStyle = "CreativeBrief",
             prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, promptWordCount = CountPromptWords(prompt.Prompt), promptCompressionRatio = CalculatePromptCompressionRatio(prompt), duplicateSectionsRemoved = CountDuplicateSectionsRemoved(prompt), prompt.Prompt }).ToArray()
         }, JsonOptions), cancellationToken);
@@ -409,8 +409,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             cropFromLandscape = false,
             locationRemovedFromPrompt = true,
             mobileOptimizedCopy = true,
-            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
-            visibleInformationFields = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Equipment", "Separation" },
+            visibleInformationFields = new[] { "Date", "Best Time", "Direction", "Equipment", "Separation" },
             prohibitedVisibleInformation = new[] { "multi-day time spans", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
             informationAreaPercentMax = 20,
             titleAreaPercentMax = 12,
@@ -427,11 +427,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
             validationPassed = failures.Count == 0,
-            thumbnailGenerationStatus = failures.Count == 0 ? "PASS" : (allOutputs.Length > 0 ? "PARTIAL" : "FAIL"),
+            status = failures.Count == 0 ? (promptValidation.OptimizationWarnings.Count > 0 ? "SuccessWithWarnings" : "Succeeded") : (allOutputs.Length > 0 ? "Partial" : "Failed"),
+            thumbnailGenerationStatus = failures.Count == 0 ? (promptValidation.OptimizationWarnings.Count > 0 ? "SuccessWithWarnings" : "PASS") : (allOutputs.Length > 0 ? "PARTIAL" : "FAIL"),
             failedAspects = failures.ToArray(),
             aspectDiagnostics,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
-            promptWriterVersion = "V9.2",
+            promptWriterVersion = "V9.3",
             promptStyle = "CreativeBrief",
             promptWordCount = promptValidation.PromptWordCount,
             targetWordCount = promptValidation.TargetWordCount,
@@ -495,8 +496,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             cropFromLandscape = false,
             locationRemovedFromPrompt = true,
             mobileOptimizedCopy = true,
-            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
-            visibleInformationFields = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Equipment", "Separation" },
+            visibleInformationFields = new[] { "Date", "Best Time", "Direction", "Equipment", "Separation" },
             prohibitedVisibleInformation = new[] { "multi-day time spans", "long date ranges", "city names", "region names", "country names", "coordinates", "location names", "scientific descriptions" },
             informationAreaPercentMax = 20,
             titleAreaPercentMax = 12,
@@ -513,11 +514,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
             validationPassed = failures.Count == 0,
-            thumbnailGenerationStatus = failures.Count == 0 ? "PASS" : (allOutputs.Length > 0 ? "PARTIAL" : "FAIL"),
+            status = failures.Count == 0 ? (promptValidation.OptimizationWarnings.Count > 0 ? "SuccessWithWarnings" : "Succeeded") : (allOutputs.Length > 0 ? "Partial" : "Failed"),
+            thumbnailGenerationStatus = failures.Count == 0 ? (promptValidation.OptimizationWarnings.Count > 0 ? "SuccessWithWarnings" : "PASS") : (allOutputs.Length > 0 ? "PARTIAL" : "FAIL"),
             failedAspects = failures.ToArray(),
             aspectDiagnostics,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
-            promptWriterVersion = "V9.2",
+            promptWriterVersion = "V9.3",
             promptStyle = "CreativeBrief",
             promptWordCount = promptValidation.PromptWordCount,
             targetWordCount = promptValidation.TargetWordCount,
@@ -642,9 +644,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             eventId = request.EventId,
             regionId = request.RegionId,
             language = request.Language,
-            validationPassed = promptValidation.FinalPromptPassedValidation,
-            promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
-            promptWriterVersion = "V9.2",
+            validationPassed = promptValidation.FailureReasons.Count == 0,
+            status = promptValidation.FailureReasons.Count == 0 ? (promptValidation.OptimizationWarnings.Count > 0 ? "SuccessWithWarnings" : "Succeeded") : "Failed",
+            promptValidationStatus = promptValidation.FailureReasons.Count == 0 ? (promptValidation.OptimizationWarnings.Count > 0 ? "SuccessWithWarnings" : "PASS") : "FAIL",
+            promptWriterVersion = "V9.3",
             promptStyle = "CreativeBrief",
             promptWordCount = promptValidation.PromptWordCount,
             targetWordCount = promptValidation.TargetWordCount,
@@ -684,7 +687,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 prompt.PromptSummary,
                 prompt.AssemblyReport,
                 promptFileName = $"thumbnail-{prompt.Name}-prompt.txt",
-                promptWriterVersion = "V9.2",
+                promptWriterVersion = "V9.3",
                 promptStyle = "CreativeBrief",
                 promptWordCount = CountPromptWords(prompt.Prompt),
                 promptCompressionRatio = CalculatePromptCompressionRatio(prompt),
@@ -780,7 +783,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             completeThumbnailModeName = "PerAspectAzureImage2CompleteThumbnail",
             azureImage2Generated = true,
             semanticValidationPassed = true,
-            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
+            maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Equipment", "Separation" },
             informationAreaPercentMax = 20,
             titleAreaPercentMax = 12,
             portraitObjectsAreaPercentMin = 35,
@@ -977,7 +980,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .ToArray();
         var checks = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {
-            ["prompt writer version V9.2"] = true,
+            ["prompt writer version V9.3"] = true,
             ["prompt style creative brief"] = prompts.All(p => p.Prompt.Contains("Creative intent:", StringComparison.OrdinalIgnoreCase)),
             ["complete final thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("complete final astronomy thumbnail", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("complete final thumbnail", StringComparison.OrdinalIgnoreCase)),
             ["no post-processing overlay instruction"] = prompts.All(p => p.Prompt.Contains("No post-processing overlay will be added", StringComparison.OrdinalIgnoreCase)),
@@ -2426,7 +2429,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var separation = current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : string.Empty;
         var altitude = current.AltitudeDegrees is decimal alt ? $"{alt:0.#}° altitude" : string.Empty;
         var date = current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date";
-        var bestTime = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, "Best local time");
+        var bestTime = FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "Best local time");
         var window = FirstNonEmpty(current.BestViewingWindowLocal, "After sunset");
 
         var titleBox = landscape
@@ -2530,6 +2533,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             SkyGuideBoundingBox: ToBoundsObject(skyGuideBox),
             OverlapPercent: overlapPercent,
             PanelCount: panelCount);
+    }
+
+    private static string ExtractTimeCue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var text = value.Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"(?:\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b|\bafter sunset\b|\bbefore sunrise\b|\bafter midnight\b)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? match.Value.Trim() : text;
     }
 
     private static string CondenseViewingWindow(string window)
@@ -2861,11 +2872,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static PlanetaryThumbnailGuideCardDto BuildPlanetaryGuideCard(CurrentEventLock current)
         => new(
             current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? string.Empty,
-            FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal),
+            FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "After sunset"),
             NormalizeDirectionCue(current.SkyDirectionHint),
-            FirstNonEmpty(current.BestViewingWindowLocal, "After sunset"),
-            current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : null,
-            current.AltitudeDegrees is decimal alt ? $"{alt:0.#}°" : null);
+            "Naked eye; binoculars optional",
+            current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : null);
 
     private static IReadOnlyList<string> BuildPlanetaryCallouts(CurrentEventLock current)
     {
