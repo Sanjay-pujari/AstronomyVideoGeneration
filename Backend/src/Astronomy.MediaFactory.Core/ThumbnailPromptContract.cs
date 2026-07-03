@@ -165,26 +165,121 @@ public sealed class ThumbnailCreativeDirector
     }
 }
 
-public sealed class ThumbnailPromptComposerV1
+public sealed class ThumbnailPromptWriterV9
 {
     private readonly ThumbnailCreativeDirector _creativeDirector = new();
 
-    public ThumbnailPromptBuildResult Compose(ThumbnailPromptContract contract)
+    public ThumbnailPromptBuildResult Write(ThumbnailPromptContract contract)
     {
         ArgumentNullException.ThrowIfNull(contract);
+        ThumbnailPromptContractValidator.Validate(contract);
+
         var direction = _creativeDirector.Direct(contract);
-        var result = new PromptAssembler().Assemble(contract);
-        var prompt = string.Join(Environment.NewLine,
-            "THUMBNAIL CREATIVE DIRECTOR:",
-            $"- Hook: {direction.Hook}",
-            $"- Emotional angle: {direction.EmotionalAngle}",
-            $"- CTR intent: {direction.CtrIntent}",
-            $"- Object prominence: {direction.ObjectProminence}",
-            $"- Family visual style: {direction.FamilyVisualStyle}",
-            $"- Platform/aspect creative strategy: {direction.PlatformAspectCreativeStrategy}",
-            result.Prompt);
-        return result with { Prompt = prompt };
+        var strategy = PlatformStorytellingStrategies.Resolve(contract);
+        var profile = ThumbnailCompositionProfiles.Resolve(contract);
+        var directing = VisualDirectingProfiles.Resolve(contract);
+        var family = FamilyDirectors.Resolve(contract);
+        var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
+        var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var included = FilterSections(contract, strategy, sections, removed);
+        EnforceInformationBudget(strategy, included, removed);
+
+        var prompt = BuildCreativeBrief(contract, direction, strategy, profile, directing, family, included);
+        var duplicateSectionsRemoved = RemoveDuplicateLines(ref prompt);
+        PromptValidatorV9.Validate(contract, included, prompt, strategy);
+
+        var report = new PromptAssemblyReport(
+            contract.EventIdentity.EventName,
+            contract.EventIdentity.EventFamily,
+            contract.Platform.CompositionProfile,
+            contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty,
+            profile.Name,
+            strategy.Name,
+            included.Select(s => s.Id).ToArray(),
+            sections.Select(s => s.Id).Except(included.Select(s => s.Id), StringComparer.OrdinalIgnoreCase).Concat(Enumerable.Repeat("duplicate-section", duplicateSectionsRemoved)).ToArray(),
+            removed,
+            prompt.Length,
+            CountWords(prompt));
+
+        return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
+
+    private static string BuildCreativeBrief(ThumbnailPromptContract contract, ThumbnailCreativeDirection direction, PlatformStorytellingStrategy strategy, CompositionProfile profile, VisualDirectingProfile directing, FamilyDirector family, IReadOnlyList<PromptSection> included)
+    {
+        var aspect = contract.Platform.AspectRatio;
+        var isPortrait = aspect == "9:16";
+        var isSquare = aspect == "1:1";
+        var lang = contract.Brand.LocalizationRules.FirstOrDefault() ?? "en";
+        var title = contract.Display.LocalizedTitle;
+        var subtitle = contract.Display.DisplayShortTitle;
+        var objects = string.Join(", ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
+        var observation = isPortrait
+            ? $"one tiny hint only: {contract.Observation.Direction}, {contract.Observation.BestViewingWindow}"
+            : isSquare
+                ? $"two compact facts: {contract.Observation.Direction}; {contract.Observation.BestViewingWindow}"
+                : $"date/time, best viewing time, direction, separation/equipment when relevant: {contract.Observation.BestViewingWindow}; {contract.Observation.Direction}; {contract.Observation.Visibility}";
+        var layout = isPortrait
+            ? "Native vertical mobile poster: a tall sky column, large circular event subject in the upper half, short title stacked in the safe middle, one small action cue near the lower third, with no extra panels or tabular data."
+            : isSquare
+                ? "Native square feed composition: balanced center-weighted celestial geometry, compact title block, one small rounded fact badge, equal breathing room on every side. Do not reuse a wide landscape layout."
+                : "Native wide 16:9 cover: cinematic horizon and lateral sky scale, strong title zone, elegant small information strip, optional compact safety/footer cues if they stay readable.";
+        var textBudget = isPortrait ? "very few large words" : isSquare ? "short feed-readable copy" : "crisp YouTube-readable hierarchy";
+        var aspectDetail = isPortrait
+            ? "Let the vertical depth do the work: sky gradient, horizon glow, and one clean focal path from title to subject to action cue."
+            : isSquare
+                ? "Use a compact radial read: the viewer should understand the title, the subject, and the one fact badge in a single glance. Keep the scene symmetrical enough for feed cropping safety while still feeling photographic, not like a resized poster. Let the sky texture frame the object instead of filling the square with text."
+                : "Use the width for story: a calm horizon, atmospheric gradient, and left-to-right eye path from headline to celestial subject to observation facts. The wide canvas may include small polished cues for time, direction, safe viewing, or equipment, but they must feel like a premium editorial thumbnail rather than a checklist. Preserve generous edge-safe space so the design remains readable on YouTube home, search, and embedded previews.";
+        var familyStyle = string.Join(", ", family.ArtisticVocabulary);
+
+        return $"""
+Creative intent: Create a complete final astronomy thumbnail, not a background plate. The image itself must include the finished text and simple integrated UI. No post-processing overlay will be added. Aim for {direction.EmotionalAngle}: immediate recognition of {contract.EventIdentity.EventName} with scientific trust and high contrast.
+
+Aspect/output size: {contract.Platform.Width}x{contract.Platform.Height}, {aspect}, {profile.Name}. Compose natively for this canvas; never stretch, squeeze, pad, crop, or adapt another aspect ratio. Celestial bodies must stay circular with physically correct geometry.
+
+Scene description: Show {objects} as the unmistakable subject in a premium dark-blue and gold observational sky. Use {family.Name} visual language: {familyStyle}. The mood is cinematic but clean, with real astronomy scale, atmospheric depth, and no invented planets or random extra objects.
+
+Layout guidance: {layout} {directing.ArtisticComposition}. {aspectDetail} Keep the object prominence natural for {contract.Platform.CompositionProfile}, with readable negative space and no crowded report-like layout.
+
+Data to render: Title: "{title}". Subtitle: "{subtitle}". Render {observation}. Language/localization: {lang}; keep Hindi UI text in Devanagari when the language is Hindi. Use only short human-facing labels, never database names.
+
+Typography/readability: Use natural title case, bold mobile-readable typography, high contrast, clean spacing, and integrated panels/icons that feel designed into the image. Keep {textBudget}; make every word legible at thumbnail size.
+
+Negative instructions: no separate background plate, no later text pass, no watermark, no logo, no location names, no clutter, no tiny text, no distorted celestial disks, no squeezed or cropped landscape look, no duplicate CTA or repeated quality rules.
+""".Trim();
+    }
+
+    private static List<PromptSection> FilterSections(ThumbnailPromptContract contract, PlatformStorytellingStrategy strategy, IReadOnlyList<PromptSection> sections, Dictionary<string, string> removed)
+    {
+        var included = new List<PromptSection>();
+        foreach (var section in sections.OrderBy(s => s.Priority).ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Supports(section.SupportedPlatforms, contract.Platform.CompositionProfile, contract.Platform.AspectRatio, contract.Platform.Platform)) { removed[section.Id] = "Unsupported platform/profile/aspect ratio"; continue; }
+            if (!Supports(section.SupportedLanguages, contract.Brand.LocalizationRules.FirstOrDefault() ?? string.Empty)) { removed[section.Id] = "Unsupported language"; continue; }
+            if (!Supports(section.SupportedFamilies, contract.EventIdentity.EventFamily)) { removed[section.Id] = "Unsupported family"; continue; }
+            if (!strategy.AllowsCategory(section.Category)) { removed[section.Id] = $"Section category '{section.Category}' is not allowed by {strategy.Name}"; continue; }
+            included.Add(section);
+        }
+        return included;
+    }
+
+    private static int RemoveDuplicateLines(ref string prompt)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); var removed = 0; var lines = new List<string>();
+        foreach (var line in prompt.Split('\n')) { var key = line.Trim(); if (key.Length > 0 && !seen.Add(key)) { removed++; continue; } lines.Add(line.TrimEnd()); }
+        prompt = string.Join(Environment.NewLine, lines).Trim(); return removed;
+    }
+
+    public static IReadOnlyList<PromptSection> BuildDefaultSections(ThumbnailPromptContract contract) => PromptAssembler.BuildDefaultSections(contract);
+    private static bool Supports(IReadOnlyList<string>? allowed, params string[] values) => allowed is null || allowed.Count == 0 || allowed.Any(a => values.Any(v => !string.IsNullOrWhiteSpace(v) && (string.Equals(a, v, StringComparison.OrdinalIgnoreCase) || v.Contains(a, StringComparison.OrdinalIgnoreCase) || a.Contains(v, StringComparison.OrdinalIgnoreCase))));
+    public static void EnforceInformationBudget(PlatformStorytellingStrategy strategy, List<PromptSection> included, Dictionary<string, string> removed) => PromptAssembler.EnforceInformationBudget(strategy, included, removed);
+    public static string AppendArtworkNegativeRules(string negativePrompt) => PromptAssembler.AppendArtworkNegativeRules(negativePrompt);
+    private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+}
+
+public sealed class ThumbnailPromptComposerV1
+{
+    private readonly ThumbnailPromptWriterV9 _writer = new();
+    public ThumbnailPromptBuildResult Compose(ThumbnailPromptContract contract) => _writer.Write(contract);
 }
 
 public sealed record CompositionProfile(
@@ -254,7 +349,7 @@ public sealed class PromptAssembler
     {
         ArgumentNullException.ThrowIfNull(contract); ThumbnailPromptContractValidator.Validate(contract);
         var profile = ThumbnailCompositionProfiles.Resolve(contract); var strategy = PlatformStorytellingStrategies.Resolve(contract); var directing = VisualDirectingProfiles.Resolve(contract); var familyDirector = FamilyDirectors.Resolve(contract);
-        var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildLegacySections(contract);
+        var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
         var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); var included = new List<PromptSection>();
         foreach (var section in sections.OrderBy(s => s.Priority).ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase))
         {
@@ -272,13 +367,13 @@ public sealed class PromptAssembler
         return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
 
-    private static string AppendArtworkNegativeRules(string negativePrompt)
+    public static string AppendArtworkNegativeRules(string negativePrompt)
     {
         const string antiDistortion = "native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, physically correct astronomical geometry";
         return string.IsNullOrWhiteSpace(negativePrompt) ? ThumbnailArtworkPromptRules.NegativePrompt + ", " + antiDistortion : negativePrompt + ", " + ThumbnailArtworkPromptRules.NegativePrompt + ", " + antiDistortion;
     }
 
-    private static IReadOnlyList<PromptSection> BuildLegacySections(ThumbnailPromptContract contract) =>
+    public static IReadOnlyList<PromptSection> BuildDefaultSections(ThumbnailPromptContract contract) =>
     [
         new PromptSection("legacy-title", "Title", 10, contract.Display.DisplayTitle, true),
         new PromptSection("legacy-dominant-object", "Dominant Object", 20, string.Join(" + ", contract.Objects.PrimaryObjects), true),
@@ -289,7 +384,7 @@ public sealed class PromptAssembler
     ];
 
     private static bool Supports(IReadOnlyList<string>? allowed, params string[] values) => allowed is null || allowed.Count == 0 || allowed.Any(a => values.Any(v => !string.IsNullOrWhiteSpace(v) && (string.Equals(a, v, StringComparison.OrdinalIgnoreCase) || v.Contains(a, StringComparison.OrdinalIgnoreCase) || a.Contains(v, StringComparison.OrdinalIgnoreCase))));
-    private static void EnforceInformationBudget(PlatformStorytellingStrategy strategy, List<PromptSection> included, Dictionary<string, string> removed)
+    public static void EnforceInformationBudget(PlatformStorytellingStrategy strategy, List<PromptSection> included, Dictionary<string, string> removed)
     {
         if (strategy.MaximumInformationItems is not int max) return;
         var info = included.Where(s => IsInformation(s.Category)).OrderBy(s => s.Priority).ThenBy(s => s.Id, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -307,26 +402,28 @@ public static class PromptValidatorV9
     {
         ArgumentNullException.ThrowIfNull(contract);
         if (string.IsNullOrWhiteSpace(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: final composed prompt is empty.");
-        var legacyPhrases = new[] { "AI image is NOT the final thumbnail", "will be added later", "background-only image", "background only", "background artwork", "do not draw text", "do not render text", "do not draw title", "do not draw icons", "renderer will add", "renderer owns", "renderer-owned presentation", "deterministic overlay", "manual overlay", "background mode", "BackgroundOnly", "RendererPresentation", "AiNativePromptBasedThumbnail", "ThumbnailV8AiNativeRenderer", "AzureImage2ThumbnailV5", "crop landscape" };
-        if (ContainsAny(finalPrompt, legacyPhrases)) throw new InvalidOperationException("Prompt validation failed: contradictory prompt instructions remain.");
-        if (!ContainsAny(finalPrompt, "Generate final finished thumbnail image") || !ContainsAny(finalPrompt, "Include all text, icons, panels, callouts, labels, and footer inside the image") || !ContainsAny(finalPrompt, "The AI image must be the complete final thumbnail") || !ContainsAny(finalPrompt, "No post-processing overlay will be added")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
+        var wordCount = CountWords(finalPrompt);
+        var aspect = contract.Platform.AspectRatio;
+        if (aspect == "16:9" && wordCount > 450) throw new InvalidOperationException($"Prompt validation failed: landscape prompt exceeds 450 words ({wordCount}).");
+        if (aspect == "1:1" && wordCount > 300) throw new InvalidOperationException($"Prompt validation failed: square prompt exceeds 300 words ({wordCount}).");
+        if (aspect == "9:16" && wordCount > 250) throw new InvalidOperationException($"Prompt validation failed: portrait prompt exceeds 250 words ({wordCount}).");
+
+        var legacyPhrases = new[] { "V8", "background-only", "background only", "background artwork", "do not draw text", "do not render text", "do not draw title", "do not draw icons", "renderer will add", "renderer owns", "renderer-owned", "deterministic overlay", "manual overlay", "BackgroundOnly", "RendererPresentation", "ThumbnailV8AiNativeRenderer", "AzureImage2ThumbnailV5", "crop landscape" };
+        if (ContainsAny(finalPrompt, legacyPhrases)) throw new InvalidOperationException("Prompt validation failed: forbidden V8/background/overlay phrase remains.");
+        if (aspect == "9:16" && ContainsAny(finalPrompt, "observation card", "footer", "equipment table", "dense infographic")) throw new InvalidOperationException("Prompt validation failed: portrait prompt contains forbidden card/footer/table language.");
+
+        if (!ContainsAny(finalPrompt, "complete final astronomy thumbnail", "complete final thumbnail")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
+        if (!ContainsAny(finalPrompt, "No post-processing overlay will be added", "No post-processing")) throw new InvalidOperationException("Prompt validation failed: no-post-processing instruction missing.");
         if (!ContainsAny(finalPrompt, contract.Display.DisplayTitle, contract.Display.LocalizedTitle)) throw new InvalidOperationException("Prompt validation failed: title text missing.");
-        if (!ContainsAny(finalPrompt, "LOCALIZED SUBTITLE TO RENDER", "SUBTITLE:")) throw new InvalidOperationException("Prompt validation failed: subtitle text missing.");
-        if (!ContainsAny(finalPrompt, $"{contract.Platform.Width}x{contract.Platform.Height}", $"OUTPUT SIZE: {contract.Platform.Width}x{contract.Platform.Height}")) throw new InvalidOperationException("Prompt validation failed: aspect output size missing.");
-        if (!ContainsAny(finalPrompt, "ASPECT-SPECIFIC COMPOSITION", contract.Platform.AspectRatio, contract.Platform.CompositionProfile)) throw new InvalidOperationException("Prompt validation failed: aspect-specific composition missing.");
-        if (!ContainsAny(finalPrompt, "OBJECT PROMINENCE RULE", "25-45%", "at least 25%", "at least 35%")) throw new InvalidOperationException("Prompt validation failed: object prominence rule missing.");
-        if (!ContainsAny(finalPrompt, "TEXT READABILITY RULE", "mobile-readable")) throw new InvalidOperationException("Prompt validation failed: text readability rule missing.");
-        if (!ContainsAny(finalPrompt, "TEXT STYLE RULE", "Natural title case", "typography")) throw new InvalidOperationException("Prompt validation failed: text style rule missing.");
-        if (!ContainsAny(finalPrompt, "FAMILY-SPECIFIC TEMPLATE")) throw new InvalidOperationException("Prompt validation failed: family-specific template missing.");
-        if (!ContainsAny(finalPrompt, "VISUAL SCENE")) throw new InvalidOperationException("Prompt validation failed: visual scene missing.");
-        if (!ContainsAny(finalPrompt, "UI ARCHITECTURE")) throw new InvalidOperationException("Prompt validation failed: UI architecture missing.");
-        if (!ContainsAny(finalPrompt, "LOCALIZED TEXT AND FACTS TO RENDER", "DATA TO RENDER")) throw new InvalidOperationException("Prompt validation failed: data to render missing.");
-        if (!ContainsAny(finalPrompt, "QUALITY RULES")) throw new InvalidOperationException("Prompt validation failed: quality rules missing.");
-        if (!ContainsAny(finalPrompt, "CTR INSTRUCTIONS")) throw new InvalidOperationException("Prompt validation failed: CTR instructions missing.");
-        if (!ContainsAny(finalPrompt, "NEGATIVE RULES")) throw new InvalidOperationException("Prompt validation failed: negative rules missing.");
-        if (!ContainsAny(finalPrompt, "LOCALIZED", "language", "Hindi", "English")) throw new InvalidOperationException("Prompt validation failed: localized language rules missing.");
+        if (!finalPrompt.Contains($"{contract.Platform.Width}x{contract.Platform.Height}", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Prompt validation failed: aspect output size missing.");
+        foreach (var heading in new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" })
+            if (!finalPrompt.Contains(heading, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Prompt validation failed: missing creative brief section '{heading}'.");
+        if (!ContainsAny(finalPrompt, "circular", "physically correct geometry")) throw new InvalidOperationException("Prompt validation failed: circular celestial body rule missing.");
+        if (aspect == "1:1" && !ContainsAny(finalPrompt, "Native square", "Do not reuse a wide landscape layout")) throw new InvalidOperationException("Prompt validation failed: native square composition missing.");
+        if (aspect == "9:16" && !ContainsAny(finalPrompt, "Native vertical", "mobile")) throw new InvalidOperationException("Prompt validation failed: native portrait composition missing.");
     }
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
+    private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
 
 
