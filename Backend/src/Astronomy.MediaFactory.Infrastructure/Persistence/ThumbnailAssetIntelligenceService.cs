@@ -52,6 +52,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string VisualPromptDiagnosticsFileName = "visual-prompt-diagnostics.json";
     private const string PromptAssemblyReportFileName = "PromptAssemblyReport.json";
     private const string VisualDirectingProfileFileName = "visual-directing-profile.json";
+    private const string ThumbnailFormattedGuideCardFileName = "thumbnail-formatted-guide-card.json";
     private static readonly string[] ThumbnailRc3RequiredArtifactFileNames =
     [
         ThumbnailPromptContractFileName,
@@ -290,6 +291,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var debugEnabled = IsThumbnailDebugEnabled();
         var diagnosticsRoot = ResolveThumbnailDiagnosticsRoot(thumbnailRoot);
         var contracts = ThumbnailV8AiNativePromptBuilder.BuildContracts(request);
+        if (debugEnabled)
+            await WriteFormattedGuideCardDiagnosticsAsync(diagnosticsRoot, contracts, cancellationToken);
         var promptBuilder = new ThumbnailPromptBuilder();
         var prompts = contracts.Select(contract => ToPrompt(contract, promptBuilder)).ToArray();
         var promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
@@ -3266,6 +3269,25 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string NegativePrompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary, PromptAssemblyReport? AssemblyReport);
 
+    private static async Task WriteFormattedGuideCardDiagnosticsAsync(string diagnosticsRoot, IReadOnlyList<ThumbnailPromptContract> contracts, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(diagnosticsRoot);
+        var formatted = contracts.Select(contract => new
+        {
+            aspect = contract.Platform.CompositionProfile,
+            contract.Platform.AspectRatio,
+            sourceGuideCard = contract.Observation.GuideCard,
+            formattedGuideCard = ThumbnailFieldFormatter.Format(contract.Observation, contract.Brand.LocalizationRules.FirstOrDefault() ?? "en")
+        }).ToArray();
+
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsRoot, ThumbnailFormattedGuideCardFileName), JsonSerializer.Serialize(new
+        {
+            generatedUtc = DateTimeOffset.UtcNow,
+            promptWriterVersion = "V9.5",
+            fieldsUsedByPromptWriter = formatted
+        }, JsonOptions), cancellationToken);
+    }
+
     private static class ThumbnailV8AiNativePromptBuilder
     {
         private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
@@ -3282,16 +3304,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var family = ThumbnailFamilyResolver.Resolve(current);
             var builder = SelectBuilder(family);
             var objects = ResolveV8Objects(current, intelligence);
+            var guideCard = family == ThumbnailV8Family.Planetary ? BuildPlanetaryGuideCard(current) : null;
             var context = new ThumbnailV8PromptContext(
                 Current: current,
                 Intelligence: intelligence,
                 Title: ResolveV8Title(current, intelligence, objects, request.EventId, family),
                 EventType: ResolveV8Subtitle(current, intelligence),
-                DateText: current.EventDate?.ToString("MMM d", CultureInfo.InvariantCulture) ?? "Event date",
-                BestTime: ResolveShortBestTime(current, intelligence),
-                Separation: ResolveShortSeparation(current),
-                Direction: ResolveShortDirection(current, intelligence),
-                Equipment: ResolveV8Equipment(current, intelligence),
+                DateText: FirstNonEmpty(guideCard?.Date, current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), "Event date"),
+                BestTime: FirstNonEmpty(guideCard?.BestTime, ResolveShortBestTime(current, intelligence)),
+                Separation: FirstNonEmpty(guideCard?.Separation, ResolveShortSeparation(current)),
+                Direction: FirstNonEmpty(guideCard?.Direction, ResolveShortDirection(current, intelligence)),
+                Equipment: FirstNonEmpty(guideCard?.Equipment, ResolveV8Equipment(current, intelligence)),
+                GuideCard: guideCard,
                 Tips: [],
                 Objects: objects);
 
@@ -3480,7 +3504,7 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
     }
 
     private sealed record ThumbnailV8AspectSpec(string Name, int Width, int Height, string AspectRatio, string LayoutInstruction);
-    private sealed record ThumbnailV8PromptContext(CurrentEventLock Current, ProductionEventIntelligence? Intelligence, string Title, string EventType, string DateText, string BestTime, string Separation, string Direction, string Equipment, IReadOnlyList<string> Tips, IReadOnlyList<string> Objects);
+    private sealed record ThumbnailV8PromptContext(CurrentEventLock Current, ProductionEventIntelligence? Intelligence, string Title, string EventType, string DateText, string BestTime, string Separation, string Direction, string Equipment, PlanetaryThumbnailGuideCardDto? GuideCard, IReadOnlyList<string> Tips, IReadOnlyList<string> Objects);
 
     private static string ResolveEclipseEventName(CurrentEventLock current, ProductionEventIntelligence? intelligence)
     {
@@ -3563,7 +3587,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new ThumbnailEventIdentity(FirstNonEmpty(eventId, c.Current.SourceExternalEventId, c.Current.PlanId), c.Title, FirstNonEmpty(c.Current.ContentStrategy, "Observation guide"), template, c.Current.EventType),
             new ThumbnailDisplay(c.Title, c.Title, FirstNonEmpty(c.Current.ShortTitle, c.Title), [c.Title]),
             new ThumbnailObjects(primaryObjects, c.Current.SecondaryObjects ?? [], primaryObjects.ToDictionary(value => value, value => value, StringComparer.OrdinalIgnoreCase)),
-            new ThumbnailObservation(observationInfo, FirstNonEmpty(c.Current.BestViewingWindowLocal, observationInfo?.DisplayWindowLocal, c.BestTime), c.BestTime, c.Direction, FirstNonEmpty(observationInfo?.VisibilityStatus, "Visibility derived from current event intelligence")),
+            new ThumbnailObservation(observationInfo, FirstNonEmpty(c.Current.BestViewingWindowLocal, observationInfo?.DisplayWindowLocal, c.BestTime), c.BestTime, c.Direction, FirstNonEmpty(observationInfo?.VisibilityStatus, "Visibility derived from current event intelligence"), c.GuideCard),
             new ThumbnailVisual(FirstNonEmpty(c.Intelligence?.VisualTheme, summary), "premium high-salience astronomy discovery", "communicate the event and observation essentials as a finished image", "maximize click-through recognition while preserving scientific trust"),
             new ThumbnailPlatform("Thumbnail", aspect.AspectRatio, aspect.Name, aspect.Width, aspect.Height),
             new ThumbnailPromptInstructions(sanitizedPrompt, negativePrompt, primaryObjects, c.Current.ForbiddenObjectNames ?? []),
