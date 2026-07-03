@@ -30,6 +30,7 @@ public sealed class ThumbnailOptions
     public bool UseThumbnailV8 { get; init; }
     public bool UseV8AiNative { get; init; }
     public string ThumbnailVersion { get; init; } = string.Empty;
+    public string DebugLevel { get; init; } = "Off";
 
     public bool EnableHookText { get; init; } = true;
     public int MaxHookWords { get; init; } = 4;
