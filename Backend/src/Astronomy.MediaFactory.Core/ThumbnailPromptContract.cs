@@ -257,6 +257,9 @@ public sealed class ThumbnailPromptWriterV9
         ArgumentNullException.ThrowIfNull(contract);
         ThumbnailPromptContractValidator.Validate(contract);
 
+        if (!IsPortrait(contract))
+            return new PromptAssembler().Assemble(contract);
+
         var strategy = PlatformStorytellingStrategies.Resolve(contract);
         var profile = ThumbnailCompositionProfiles.Resolve(contract);
         var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
@@ -283,6 +286,10 @@ public sealed class ThumbnailPromptWriterV9
 
         return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
+
+    private static bool IsPortrait(ThumbnailPromptContract contract) =>
+        contract.Platform.CompositionProfile.Contains("portrait", StringComparison.OrdinalIgnoreCase) ||
+        contract.Platform.AspectRatio is "9:16" or "9x16";
 
     private static string BuildObservationPrompt(ThumbnailPromptContract contract, LocalizedPromptTerms terms, bool isPortrait, bool isSquare)
     {
@@ -429,8 +436,7 @@ public static class ThumbnailFieldFormatter
 
 public sealed class ThumbnailPromptComposerV1
 {
-    private readonly ThumbnailPromptWriterV9 _writer = new();
-    public ThumbnailPromptBuildResult Compose(ThumbnailPromptContract contract) => _writer.Write(contract);
+    public ThumbnailPromptBuildResult Compose(ThumbnailPromptContract contract) => new PromptAssembler().Assemble(contract);
 }
 
 public sealed record CompositionProfile(
@@ -567,11 +573,14 @@ public static class PromptValidatorV9
         if (!ContainsAny(finalPrompt, "No post-processing overlay will be added", "No post-processing")) throw new InvalidOperationException("Prompt validation failed: no-post-processing instruction missing.");
         if (!ContainsAny(finalPrompt, contract.Display.DisplayTitle, contract.Display.LocalizedTitle)) throw new InvalidOperationException("Prompt validation failed: title text missing.");
         if (!finalPrompt.Contains($"{contract.Platform.Width}x{contract.Platform.Height}", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Prompt validation failed: aspect output size missing.");
-        foreach (var heading in new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" })
-            if (!finalPrompt.Contains(heading, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Prompt validation failed: missing creative brief section '{heading}'.");
+        if (aspect == "9:16")
+        {
+            foreach (var heading in new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" })
+                if (!finalPrompt.Contains(heading, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Prompt validation failed: missing creative brief section '{heading}'.");
+        }
         if (!ContainsAny(finalPrompt, "circular", "physically correct geometry")) throw new InvalidOperationException("Prompt validation failed: circular celestial body rule missing.");
         if (aspect == "1:1" && !ContainsAny(finalPrompt, "Native square", "Do not reuse a wide landscape layout")) throw new InvalidOperationException("Prompt validation failed: native square composition missing.");
-        if (aspect == "9:16" && !ContainsAny(finalPrompt, "Native vertical", "mobile")) throw new InvalidOperationException("Prompt validation failed: native portrait composition missing.");
+        if (aspect == "9:16" && !ContainsAllPortraitTemplateConcepts(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: portrait template concepts missing.");
         if (ContainsAny(finalPrompt, "Today", "Tonight", "Tomorrow", "This evening", "This week", "Look tonight", "Watch tonight", "Don’t miss", "Don't miss", "Coming soon", "Right now")) throw new InvalidOperationException("Prompt validation failed: relative time words are forbidden in evergreen thumbnail prompts.");
         var dateMatch = System.Text.RegularExpressions.Regex.Match(finalPrompt, @"(?:\bDate|तारीख):\s*([^;.]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         if (!dateMatch.Success) throw new InvalidOperationException("Prompt validation failed: Date field is missing.");
@@ -579,6 +588,14 @@ public static class PromptValidatorV9
         if (System.Text.RegularExpressions.Regex.IsMatch(dateValue, @"^\d{1,2}:\d{2}\s*(?:AM|PM)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Prompt validation failed: Date resembles a time-only value.");
         if (System.Text.RegularExpressions.Regex.IsMatch(dateValue, @"\b(?:AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Prompt validation failed: Date contains AM/PM.");
     }
+    private static bool ContainsAllPortraitTemplateConcepts(string value) =>
+        ContainsAny(value, "final finished thumbnail", "complete finished thumbnail") &&
+        ContainsAny(value, "complete final thumbnail", "complete final astronomy thumbnail") &&
+        ContainsAny(value, "integrated text/UI", "integrated typography", "integrated UI") &&
+        ContainsAny(value, "No post-processing overlay will be added", "No post-processing") &&
+        ContainsAny(value, "native portrait", "Native vertical", "native 9:16") &&
+        ContainsAny(value, "no relative time wording", "no relative words");
+
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
