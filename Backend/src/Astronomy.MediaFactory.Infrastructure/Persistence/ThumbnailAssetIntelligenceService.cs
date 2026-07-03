@@ -338,7 +338,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             validator = "PromptValidatorV9",
-            prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, prompt.Prompt }).ToArray()
+            promptWriterVersion = "V9.1",
+            promptStyle = "CreativeBrief",
+            prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, promptWordCount = CountPromptWords(prompt.Prompt), promptCompressionRatio = CalculatePromptCompressionRatio(prompt), duplicateSectionsRemoved = CountDuplicateSectionsRemoved(prompt), prompt.Prompt }).ToArray()
         }, JsonOptions), cancellationToken);
         var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
         var visualPromptDiagnosticsPath = Path.Combine(thumbnailRoot, VisualPromptDiagnosticsFileName);
@@ -378,6 +380,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedSquarePrompt = true,
             validationPassed = true,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
+            promptWriterVersion = "V9.1",
+            promptStyle = "CreativeBrief",
+            promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase),
+            promptCompressionRatio = prompts.ToDictionary(p => p.Name, p => CalculatePromptCompressionRatio(p), StringComparer.OrdinalIgnoreCase),
+            duplicateSectionsRemoved = prompts.ToDictionary(p => p.Name, p => CountDuplicateSectionsRemoved(p), StringComparer.OrdinalIgnoreCase),
             promptValidationReasons = promptValidation.FailureReasons,
             promptValidationRequiredChecks = promptValidation.RequiredChecks,
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
@@ -448,6 +455,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedSquarePrompt = true,
             validationPassed = true,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
+            promptWriterVersion = "V9.1",
+            promptStyle = "CreativeBrief",
+            promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase),
+            promptCompressionRatio = prompts.ToDictionary(p => p.Name, p => CalculatePromptCompressionRatio(p), StringComparer.OrdinalIgnoreCase),
+            duplicateSectionsRemoved = prompts.ToDictionary(p => p.Name, p => CountDuplicateSectionsRemoved(p), StringComparer.OrdinalIgnoreCase),
             promptValidationReasons = promptValidation.FailureReasons,
             promptValidationRequiredChecks = promptValidation.RequiredChecks,
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
@@ -521,6 +533,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             thumbnailLayoutValidationPath: NormalizePath(diagnosticsPath));
     }
 
+
+    private static int CountPromptWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private static double CalculatePromptCompressionRatio(ThumbnailV8Prompt prompt)
+    {
+        var sourceWords = Math.Max(prompt.AssemblyReport?.FinalPromptWordCount ?? CountPromptWords(prompt.Prompt), CountPromptWords(prompt.Prompt));
+        return Math.Round((double)CountPromptWords(prompt.Prompt) / Math.Max(sourceWords, 1), 3);
+    }
+
+    private static int CountDuplicateSectionsRemoved(ThumbnailV8Prompt prompt)
+        => prompt.AssemblyReport?.ExcludedSections.Count(section => section.Contains("duplicate", StringComparison.OrdinalIgnoreCase)) ?? 0;
+
     private static async Task WriteThumbnailV8VisualPromptDiagnosticsAsync(
         string visualPromptDiagnosticsPath,
         ThumbnailAssetGenerationRequest request,
@@ -549,6 +573,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             language = request.Language,
             validationPassed = promptValidation.FinalPromptPassedValidation,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
+            promptWriterVersion = "V9.1",
+            promptStyle = "CreativeBrief",
+            promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase),
+            promptCompressionRatio = prompts.ToDictionary(p => p.Name, p => CalculatePromptCompressionRatio(p), StringComparer.OrdinalIgnoreCase),
+            duplicateSectionsRemoved = prompts.ToDictionary(p => p.Name, p => CountDuplicateSectionsRemoved(p), StringComparer.OrdinalIgnoreCase),
             promptValidationReasons = promptValidation.FailureReasons,
             promptValidationRequiredChecks = promptValidation.RequiredChecks,
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
@@ -580,6 +609,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 prompt.PromptSummary,
                 prompt.AssemblyReport,
                 promptFileName = $"thumbnail-{prompt.Name}-prompt.txt",
+                promptWriterVersion = "V9.1",
+                promptStyle = "CreativeBrief",
+                promptWordCount = CountPromptWords(prompt.Prompt),
+                promptCompressionRatio = CalculatePromptCompressionRatio(prompt),
+                duplicateSectionsRemoved = CountDuplicateSectionsRemoved(prompt),
                 promptUniqueHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt)))
             }).ToArray()
         }, JsonOptions), cancellationToken);
@@ -851,23 +885,20 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .ToArray();
         var checks = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {
-            ["final finished thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("Generate final finished thumbnail image", StringComparison.OrdinalIgnoreCase)),
-            ["complete AI thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("The AI image must be the complete final thumbnail", StringComparison.OrdinalIgnoreCase)),
-            ["title text"] = prompts.All(p => p.Prompt.Contains("LOCALIZED TITLE TO RENDER", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("TITLE:", StringComparison.OrdinalIgnoreCase)),
-            ["subtitle text"] = prompts.All(p => p.Prompt.Contains("LOCALIZED SUBTITLE TO RENDER", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("SUBTITLE:", StringComparison.OrdinalIgnoreCase)),
+            ["prompt writer version V9.1"] = true,
+            ["prompt style creative brief"] = prompts.All(p => p.Prompt.Contains("Creative intent:", StringComparison.OrdinalIgnoreCase)),
+            ["complete final thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("complete final astronomy thumbnail", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("complete final thumbnail", StringComparison.OrdinalIgnoreCase)),
+            ["no post-processing overlay instruction"] = prompts.All(p => p.Prompt.Contains("No post-processing overlay will be added", StringComparison.OrdinalIgnoreCase)),
+            ["title text"] = prompts.All(p => p.Prompt.Contains("Title:", StringComparison.OrdinalIgnoreCase)),
             ["aspect output size"] = prompts.All(p => p.Prompt.Contains($"{p.Width}x{p.Height}", StringComparison.OrdinalIgnoreCase)),
-            ["aspect-specific composition"] = prompts.All(p => p.Prompt.Contains("ASPECT-SPECIFIC COMPOSITION", StringComparison.OrdinalIgnoreCase)),
-            ["object prominence rule"] = prompts.All(p => p.Prompt.Contains("OBJECT PROMINENCE RULE", StringComparison.OrdinalIgnoreCase)),
-            ["mobile readability rule"] = prompts.All(p => p.Prompt.Contains("TEXT READABILITY RULE", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("mobile-readable", StringComparison.OrdinalIgnoreCase)),
-            ["text style rule"] = prompts.All(p => p.Prompt.Contains("TEXT STYLE RULE", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("typography", StringComparison.OrdinalIgnoreCase)),
-            ["family-specific template"] = prompts.All(p => p.Prompt.Contains("FAMILY-SPECIFIC TEMPLATE", StringComparison.OrdinalIgnoreCase)),
-            ["visual scene"] = prompts.All(p => p.Prompt.Contains("VISUAL SCENE", StringComparison.OrdinalIgnoreCase)),
-            ["UI architecture"] = prompts.All(p => p.Prompt.Contains("UI ARCHITECTURE", StringComparison.OrdinalIgnoreCase)),
-            ["data to render"] = prompts.All(p => p.Prompt.Contains("LOCALIZED TEXT AND FACTS TO RENDER", StringComparison.OrdinalIgnoreCase)),
-            ["quality rules"] = prompts.All(p => p.Prompt.Contains("QUALITY RULES", StringComparison.OrdinalIgnoreCase)),
-            ["CTR instructions"] = prompts.All(p => p.Prompt.Contains("CTR INSTRUCTIONS", StringComparison.OrdinalIgnoreCase)),
-            ["negative rules"] = prompts.All(p => p.Prompt.Contains("NEGATIVE RULES", StringComparison.OrdinalIgnoreCase)),
-            ["localized language rules"] = prompts.All(p => p.Prompt.Contains("LOCALIZED", StringComparison.OrdinalIgnoreCase)),
+            ["creative brief sections"] = prompts.All(p => new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" }.All(h => p.Prompt.Contains(h, StringComparison.OrdinalIgnoreCase))),
+            ["landscape prompt <= 450 words"] = prompts.Where(p => p.AspectRatio == "16:9").All(p => CountPromptWords(p.Prompt) <= 450),
+            ["square prompt <= 300 words"] = prompts.Where(p => p.AspectRatio == "1:1").All(p => CountPromptWords(p.Prompt) <= 300),
+            ["portrait prompt <= 250 words"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => CountPromptWords(p.Prompt) <= 250),
+            ["portrait no card footer table language"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => !new[] { "observation card", "footer", "equipment table", "dense infographic" }.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase))),
+            ["square native composition"] = prompts.Where(p => p.AspectRatio == "1:1").All(p => p.Prompt.Contains("Native square", StringComparison.OrdinalIgnoreCase)),
+            ["portrait native composition"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => p.Prompt.Contains("Native vertical", StringComparison.OrdinalIgnoreCase)),
+            ["circular celestial bodies"] = prompts.All(p => p.Prompt.Contains("circular", StringComparison.OrdinalIgnoreCase)),
             ["legacy presentation phrases absent"] = prompts.All(p => !ThumbnailV8ForbiddenPromptTokens.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
         };
         var failures = checks.Where(kv => !kv.Value).Select(kv => kv.Key).Concat(detected.Select(token => $"forbidden token: {token}")).ToArray();
