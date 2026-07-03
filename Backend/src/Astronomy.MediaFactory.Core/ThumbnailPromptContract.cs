@@ -132,6 +132,61 @@ public sealed record PromptAssemblyReport(
 
 public sealed record ThumbnailPromptBuildResult(string Prompt, string NegativePrompt, PlatformStorytellingStrategy StorytellingStrategy, PromptAssemblyReport? AssemblyReport = null);
 
+public sealed record ThumbnailCreativeDirection(
+    string Hook,
+    string EmotionalAngle,
+    string CtrIntent,
+    string ObjectProminence,
+    string FamilyVisualStyle,
+    string PlatformAspectCreativeStrategy);
+
+public sealed class ThumbnailCreativeDirector
+{
+    public ThumbnailCreativeDirection Direct(ThumbnailPromptContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        var strategy = PlatformStorytellingStrategies.Resolve(contract);
+        var profile = ThumbnailCompositionProfiles.Resolve(contract);
+        var family = FamilyDirectors.Resolve(contract);
+        var objectProminence = contract.Platform.AspectRatio switch
+        {
+            "9:16" => "Portrait object prominence: native Shorts/Reels hero object at least 35% of the visual focus.",
+            "1:1" => "Square object prominence: native feed hero object at least 25% of the visual focus.",
+            _ => "Landscape object prominence: rich YouTube/social cover hero object at 25-45% visual focus."
+        };
+
+        return new ThumbnailCreativeDirection(
+            contract.Display.DisplayTitle,
+            contract.Visual.EmotionalTone,
+            contract.Visual.CtrGoal,
+            objectProminence,
+            $"{family.Name}: {family.PromptGuidance}",
+            $"{profile.Name} + {strategy.Name}: {profile.PromptGuidance} {strategy.PromptGuidance}");
+    }
+}
+
+public sealed class ThumbnailPromptComposerV1
+{
+    private readonly ThumbnailCreativeDirector _creativeDirector = new();
+
+    public ThumbnailPromptBuildResult Compose(ThumbnailPromptContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        var direction = _creativeDirector.Direct(contract);
+        var result = new PromptAssembler().Assemble(contract);
+        var prompt = string.Join(Environment.NewLine,
+            "THUMBNAIL CREATIVE DIRECTOR:",
+            $"- Hook: {direction.Hook}",
+            $"- Emotional angle: {direction.EmotionalAngle}",
+            $"- CTR intent: {direction.CtrIntent}",
+            $"- Object prominence: {direction.ObjectProminence}",
+            $"- Family visual style: {direction.FamilyVisualStyle}",
+            $"- Platform/aspect creative strategy: {direction.PlatformAspectCreativeStrategy}",
+            result.Prompt);
+        return result with { Prompt = prompt };
+    }
+}
+
 public sealed record CompositionProfile(
     string Name,
     string AspectRatio,
@@ -244,7 +299,7 @@ public sealed class PromptAssembler
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
 
-public sealed class ThumbnailPromptBuilder { public ThumbnailPromptBuildResult Build(ThumbnailPromptContract contract) => new PromptAssembler().Assemble(contract); }
+public sealed class ThumbnailPromptBuilder { public ThumbnailPromptBuildResult Build(ThumbnailPromptContract contract) => new ThumbnailPromptComposerV1().Compose(contract); }
 
 public static class PromptValidator
 {
@@ -260,8 +315,21 @@ public static class PromptValidator
         if (ContainsAny(finalPrompt, "crop landscape")) throw new InvalidOperationException("Prompt validation failed: contradictory prompt instructions remain.");
         if (ContainsAny(finalPrompt, "AI image is NOT the final thumbnail", "will be added later", "background-only image", "background artwork only", "do not render text")) throw new InvalidOperationException("Prompt validation failed: prompt is not complete-thumbnail mode.");
         if (!ContainsAny(finalPrompt, "Generate final finished thumbnail image") || !ContainsAny(finalPrompt, "The AI image must be the complete final thumbnail") || !ContainsAny(finalPrompt, "No post-processing overlay will be added")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
+        if (!ContainsAny(finalPrompt, contract.Display.DisplayTitle, contract.Display.LocalizedTitle)) throw new InvalidOperationException("Prompt validation failed: title text missing.");
+        if (!ContainsAny(finalPrompt, "LOCALIZED SUBTITLE TO RENDER", "SUBTITLE:")) throw new InvalidOperationException("Prompt validation failed: subtitle text missing.");
+        if (!ContainsAny(finalPrompt, $"{contract.Platform.Width}x{contract.Platform.Height}", $"OUTPUT SIZE: {contract.Platform.Width}x{contract.Platform.Height}")) throw new InvalidOperationException("Prompt validation failed: aspect output size missing.");
+        if (!ContainsAny(finalPrompt, "ASPECT-SPECIFIC COMPOSITION", contract.Platform.AspectRatio, contract.Platform.CompositionProfile)) throw new InvalidOperationException("Prompt validation failed: aspect-specific composition missing.");
         if (!ContainsAny(finalPrompt, "OBJECT PROMINENCE RULE", "25-45%", "at least 25%", "at least 35%")) throw new InvalidOperationException("Prompt validation failed: object prominence rule missing.");
         if (!ContainsAny(finalPrompt, "TEXT READABILITY RULE", "mobile-readable")) throw new InvalidOperationException("Prompt validation failed: text readability rule missing.");
+        if (!ContainsAny(finalPrompt, "TEXT STYLE RULE", "Natural title case", "typography")) throw new InvalidOperationException("Prompt validation failed: text style rule missing.");
+        if (!ContainsAny(finalPrompt, "FAMILY-SPECIFIC TEMPLATE")) throw new InvalidOperationException("Prompt validation failed: family-specific template missing.");
+        if (!ContainsAny(finalPrompt, "VISUAL SCENE")) throw new InvalidOperationException("Prompt validation failed: visual scene missing.");
+        if (!ContainsAny(finalPrompt, "UI ARCHITECTURE")) throw new InvalidOperationException("Prompt validation failed: UI architecture missing.");
+        if (!ContainsAny(finalPrompt, "LOCALIZED TEXT AND FACTS TO RENDER", "DATA TO RENDER")) throw new InvalidOperationException("Prompt validation failed: data to render missing.");
+        if (!ContainsAny(finalPrompt, "QUALITY RULES")) throw new InvalidOperationException("Prompt validation failed: quality rules missing.");
+        if (!ContainsAny(finalPrompt, "CTR INSTRUCTIONS")) throw new InvalidOperationException("Prompt validation failed: CTR instructions missing.");
+        if (!ContainsAny(finalPrompt, "NEGATIVE RULES")) throw new InvalidOperationException("Prompt validation failed: negative rules missing.");
+        if (!ContainsAny(finalPrompt, "LOCALIZED", "language", "Hindi", "English")) throw new InvalidOperationException("Prompt validation failed: localized language rules missing.");
     }
     private static void FailIfPresent(IReadOnlyList<PromptSection> sections, string category, string reason) { if (sections.Any(s => s.Category.Equals(category, StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Prompt validation failed: " + reason); }
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
