@@ -346,7 +346,19 @@ public sealed class ThumbnailPromptWriterV9
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
 
-public sealed record ThumbnailFormattedGuideFields(string Date, string BestTime, string Direction, string Equipment, string? Separation);
+public sealed record ThumbnailFormattedGuideFields(string DateDisplay, string BestTimeDisplay, string DirectionDisplay, string EquipmentDisplay, string? SeparationDisplay)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Date => DateDisplay;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string BestTime => BestTimeDisplay;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Direction => DirectionDisplay;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Equipment => EquipmentDisplay;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? Separation => SeparationDisplay;
+}
 
 public static class ThumbnailFieldFormatter
 {
@@ -389,9 +401,14 @@ public static class ThumbnailFieldFormatter
         return match.Success ? System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Value.ToLowerInvariant()) : value.Trim();
     }
 
-    private static string CleanEquipment(string value) =>
-        string.Join("; ", value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    private static string CleanEquipment(string value)
+    {
+        var text = value.Trim();
+        if (text.Contains("naked eye", StringComparison.OrdinalIgnoreCase))
+            return "Naked Eye";
+        return string.Join("; ", text.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(part => System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(part.ToLowerInvariant())));
+    }
 
     private static string? CleanSeparation(string value)
     {
@@ -403,8 +420,10 @@ public static class ThumbnailFieldFormatter
     private static void Validate(string date, string bestTime, string direction, string equipment, string? separation)
     {
         if (string.IsNullOrWhiteSpace(date)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Date is missing.");
-        if (System.Text.RegularExpressions.Regex.IsMatch(date, @"^\s*\d{1,2}:\d{2}\s*(?:AM|PM)?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Date resembles a time-only value.");
-        if (System.Text.RegularExpressions.Regex.IsMatch(date, @"\b(?:AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Date contains AM/PM.");
+        if (System.Text.RegularExpressions.Regex.IsMatch(date, @"^\s*\d{1,2}:\d{2}\s*(?:AM|PM)?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Thumbnail guide-card validation failed: DateDisplay resembles a time-only value.");
+        if (System.Text.RegularExpressions.Regex.IsMatch(date, @"\b(?:AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Thumbnail guide-card validation failed: DateDisplay contains AM/PM.");
+        if (string.IsNullOrWhiteSpace(bestTime)) throw new InvalidOperationException("Thumbnail guide-card validation failed: BestTime is missing.");
+        if (string.IsNullOrWhiteSpace(direction)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Direction is missing.");
         var text = string.Join(" ", date, bestTime, direction, equipment, separation);
         foreach (var phrase in RelativeTimePhrases)
             if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Thumbnail guide-card validation failed: relative time phrase '{phrase}' is forbidden.");
@@ -581,12 +600,10 @@ public static class PromptValidatorV9
         if (!ContainsAny(finalPrompt, "circular", "physically correct geometry")) throw new InvalidOperationException("Prompt validation failed: circular celestial body rule missing.");
         if (aspect == "1:1" && !ContainsAny(finalPrompt, "Native square", "Do not reuse a wide landscape layout")) throw new InvalidOperationException("Prompt validation failed: native square composition missing.");
         if (aspect == "9:16" && !ContainsAllPortraitTemplateConcepts(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: portrait template concepts missing.");
+        // Validate normalized guide-card values before/independent of prompt rendering.
+        // Do not parse rendered prose as structured date data; Best Time legitimately contains AM/PM in English.
+        _ = ThumbnailFieldFormatter.Format(contract.Observation, contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
         if (ContainsAny(finalPrompt, "Today", "Tonight", "Tomorrow", "This evening", "This week", "Look tonight", "Watch tonight", "Don’t miss", "Don't miss", "Coming soon", "Right now")) throw new InvalidOperationException("Prompt validation failed: relative time words are forbidden in evergreen thumbnail prompts.");
-        var dateMatch = System.Text.RegularExpressions.Regex.Match(finalPrompt, @"(?:\bDate|तारीख):\s*([^;.]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        if (!dateMatch.Success) throw new InvalidOperationException("Prompt validation failed: Date field is missing.");
-        var dateValue = dateMatch.Groups[1].Value.Trim();
-        if (System.Text.RegularExpressions.Regex.IsMatch(dateValue, @"^\d{1,2}:\d{2}\s*(?:AM|PM)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Prompt validation failed: Date resembles a time-only value.");
-        if (System.Text.RegularExpressions.Regex.IsMatch(dateValue, @"\b(?:AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Prompt validation failed: Date contains AM/PM.");
     }
     private static bool ContainsAllPortraitTemplateConcepts(string value) =>
         ContainsAny(value, "final finished thumbnail", "complete finished thumbnail") &&

@@ -3277,7 +3277,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             aspect = contract.Platform.CompositionProfile,
             contract.Platform.AspectRatio,
             sourceGuideCard = contract.Observation.GuideCard,
-            formattedGuideCard = ThumbnailFieldFormatter.Format(contract.Observation, contract.Brand.LocalizationRules.FirstOrDefault() ?? "en")
+            formattedGuideCard = ToFormattedGuideCardDiagnostics(ThumbnailFieldFormatter.Format(contract.Observation, contract.Brand.LocalizationRules.FirstOrDefault() ?? "en"))
         }).ToArray();
 
         await File.WriteAllTextAsync(Path.Combine(diagnosticsRoot, ThumbnailFormattedGuideCardFileName), JsonSerializer.Serialize(new
@@ -3287,6 +3287,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             fieldsUsedByPromptWriter = formatted
         }, JsonOptions), cancellationToken);
     }
+
+    private static object ToFormattedGuideCardDiagnostics(ThumbnailFormattedGuideFields fields) => new
+    {
+        fields.DateDisplay,
+        fields.BestTimeDisplay,
+        fields.DirectionDisplay,
+        fields.EquipmentDisplay,
+        fields.SeparationDisplay
+    };
 
     private static class ThumbnailV8AiNativePromptBuilder
     {
