@@ -209,27 +209,31 @@ public sealed class ThumbnailPromptWriterV9
         var aspect = contract.Platform.AspectRatio;
         var isPortrait = aspect == "9:16";
         var isSquare = aspect == "1:1";
-        var lang = contract.Brand.LocalizationRules.FirstOrDefault() ?? "en";
+        var lang = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
+        var localized = LocalizedPromptTerms.For(lang);
         var title = contract.Display.LocalizedTitle;
-        var subtitle = contract.Display.DisplayShortTitle;
+        var subtitle = lang == "hi" ? LocalizeKnownEnglishPhrase(contract.Display.DisplayShortTitle, lang) : contract.Display.DisplayShortTitle;
         var objects = string.Join(", ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
-        var observation = isPortrait
-            ? $"one tiny hint only: {contract.Observation.Direction}, {contract.Observation.BestViewingWindow}"
-            : isSquare
-                ? $"two compact facts: {contract.Observation.Direction}; {contract.Observation.BestViewingWindow}"
-                : $"date/time, best viewing time, direction, separation/equipment when relevant: {contract.Observation.BestViewingWindow}; {contract.Observation.Direction}; {contract.Observation.Visibility}";
+        var observation = BuildObservationPrompt(contract, localized, isPortrait, isSquare);
         var layout = isPortrait
             ? "Native vertical mobile poster: a tall sky column, large circular event subject in the upper half, short title stacked in the safe middle, one small action cue near the lower third, with no extra panels or tabular data."
             : isSquare
                 ? "Native square feed composition: balanced center-weighted celestial geometry, compact title block, one small rounded fact badge, equal breathing room on every side. Do not reuse a wide landscape layout."
                 : "Native wide 16:9 cover: cinematic horizon and lateral sky scale, strong title zone, elegant small information strip, optional compact safety/footer cues if they stay readable.";
-        var textBudget = isPortrait ? "very few large words" : isSquare ? "short feed-readable copy" : "crisp YouTube-readable hierarchy";
+        var textBudget = isPortrait ? "large mobile-readable words with date, time, direction, and one CTA" : isSquare ? "medium-density feed-readable copy" : "crisp YouTube-readable hierarchy with complete guide details";
         var aspectDetail = isPortrait
             ? "Let the vertical depth do the work: sky gradient, horizon glow, and one clean focal path from title to subject to action cue."
             : isSquare
                 ? "Use a compact radial read: the viewer should understand the title, the subject, and the one fact badge in a single glance. Keep the scene symmetrical enough for feed cropping safety while still feeling photographic, not like a resized poster. Let the sky texture frame the object instead of filling the square with text."
                 : "Use the width for story: a calm horizon, atmospheric gradient, and left-to-right eye path from headline to celestial subject to observation facts. The wide canvas may include small polished cues for time, direction, safe viewing, or equipment, but they must feel like a premium editorial thumbnail rather than a checklist. Preserve generous edge-safe space so the design remains readable on YouTube home, search, and embedded previews.";
         var familyStyle = string.Join(", ", family.ArtisticVocabulary);
+        var localizationInstruction = lang == "hi"
+            ? isPortrait
+                ? "all visible UI labels, CTA, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels."
+                : "all visible UI labels, CTA, footer tips, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels."
+            : isPortrait
+                ? "all visible UI labels, CTA, date/time/direction labels, and observation fields must be English."
+                : "all visible UI labels, CTA, footer tips, date/time/direction labels, and observation fields must be English.";
 
         return $"""
 Creative intent: Create a complete final astronomy thumbnail, not a background plate. The image itself must include the finished text and simple integrated UI. No post-processing overlay will be added. Aim for {direction.EmotionalAngle}: immediate recognition of {contract.EventIdentity.EventName} with scientific trust and high contrast.
@@ -240,12 +244,67 @@ Scene description: Show {objects} as the unmistakable subject in a premium dark-
 
 Layout guidance: {layout} {directing.ArtisticComposition}. {aspectDetail} Keep the object prominence natural for {contract.Platform.CompositionProfile}, with readable negative space and no crowded report-like layout.
 
-Data to render: Title: "{title}". Subtitle: "{subtitle}". Render {observation}. Language/localization: {lang}; keep Hindi UI text in Devanagari when the language is Hindi. Use only short human-facing labels, never database names.
+Data to render: {localized.Title}: "{title}". {localized.Subtitle}: "{subtitle}". Render {observation}. {localized.ObjectLabels}: {objects}. Language/localization: {lang}; {localizationInstruction} Use only short human-facing labels, never database names.
 
 Typography/readability: Use natural title case, bold mobile-readable typography, high contrast, clean spacing, and integrated panels/icons that feel designed into the image. Keep {textBudget}; make every word legible at thumbnail size.
 
 Negative instructions: no separate background plate, no later text pass, no watermark, no logo, no location names, no clutter, no tiny text, no distorted celestial disks, no squeezed or cropped landscape look, no duplicate CTA or repeated quality rules.
 """.Trim();
+    }
+
+    private static string BuildObservationPrompt(ThumbnailPromptContract contract, LocalizedPromptTerms terms, bool isPortrait, bool isSquare)
+    {
+        var info = contract.Observation.ObservationInfo;
+        var date = FirstNonEmpty(info?.DisplayDate, ExtractDate(contract.Observation.ObservationWindow), contract.Observation.ObservationWindow);
+        var bestTime = FirstNonEmpty(info?.BestViewingWindowLocal, info?.DisplayWindowLocal, info?.DisplayTime, contract.Observation.BestViewingWindow);
+        var direction = FirstNonEmpty(info?.Direction, contract.Observation.Direction);
+        var separation = ExtractSeparation(contract.Observation.Visibility);
+        var equipment = terms.Language == "hi" ? "नंगी आँख; दूरबीन वैकल्पिक" : "Naked eye; binoculars optional";
+        var cta = terms.Language == "hi" ? "आज रात आसमान देखें" : "Look tonight";
+        var footer = terms.Language == "hi" ? "क्षितिज साफ रखें • रोशनी से दूर जाएँ • समय बचा लें" : "Clear horizon • avoid bright lights • save the time";
+
+        if (isPortrait)
+            return $"mobile-clean vertical guide fields: {terms.Title}, {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}; {terms.Cta}: {cta}. No full large table; keep planets circular.";
+
+        if (isSquare)
+        {
+            var equipmentText = equipment.Length <= 32 ? $"; {terms.Equipment}: {equipment}" : string.Empty;
+            var separationText = string.IsNullOrWhiteSpace(separation) ? string.Empty : $"; {terms.Separation}: {separation}";
+            return $"medium-density square guide fields: {terms.Title}; {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}{separationText}{equipmentText}. No squeezed landscape composition.";
+        }
+
+        var landscapeSeparation = string.IsNullOrWhiteSpace(separation) ? string.Empty : $"; {terms.Separation}: {separation}";
+        return $"rich RC2-style observation guide card with complete final thumbnail instruction: {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}{landscapeSeparation}; {terms.Equipment}: {equipment}; {terms.FooterTips}: {footer}; {terms.Cta}: {cta}; {terms.ObjectLabels} for every primary object.";
+    }
+
+    private static string ExtractDate(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"\b\d{4}-\d{2}-\d{2}\b");
+        return match.Success ? match.Value : value;
+    }
+
+    private static string ExtractSeparation(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?i)(?:separation|apart|angular separation|minimum angular separation)?[^.;,]*(\d+(?:\.\d+)?\s*(?:°|deg|degree|degrees))");
+        return match.Success ? match.Groups[1].Value : string.Empty;
+    }
+
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
+    private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
+
+    private static string LocalizeKnownEnglishPhrase(string value, string language)
+    {
+        if (language != "hi") return value;
+        return value.Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase).Replace("Venus", "शुक्र", StringComparison.OrdinalIgnoreCase).Replace("Conjunction", "युति", StringComparison.OrdinalIgnoreCase).Replace("Pairing", "जोड़ी", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record LocalizedPromptTerms(string Language, string Title, string Subtitle, string Date, string BestTime, string Direction, string Separation, string Equipment, string FooterTips, string Cta, string ObjectLabels)
+    {
+        public static LocalizedPromptTerms For(string language) => language == "hi"
+            ? new LocalizedPromptTerms("hi", "शीर्षक", "उपशीर्षक", "तारीख", "सबसे अच्छा समय", "दिशा", "दूरी", "उपकरण", "नीचे के सुझाव", "कार्रवाई", "वस्तु लेबल")
+            : new LocalizedPromptTerms("en", "Title", "Subtitle", "Date", "Best Time", "Direction", "Separation", "Equipment", "Footer tips", "CTA", "Object labels");
     }
 
     private static List<PromptSection> FilterSections(ThumbnailPromptContract contract, PlatformStorytellingStrategy strategy, IReadOnlyList<PromptSection> sections, Dictionary<string, string> removed)
@@ -338,8 +397,8 @@ public static class PlatformStorytellingStrategies
         throw new InvalidOperationException($"Thumbnail storytelling strategy validation failed: unsupported profile '{profileName}' for aspect ratio '{aspectRatio}'.");
     }
     public static readonly PlatformStorytellingStrategy LandscapeStrategy = new("LandscapeStrategy", "Rich", ["YouTube", "Website"], ["Title", "Subtitle", "Observation Card", "Equipment", "Safety", "Footer", "CTA", "Dominant Object", "Visual Scene", "Quality Rules"], 42, 6, "Footer allowed", "Observation card allowed", "CTA allowed when secondary to educational content", ["STORYTELLING STRATEGY: LandscapeStrategy decides WHAT information exists for rich educational YouTube and website thumbnails.", "Allowed sections: Title, Subtitle, Observation Card, Equipment, Safety, Footer, CTA.", "Keep educational richness while maintaining mobile readability."], null);
-    public static readonly PlatformStorytellingStrategy PortraitStrategy = new("PortraitStrategy", "Minimal", ["YouTube Shorts", "Instagram Reels"], ["Title", "Subtitle", "Dominant Object", "One Observation Hint", "CTA", "Visual Scene", "Quality Rules"], 14, 2, "Footer disabled", "Observation table disabled; maximum one observation hint", "CTA allowed only as short phone-first action cue", ["STORYTELLING STRATEGY: PortraitStrategy decides WHAT information exists for phone-first Shorts and Reels thumbnails.", "Allowed sections: Title, Subtitle, Dominant Object, One Observation Hint, CTA.", "Forbidden: Observation Table, Equipment Table, Footer, Dense Infographic."], 1);
-    public static readonly PlatformStorytellingStrategy SquareStrategy = new("SquareStrategy", "Balanced", ["Facebook", "Mobile feed"], ["Title", "Subtitle", "Compact Observation", "CTA", "Dominant Object", "Visual Scene", "Quality Rules"], 24, 4, "Footer disabled", "Compact observation enabled with maximum two information items", "CTA allowed when compact and feed optimized", ["STORYTELLING STRATEGY: SquareStrategy decides WHAT information exists for balanced mobile-feed thumbnails.", "Allowed sections: Title, Subtitle, Compact Observation, CTA.", "Maximum two information items; do not reuse landscape density."], 2);
+    public static readonly PlatformStorytellingStrategy PortraitStrategy = new("PortraitStrategy", "Mobile-clean", ["YouTube Shorts", "Instagram Reels"], ["Title", "Subtitle", "Dominant Object", "One Observation Hint", "CTA", "Visual Scene", "Quality Rules"], 22, 2, "Footer disabled", "Observation table disabled; render date, best time, and direction as clean mobile fields", "CTA allowed only as short phone-first action cue", ["STORYTELLING STRATEGY: PortraitStrategy decides WHAT information exists for phone-first Shorts and Reels thumbnails.", "Allowed sections: Title, Subtitle, Dominant Object, clean Date/Best Time/Direction fields, CTA.", "Forbidden: Observation Table, Equipment Table, Footer, Dense Infographic."], null);
+    public static readonly PlatformStorytellingStrategy SquareStrategy = new("SquareStrategy", "Medium", ["Facebook", "Mobile feed"], ["Title", "Subtitle", "Compact Observation", "CTA", "Dominant Object", "Visual Scene", "Quality Rules"], 34, 4, "Footer disabled", "Compact observation enabled with title, date, best time, direction, separation when available, and short equipment when useful", "CTA allowed when compact and feed optimized", ["STORYTELLING STRATEGY: SquareStrategy decides WHAT information exists for balanced mobile-feed thumbnails.", "Allowed sections: Title, Subtitle, Compact Observation, CTA.", "Use medium-density details without reusing a squeezed landscape layout."], null);
     private static string Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().Replace('_', ':');
 }
 

@@ -44,10 +44,62 @@ public sealed class ThumbnailRendererTests
     {
         var contract = BuildContract("Moon", "landscape", "en");
         var prompt = new ThumbnailPromptBuilder().Build(contract);
-        Assert.Contains("clean cinematic background artwork only", prompt.Prompt);
+        Assert.Contains("complete final astronomy thumbnail", prompt.Prompt);
         Assert.Contains("observation cards", prompt.NegativePrompt);
         Assert.Contains("icons", prompt.NegativePrompt);
         Assert.Contains("buttons", prompt.NegativePrompt);
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("hi")]
+    public void ThumbnailPromptWriterV9_JupiterVenus_RestoresV92PromptDensity(string language)
+    {
+        var landscape = new ThumbnailPromptWriterV9().Write(BuildJupiterVenusContract("landscape", language)).Prompt;
+        var square = new ThumbnailPromptWriterV9().Write(BuildJupiterVenusContract("square", language)).Prompt;
+        var portrait = new ThumbnailPromptWriterV9().Write(BuildJupiterVenusContract("portrait", language)).Prompt;
+        var dateLabel = language == "hi" ? "तारीख" : "Date";
+        var timeLabel = language == "hi" ? "सबसे अच्छा समय" : "Best Time";
+        var directionLabel = language == "hi" ? "दिशा" : "Direction";
+        var separationLabel = language == "hi" ? "दूरी" : "Separation";
+        var equipmentLabel = language == "hi" ? "उपकरण" : "Equipment";
+        var footerLabel = language == "hi" ? "नीचे के सुझाव" : "Footer tips";
+        var objectLabel = language == "hi" ? "वस्तु लेबल" : "Object labels";
+
+        Assert.Contains("rich RC2-style observation guide card", landscape);
+        Assert.Contains(dateLabel, landscape);
+        Assert.Contains(timeLabel, landscape);
+        Assert.Contains(directionLabel, landscape);
+        Assert.Contains(separationLabel, landscape);
+        Assert.Contains(equipmentLabel, landscape);
+        Assert.Contains(footerLabel, landscape);
+        Assert.Contains(objectLabel, landscape);
+        Assert.Contains("complete final astronomy thumbnail", landscape);
+
+        Assert.Contains("medium-density square guide fields", square);
+        Assert.Contains(dateLabel, square);
+        Assert.Contains(timeLabel, square);
+        Assert.Contains(directionLabel, square);
+        Assert.Contains(separationLabel, square);
+        Assert.DoesNotContain("only one tiny hint", square);
+        Assert.DoesNotContain("two compact facts", square);
+
+        Assert.Contains("mobile-clean vertical guide fields", portrait);
+        Assert.Contains(dateLabel, portrait);
+        Assert.Contains(timeLabel, portrait);
+        Assert.Contains(directionLabel, portrait);
+        Assert.Contains("keep planets circular", portrait);
+        Assert.DoesNotContain("only one tiny hint", portrait);
+    }
+
+    private static ThumbnailPromptContract BuildJupiterVenusContract(string aspect, string language)
+    {
+        var (name, ratio, w, h) = aspect switch { "portrait" => ("portrait", "9:16", 1080, 1920), "square" => ("square", "1:1", 1200, 1200), _ => ("landscape", "16:9", 1280, 720) };
+        var hi = language == "hi";
+        var title = hi ? "बृहस्पति शुक्र युति" : "Jupiter Venus Conjunction";
+        var shortTitle = hi ? "बृहस्पति + शुक्र" : "Jupiter + Venus";
+        var observation = new ProductionObservationInfo("PlanetConjunction", "Planetary", "IN-RJ", "Udaipur", "IST", null, true, "Visible", "Show", "2026-06-07", "19:30 IST", "2026-06-07 19:00–20:30 IST", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "25° altitude", [], "Close conjunction", "test", "High", [], []);
+        return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity("JUPITER_VENUS_2026", "Jupiter Venus Conjunction", "Viewing guide", "Planetary", "Conjunction"), new ThumbnailDisplay(title, title, shortTitle, [title]), new ThumbnailObjects(["Jupiter", "Venus"], [], new Dictionary<string, string> { ["Jupiter"] = hi ? "बृहस्पति" : "Jupiter", ["Venus"] = hi ? "शुक्र" : "Venus" }), new ThumbnailObservation(observation, "2026-06-07", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "minimum angular separation 1.63 degrees; visible if skies are clear"), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", ratio, name, w, h), new ThumbnailPromptInstructions("clean astronomy final thumbnail", ThumbnailArtworkPromptRules.NegativePrompt, ["Jupiter", "Venus"], []), new ThumbnailBrand("AI integrated typography", "Discovery Dark Gold", [language]), new ThumbnailValidation(["layout"], ["scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", "Planetary", "summary", DateTimeOffset.UtcNow));
     }
 
     private static ThumbnailPromptContract BuildContract(string family, string aspect, string language)
