@@ -63,7 +63,6 @@ public sealed class ThumbnailRendererTests
         var directionLabel = language == "hi" ? "दिशा" : "Direction";
         var separationLabel = language == "hi" ? "दूरी" : "Separation";
         var equipmentLabel = language == "hi" ? "उपकरण" : "Equipment";
-        var ctaLabel = language == "hi" ? "कार्रवाई" : "CTA";
         var objectLabel = language == "hi" ? "वस्तु लेबल" : "Object labels";
 
         Assert.Contains("premium landscape glass observation card", landscape);
@@ -72,11 +71,22 @@ public sealed class ThumbnailRendererTests
         Assert.Contains(directionLabel, landscape);
         Assert.Contains(separationLabel, landscape);
         Assert.Contains(equipmentLabel, landscape);
-        Assert.Contains(ctaLabel, landscape);
         Assert.Contains(objectLabel, landscape);
-        Assert.Contains("Do not render observation windows, long date ranges, technical wording, internal IDs, or footer tips", landscape);
+        if (language == "en")
+        {
+            Assert.Contains("Date: Jun 9, 2026", landscape);
+            Assert.Contains("Best Time: 7:23 PM IST", landscape);
+            Assert.Contains("Direction: West", landscape);
+            Assert.Contains("Equipment: Naked Eye; Binoculars Optional", landscape);
+            Assert.Contains("Separation: 1.63° Apart", landscape);
+        }
+        Assert.Contains("Do not render action-prompt text, long date ranges, technical wording, internal IDs, or footer tips", landscape);
         Assert.Contains("complete final astronomy thumbnail", landscape);
         Assert.DoesNotContain($"{(language == "hi" ? "उपशीर्षक" : "Subtitle")}:", landscape);
+        Assert.DoesNotContain("Look tonight", landscape, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Watch tonight", landscape, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Today", landscape, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Tomorrow", landscape, StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains("medium-density square guide fields", square);
         Assert.Contains(dateLabel, square);
@@ -90,6 +100,7 @@ public sealed class ThumbnailRendererTests
         Assert.Contains(dateLabel, portrait);
         Assert.Contains(timeLabel, portrait);
         Assert.Contains(directionLabel, portrait);
+        Assert.DoesNotContain(equipmentLabel, portrait);
         Assert.Contains("keep planets circular", portrait);
         Assert.DoesNotContain("only one tiny hint", portrait);
     }
@@ -101,7 +112,8 @@ public sealed class ThumbnailRendererTests
         var title = hi ? "बृहस्पति शुक्र युति" : "Jupiter Venus Conjunction";
         var shortTitle = hi ? "बृहस्पति + शुक्र" : "Jupiter + Venus";
         var observation = new ProductionObservationInfo("PlanetConjunction", "Planetary", "IN-RJ", "Udaipur", "IST", null, true, "Visible", "Show", "2026-06-07", "19:30 IST", "2026-06-07 19:00–20:30 IST", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "25° altitude", [], "Close conjunction", "test", "High", [], []);
-        return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity("JUPITER_VENUS_2026", "Jupiter Venus Conjunction", "Viewing guide", "Planetary", "Conjunction"), new ThumbnailDisplay(title, title, shortTitle, [title]), new ThumbnailObjects(["Jupiter", "Venus"], [], new Dictionary<string, string> { ["Jupiter"] = hi ? "बृहस्पति" : "Jupiter", ["Venus"] = hi ? "शुक्र" : "Venus" }), new ThumbnailObservation(observation, "2026-06-07", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "minimum angular separation 1.63 degrees; visible if skies are clear"), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", ratio, name, w, h), new ThumbnailPromptInstructions("clean astronomy final thumbnail", ThumbnailArtworkPromptRules.NegativePrompt, ["Jupiter", "Venus"], []), new ThumbnailBrand("AI integrated typography", "Discovery Dark Gold", [language]), new ThumbnailValidation(["layout"], ["scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", "Planetary", "summary", DateTimeOffset.UtcNow));
+        var guideCard = new PlanetaryThumbnailGuideCardDto("Jun 9, 2026", "Jun 9, 2026 7:23 PM", "West After Sunset", "Naked eye; binoculars optional", "1.63°");
+        return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity("JUPITER_VENUS_2026", "Jupiter Venus Conjunction", "Viewing guide", "Planetary", "Conjunction"), new ThumbnailDisplay(title, title, shortTitle, [title]), new ThumbnailObjects(["Jupiter", "Venus"], [], new Dictionary<string, string> { ["Jupiter"] = hi ? "बृहस्पति" : "Jupiter", ["Venus"] = hi ? "शुक्र" : "Venus" }), new ThumbnailObservation(observation, "2026-06-07", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "minimum angular separation 1.63 degrees; visible if skies are clear", guideCard), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", ratio, name, w, h), new ThumbnailPromptInstructions("clean astronomy final thumbnail", ThumbnailArtworkPromptRules.NegativePrompt, ["Jupiter", "Venus"], []), new ThumbnailBrand("AI integrated typography", "Discovery Dark Gold", [language]), new ThumbnailValidation(["layout"], ["scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", "Planetary", "summary", DateTimeOffset.UtcNow));
     }
 
     private static ThumbnailPromptContract BuildContract(string family, string aspect, string language)
@@ -109,6 +121,6 @@ public sealed class ThumbnailRendererTests
         var (name, ratio, w, h) = aspect switch { "portrait" => ("portrait", "9:16", 1080, 1920), "square" => ("square", "1:1", 1200, 1200), _ => ("landscape", "16:9", 1280, 720) };
         var solar = family.Contains("Solar", StringComparison.OrdinalIgnoreCase);
         var title = language == "hi" ? family switch { "Moon" => "चंद्रमा", "Meteor" => "उल्का वर्षा", "Solar Eclipse" => "सूर्य ग्रहण", _ => "ग्रह युति" } : family;
-        return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity(family, family, "Viewing guide", family, family), new ThumbnailDisplay(title, title, title, [title]), new ThumbnailObjects([family], [], new Dictionary<string, string> { [family] = title }), new ThumbnailObservation(null, "Tonight", "After sunset", "West", "Visible if skies are clear"), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", ratio, name, w, h), new ThumbnailPromptInstructions("clean astronomy artwork", ThumbnailArtworkPromptRules.NegativePrompt, [family], []), new ThumbnailBrand("Renderer typography only", "Discovery Dark Gold", [language]), new ThumbnailValidation(["layout"], [solar ? "Solar safety required" : "scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", family, "summary", DateTimeOffset.UtcNow));
+        return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity(family, family, "Viewing guide", family, family), new ThumbnailDisplay(title, title, title, [title]), new ThumbnailObjects([family], [], new Dictionary<string, string> { [family] = title }), new ThumbnailObservation(null, "Jun 9, 2026", "7:23 PM IST", "West", "Visible if skies are clear", new PlanetaryThumbnailGuideCardDto("Jun 9, 2026", "7:23 PM IST", "West", "Naked eye", null)), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", ratio, name, w, h), new ThumbnailPromptInstructions("clean astronomy artwork", ThumbnailArtworkPromptRules.NegativePrompt, [family], []), new ThumbnailBrand("Renderer typography only", "Discovery Dark Gold", [language]), new ThumbnailValidation(["layout"], [solar ? "Solar safety required" : "scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", family, "summary", DateTimeOffset.UtcNow));
     }
 }
