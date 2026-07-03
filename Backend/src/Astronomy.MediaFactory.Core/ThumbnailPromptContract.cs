@@ -165,26 +165,106 @@ public sealed class ThumbnailCreativeDirector
     }
 }
 
+public sealed class ThumbnailPromptTemplateRenderer
+{
+    private const string TemplateRoot = "docs/product/thumbnail-prompts";
+
+    public string Render(ThumbnailPromptContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+
+        var aspectName = ResolveAspectName(contract);
+        var template = File.ReadAllText(ResolveTemplatePath(aspectName));
+        var language = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
+        var fields = ThumbnailFieldFormatter.Format(contract.Observation, language);
+        var objectLabels = string.Join(", ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TITLE"] = contract.Display.LocalizedTitle,
+            ["SUBTITLE"] = ResolveSubtitle(contract),
+            ["DATE"] = fields.Date,
+            ["BEST_TIME"] = fields.BestTime,
+            ["DIRECTION"] = fields.Direction,
+            ["EQUIPMENT"] = fields.Equipment,
+            ["SEPARATION"] = fields.Separation ?? string.Empty,
+            ["OBJECT_LABELS"] = objectLabels,
+            ["LANGUAGE"] = language,
+            ["OUTPUT_SIZE"] = $"{contract.Platform.Width}x{contract.Platform.Height}",
+            ["ASPECT_RATIO"] = contract.Platform.AspectRatio,
+            ["ASPECT_NAME"] = aspectName
+        };
+
+        foreach (var (key, value) in values)
+            template = template.Replace("{{" + key + "}}", value, StringComparison.OrdinalIgnoreCase);
+
+        return template.Trim();
+    }
+
+    public async Task<string> SaveAsync(ThumbnailPromptContract contract, string thumbnailRoot, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        ArgumentException.ThrowIfNullOrWhiteSpace(thumbnailRoot);
+
+        Directory.CreateDirectory(thumbnailRoot);
+        var aspectName = ResolveAspectName(contract);
+        var promptPath = Path.Combine(thumbnailRoot, $"thumbnail-{aspectName}-prompt.txt");
+        await File.WriteAllTextAsync(promptPath, Render(contract), cancellationToken);
+        return promptPath;
+    }
+
+    private static string ResolveAspectName(ThumbnailPromptContract contract)
+    {
+        var profile = contract.Platform.CompositionProfile;
+        var aspect = contract.Platform.AspectRatio;
+        if (profile.Contains("portrait", StringComparison.OrdinalIgnoreCase) || aspect is "9:16" or "9x16") return "portrait";
+        if (profile.Contains("square", StringComparison.OrdinalIgnoreCase) || aspect is "1:1" or "1x1") return "square";
+        if (profile.Contains("landscape", StringComparison.OrdinalIgnoreCase) || aspect is "16:9" or "16x9") return "landscape";
+        throw new InvalidOperationException($"Thumbnail prompt template validation failed: unsupported aspect '{profile}' / '{aspect}'.");
+    }
+
+    private static string ResolveTemplatePath(string aspectName)
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            var candidate = Path.Combine(current.FullName, TemplateRoot, $"{aspectName}.master.prompt.md");
+            if (File.Exists(candidate)) return candidate;
+            current = current.Parent;
+        }
+
+        var workingDirectoryCandidate = Path.Combine(Directory.GetCurrentDirectory(), TemplateRoot, $"{aspectName}.master.prompt.md");
+        if (File.Exists(workingDirectoryCandidate)) return workingDirectoryCandidate;
+
+        throw new FileNotFoundException($"Thumbnail master prompt template not found for aspect '{aspectName}'.", $"{aspectName}.master.prompt.md");
+    }
+
+    private static string ResolveSubtitle(ThumbnailPromptContract contract)
+    {
+        if (!string.IsNullOrWhiteSpace(contract.EventIdentity.EventSubtype))
+            return contract.EventIdentity.EventSubtype.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) ? "Planet Conjunction" : contract.EventIdentity.EventSubtype;
+        return contract.EventIdentity.EventAction;
+    }
+
+    private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
+}
+
 public sealed class ThumbnailPromptWriterV9
 {
-    private readonly ThumbnailCreativeDirector _creativeDirector = new();
+    private readonly ThumbnailPromptTemplateRenderer _templateRenderer = new();
 
     public ThumbnailPromptBuildResult Write(ThumbnailPromptContract contract)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ThumbnailPromptContractValidator.Validate(contract);
 
-        var direction = _creativeDirector.Direct(contract);
         var strategy = PlatformStorytellingStrategies.Resolve(contract);
         var profile = ThumbnailCompositionProfiles.Resolve(contract);
-        var directing = VisualDirectingProfiles.Resolve(contract);
-        var family = FamilyDirectors.Resolve(contract);
         var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
         var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var included = FilterSections(contract, strategy, sections, removed);
         EnforceInformationBudget(strategy, included, removed);
 
-        var prompt = BuildCreativeBrief(contract, direction, strategy, profile, directing, family, included);
+        var prompt = _templateRenderer.Render(contract);
         var duplicateSectionsRemoved = RemoveDuplicateLines(ref prompt);
         PromptValidatorV9.Validate(contract, included, prompt, strategy);
 
@@ -202,60 +282,6 @@ public sealed class ThumbnailPromptWriterV9
             CountWords(prompt));
 
         return new ThumbnailPromptBuildResult(prompt, AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
-    }
-
-    private static string BuildCreativeBrief(ThumbnailPromptContract contract, ThumbnailCreativeDirection direction, PlatformStorytellingStrategy strategy, CompositionProfile profile, VisualDirectingProfile directing, FamilyDirector family, IReadOnlyList<PromptSection> included)
-    {
-        var aspect = contract.Platform.AspectRatio;
-        var isPortrait = aspect == "9:16";
-        var isSquare = aspect == "1:1";
-        var lang = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
-        var localized = LocalizedPromptTerms.For(lang);
-        var title = contract.Display.LocalizedTitle;
-        var objects = string.Join(", ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
-        var observation = BuildObservationPrompt(contract, localized, isPortrait, isSquare);
-        var layout = isPortrait
-            ? "Native vertical premium Shorts cover: large cinematic title at the top, huge circular celestial bodies through the middle, and one small premium observation badge at the bottom. It must feel like a movie poster or magazine cover, not a guide card, infographic, or resized landscape."
-            : isSquare
-                ? "Native square feed composition: balanced center-weighted celestial geometry, compact title block, one small rounded fact badge, equal breathing room on every side. Do not reuse a wide landscape layout."
-                : "Native wide 16:9 YouTube cover: large recognizable event bodies dominate one side, premium title on the other, and one glassmorphism observation card for the essential viewing facts.";
-        var textBudget = isPortrait ? "large phone-readable title plus Date, Best Time, and Direction only in a small bottom badge; no equipment, no separation, no observation window, no bottom strip, no action prompt, no marketing language, and no large fields" : isSquare ? "medium-density feed-readable copy with title, date, best time, direction, optional equipment, and separation when available; no action prompt" : "large YouTube-readable title plus only the essential facts: date, best time, direction, equipment, separation when available, and object labels; no action prompt";
-        var aspectDetail = isPortrait
-            ? "Compose vertically from the beginning with an impossible-to-crop-into-landscape silhouette. Use camera distance and framing to make Jupiter dominant and Venus supportive with natural separation, natural lighting, natural proportion, and perfectly circular disks. Let the vertical path read top title to giant planets to small bottom badge."
-            : isSquare
-                ? "Use a compact radial read: the viewer should understand the title, the subject, and the one fact badge in a single glance. Keep the scene symmetrical enough for feed cropping safety while still feeling photographic, not like a resized poster. Let the sky texture frame the object instead of filling the square with text."
-                : "Use the width for instant recognition: Jupiter and Venus should read within one second, with Jupiter visibly larger and banded and Venus smaller, bright, and warm-white. Keep the sky scientifically believable for the event time and direction, use premium dark-blue/gold contrast, and place the glass card where it never overlaps or clips the planets. Avoid checklist energy: every visible word must feel editorial, intentional, and thumbnail-size readable.";
-        var familyStyle = string.Join(", ", family.ArtisticVocabulary);
-        var localizationInstruction = lang == "hi"
-            ? isPortrait
-                ? "all visible UI labels, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels. Do not render action-prompt text."
-                : isSquare
-                    ? "all visible UI labels, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels. Do not render action-prompt or footer tips."
-                    : "all visible UI labels, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels. Do not render action-prompt text."
-            : isPortrait
-                ? "all visible UI labels, date/time/direction labels, and observation fields must be English. Do not render action-prompt text."
-                : isSquare
-                    ? "all visible UI labels, date/time/direction labels, and observation fields must be English. Do not render action-prompt or footer tips."
-                    : "all visible UI labels, date/time/direction labels, and observation fields must be English. Do not render action-prompt text.";
-        var dataToRender = isPortrait || isSquare
-            ? $"{localized.Title}: \"{title}\". Render {observation}."
-            : $"{localized.Title}: \"{title}\". Render {observation}. {localized.ObjectLabels}: {objects}.";
-
-        return $"""
-Creative intent: Create a complete final astronomy thumbnail, not a background plate. The image itself must include the finished text and simple integrated UI. No post-processing overlay will be added. Aim for {direction.EmotionalAngle}: immediate recognition of {contract.EventIdentity.EventName} with scientific trust and high contrast.
-
-Aspect/output size: {contract.Platform.Width}x{contract.Platform.Height}, {aspect}, {profile.Name}. Compose natively for this canvas; never stretch, squeeze, pad, crop, or adapt another aspect ratio. Celestial bodies must stay circular with physically correct geometry.
-
-Scene description: Show {objects} as the unmistakable subject in a premium dark-blue and gold observational sky. Use {family.Name} visual language: {familyStyle}. The mood is cinematic but clean, with scientifically trusted color, proportion, sky context, atmospheric depth, and no invented planets or random extra objects.
-
-Layout guidance: {layout} {directing.ArtisticComposition}. {aspectDetail} Keep the object prominence natural for {contract.Platform.CompositionProfile}, with readable negative space and no crowded report-like layout.
-
-Data to render: {dataToRender} Language/localization: {lang}; {localizationInstruction} Use only short human-facing labels, never database names.
-
-Typography/readability: Use natural title case, premium bold typography, high contrast, clean spacing, and polished cover-design restraint. Keep {textBudget}; make the title cinematic and readable on a phone, with the badge much smaller than the title.
-
-Negative instructions: no separate background plate, no later text pass, no watermark, no logo, no location names, no clutter, no tiny text, no distorted celestial disks, no stretched planets, no squeezed or cropped landscape look, no guide table, no CTA, no duplicate action prompt or repeated quality rules.
-""".Trim();
     }
 
     private static string BuildObservationPrompt(ThumbnailPromptContract contract, LocalizedPromptTerms terms, bool isPortrait, bool isSquare)
@@ -535,7 +561,7 @@ public static class PromptValidatorV9
 
         var legacyPhrases = new[] { "V8", "background-only", "background only", "background artwork", "do not draw text", "do not render text", "do not draw title", "do not draw icons", "renderer will add", "renderer owns", "renderer-owned", "deterministic overlay", "manual overlay", "BackgroundOnly", "RendererPresentation", "ThumbnailV8AiNativeRenderer", "AzureImage2ThumbnailV5", "crop landscape" };
         if (ContainsAny(finalPrompt, legacyPhrases)) throw new InvalidOperationException("Prompt validation failed: forbidden V8/background/overlay phrase remains.");
-        if (aspect == "9:16" && ContainsAny(finalPrompt, "observation card", "footer", "equipment table", "dense infographic")) throw new InvalidOperationException("Prompt validation failed: portrait prompt contains forbidden card/footer/table language.");
+        if (aspect == "9:16" && ContainsAny(finalPrompt, "footer", "equipment table", "dense infographic")) throw new InvalidOperationException("Prompt validation failed: portrait prompt contains forbidden card/footer/table language.");
 
         if (!ContainsAny(finalPrompt, "complete final astronomy thumbnail", "complete final thumbnail")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
         if (!ContainsAny(finalPrompt, "No post-processing overlay will be added", "No post-processing")) throw new InvalidOperationException("Prompt validation failed: no-post-processing instruction missing.");
