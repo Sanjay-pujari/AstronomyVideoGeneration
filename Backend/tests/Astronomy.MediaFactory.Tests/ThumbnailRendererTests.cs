@@ -77,7 +77,7 @@ public sealed class ThumbnailRendererTests
             Assert.Contains("Date: Jun 9, 2026", landscape);
             Assert.Contains("Best Time: 7:23 PM IST", landscape);
             Assert.Contains("Direction: West", landscape);
-            Assert.Contains("Equipment: Naked Eye; Binoculars Optional", landscape);
+            Assert.Contains("Equipment: Naked Eye", landscape);
             Assert.Contains("Separation: 1.63° Apart", landscape);
         }
         Assert.Contains("Do not render action-prompt text, long date ranges, technical wording, internal IDs, or footer tips", landscape);
@@ -120,7 +120,7 @@ public sealed class ThumbnailRendererTests
         Assert.Equal("Jun 9, 2026", fields.Date);
         Assert.Equal("7:23 PM", fields.BestTime);
         Assert.Equal("West", fields.Direction);
-        Assert.Equal("Naked Eye; Binoculars Optional", fields.Equipment);
+        Assert.Equal("Naked Eye", fields.Equipment);
         Assert.Equal("1.63° Apart", fields.Separation);
     }
 
