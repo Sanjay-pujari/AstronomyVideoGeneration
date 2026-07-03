@@ -53,7 +53,7 @@ public sealed record ThumbnailRenderComponentLayout(
 
 public static class ThumbnailArtworkPromptRules
 {
-    public const string NegativePrompt = "text, typography, logos, UI, observation cards, icons, labels, buttons, CTA elements, panels, callouts, footers, watermarks, brand marks, captions, numerals, badges, data boxes, fake lettering, readable words, generic sky poster, placeholder panels, random planets, invented celestial objects, cropping";
+    public const string NegativePrompt = "watermarks, brand marks, external logos, fake lettering, unreadable gibberish text, generic sky poster, placeholder empty panels, random planets, invented celestial objects, cropping, stretched objects, squeezed layout";
 
-    public const string PositiveArtworkOnlyInstruction = "AI artwork must be clean cinematic background artwork only. Do not render text, typography, logos, UI, observation cards, icons, labels, buttons, watermarks, brand marks, panels, callouts, or CTA elements; ThumbnailRenderer owns all final presentation.";
+    public const string PositiveArtworkOnlyInstruction = "Generate final finished thumbnail image. Include all text, icons, panels, callouts, labels, and footer inside the image. The AI image must be the complete final thumbnail. No post-processing overlay will be added. All visible text must be crisp, localized, and mobile-readable.";
 }

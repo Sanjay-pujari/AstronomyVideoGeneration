@@ -62,7 +62,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         VisualDirectingProfileFileName,
         "thumbnail-landscape-prompt.txt",
         "thumbnail-portrait-prompt.txt",
-        "thumbnail-square-prompt.txt"
+        "thumbnail-square-prompt.txt",
+        "thumbnail-prompt-diff.md"
     ];
     private const string ThumbnailV8AiNativeRendererName = "ThumbnailV8AiNativeRenderer";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
@@ -341,6 +342,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }, JsonOptions), cancellationToken);
         var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
         var visualPromptDiagnosticsPath = Path.Combine(thumbnailRoot, VisualPromptDiagnosticsFileName);
+        var promptDiffPath = Path.Combine(thumbnailRoot, "thumbnail-prompt-diff.md");
+        await WriteThumbnailV8PromptDiffAsync(promptDiffPath, contracts, prompts, cancellationToken);
         await WriteThumbnailV8VisualPromptDiagnosticsAsync(visualPromptDiagnosticsPath, request, contracts, prompts, promptValidation, cancellationToken);
         var diagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailGenerationDiagnosticsFileName);
         var v8DiagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailV8DiagnosticsFileName);
@@ -350,6 +353,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             renderer = ThumbnailV8AiNativeRendererName,
             aiNativeFullImage = true,
+            completeThumbnailMode = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
@@ -395,6 +399,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputFilePaths = outputFileMap,
             promptFilePaths = promptPaths,
             visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
+            promptDiffPath = NormalizePath(promptDiffPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
             storytellingStrategyPath = NormalizePath(storytellingStrategyPath),
             promptContractPath = NormalizePath(contractJsonPath),
@@ -412,6 +417,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             model = imageOptions.Value.ImageDeployment,
             deployment = imageOptions.Value.ImageDeployment,
             aiNativeFullImage = true,
+            completeThumbnailMode = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
@@ -456,6 +462,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
             visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
+            promptDiffPath = NormalizePath(promptDiffPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
             storytellingStrategyPath = NormalizePath(storytellingStrategyPath),
             outputFiles = allOutputs,
@@ -518,6 +525,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             renderer = ThumbnailV8AiNativeRendererName,
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             promptContractGenerated = true,
+            completeThumbnailMode = true,
             compositionProfileGenerated = true,
             promptGenerationChanged = false,
             renderingBehaviorChanged = false,
@@ -557,6 +565,34 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }, JsonOptions), cancellationToken);
     }
 
+    private static async Task WriteThumbnailV8PromptDiffAsync(string path, IReadOnlyList<ThumbnailPromptContract> contracts, IReadOnlyList<ThumbnailV8Prompt> prompts, CancellationToken cancellationToken)
+    {
+        static string Hash(string value) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        static bool Hindi(string? language) => !string.IsNullOrWhiteSpace(language) && language.StartsWith("hi", StringComparison.OrdinalIgnoreCase);
+        var hashes = prompts.ToDictionary(p => p.Name, p => Hash(p.Prompt), StringComparer.OrdinalIgnoreCase);
+        var unique = hashes.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count;
+        var lines = new List<string>
+        {
+            "# Thumbnail Prompt Diff",
+            string.Empty,
+            "Complete-thumbnail mode = true",
+            $"Aspect prompts unique = {unique.ToString().ToLowerInvariant()}",
+            string.Empty
+        };
+        foreach (var prompt in prompts.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var contract = contracts.First(c => string.Equals(c.Platform.CompositionProfile, prompt.Name, StringComparison.OrdinalIgnoreCase));
+            lines.Add($"## {prompt.Name}");
+            lines.Add($"- Aspect-specific output size: {prompt.Width}x{prompt.Height} ({prompt.AspectRatio})");
+            lines.Add($"- Localized title: {contract.Display.LocalizedTitle}");
+            lines.Add($"- Localized labels: {(Hindi(contract.Brand.LocalizationRules.FirstOrDefault()) ? "तारीख, श्रेष्ठ समय, दिशा, दूरी, उपकरण, सुरक्षा" : "Date, Best Time, Direction, Separation, Equipment, Safety")}");
+            lines.Add($"- Prompt hash: {hashes[prompt.Name]}");
+            lines.Add($"- Unique prompt: {hashes.Count(kv => string.Equals(kv.Value, hashes[prompt.Name], StringComparison.OrdinalIgnoreCase)) == 1}");
+            lines.Add(string.Empty);
+        }
+        await File.WriteAllLinesAsync(path, lines, cancellationToken);
+    }
+
     private static void ValidateThumbnailRc3RequiredArtifacts(string thumbnailRoot)
     {
         var missing = ThumbnailRc3RequiredArtifactFileNames
@@ -587,6 +623,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             validator = "ThumbnailV8Validator",
             aiNativeFullImage = true,
+            completeThumbnailMode = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
             cropFromLandscape = false,
@@ -2995,9 +3032,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         private static readonly ThumbnailV8AspectSpec[] AspectSpecs =
         [
-            new("landscape", 3840, 2160, "16:9", "LANDSCAPE 16:9. Title top-left. Observation card on the left. Celestial objects on the right and occupying 25-40% of the visible composition. Footer spans full width along the bottom safe area. Elegant WEST marker near the natural horizon."),
-            new("square", 2160, 2160, "1:1", "SQUARE 1:1. Generate a native square composition, never cropped from landscape. Title top-left. Objects center-right, large and recognizable. Small observation card lower-left, less than 20% of canvas. Compact footer at bottom. Observation card must not compete with celestial objects."),
-            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16. Generate a native mobile-first composition for YouTube Shorts, Instagram Reels, and Facebook Reels; this is not a squeezed or cropped landscape layout. Title area maximum 12% of canvas. Information area maximum 20% of canvas. Celestial object area minimum 35% of canvas and primary visual focus. Create portrait-specific vertical balance, not landscape side-panel composition.")
+            new("landscape", 3840, 2160, "16:9", "LANDSCAPE 16:9 YouTube thumbnail / social cover. Use a title top-left or strong left block, a compact observation card, footer tips, and no clutter. Main object large and prominent at 25-45% visual focus."),
+            new("square", 2160, 2160, "1:1", "SQUARE 1:1 Instagram/Facebook square cover. Use centered or balanced native-square composition, large main object, fewer fields than landscape, and no squeezed landscape look. Main object at least 25% visual focus."),
+            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16 Shorts/Reels/Stories cover. Native vertical scene with safe top/bottom margins, large readable title, fewer fields, celestial object not oval or stretched, no squeezed landscape look. Celestial object area minimum 35% and primary visual focus.")
         ];
 
         public static IReadOnlyList<ThumbnailPromptContract> BuildContracts(ThumbnailAssetGenerationRequest request)
@@ -3063,7 +3100,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         private static string ResolveV8Title(CurrentEventLock current, ProductionEventIntelligence? intelligence, IReadOnlyList<string> objects, string eventId, ThumbnailV8Family family)
         {
             if (family == ThumbnailV8Family.Eclipse)
-                return SanitizeThumbnailV8PromptText(ResolveEclipseEventName(current, intelligence));
+                return SanitizeThumbnailV8PromptText(LocalizeThumbnailText(SanitizeThumbnailV8PromptText(ResolveEclipseEventName(current, intelligence)), current.Language));
             if (family == ThumbnailV8Family.Meteor)
                 return SanitizeThumbnailV8PromptText(ResolveMeteorShowerTitle(current, intelligence, objects));
             if (objects.Count >= 2)
@@ -3076,8 +3113,21 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
             if (IsPlanetaryEvent(current.EventType) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary)
-                return "Planet Conjunction";
-            return SanitizeThumbnailV8PromptText(HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.EventType, current.EventType, "Astronomy Viewing Guide")));
+                return IsHindiLanguage(current.Language) ? "ग्रह संयोजन" : "Planet Conjunction";
+            return LocalizeThumbnailText(SanitizeThumbnailV8PromptText(HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.EventType, current.EventType, "Astronomy Viewing Guide"))), current.Language);
+        }
+
+        private static bool IsHindiLanguage(string? language) => !string.IsNullOrWhiteSpace(language) && language.StartsWith("hi", StringComparison.OrdinalIgnoreCase);
+
+        private static string LocalizeThumbnailText(string text, string? language)
+        {
+            if (!IsHindiLanguage(language)) return text;
+            return text
+                .Replace("Total Solar Eclipse", "पूर्ण सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Solar Eclipse", "सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Total Lunar Eclipse", "पूर्ण चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Lunar Eclipse", "चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Astronomy Viewing Guide", "आकाश दर्शन गाइड", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveShortBestTime(CurrentEventLock current, ProductionEventIntelligence? intelligence)
@@ -3214,18 +3264,24 @@ SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOL
     }
 
     private static string CommonOpening(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string posterType) => $$"""
-Generate clean cinematic artwork only for deterministic thumbnail rendering: {{posterType}} background artwork.
-The AI image is NOT the final thumbnail. Do not include any text, typography, logos, UI, observation cards, icons, labels, buttons, CTA elements, panels, callouts, footers, watermarks, brand marks, captions, numerals, badges, or data boxes. The deterministic ThumbnailRenderer will render all presentation elements later. 4K quality. Generate independently for this exact format; do not crop landscape and do not reuse another aspect-ratio prompt. No extra celestial objects. No location text. No city, region, country, or coordinates.
+Generate final finished thumbnail image.
+Include all text, icons, panels, callouts, labels, and footer inside the image.
+The AI image must be the complete final thumbnail.
+No post-processing overlay will be added.
+Create a {{posterType}} as a complete social thumbnail, not a background plate. 4K quality. Generate independently for this exact format; do not crop landscape and do not reuse another aspect-ratio prompt. No extra celestial objects. Do not render location text unless explicitly allowed. No city, region, country, or coordinates.
 OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
-RENDERER PRESENTATION DATA (do not draw in artwork): title {{c.Title}}; subtitle {{c.EventType}}.
-MOBILE INFORMATION LIMIT: renderer-owned visible information is Date, Best Time, Direction, Separation when available, Equipment. Do not display any of it in the AI artwork.
-PORTRAIT LOCK: when aspect is 9:16, preserve clean negative space for renderer presentation while keeping celestial object area minimum 35% and the primary visual focus in a unique Shorts/Reels composition.
-ARTWORK PURITY RULE: no readable words, no typographic marks, no fake lettering, no UI glyphs, no icons, no panels.
+LOCALIZED TITLE TO RENDER: {{c.Title}}.
+LOCALIZED SUBTITLE TO RENDER: {{c.EventType}}.
+LOCALIZED FIELD LABELS TO RENDER: {{(IsHindiLanguage(c.Current.Language) ? "तारीख, श्रेष्ठ समय, दिशा, दूरी, उपकरण, सुरक्षा" : "Date, Best Time, Direction, Separation, Equipment, Safety")}}.
+VISIBLE INFORMATION LIMIT: render only the fields requested by this aspect: Date, Best Time, Direction, Separation when available, Equipment, and Safety when applicable.
+OBJECT PROMINENCE RULE: the main celestial object or event object must be large, visible, and the strongest visual focus; landscape target 25-45% visual focus, square target at least 25%, portrait target at least 35%.
+TEXT READABILITY RULE: all title, subtitle, labels, callouts, cards, and footer text must be crisp, correctly spelled, high-contrast, localized, and readable on mobile.
 """;
 
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
-DATA FOR RENDERER-OWNED PRESENTATION (do not render as text in the image):
+LOCALIZED TEXT AND FACTS TO RENDER INSIDE THE FINAL THUMBNAIL:
+- Field labels: {{(IsHindiLanguage(c.Current.Language) ? "तारीख / श्रेष्ठ समय / दिशा / दूरी / उपकरण / सुरक्षा" : "Date / Best Time / Direction / Separation / Equipment / Safety")}}
 - Date: {{c.DateText}}
 - Best Time: {{c.BestTime}}
 - Direction: {{c.Direction}}
@@ -3233,10 +3289,10 @@ DATA FOR RENDERER-OWNED PRESENTATION (do not render as text in the image):
 - Separation: {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}
 - Objects to render visually, not as observation-card fields: {{objectText}}
 - Footer tips: use the three short tips specified in the family template above.
-QUALITY RULES: clean cinematic artwork, no watermark, no branding, no location text, no text outside canvas, no professional infographic UI, no polished icons, premium dark blue and gold atmosphere. Reserve quiet negative space for deterministic renderer overlays without drawing boxes or layout guides.
-CTR INSTRUCTIONS: Optimize the artwork for click-through recognition through large celestial objects, high contrast, atmospheric depth, and strong visual hierarchy. Renderer adds typography and branded UI.
-AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers.
-NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets, no invented celestial objects, no cropping, no text, no typography, no logos, no UI, no observation cards, no icons, no labels, no buttons, no watermarks.
+QUALITY RULES: complete finished thumbnail, no watermark, no external branding, no location text, no text outside canvas, premium dark blue and gold atmosphere, integrated polished infographic UI created by AI.
+CTR INSTRUCTIONS: Optimize the complete thumbnail for click-through recognition through large celestial objects, high contrast, atmospheric depth, integrated typography, and strong visual hierarchy.
+AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers, empty background artwork.
+NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random planets, no invented celestial objects, no cropping, no post-render overlay instructions, no plain background image, no watermark.
 """;
 
     private static ThumbnailV8Prompt ToPrompt(ThumbnailPromptContract contract, ThumbnailPromptBuilder builder)
@@ -3306,18 +3362,18 @@ NEGATIVE RULES: no generic sky poster, no placeholder panels, no random planets,
 
         return
         [
-            new PromptSection("renderer-title", "Quality Rules", 10, $"Renderer will add title '{c.Title}'; do not draw it in the artwork.", true),
-            new PromptSection("renderer-subtitle", "Quality Rules", 20, $"Renderer will add subtitle '{c.EventType}'; do not draw it in the artwork.", false),
+            new PromptSection("localized-title", "Title", 10, $"Render the localized title exactly: '{c.Title}'.", true),
+            new PromptSection("localized-subtitle", "Subtitle", 20, $"Render the localized subtitle: '{c.EventType}'.", false),
             new PromptSection("family-visual-scene", "Visual Scene", 30, $"{summary} Show only these event objects: {objectText}. No random planets, invented celestial objects, location text, watermark, database identifiers, or snake case.", true),
             new PromptSection("dominant-object", "Dominant Object", 40, $"Make the event subject immediately recognizable: {objectText}. Celestial objects must drive the visual hierarchy and remain scientifically plausible.", true),
-            new PromptSection("observation-card", "Observation Card", 50, "Renderer will add observation card fields: " + string.Join("; ", observationFacts) + ". Do not draw a card, panel, icon, or label in the artwork.", true),
+            new PromptSection("observation-card", "Observation Card", 50, "Render an integrated observation card with localized field labels and values: " + string.Join("; ", observationFacts) + ". Keep it compact, polished, and readable.", true),
             new PromptSection("one-observation-hint", "One Observation Hint", 55, $"One compact observation hint only: {c.Direction} / {c.BestTime}.", false),
             new PromptSection("compact-observation", "Compact Observation", 60, $"Compact observation: {c.Direction}, {c.BestTime}.", false),
             new PromptSection("equipment", "Equipment", 70, $"Equipment cue: {c.Equipment}.", false),
             new PromptSection("safety", "Safety", 80, safety, family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)),
             new PromptSection("cta", "CTA", 90, "Short action cue: watch the sky tonight.", false),
             new PromptSection("footer", "Footer", 100, "Short footer tips may appear only on rich landscape layouts: look direction, best time, equipment.", false),
-            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate clean artwork only at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium cinematic astronomy style, no typography, no UI, no placeholder panels, no cropping, no squeezing. Require native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, and physically correct astronomical geometry.", true)
+            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate the complete final thumbnail at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium cinematic astronomy style with integrated typography, UI panels, icons, labels, callouts, and footer where allowed. Require native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, physically correct astronomical geometry, object prominence, and text readability.", true)
         ];
     }
 
