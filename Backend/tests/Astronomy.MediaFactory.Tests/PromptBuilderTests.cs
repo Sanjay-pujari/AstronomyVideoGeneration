@@ -211,7 +211,7 @@ public sealed class PromptBuilderTests
             new ThumbnailEventIdentity("event-1", "Moon", "Observation guide", "Moon", "FullMoon"),
             new ThumbnailDisplay("Moon", "Moon", "Moon", ["Moon"]),
             new ThumbnailObjects(["Moon"], [], new Dictionary<string, string> { ["Moon"] = "Moon" }),
-            new ThumbnailObservation(null, "Tonight", "After sunset", "East", "Visible"),
+            new ThumbnailObservation(null, "Jun 9, 2026", "7:23 PM IST", "East", "Visible", new PlanetaryThumbnailGuideCardDto("Jun 9, 2026", "7:23 PM IST", "East", "Naked eye", null)),
             new ThumbnailVisual("Moon over horizon", "premium", "observe the event", "CTR"),
             new ThumbnailPlatform("Thumbnail", aspectRatio, profile, 100, 100),
             new ThumbnailPromptInstructions("Base event-specific wording that must remain unchanged.", "negative", ["Moon"], []),

@@ -19,7 +19,7 @@ public sealed record ThumbnailPromptContract(
 public sealed record ThumbnailEventIdentity(string EventId, string EventName, string EventAction, string EventFamily, string EventSubtype);
 public sealed record ThumbnailDisplay(string DisplayTitle, string LocalizedTitle, string DisplayShortTitle, IReadOnlyList<string> TitleCandidates);
 public sealed record ThumbnailObjects(IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, IReadOnlyDictionary<string, string> LocalizedObjectNames);
-public sealed record ThumbnailObservation(ProductionObservationInfo? ObservationInfo, string ObservationWindow, string BestViewingWindow, string Direction, string Visibility);
+public sealed record ThumbnailObservation(ProductionObservationInfo? ObservationInfo, string ObservationWindow, string BestViewingWindow, string Direction, string Visibility, PlanetaryThumbnailGuideCardDto? GuideCard = null);
 public sealed record ThumbnailVisual(string VisualIdentity, string EmotionalTone, string EducationalIntent, string CtrGoal);
 public sealed record ThumbnailPlatform(string Platform, string AspectRatio, string CompositionProfile, int Width, int Height);
 public sealed record ThumbnailPromptInstructions(string PositivePrompt, string NegativePrompt, IReadOnlyList<string> RequiredObjects, IReadOnlyList<string> ForbiddenObjects);
@@ -212,34 +212,33 @@ public sealed class ThumbnailPromptWriterV9
         var lang = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
         var localized = LocalizedPromptTerms.For(lang);
         var title = contract.Display.LocalizedTitle;
-        var subtitle = lang == "hi" ? LocalizeKnownEnglishPhrase(contract.Display.DisplayShortTitle, lang) : contract.Display.DisplayShortTitle;
         var objects = string.Join(", ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
         var observation = BuildObservationPrompt(contract, localized, isPortrait, isSquare);
         var layout = isPortrait
-            ? "Native vertical mobile poster: a tall sky column, large circular event subject in the upper half, short title stacked in the safe middle, one small action cue near the lower third, with no extra panels or tabular data."
+            ? "Native vertical mobile poster: a tall sky column, large circular event subject in the upper half, short title stacked in the safe middle, with no action prompt, no extra panels, and no tabular data."
             : isSquare
                 ? "Native square feed composition: balanced center-weighted celestial geometry, compact title block, one small rounded fact badge, equal breathing room on every side. Do not reuse a wide landscape layout."
                 : "Native wide 16:9 YouTube cover: large recognizable event bodies dominate one side, premium title on the other, and one glassmorphism observation card for the essential viewing facts.";
-        var textBudget = isPortrait ? "large mobile-readable words with date, time, direction, and one CTA" : isSquare ? "medium-density feed-readable copy" : "large YouTube-readable title plus only the essential facts: date, best time, direction, equipment, separation when available, and CTA";
+        var textBudget = isPortrait ? "large mobile-readable words with title, date, best time, and direction only; no action prompt and no long table" : isSquare ? "medium-density feed-readable copy with title, date, best time, direction, optional equipment, and separation when available; no action prompt" : "large YouTube-readable title plus only the essential facts: date, best time, direction, equipment, separation when available, and object labels; no action prompt";
         var aspectDetail = isPortrait
-            ? "Let the vertical depth do the work: sky gradient, horizon glow, and one clean focal path from title to subject to action cue."
+            ? "Let the vertical depth do the work: sky gradient, horizon glow, and one clean focal path from title to subject to absolute viewing facts."
             : isSquare
                 ? "Use a compact radial read: the viewer should understand the title, the subject, and the one fact badge in a single glance. Keep the scene symmetrical enough for feed cropping safety while still feeling photographic, not like a resized poster. Let the sky texture frame the object instead of filling the square with text."
                 : "Use the width for instant recognition: Jupiter and Venus should read within one second, with Jupiter visibly larger and banded and Venus smaller, bright, and warm-white. Keep the sky scientifically believable for the event time and direction, use premium dark-blue/gold contrast, and place the glass card where it never overlaps or clips the planets. Avoid checklist energy: every visible word must feel editorial, intentional, and thumbnail-size readable.";
         var familyStyle = string.Join(", ", family.ArtisticVocabulary);
         var localizationInstruction = lang == "hi"
             ? isPortrait
-                ? "all visible UI labels, CTA, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels."
+                ? "all visible UI labels, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels. Do not render action-prompt text."
                 : isSquare
-                    ? "all visible UI labels, CTA, footer tips, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels."
-                    : "all visible UI labels, CTA, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels."
+                    ? "all visible UI labels, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels. Do not render action-prompt or footer tips."
+                    : "all visible UI labels, date/time/direction labels, and observation fields must be Hindi in Devanagari; planet names may remain English only when intentionally listed as object labels. Do not render action-prompt text."
             : isPortrait
-                ? "all visible UI labels, CTA, date/time/direction labels, and observation fields must be English."
+                ? "all visible UI labels, date/time/direction labels, and observation fields must be English. Do not render action-prompt text."
                 : isSquare
-                    ? "all visible UI labels, CTA, footer tips, date/time/direction labels, and observation fields must be English."
-                    : "all visible UI labels, CTA, date/time/direction labels, and observation fields must be English.";
+                    ? "all visible UI labels, date/time/direction labels, and observation fields must be English. Do not render action-prompt or footer tips."
+                    : "all visible UI labels, date/time/direction labels, and observation fields must be English. Do not render action-prompt text.";
         var dataToRender = isPortrait || isSquare
-            ? $"{localized.Title}: \"{title}\". {localized.Subtitle}: \"{subtitle}\". Render {observation}. {localized.ObjectLabels}: {objects}."
+            ? $"{localized.Title}: \"{title}\". Render {observation}."
             : $"{localized.Title}: \"{title}\". Render {observation}. {localized.ObjectLabels}: {objects}.";
 
         return $"""
@@ -255,64 +254,29 @@ Data to render: {dataToRender} Language/localization: {lang}; {localizationInstr
 
 Typography/readability: Use natural title case, premium bold typography, high contrast, clean spacing, and polished glassmorphism panels/icons that feel designed into the image. Keep {textBudget}; make every word large and legible at thumbnail size.
 
-Negative instructions: no separate background plate, no later text pass, no watermark, no logo, no location names, no clutter, no tiny text, no distorted celestial disks, no squeezed or cropped landscape look, no duplicate CTA or repeated quality rules.
+Negative instructions: no separate background plate, no later text pass, no watermark, no logo, no location names, no clutter, no tiny text, no distorted celestial disks, no squeezed or cropped landscape look, no duplicate action prompt or repeated quality rules.
 """.Trim();
     }
 
     private static string BuildObservationPrompt(ThumbnailPromptContract contract, LocalizedPromptTerms terms, bool isPortrait, bool isSquare)
     {
-        var info = contract.Observation.ObservationInfo;
-        var date = FirstNonEmpty(info?.DisplayDate, ExtractDate(contract.Observation.BestViewingWindow), contract.Observation.BestViewingWindow);
-        var bestTime = FirstNonEmpty(info?.DisplayTime, contract.Observation.BestViewingWindow, ExtractTimeCue(info?.BestViewingWindowLocal), ExtractTimeCue(info?.DisplayWindowLocal));
-        var direction = FirstNonEmpty(info?.Direction, contract.Observation.Direction);
-        var separation = ExtractSeparation(contract.Observation.Visibility);
-        var equipment = terms.Language == "hi" ? "नंगी आँख; दूरबीन वैकल्पिक" : "Naked eye; binoculars optional";
-        var cta = terms.Language == "hi" ? "आज रात आसमान देखें" : "Look tonight";
+        var fields = ThumbnailFieldFormatter.Format(contract.Observation, terms.Language);
 
         if (isPortrait)
-            return $"mobile-clean vertical guide fields: {terms.Title}, {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}; {terms.Cta}: {cta}. No full large table; keep planets circular.";
+            return $"mobile-clean vertical guide fields: {terms.Title}; {terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}. No action prompt; no full large table; keep planets circular.";
 
         if (isSquare)
         {
-            var equipmentText = equipment.Length <= 32 ? $"; {terms.Equipment}: {equipment}" : string.Empty;
-            var separationText = string.IsNullOrWhiteSpace(separation) ? string.Empty : $"; {terms.Separation}: {separation}";
-            return $"medium-density square guide fields: {terms.Title}; {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}{separationText}{equipmentText}. No squeezed landscape composition.";
+            var equipmentText = string.IsNullOrWhiteSpace(fields.Equipment) ? string.Empty : $"; {terms.Equipment}: {fields.Equipment}";
+            var separationText = string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}";
+            return $"medium-density square guide fields: {terms.Title}; {terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}{equipmentText}{separationText}. No action prompt; no squeezed landscape composition.";
         }
 
-        var landscapeSeparation = string.IsNullOrWhiteSpace(separation) ? string.Empty : $"; {terms.Separation}: {separation}";
-        return $"premium landscape glass observation card: {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}{landscapeSeparation}; {terms.Equipment}: {equipment}; {terms.Cta}: {cta}; {terms.ObjectLabels}: every primary object. Do not render long date ranges, technical wording, internal IDs, or footer tips.";
+        var landscapeSeparation = string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}";
+        return $"premium landscape glass observation card: {terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}{landscapeSeparation}; {terms.ObjectLabels}: every primary object. Do not render action-prompt text, long date ranges, technical wording, internal IDs, or footer tips.";
     }
 
-    private static string ExtractTimeCue(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-        var text = value.Trim();
-        var match = System.Text.RegularExpressions.Regex.Match(text, @"(?:\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b|\bafter sunset\b|\bbefore sunrise\b|\bafter midnight\b)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        return match.Success ? match.Value.Trim() : text;
-    }
-
-    private static string ExtractDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-        var match = System.Text.RegularExpressions.Regex.Match(value, @"\b\d{4}-\d{2}-\d{2}\b");
-        return match.Success ? match.Value : value;
-    }
-
-    private static string ExtractSeparation(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?i)(?:separation|apart|angular separation|minimum angular separation)?[^.;,]*(\d+(?:\.\d+)?\s*(?:°|deg|degree|degrees))");
-        return match.Success ? match.Groups[1].Value : string.Empty;
-    }
-
-    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
     private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
-
-    private static string LocalizeKnownEnglishPhrase(string value, string language)
-    {
-        if (language != "hi") return value;
-        return value.Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase).Replace("Venus", "शुक्र", StringComparison.OrdinalIgnoreCase).Replace("Conjunction", "युति", StringComparison.OrdinalIgnoreCase).Replace("Pairing", "जोड़ी", StringComparison.OrdinalIgnoreCase);
-    }
 
     private sealed record LocalizedPromptTerms(string Language, string Title, string Subtitle, string Date, string BestTime, string Direction, string Separation, string Equipment, string FooterTips, string Cta, string ObjectLabels)
     {
@@ -347,6 +311,94 @@ Negative instructions: no separate background plate, no later text pass, no wate
     public static void EnforceInformationBudget(PlatformStorytellingStrategy strategy, List<PromptSection> included, Dictionary<string, string> removed) => PromptAssembler.EnforceInformationBudget(strategy, included, removed);
     public static string AppendArtworkNegativeRules(string negativePrompt) => PromptAssembler.AppendArtworkNegativeRules(negativePrompt);
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+}
+
+public sealed record ThumbnailFormattedGuideFields(string Date, string BestTime, string Direction, string Equipment, string? Separation);
+
+public static class ThumbnailFieldFormatter
+{
+    private static readonly string[] RelativeTimePhrases = ["today", "tonight", "tomorrow", "this evening", "this week", "look tonight", "watch tonight", "don't miss", "don’t miss", "coming soon", "right now"];
+
+    public static ThumbnailFormattedGuideFields Format(ThumbnailObservation observation, string language)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        var guideCard = observation.GuideCard;
+        var info = observation.ObservationInfo;
+        var date = CleanDate(FirstNonEmpty(guideCard?.Date, info?.DisplayDate));
+        var bestTime = CleanBestTime(FirstNonEmpty(guideCard?.BestTime, info?.DisplayTime, ExtractTimeCue(info?.BestViewingWindowLocal), ExtractTimeCue(info?.DisplayWindowLocal)), info?.Timezone);
+        var direction = CleanDirection(FirstNonEmpty(guideCard?.Direction, info?.Direction, observation.Direction));
+        var equipment = CleanEquipment(FirstNonEmpty(guideCard?.Equipment, language == "hi" ? "नंगी आँख; दूरबीन वैकल्पिक" : "Naked eye; binoculars optional"));
+        var separation = CleanSeparation(FirstNonEmpty(guideCard?.Separation, ExtractSeparation(observation.Visibility)));
+
+        Validate(date, bestTime, direction, equipment, separation);
+        return new ThumbnailFormattedGuideFields(date, bestTime, direction, equipment, separation);
+    }
+
+    private static string CleanDate(string value)
+    {
+        var text = value.Trim();
+        if (System.DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var parsed))
+            return parsed.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
+        return text;
+    }
+
+    private static string CleanBestTime(string value, string? timezone)
+    {
+        var text = ExtractTimeCue(value);
+        var zone = FirstNonEmpty(ExtractTimezone(text), timezone);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+\b[A-Z]{2,5}\b$", string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(zone) ? text : $"{text} {zone}";
+    }
+
+    private static string CleanDirection(string value)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"\b(North|South|East|West|Northeast|Northwest|Southeast|Southwest|NE|NW|SE|SW|N|S|E|W)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Value.ToLowerInvariant()) : value.Trim();
+    }
+
+    private static string CleanEquipment(string value) =>
+        string.Join("; ", value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(part.ToLowerInvariant())));
+
+    private static string? CleanSeparation(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"(\d+(?:\.\d+)?)\s*(?:°|deg|degree|degrees)?", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? $"{match.Groups[1].Value}° Apart" : null;
+    }
+
+    private static void Validate(string date, string bestTime, string direction, string equipment, string? separation)
+    {
+        if (string.IsNullOrWhiteSpace(date)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Date is missing.");
+        if (System.Text.RegularExpressions.Regex.IsMatch(date, @"^\s*\d{1,2}:\d{2}\s*(?:AM|PM)?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Date resembles a time-only value.");
+        if (System.Text.RegularExpressions.Regex.IsMatch(date, @"\b(?:AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) throw new InvalidOperationException("Thumbnail guide-card validation failed: Date contains AM/PM.");
+        var text = string.Join(" ", date, bestTime, direction, equipment, separation);
+        foreach (var phrase in RelativeTimePhrases)
+            if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Thumbnail guide-card validation failed: relative time phrase '{phrase}' is forbidden.");
+    }
+
+    private static string ExtractTimeCue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var text = value.Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)?(?:\s+[A-Z]{2,5})?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? match.Value.Trim() : text;
+    }
+
+    private static string ExtractTimezone(string value)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"\b([A-Z]{2,5})\b\s*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups[1].Value : string.Empty;
+    }
+
+    private static string ExtractSeparation(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?i)(?:separation|apart|angular separation|minimum angular separation)?[^.;,]*(\d+(?:\.\d+)?\s*(?:°|deg|degree|degrees))");
+        return match.Success ? match.Groups[1].Value : string.Empty;
+    }
+
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
 }
 
 public sealed class ThumbnailPromptComposerV1
@@ -494,6 +546,12 @@ public static class PromptValidatorV9
         if (!ContainsAny(finalPrompt, "circular", "physically correct geometry")) throw new InvalidOperationException("Prompt validation failed: circular celestial body rule missing.");
         if (aspect == "1:1" && !ContainsAny(finalPrompt, "Native square", "Do not reuse a wide landscape layout")) throw new InvalidOperationException("Prompt validation failed: native square composition missing.");
         if (aspect == "9:16" && !ContainsAny(finalPrompt, "Native vertical", "mobile")) throw new InvalidOperationException("Prompt validation failed: native portrait composition missing.");
+        if (ContainsAny(finalPrompt, "Today", "Tonight", "Tomorrow", "This evening", "This week", "Look tonight", "Watch tonight", "Don’t miss", "Don't miss", "Coming soon", "Right now")) throw new InvalidOperationException("Prompt validation failed: relative time words are forbidden in evergreen thumbnail prompts.");
+        var dateMatch = System.Text.RegularExpressions.Regex.Match(finalPrompt, @"(?:\bDate|तारीख):\s*([^;.]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!dateMatch.Success) throw new InvalidOperationException("Prompt validation failed: Date field is missing.");
+        var dateValue = dateMatch.Groups[1].Value.Trim();
+        if (System.Text.RegularExpressions.Regex.IsMatch(dateValue, @"^\d{1,2}:\d{2}\s*(?:AM|PM)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Prompt validation failed: Date resembles a time-only value.");
+        if (System.Text.RegularExpressions.Regex.IsMatch(dateValue, @"\b(?:AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)) throw new InvalidOperationException("Prompt validation failed: Date contains AM/PM.");
     }
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;

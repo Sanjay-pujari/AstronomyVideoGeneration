@@ -1325,7 +1325,7 @@ public sealed class ThumbnailGenerationTests
             new ThumbnailEventIdentity("test-event", family + " Event", "Observation guide", family, family),
             new ThumbnailDisplay(family + " Event", family + " Event", family, [family + " Event"]),
             new ThumbnailObjects([family], [], new Dictionary<string, string> { [family] = family }),
-            new ThumbnailObservation(null, "After sunset", "After Sunset", "West", "Visible"),
+            new ThumbnailObservation(null, "Jun 9, 2026", "7:23 PM IST", "West", "Visible", new PlanetaryThumbnailGuideCardDto("Jun 9, 2026", "7:23 PM IST", "West", "Naked eye", null)),
             new ThumbnailVisual("cinematic astronomy", "premium documentary", "observation essentials", "click-through recognition"),
             new ThumbnailPlatform("Thumbnail", aspectRatio, profile, width, height),
             new ThumbnailPromptInstructions("Clean astronomy artwork", ThumbnailArtworkPromptRules.NegativePrompt, [family], []),
