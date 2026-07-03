@@ -1659,11 +1659,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 ["thumbnailVersion"] = "V9",
                 ["selectedRenderer"] = "ThumbnailV9AiFinalThumbnailComposer",
                 ["renderer"] = "ThumbnailV9AiFinalThumbnailComposer",
-                ["aiGeneratesFinalThumbnail"] = exception is null,
+                ["aiGeneratesFinalThumbnail"] = true,
                 ["manualOverlayUsed"] = false,
                 ["backgroundOnlyMode"] = false,
                 ["cropFromLandscape"] = false,
-                ["azureImage2Generated"] = exception is null,
+                ["azureImage2Generated"] = outputFiles.Count > 0,
                 ["selectedTemplate"] = "AiCompleteFinalThumbnail",
                 ["layoutFamily"] = "AiCompleteObservationGuide",
                 ["completeThumbnailModeName"] = "PerAspectAzureImage2CompleteThumbnail",
@@ -1674,7 +1674,8 @@ public sealed partial class ProductionPipelineExecutionService(
         root["phase12DiagnosticsGuaranteed"] = true;
         root["generatedUtc"] = DateTimeOffset.UtcNow;
         root["steps"] = new JsonArray(stepDiagnostics.Select(step => step.DeepClone()).ToArray());
-        root["outputFiles"] ??= new JsonArray(outputFiles.Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>());
+        if (root["outputFiles"] is not JsonArray existingOutputFiles || existingOutputFiles.Count == 0)
+            root["outputFiles"] = new JsonArray(outputFiles.Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>());
         if (exception is not null)
         {
             root["validationPassed"] = false;
@@ -13252,7 +13253,8 @@ public sealed partial class ProductionPipelineExecutionService(
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
-        if (missing.Length > 0)
+        var generationStatus = GetJsonString(root, "thumbnailGenerationStatus", string.Empty);
+        if (missing.Length > 0 && !string.Equals(generationStatus, "PARTIAL", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V9 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
         var phase12ValidationPath = Path.Combine(Path.GetDirectoryName(diagnosticsPath)!, "phase-12-validation.json");
         if (!File.Exists(phase12ValidationPath))

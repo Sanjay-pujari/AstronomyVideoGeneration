@@ -306,6 +306,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             }, JsonOptions), cancellationToken);
         var promptPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var outputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var successfulOutputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var aspectDiagnostics = new List<ThumbnailV9AspectGenerationDiagnostics>();
         var failures = new List<string>();
 
         foreach (var prompt in prompts)
@@ -317,21 +319,46 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(promptPath, prompt.Prompt, cancellationToken);
             promptPaths[prompt.Name] = NormalizePath(promptPath);
             outputPaths[prompt.Name] = NormalizePath(outputPath);
-            var result = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, prompt.Prompt, outputPath, cancellationToken);
-            if (!result.ProviderSucceeded)
-                failures.Add($"{prompt.Name}: {result.FailureReason}");
-            else
+
+            var retryCount = 0;
+            AzureImage2GenerationResult? result = null;
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                result = await GenerateThumbnailWithAzureImage2Async(imageOptions.Value, prompt.Prompt, outputPath, cancellationToken);
+                if (result.ProviderSucceeded) break;
+                if (attempt == 1)
+                {
+                    retryCount = 1;
+                    Console.WriteLine($"Thumbnail V9 aspect {prompt.Name} failed; retrying once. Reason: {result.FailureReason}");
+                }
+            }
+
+            var imageGenerated = result?.ProviderSucceeded == true && File.Exists(outputPath);
+            if (imageGenerated)
             {
                 await NormalizeThumbnailDimensionsAsync(outputPath, prompt.Width, prompt.Height, cancellationToken);
+                successfulOutputPaths[prompt.Name] = NormalizePath(outputPath);
                 Console.WriteLine($"Thumbnail V9 output written: {NormalizePath(outputPath)}");
             }
+            else
+            {
+                failures.Add($"{prompt.Name}: {result?.FailureReason ?? "unknown failure"}");
+                Console.WriteLine($"Thumbnail V9 aspect {prompt.Name} failed after retry policy; continuing with other aspects.");
+            }
+
+            aspectDiagnostics.Add(new ThumbnailV9AspectGenerationDiagnostics(
+                prompt.Name,
+                PromptGenerated: File.Exists(promptPath),
+                ImageGenerated: imageGenerated,
+                Timeout: result?.TimedOut == true,
+                RetryCount: retryCount,
+                OutputPath: NormalizePath(outputPath),
+                ErrorMessage: imageGenerated ? null : result?.FailureReason));
         }
 
-        if (failures.Count > 0)
-            throw new InvalidOperationException("Thumbnail V9 AI-Native generation failed; fallback images are not allowed. " + string.Join(" | ", failures));
-
-        var allOutputs = outputPaths.Values.ToArray();
-        ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
+        var allOutputs = successfulOutputPaths.Values.ToArray();
+        if (failures.Count == 0)
+            ValidateThumbnailV8Outputs(prompts, thumbnailRoot, promptOnly: false, fallbackUsed: false);
         promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         await WriteThumbnailV8ManifestAsync(request, thumbnailRoot, cancellationToken);
         var contractJsonPath = Path.Combine(diagnosticsRoot, ThumbnailPromptContractFileName);
@@ -399,7 +426,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedLandscapePrompt = true,
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
-            validationPassed = true,
+            validationPassed = failures.Count == 0,
+            thumbnailGenerationStatus = failures.Count == 0 ? "PASS" : (allOutputs.Length > 0 ? "PARTIAL" : "FAIL"),
+            failedAspects = failures.ToArray(),
+            aspectDiagnostics,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
             promptWriterVersion = "V9.2",
             promptStyle = "CreativeBrief",
@@ -420,7 +450,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             aspectGenerationMode = "PerAspectGenerated",
             layoutFamily = "AiCompleteObservationGuide",
             completeThumbnailModeName = "PerAspectAzureImage2CompleteThumbnail",
-            azureImage2Generated = true,
+            azureImage2Generated = allOutputs.Length > 0,
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             landscapePromptPath = promptPaths.GetValueOrDefault("landscape"),
@@ -432,6 +462,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validator = "PromptValidatorV9",
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
+            successfulOutputFilePaths = successfulOutputPaths,
             promptFilePaths = promptPaths,
             promptHashes = prompts.ToDictionary(prompt => prompt.Name, prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant(), StringComparer.OrdinalIgnoreCase),
             promptHashesUnique = prompts.Select(prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Length,
@@ -481,7 +512,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedLandscapePrompt = true,
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
-            validationPassed = true,
+            validationPassed = failures.Count == 0,
+            thumbnailGenerationStatus = failures.Count == 0 ? "PASS" : (allOutputs.Length > 0 ? "PARTIAL" : "FAIL"),
+            failedAspects = failures.ToArray(),
+            aspectDiagnostics,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
             promptWriterVersion = "V9.2",
             promptStyle = "CreativeBrief",
@@ -502,7 +536,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             aspectGenerationMode = "PerAspectGenerated",
             layoutFamily = "AiCompleteObservationGuide",
             completeThumbnailModeName = "PerAspectAzureImage2CompleteThumbnail",
-            azureImage2Generated = true,
+            azureImage2Generated = allOutputs.Length > 0,
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             landscapePromptPath = promptPaths.GetValueOrDefault("landscape"),
@@ -3117,29 +3151,37 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            using var response = await httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
-            var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(300));
+            var client = httpClientFactory.CreateClient();
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            using var response = await client.SendAsync(request, timeoutCts.Token);
+            var payload = await response.Content.ReadAsStringAsync(timeoutCts.Token);
             stopwatch.Stop();
             var generationEndedUtc = DateTimeOffset.UtcNow;
             var providerRequestId = response.Headers.TryGetValues("x-request-id", out var requestIds) ? requestIds.FirstOrDefault() : null;
             Console.WriteLine($"Azure Image2 HTTP request end: {(int)response.StatusCode} {response.StatusCode} in {stopwatch.ElapsedMilliseconds} ms");
-            if (!response.IsSuccessStatusCode) return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, providerRequestId, generationStartedUtc, generationEndedUtc, stopwatch.ElapsedMilliseconds, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}): {payload}");
+            if (!response.IsSuccessStatusCode) return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, providerRequestId, generationStartedUtc, generationEndedUtc, stopwatch.ElapsedMilliseconds, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}): {payload}", false);
             var downloadStopwatch = Stopwatch.StartNew();
-            var imageBytes = await ExtractAzureImage2BytesAsync(httpClientFactory.CreateClient(), payload, cancellationToken);
+            var downloadClient = httpClientFactory.CreateClient();
+            downloadClient.Timeout = Timeout.InfiniteTimeSpan;
+            var imageBytes = await ExtractAzureImage2BytesAsync(downloadClient, payload, timeoutCts.Token);
             Directory.CreateDirectory(Path.GetDirectoryName(imagePath) ?? ResolveWorkingDirectoryRoot());
             await File.WriteAllBytesAsync(imagePath, imageBytes, cancellationToken);
             downloadStopwatch.Stop();
-            return new(true, true, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, "AzureOpenAI", options.ImageDeployment, providerRequestId, generationStartedUtc, generationEndedUtc, stopwatch.ElapsedMilliseconds + downloadStopwatch.ElapsedMilliseconds, null);
+            return new(true, true, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, "AzureOpenAI", options.ImageDeployment, providerRequestId, generationStartedUtc, generationEndedUtc, stopwatch.ElapsedMilliseconds + downloadStopwatch.ElapsedMilliseconds, null, false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw;
+            stopwatch.Stop();
+            Console.WriteLine($"Azure Image2 HTTP request timed out in {stopwatch.ElapsedMilliseconds} ms");
+            return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, null, generationStartedUtc, DateTimeOffset.UtcNow, stopwatch.ElapsedMilliseconds, "Azure Image2 request timed out after 300 seconds.", true);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             Console.WriteLine($"Azure Image2 HTTP request end: provider exception in {stopwatch.ElapsedMilliseconds} ms: {ex.Message}");
-            return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, null, generationStartedUtc, DateTimeOffset.UtcNow, stopwatch.ElapsedMilliseconds, ex.ToString());
+            return new(true, false, stopwatch.ElapsedMilliseconds, 0, "AzureOpenAI", options.ImageDeployment, null, generationStartedUtc, DateTimeOffset.UtcNow, stopwatch.ElapsedMilliseconds, ex.ToString(), false);
         }
     }
 
@@ -3173,7 +3215,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content.");
     }
 
-    private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? ProviderName, string? ProviderModelName, string? ProviderRequestId, DateTimeOffset? GenerationStartedUtc, DateTimeOffset? GenerationEndedUtc, long? DurationMs, string? FailureReason);
+    private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? ProviderName, string? ProviderModelName, string? ProviderRequestId, DateTimeOffset? GenerationStartedUtc, DateTimeOffset? GenerationEndedUtc, long? DurationMs, string? FailureReason, bool TimedOut = false);
+
+    private sealed record ThumbnailV9AspectGenerationDiagnostics(string Aspect, bool PromptGenerated, bool ImageGenerated, bool Timeout, int RetryCount, string OutputPath, string? ErrorMessage);
 
     private sealed record ThumbnailV8Prompt(string Name, int Width, int Height, string AspectRatio, string Prompt, string NegativePrompt, string SelectedPromptBuilder, string SelectedFamilyTemplate, string PromptSummary, PromptAssemblyReport? AssemblyReport);
 
