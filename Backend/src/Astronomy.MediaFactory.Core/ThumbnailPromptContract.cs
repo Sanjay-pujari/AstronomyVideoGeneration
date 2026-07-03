@@ -305,16 +305,11 @@ public static class PromptValidatorV9
 {
     public static void Validate(ThumbnailPromptContract contract, IReadOnlyList<PromptSection> sections, string finalPrompt, PlatformStorytellingStrategy strategy)
     {
-        if (sections.Count == 0) throw new InvalidOperationException("Prompt validation failed: no prompt sections remained after assembly.");
-        if (strategy.Name == "LandscapeStrategy" && !sections.Any(s => s.Category.Equals("Observation Card", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Prompt validation failed: Landscape observation card missing.");
-        if (strategy.Name == "PortraitStrategy")
-        {
-            FailIfPresent(sections, "Footer", "Portrait footer exists."); FailIfPresent(sections, "Equipment", "Portrait equipment table exists."); FailIfPresent(sections, "Observation Card", "Portrait observation table exists.");
-        }
-        if (strategy.Name == "SquareStrategy" && sections.Count(s => s.Category.Contains("Observation", StringComparison.OrdinalIgnoreCase) || s.Category.Contains("Equipment", StringComparison.OrdinalIgnoreCase) || s.Category.Contains("Safety", StringComparison.OrdinalIgnoreCase) || s.Category.Contains("Footer", StringComparison.OrdinalIgnoreCase)) > 2) throw new InvalidOperationException("Prompt validation failed: Square information density exceeds strategy.");
-        if (ContainsAny(finalPrompt, "crop landscape")) throw new InvalidOperationException("Prompt validation failed: contradictory prompt instructions remain.");
-        if (ContainsAny(finalPrompt, "AI image is NOT the final thumbnail", "will be added later", "background-only image", "background only", "background artwork only", "do not draw text", "do not render text", "renderer will add title", "renderer owns presentation", "renderer-owned presentation", "deterministic overlay", "manual overlay", "do not draw icons")) throw new InvalidOperationException("Prompt validation failed: prompt is not complete-thumbnail mode.");
-        if (!ContainsAny(finalPrompt, "Generate final finished thumbnail image") || !ContainsAny(finalPrompt, "The AI image must be the complete final thumbnail") || !ContainsAny(finalPrompt, "No post-processing overlay will be added")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
+        ArgumentNullException.ThrowIfNull(contract);
+        if (string.IsNullOrWhiteSpace(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: final composed prompt is empty.");
+        var legacyPhrases = new[] { "AI image is NOT the final thumbnail", "will be added later", "background-only image", "background only", "background artwork", "do not draw text", "do not render text", "do not draw title", "do not draw icons", "renderer will add", "renderer owns", "renderer-owned presentation", "deterministic overlay", "manual overlay", "background mode", "BackgroundOnly", "RendererPresentation", "AiNativePromptBasedThumbnail", "ThumbnailV8AiNativeRenderer", "AzureImage2ThumbnailV5", "crop landscape" };
+        if (ContainsAny(finalPrompt, legacyPhrases)) throw new InvalidOperationException("Prompt validation failed: contradictory prompt instructions remain.");
+        if (!ContainsAny(finalPrompt, "Generate final finished thumbnail image") || !ContainsAny(finalPrompt, "Include all text, icons, panels, callouts, labels, and footer inside the image") || !ContainsAny(finalPrompt, "The AI image must be the complete final thumbnail") || !ContainsAny(finalPrompt, "No post-processing overlay will be added")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
         if (!ContainsAny(finalPrompt, contract.Display.DisplayTitle, contract.Display.LocalizedTitle)) throw new InvalidOperationException("Prompt validation failed: title text missing.");
         if (!ContainsAny(finalPrompt, "LOCALIZED SUBTITLE TO RENDER", "SUBTITLE:")) throw new InvalidOperationException("Prompt validation failed: subtitle text missing.");
         if (!ContainsAny(finalPrompt, $"{contract.Platform.Width}x{contract.Platform.Height}", $"OUTPUT SIZE: {contract.Platform.Width}x{contract.Platform.Height}")) throw new InvalidOperationException("Prompt validation failed: aspect output size missing.");
@@ -331,9 +326,9 @@ public static class PromptValidatorV9
         if (!ContainsAny(finalPrompt, "NEGATIVE RULES")) throw new InvalidOperationException("Prompt validation failed: negative rules missing.");
         if (!ContainsAny(finalPrompt, "LOCALIZED", "language", "Hindi", "English")) throw new InvalidOperationException("Prompt validation failed: localized language rules missing.");
     }
-    private static void FailIfPresent(IReadOnlyList<PromptSection> sections, string category, string reason) { if (sections.Any(s => s.Category.Equals(category, StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Prompt validation failed: " + reason); }
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
 }
+
 
 public static class ThumbnailPromptContractValidator
 {

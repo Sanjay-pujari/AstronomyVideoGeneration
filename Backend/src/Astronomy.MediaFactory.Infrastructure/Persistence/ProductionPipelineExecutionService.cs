@@ -1659,14 +1659,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 ["thumbnailVersion"] = "V9",
                 ["selectedRenderer"] = "ThumbnailV9AiFinalThumbnailComposer",
                 ["renderer"] = "ThumbnailV9AiFinalThumbnailComposer",
-                ["aiNativeFullImage"] = exception is null,
+                ["aiGeneratesFinalThumbnail"] = exception is null,
                 ["manualOverlayUsed"] = false,
                 ["backgroundOnlyMode"] = false,
                 ["cropFromLandscape"] = false,
                 ["azureImage2Generated"] = exception is null,
-                ["selectedTemplate"] = "AiFinalPromptBasedThumbnail",
-                ["layoutFamily"] = "AiGeneratedObservationGuide",
-                ["backgroundMode"] = "PerAspectAzureImage2",
+                ["selectedTemplate"] = "AiCompleteFinalThumbnail",
+                ["layoutFamily"] = "AiCompleteObservationGuide",
+                ["completeThumbnailModeName"] = "PerAspectAzureImage2CompleteThumbnail",
                 ["validationPassed"] = exception is null
             };
         }
@@ -12340,9 +12340,9 @@ public sealed partial class ProductionPipelineExecutionService(
             phase12ThumbnailDiagnostics,
             thumbnailVersion = phase12ThumbnailDiagnostics?.ThumbnailVersion,
             selectedRenderer = phase12ThumbnailDiagnostics?.Renderer,
-            selectedTemplate = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "AiFinalPromptBasedThumbnail" : null,
-            layoutFamily = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "AiGeneratedObservationGuide" : null,
-            backgroundMode = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "PerAspectAzureImage2" : null,
+            selectedTemplate = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "AiCompleteFinalThumbnail" : null,
+            layoutFamily = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "AiCompleteObservationGuide" : null,
+            completeThumbnailModeName = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "PerAspectAzureImage2CompleteThumbnail" : null,
             renderer = phase12ThumbnailDiagnostics?.Renderer,
             validator = phase12ThumbnailDiagnostics?.Validator,
             thumbnailReviewJsonRequired = phase12ThumbnailDiagnostics?.ThumbnailReviewJsonRequired,
@@ -13234,14 +13234,14 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V9", StringComparison.Ordinal)
             || !string.Equals(GetJsonString(root, "selectedRenderer", string.Empty), "ThumbnailV9AiFinalThumbnailComposer", StringComparison.Ordinal))
             throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report V9 and ThumbnailV9AiFinalThumbnailComposer.");
-        if (!GetJsonBool(root, "aiNativeFullImage") || GetJsonBool(root, "manualOverlayUsed") || GetJsonBool(root, "backgroundOnlyMode") || GetJsonBool(root, "cropFromLandscape") || !GetJsonBool(root, "azureImage2Generated"))
-            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report full AI-native generation without manual overlay, background-only mode, or landscape crop.");
+        if (!GetJsonBool(root, "aiGeneratesFinalThumbnail") || !GetJsonBool(root, "completeThumbnailMode") || GetJsonBool(root, "manualOverlayUsed") || GetJsonBool(root, "backgroundOnlyMode") || GetJsonBool(root, "cropFromLandscape") || !GetJsonBool(root, "azureImage2Generated"))
+            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report complete AI generation without legacy presentation mode or landscape crop.");
         if (File.ReadAllText(diagnosticsPath).Contains("V7", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V9 validation failed: V7 appeared in thumbnail-v9-diagnostics.json while V9 is enabled.");
-        if (!string.Equals(GetJsonString(root, "selectedTemplate", string.Empty), "AiFinalPromptBasedThumbnail", StringComparison.Ordinal)
-            || !string.Equals(GetJsonString(root, "layoutFamily", string.Empty), "AiGeneratedObservationGuide", StringComparison.Ordinal)
-            || !string.Equals(GetJsonString(root, "backgroundMode", string.Empty), "PerAspectAzureImage2", StringComparison.Ordinal))
-            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report AiFinalPromptBasedThumbnail, AiGeneratedObservationGuide, and PerAspectAzureImage2.");
+        if (!string.Equals(GetJsonString(root, "selectedTemplate", string.Empty), "AiCompleteFinalThumbnail", StringComparison.Ordinal)
+            || !string.Equals(GetJsonString(root, "layoutFamily", string.Empty), "AiCompleteObservationGuide", StringComparison.Ordinal)
+            || !string.Equals(GetJsonString(root, "completeThumbnailModeName", string.Empty), "PerAspectAzureImage2CompleteThumbnail", StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report complete-thumbnail template, layout, and per-aspect generation mode.");
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
