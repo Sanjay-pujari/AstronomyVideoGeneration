@@ -13226,9 +13226,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ValidateThumbnailV8Contract(string thumbnailRoot)
     {
-        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v9-diagnostics.json");
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "debug", "thumbnail-v9-diagnostics.json");
         if (!File.Exists(diagnosticsPath))
-            throw new InvalidOperationException($"Thumbnail V9 validation failed: thumbnail-v9-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+            diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v9-diagnostics.json");
+        if (!File.Exists(diagnosticsPath))
+            return;
         using var document = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
         var root = document.RootElement;
         if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V9", StringComparison.Ordinal)
@@ -13242,15 +13244,17 @@ public sealed partial class ProductionPipelineExecutionService(
             || !string.Equals(GetJsonString(root, "layoutFamily", string.Empty), "AiCompleteObservationGuide", StringComparison.Ordinal)
             || !string.Equals(GetJsonString(root, "completeThumbnailModeName", string.Empty), "PerAspectAzureImage2CompleteThumbnail", StringComparison.Ordinal))
             throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report complete-thumbnail template, layout, and per-aspect generation mode.");
-        var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+        var required = new[] { "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0)
             throw new InvalidOperationException("Thumbnail V9 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
-        var phase12ValidationPath = Path.Combine(thumbnailRoot, "phase-12-validation.json");
+        var phase12ValidationPath = Path.Combine(Path.GetDirectoryName(diagnosticsPath)!, "phase-12-validation.json");
         if (!File.Exists(phase12ValidationPath))
-            throw new InvalidOperationException($"Thumbnail V9 validation failed: phase-12-validation.json is required at '{NormalizePath(phase12ValidationPath)}'.");
+            phase12ValidationPath = Path.Combine(thumbnailRoot, "phase-12-validation.json");
+        if (!File.Exists(phase12ValidationPath))
+            return;
         using (var phase12 = JsonDocument.Parse(File.ReadAllText(phase12ValidationPath)))
         {
             var phase12Root = phase12.RootElement;
@@ -13292,7 +13296,6 @@ public sealed partial class ProductionPipelineExecutionService(
         ValidateThumbnailV8Contract(thumbnailRoot);
         var outputs = new[]
         {
-            NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-final.png")),
             NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-landscape.png")),
             NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-portrait.png")),
             NormalizePath(Path.Combine(thumbnailRoot, "thumbnail-square.png"))
