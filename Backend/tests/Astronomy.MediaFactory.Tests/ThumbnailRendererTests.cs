@@ -63,18 +63,20 @@ public sealed class ThumbnailRendererTests
         var directionLabel = language == "hi" ? "दिशा" : "Direction";
         var separationLabel = language == "hi" ? "दूरी" : "Separation";
         var equipmentLabel = language == "hi" ? "उपकरण" : "Equipment";
-        var footerLabel = language == "hi" ? "नीचे के सुझाव" : "Footer tips";
+        var ctaLabel = language == "hi" ? "कार्रवाई" : "CTA";
         var objectLabel = language == "hi" ? "वस्तु लेबल" : "Object labels";
 
-        Assert.Contains("rich RC2-style observation guide card", landscape);
+        Assert.Contains("premium landscape glass observation card", landscape);
         Assert.Contains(dateLabel, landscape);
         Assert.Contains(timeLabel, landscape);
         Assert.Contains(directionLabel, landscape);
         Assert.Contains(separationLabel, landscape);
         Assert.Contains(equipmentLabel, landscape);
-        Assert.Contains(footerLabel, landscape);
+        Assert.Contains(ctaLabel, landscape);
         Assert.Contains(objectLabel, landscape);
+        Assert.Contains("Do not render observation windows, long date ranges, technical wording, internal IDs, or footer tips", landscape);
         Assert.Contains("complete final astronomy thumbnail", landscape);
+        Assert.DoesNotContain($"{(language == "hi" ? "उपशीर्षक" : "Subtitle")}:", landscape);
 
         Assert.Contains("medium-density square guide fields", square);
         Assert.Contains(dateLabel, square);
