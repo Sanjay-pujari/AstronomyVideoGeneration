@@ -1950,7 +1950,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(layoutPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
 
             thumbnailTotalStopwatch.Stop();
-            await WriteAzureImage2ThumbnailV5GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, finalFileWrites, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, allRequiredThumbnailFilesGenerated, missingThumbnailFiles, retryMissingVariantsAttempted, retryMissingVariantsSucceeded, finalCopiedFromLandscape, cancellationToken);
+            await WriteAzureImage2ThumbnailV5GenerationSummaryDiagnosticsAsync(finalPromptText, imageOptions.Value, finalPath, promptPath, diagnosticsPath, thumbnailVariantResults, finalFileWrites, duplicateHashGroups, thumbnailTotalStopwatch.ElapsedMilliseconds, allRequiredThumbnailFilesGenerated, missingThumbnailFiles, retryMissingVariantsAttempted, retryMissingVariantsSucceeded, finalCopiedFromLandscape, IsThumbnailDebugEnabled(), cancellationToken);
         }
 
         return BuildImageGenerationResponse(
@@ -2935,6 +2935,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         bool retryMissingVariantsAttempted,
         bool retryMissingVariantsSucceeded,
         bool finalCopiedFromLandscape,
+        bool debugEnabled,
         CancellationToken cancellationToken)
     {
         var endpoint = options.Endpoint?.Trim() ?? string.Empty;
