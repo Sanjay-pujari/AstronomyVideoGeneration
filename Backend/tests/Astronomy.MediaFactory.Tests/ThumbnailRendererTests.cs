@@ -105,6 +105,22 @@ public sealed class ThumbnailRendererTests
         Assert.DoesNotContain("only one tiny hint", portrait);
     }
 
+
+    [Fact]
+    public void ThumbnailFieldFormatter_MapsGuideCardDateWithoutDerivingFromBestTime()
+    {
+        var guideCard = new PlanetaryThumbnailGuideCardDto("Jun 9, 2026", "Jun 9, 2026 7:23 PM", "West After Sunset", "Naked eye; binoculars optional", "1.63°");
+        var observation = new ThumbnailObservation(null, "", "", "", "", guideCard);
+
+        var fields = ThumbnailFieldFormatter.Format(observation, "en");
+
+        Assert.Equal("Jun 9, 2026", fields.Date);
+        Assert.Equal("7:23 PM", fields.BestTime);
+        Assert.Equal("West", fields.Direction);
+        Assert.Equal("Naked Eye; Binoculars Optional", fields.Equipment);
+        Assert.Equal("1.63° Apart", fields.Separation);
+    }
+
     private static ThumbnailPromptContract BuildJupiterVenusContract(string aspect, string language)
     {
         var (name, ratio, w, h) = aspect switch { "portrait" => ("portrait", "9:16", 1080, 1920), "square" => ("square", "1:1", 1200, 1200), _ => ("landscape", "16:9", 1280, 720) };
