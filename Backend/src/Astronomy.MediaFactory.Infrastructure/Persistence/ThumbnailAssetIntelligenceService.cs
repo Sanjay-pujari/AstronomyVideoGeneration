@@ -356,7 +356,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             validator = "PromptValidatorV9",
-            promptWriterVersion = "V9.1",
+            promptWriterVersion = "V9.2",
             promptStyle = "CreativeBrief",
             prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, promptWordCount = CountPromptWords(prompt.Prompt), promptCompressionRatio = CalculatePromptCompressionRatio(prompt), duplicateSectionsRemoved = CountDuplicateSectionsRemoved(prompt), prompt.Prompt }).ToArray()
         }, JsonOptions), cancellationToken);
@@ -401,7 +401,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedSquarePrompt = true,
             validationPassed = true,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
-            promptWriterVersion = "V9.1",
+            promptWriterVersion = "V9.2",
             promptStyle = "CreativeBrief",
             promptWordCount = promptValidation.PromptWordCount,
             targetWordCount = promptValidation.TargetWordCount,
@@ -483,7 +483,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedSquarePrompt = true,
             validationPassed = true,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
-            promptWriterVersion = "V9.1",
+            promptWriterVersion = "V9.2",
             promptStyle = "CreativeBrief",
             promptWordCount = promptValidation.PromptWordCount,
             targetWordCount = promptValidation.TargetWordCount,
@@ -610,7 +610,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             language = request.Language,
             validationPassed = promptValidation.FinalPromptPassedValidation,
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
-            promptWriterVersion = "V9.1",
+            promptWriterVersion = "V9.2",
             promptStyle = "CreativeBrief",
             promptWordCount = promptValidation.PromptWordCount,
             targetWordCount = promptValidation.TargetWordCount,
@@ -650,7 +650,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 prompt.PromptSummary,
                 prompt.AssemblyReport,
                 promptFileName = $"thumbnail-{prompt.Name}-prompt.txt",
-                promptWriterVersion = "V9.1",
+                promptWriterVersion = "V9.2",
                 promptStyle = "CreativeBrief",
                 promptWordCount = CountPromptWords(prompt.Prompt),
                 promptCompressionRatio = CalculatePromptCompressionRatio(prompt),
@@ -943,7 +943,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             .ToArray();
         var checks = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {
-            ["prompt writer version V9.1"] = true,
+            ["prompt writer version V9.2"] = true,
             ["prompt style creative brief"] = prompts.All(p => p.Prompt.Contains("Creative intent:", StringComparison.OrdinalIgnoreCase)),
             ["complete final thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("complete final astronomy thumbnail", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("complete final thumbnail", StringComparison.OrdinalIgnoreCase)),
             ["no post-processing overlay instruction"] = prompts.All(p => p.Prompt.Contains("No post-processing overlay will be added", StringComparison.OrdinalIgnoreCase)),

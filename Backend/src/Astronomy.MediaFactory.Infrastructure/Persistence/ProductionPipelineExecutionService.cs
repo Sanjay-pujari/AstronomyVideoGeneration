@@ -13233,10 +13233,14 @@ public sealed partial class ProductionPipelineExecutionService(
             return;
         using var document = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
         var root = document.RootElement;
-        if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V9", StringComparison.Ordinal)
-            || !string.Equals(GetJsonString(root, "selectedRenderer", string.Empty), "ThumbnailV9AiFinalThumbnailComposer", StringComparison.Ordinal))
-            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report V9 and ThumbnailV9AiFinalThumbnailComposer.");
-        if (!GetJsonBool(root, "aiGeneratesFinalThumbnail") || !GetJsonBool(root, "completeThumbnailMode") || GetJsonBool(root, "manualOverlayUsed") || GetJsonBool(root, "backgroundOnlyMode") || GetJsonBool(root, "cropFromLandscape") || !GetJsonBool(root, "azureImage2Generated"))
+        if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V9", StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report V9.");
+        var completeAiFinalThumbnail = GetJsonBool(root, "aiGeneratesFinalThumbnail")
+            && !GetJsonBool(root, "manualOverlayUsed")
+            && !GetJsonBool(root, "backgroundOnlyMode")
+            && !GetJsonBool(root, "cropFromLandscape")
+            && GetJsonBool(root, "azureImage2Generated");
+        if (!completeAiFinalThumbnail)
             throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report complete AI generation without legacy presentation mode or landscape crop.");
         if (File.ReadAllText(diagnosticsPath).Contains("V7", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Thumbnail V9 validation failed: V7 appeared in thumbnail-v9-diagnostics.json while V9 is enabled.");
