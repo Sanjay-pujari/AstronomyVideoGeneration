@@ -377,6 +377,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
             validationPassed = true,
+            promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
+            promptValidationReasons = promptValidation.FailureReasons,
+            promptValidationRequiredChecks = promptValidation.RequiredChecks,
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
@@ -398,6 +401,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
             promptFilePaths = promptPaths,
+            promptHashes = prompts.ToDictionary(prompt => prompt.Name, prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant(), StringComparer.OrdinalIgnoreCase),
+            promptHashesUnique = prompts.Select(prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count,
+            aspectPromptsUnique = prompts.Select(prompt => prompt.Prompt).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count,
             visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
             promptDiffPath = NormalizePath(promptDiffPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
@@ -441,6 +447,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             dedicatedPortraitPrompt = true,
             dedicatedSquarePrompt = true,
             validationPassed = true,
+            promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
+            promptValidationReasons = promptValidation.FailureReasons,
+            promptValidationRequiredChecks = promptValidation.RequiredChecks,
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
@@ -461,6 +470,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validator = "ThumbnailV8Validator",
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
+            promptHashes = prompts.ToDictionary(prompt => prompt.Name, prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant(), StringComparer.OrdinalIgnoreCase),
+            promptHashesUnique = prompts.Select(prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count,
+            aspectPromptsUnique = prompts.Select(prompt => prompt.Prompt).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count,
             visualPromptDiagnosticsPath = NormalizePath(visualPromptDiagnosticsPath),
             promptDiffPath = NormalizePath(promptDiffPath),
             compositionProfilePath = NormalizePath(compositionProfilePath),
@@ -526,6 +538,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             promptContractGenerated = true,
             completeThumbnailMode = true,
+            backgroundOnlyMode = false,
+            manualOverlayUsed = false,
+            aiNativeFullImage = true,
             compositionProfileGenerated = true,
             promptGenerationChanged = false,
             renderingBehaviorChanged = false,
@@ -533,7 +548,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             regionId = request.RegionId,
             language = request.Language,
             validationPassed = promptValidation.FinalPromptPassedValidation,
+            promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
+            promptValidationReasons = promptValidation.FailureReasons,
+            promptValidationRequiredChecks = promptValidation.RequiredChecks,
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
+            promptHashesUnique = prompts.Select(prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count,
+            aspectPromptsUnique = prompts.Select(prompt => prompt.Prompt).Distinct(StringComparer.OrdinalIgnoreCase).Count() == prompts.Count,
             promptContracts = contracts.Select(contract => new
             {
                 contract.EventIdentity.EventId,
@@ -677,7 +697,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         "viewing window", "recommended viewing window", "schedule description", "schedule descriptions"
     ];
 
-    private sealed record ThumbnailV8PromptValidationDiagnostics(IReadOnlyList<string> ForbiddenTokensDetected, IReadOnlyList<string> ForbiddenTokensRemoved, bool FinalPromptPassedValidation);
+    private sealed record ThumbnailV8PromptValidationDiagnostics(IReadOnlyList<string> ForbiddenTokensDetected, IReadOnlyList<string> ForbiddenTokensRemoved, bool FinalPromptPassedValidation, IReadOnlyDictionary<string, bool> RequiredChecks, IReadOnlyList<string> FailureReasons);
 
     private static object BuildThumbnailCompositionProfileDiagnostics(IReadOnlyList<ThumbnailPromptContract> contracts, IReadOnlyList<ThumbnailV8Prompt> prompts)
     {
@@ -829,7 +849,29 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var removed = new[] { "visibility window", "visibility windows", "viewing window", "recommended viewing window", "schedule descriptions" }
             .Except(detected, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return new ThumbnailV8PromptValidationDiagnostics(detected, removed, detected.Length == 0);
+        var checks = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["final finished thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("Generate final finished thumbnail image", StringComparison.OrdinalIgnoreCase)),
+            ["complete AI thumbnail instruction"] = prompts.All(p => p.Prompt.Contains("The AI image must be the complete final thumbnail", StringComparison.OrdinalIgnoreCase)),
+            ["title text"] = prompts.All(p => p.Prompt.Contains("LOCALIZED TITLE TO RENDER", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("TITLE:", StringComparison.OrdinalIgnoreCase)),
+            ["subtitle text"] = prompts.All(p => p.Prompt.Contains("LOCALIZED SUBTITLE TO RENDER", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("SUBTITLE:", StringComparison.OrdinalIgnoreCase)),
+            ["aspect output size"] = prompts.All(p => p.Prompt.Contains($"{p.Width}x{p.Height}", StringComparison.OrdinalIgnoreCase)),
+            ["aspect-specific composition"] = prompts.All(p => p.Prompt.Contains("ASPECT-SPECIFIC COMPOSITION", StringComparison.OrdinalIgnoreCase)),
+            ["object prominence rule"] = prompts.All(p => p.Prompt.Contains("OBJECT PROMINENCE RULE", StringComparison.OrdinalIgnoreCase)),
+            ["mobile readability rule"] = prompts.All(p => p.Prompt.Contains("TEXT READABILITY RULE", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("mobile-readable", StringComparison.OrdinalIgnoreCase)),
+            ["text style rule"] = prompts.All(p => p.Prompt.Contains("TEXT STYLE RULE", StringComparison.OrdinalIgnoreCase) || p.Prompt.Contains("typography", StringComparison.OrdinalIgnoreCase)),
+            ["family-specific template"] = prompts.All(p => p.Prompt.Contains("FAMILY-SPECIFIC TEMPLATE", StringComparison.OrdinalIgnoreCase)),
+            ["visual scene"] = prompts.All(p => p.Prompt.Contains("VISUAL SCENE", StringComparison.OrdinalIgnoreCase)),
+            ["UI architecture"] = prompts.All(p => p.Prompt.Contains("UI ARCHITECTURE", StringComparison.OrdinalIgnoreCase)),
+            ["data to render"] = prompts.All(p => p.Prompt.Contains("LOCALIZED TEXT AND FACTS TO RENDER", StringComparison.OrdinalIgnoreCase)),
+            ["quality rules"] = prompts.All(p => p.Prompt.Contains("QUALITY RULES", StringComparison.OrdinalIgnoreCase)),
+            ["CTR instructions"] = prompts.All(p => p.Prompt.Contains("CTR INSTRUCTIONS", StringComparison.OrdinalIgnoreCase)),
+            ["negative rules"] = prompts.All(p => p.Prompt.Contains("NEGATIVE RULES", StringComparison.OrdinalIgnoreCase)),
+            ["localized language rules"] = prompts.All(p => p.Prompt.Contains("LOCALIZED", StringComparison.OrdinalIgnoreCase)),
+            ["background-only mode disabled"] = prompts.All(p => !p.Prompt.Contains("background artwork only", StringComparison.OrdinalIgnoreCase) && !p.Prompt.Contains("do not draw text", StringComparison.OrdinalIgnoreCase) && !p.Prompt.Contains("renderer will add", StringComparison.OrdinalIgnoreCase))
+        };
+        var failures = checks.Where(kv => !kv.Value).Select(kv => kv.Key).Concat(detected.Select(token => $"forbidden token: {token}")).ToArray();
+        return new ThumbnailV8PromptValidationDiagnostics(detected, removed, failures.Length == 0, checks, failures);
     }
 
     private static void ValidateThumbnailV8Outputs(IReadOnlyList<ThumbnailV8Prompt> prompts, string thumbnailRoot, bool promptOnly, bool fallbackUsed)
@@ -3331,7 +3373,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new ThumbnailBrand("Natural title case, mobile-readable typography, no technical identifiers", "premium dark blue and gold astronomy magazine style", [FirstNonEmpty(language, c.Current.Language, "en"), "Do not bake location names into the image"]),
             new ThumbnailValidation(["No null required fields", "Aspect-native image generation", "Renderer consumes contract only"], ["Render only required event objects", "Preserve event family safety and observation truth"], ["No cropping from another aspect ratio", "Respect safe zones and mobile readability"]),
             new ThumbnailPromptDiagnostics("ThumbnailV8AiNativePromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow),
-            BuildPromptSections(aspect, c, template, summary, primaryObjects));
+            BuildPromptSections(aspect, c, template, summary, primaryObjects, sanitizedPrompt));
     }
 
     private static string SanitizeThumbnailV8PromptText(string value)
@@ -3346,7 +3388,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
     }
 
 
-    private static IReadOnlyList<PromptSection> BuildPromptSections(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string family, string summary, IReadOnlyList<string> primaryObjects)
+    private static IReadOnlyList<PromptSection> BuildPromptSections(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string family, string summary, IReadOnlyList<string> primaryObjects, string completePrompt)
     {
         var objectText = primaryObjects.Count > 0 ? string.Join(" + ", primaryObjects) : c.Title;
         var observationFacts = new[]
@@ -3364,6 +3406,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
 
         return
         [
+            new PromptSection("complete-thumbnail-contract", "Quality Rules", 5, completePrompt, true),
             new PromptSection("localized-title", "Title", 10, $"Render the localized title exactly: '{c.Title}'.", true),
             new PromptSection("localized-subtitle", "Subtitle", 20, $"Render the localized subtitle: '{c.EventType}'.", false),
             new PromptSection("family-visual-scene", "Visual Scene", 30, $"{summary} Show only these event objects: {objectText}. No random planets, invented celestial objects, location text, watermark, database identifiers, or snake case.", true),
@@ -3375,7 +3418,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new PromptSection("safety", "Safety", 80, safety, family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)),
             new PromptSection("cta", "CTA", 90, "Short action cue: watch the sky tonight.", false),
             new PromptSection("footer", "Footer", 100, "Short footer tips may appear only on rich landscape layouts: look direction, best time, equipment.", false),
-            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate the complete final thumbnail at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. Premium cinematic astronomy style with integrated typography, UI panels, icons, labels, callouts, and footer where allowed. Require native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, physically correct astronomical geometry, object prominence, and text readability.", true)
+            new PromptSection("quality-rules", "Quality Rules", 110, $"Generate the complete final thumbnail at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. TEXT STYLE RULE: use natural title case, mobile-readable typography, high contrast text, and no technical identifiers. Premium cinematic astronomy style with integrated typography, UI panels, icons, labels, callouts, and footer where allowed. Require native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, physically correct astronomical geometry, object prominence, and text readability.", true)
         ];
     }
 
