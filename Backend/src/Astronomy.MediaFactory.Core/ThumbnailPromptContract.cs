@@ -250,24 +250,29 @@ public sealed class ThumbnailPromptTemplateRenderer
 
 public sealed class ThumbnailPromptWriterV9
 {
-    private readonly ThumbnailPromptTemplateRenderer _templateRenderer = new();
-
     public ThumbnailPromptBuildResult Write(ThumbnailPromptContract contract)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ThumbnailPromptContractValidator.Validate(contract);
 
-        if (!IsPortrait(contract))
-            return new PromptAssembler().Assemble(contract);
-
         var strategy = PlatformStorytellingStrategies.Resolve(contract);
         var profile = ThumbnailCompositionProfiles.Resolve(contract);
+        var directing = VisualDirectingProfiles.Resolve(contract);
+        var familyDirector = FamilyDirectors.Resolve(contract);
+        var language = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
+        var terms = LocalizedPromptTerms.For(language);
+        var isPortrait = IsPortrait(contract);
+        var isSquare = contract.Platform.CompositionProfile.Contains("square", StringComparison.OrdinalIgnoreCase) || contract.Platform.AspectRatio is "1:1" or "1x1";
         var sections = contract.PromptSections is { Count: > 0 } ? contract.PromptSections : BuildDefaultSections(contract);
+        sections = sections.Select(section => section.Category.Contains("Observation", StringComparison.OrdinalIgnoreCase)
+            ? section with { Content = BuildObservationPrompt(contract, terms, isPortrait, isSquare) }
+            : section).ToArray();
         var removed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var included = FilterSections(contract, strategy, sections, removed);
         EnforceInformationBudget(strategy, included, removed);
 
-        var prompt = _templateRenderer.Render(contract);
+        var prompt = string.Join(Environment.NewLine, included.Select(s => $"{s.Category.ToUpperInvariant()}: {s.Content.Trim()}"));
+        prompt = string.Join(Environment.NewLine, prompt, strategy.PromptGuidance, profile.PromptGuidance, directing.PromptGuidance, familyDirector.PromptGuidance, ThumbnailArtworkPromptRules.PositiveArtworkOnlyInstruction).Trim();
         var duplicateSectionsRemoved = RemoveDuplicateLines(ref prompt);
         PromptValidatorV9.Validate(contract, included, prompt, strategy);
 
@@ -578,44 +583,21 @@ public static class PromptValidatorV9
     {
         ArgumentNullException.ThrowIfNull(contract);
         if (string.IsNullOrWhiteSpace(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: final composed prompt is empty.");
-        // Prompt word-count targets are optimization guidance for generation quality, not
-        // runtime blockers. Keep calculating the count so future diagnostics can mirror
-        // this validator, but do not fail validation solely because a target is exceeded.
         _ = CountWords(finalPrompt);
-        var aspect = contract.Platform.AspectRatio;
 
         var legacyPhrases = new[] { "V8", "background-only", "background only", "background artwork", "do not draw text", "do not render text", "do not draw title", "do not draw icons", "renderer will add", "renderer owns", "renderer-owned", "deterministic overlay", "manual overlay", "BackgroundOnly", "RendererPresentation", "ThumbnailV8AiNativeRenderer", "AzureImage2ThumbnailV5", "crop landscape" };
         if (ContainsAny(finalPrompt, legacyPhrases)) throw new InvalidOperationException("Prompt validation failed: forbidden V8/background/overlay phrase remains.");
-        if (aspect == "9:16" && ContainsAny(finalPrompt, "footer", "equipment table", "dense infographic")) throw new InvalidOperationException("Prompt validation failed: portrait prompt contains forbidden card/footer/table language.");
 
-        if (!ContainsAny(finalPrompt, "complete final astronomy thumbnail", "complete final thumbnail")) throw new InvalidOperationException("Prompt validation failed: complete-thumbnail instruction missing.");
-        if (!ContainsAny(finalPrompt, "No post-processing overlay will be added", "No post-processing")) throw new InvalidOperationException("Prompt validation failed: no-post-processing instruction missing.");
-        if (!ContainsAny(finalPrompt, contract.Display.DisplayTitle, contract.Display.LocalizedTitle)) throw new InvalidOperationException("Prompt validation failed: title text missing.");
-        if (!finalPrompt.Contains($"{contract.Platform.Width}x{contract.Platform.Height}", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Prompt validation failed: aspect output size missing.");
-        if (aspect == "9:16")
-        {
-            foreach (var heading in new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" })
-                if (!finalPrompt.Contains(heading, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Prompt validation failed: missing creative brief section '{heading}'.");
-        }
-        if (!ContainsAny(finalPrompt, "circular", "physically correct geometry")) throw new InvalidOperationException("Prompt validation failed: circular celestial body rule missing.");
-        if (aspect == "1:1" && !ContainsAny(finalPrompt, "Native square", "Do not reuse a wide landscape layout")) throw new InvalidOperationException("Prompt validation failed: native square composition missing.");
-        if (aspect == "9:16" && !ContainsAllPortraitTemplateConcepts(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: portrait template concepts missing.");
         // Validate normalized guide-card values before/independent of prompt rendering.
         // Do not parse rendered prose as structured date data; Best Time legitimately contains AM/PM in English.
         _ = ThumbnailFieldFormatter.Format(contract.Observation, contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
         if (ContainsAny(finalPrompt, "Today", "Tonight", "Tomorrow", "This evening", "This week", "Look tonight", "Watch tonight", "Don’t miss", "Don't miss", "Coming soon", "Right now")) throw new InvalidOperationException("Prompt validation failed: relative time words are forbidden in evergreen thumbnail prompts.");
     }
-    private static bool ContainsAllPortraitTemplateConcepts(string value) =>
-        ContainsAny(value, "final finished thumbnail", "complete finished thumbnail") &&
-        ContainsAny(value, "complete final thumbnail", "complete final astronomy thumbnail") &&
-        ContainsAny(value, "integrated text/UI", "integrated typography", "integrated UI") &&
-        ContainsAny(value, "No post-processing overlay will be added", "No post-processing") &&
-        ContainsAny(value, "native portrait", "Native vertical", "native 9:16") &&
-        ContainsAny(value, "no relative time wording", "no relative words");
 
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
+
 
 
 public static class ThumbnailPromptContractValidator

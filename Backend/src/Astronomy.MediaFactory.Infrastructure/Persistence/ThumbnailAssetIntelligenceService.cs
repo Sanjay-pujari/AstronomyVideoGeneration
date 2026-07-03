@@ -3447,7 +3447,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         public ThumbnailPromptContract Build(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language)
         {
             var objectText = c.Objects.Count > 0 ? string.Join(" + ", c.Objects) : "event planets only";
-            var prompt = CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
+            var prompt = aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase)
+                ? CommonOpening(aspect, c, "Premium YouTube Shorts astronomy cover") + $$"""
+PORTRAIT CREATIVE BRIEF: Generate final finished thumbnail image as a complete final thumbnail. No post-processing overlay will be added. Output size 2160x3840. Native 9:16 portrait composition for a premium YouTube Shorts cover.
+STYLE: astronomy documentary cover with National Geographic, NASA, Apple event poster, and Netflix polish. Dark blue and gold palette, premium magazine typography, high contrast, crisp mobile readability.
+EVENT: Jupiter + Venus conjunction. Jupiter is the hero and Venus is supporting, with clean separation and no extra planets, Moon, watermark, logo, or unrelated celestial objects.
+PLANET RENDERING: planets perfectly circular with physically correct geometry. No oval, stretched, squashed, or elongated planets. Jupiter must show realistic cloud bands and dimensional atmosphere. Venus is bright, naturally illuminated, warm white-gold, and smaller than Jupiter without disappearing.
+LAYOUT: large title at the top, large planets centered in the middle, clean compact information card at the bottom. Render the card fields Date, Best Time, Direction, Equipment, and Separation only.
+TEXT TO RENDER: title {{c.Title}}; Date {{c.DateText}}; Best Time {{c.BestTime}}; Direction {{c.Direction}}; Equipment {{c.Equipment}}; Separation {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}.
+EVERGREEN WORDING: use only absolute date and time facts. No relative time words.
+NEGATIVE INSTRUCTIONS: no extra planets, no Moon, no watermark, no logo, no relative time words, no stretched planets, no post-processing overlay instructions, no unfinished artwork.
+""" + CommonData(c, objectText)
+                : CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Premium astronomy infographic thumbnail for a planet conjunction. NASA + National Geographic quality, cinematic twilight sky, ultra realistic celestial objects, modern glassmorphism UI, professional typography, high contrast, mobile readable, social-media optimized.
 VISUAL SCENE: realistic twilight sky with beautiful sunset glow, natural horizon, atmospheric scattering, cinematic clouds, professional landscape silhouette, dark blue and gold palette. Planet objects on the right side only. Show only these event objects: {{objectText}}. For Jupiter + Venus, show only Jupiter and Venus; do not add Mercury. No extra celestial objects, no Moon unless listed as an event object, no random planets.
 UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields visible in mobile variants: DATE, BEST TIME, DIRECTION, SEPARATION when available, EQUIPMENT only. Do not render Objects, coordinates, city, country, time-span block, long date range, region, location, technical astronomy data, or scientific description as visible fields. Professional callouts connected to planets only if space allows and never competing with planets. West marker near horizon. Footer tips exactly: LOOK WEST, AFTER SUNSET, NAKED EYE.
