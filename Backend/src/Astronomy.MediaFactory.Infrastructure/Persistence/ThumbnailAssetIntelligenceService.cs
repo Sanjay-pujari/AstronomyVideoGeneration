@@ -3273,15 +3273,17 @@ OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 LOCALIZED TITLE TO RENDER: {{c.Title}}.
 LOCALIZED SUBTITLE TO RENDER: {{c.EventType}}.
-LOCALIZED FIELD LABELS TO RENDER: {{(IsHindiLanguage(c.Current.Language) ? "तारीख, श्रेष्ठ समय, दिशा, दूरी, उपकरण, सुरक्षा" : "Date, Best Time, Direction, Separation, Equipment, Safety")}}.
+LOCALIZED FIELD LABELS TO RENDER: {{(IsThumbnailHindiLanguage(c.Current.Language) ? "तारीख, श्रेष्ठ समय, दिशा, दूरी, उपकरण, सुरक्षा" : "Date, Best Time, Direction, Separation, Equipment, Safety")}}.
 VISIBLE INFORMATION LIMIT: render only the fields requested by this aspect: Date, Best Time, Direction, Separation when available, Equipment, and Safety when applicable.
 OBJECT PROMINENCE RULE: the main celestial object or event object must be large, visible, and the strongest visual focus; landscape target 25-45% visual focus, square target at least 25%, portrait target at least 35%.
 TEXT READABILITY RULE: all title, subtitle, labels, callouts, cards, and footer text must be crisp, correctly spelled, high-contrast, localized, and readable on mobile.
 """;
 
+    private static bool IsThumbnailHindiLanguage(string? language) => !string.IsNullOrWhiteSpace(language) && language.StartsWith("hi", StringComparison.OrdinalIgnoreCase);
+
     private static string CommonData(ThumbnailV8PromptContext c, string objectText) => $$"""
 LOCALIZED TEXT AND FACTS TO RENDER INSIDE THE FINAL THUMBNAIL:
-- Field labels: {{(IsHindiLanguage(c.Current.Language) ? "तारीख / श्रेष्ठ समय / दिशा / दूरी / उपकरण / सुरक्षा" : "Date / Best Time / Direction / Separation / Equipment / Safety")}}
+- Field labels: {{(IsThumbnailHindiLanguage(c.Current.Language) ? "तारीख / श्रेष्ठ समय / दिशा / दूरी / उपकरण / सुरक्षा" : "Date / Best Time / Direction / Separation / Equipment / Safety")}}
 - Date: {{c.DateText}}
 - Best Time: {{c.BestTime}}
 - Direction: {{c.Direction}}
