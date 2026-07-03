@@ -366,8 +366,9 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Equal(["1.63° APART"], saved.Callouts);
         Assert.NotNull(saved.GuideCard);
         Assert.Equal("10:00 PM", saved.GuideCard!.BestTime);
-        Assert.Equal("Evening", saved.GuideCard.ViewingWindow);
         Assert.Equal("East", saved.GuideCard.Direction);
+        Assert.Equal("Naked eye; binoculars optional", saved.GuideCard.Equipment);
+        Assert.Equal("1.63°", saved.GuideCard.Separation);
         Assert.DoesNotContain("consolidated", saved.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.True(saved.Headline.Length <= 50);
     }

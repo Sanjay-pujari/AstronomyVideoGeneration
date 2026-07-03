@@ -262,8 +262,8 @@ Negative instructions: no separate background plate, no later text pass, no wate
     private static string BuildObservationPrompt(ThumbnailPromptContract contract, LocalizedPromptTerms terms, bool isPortrait, bool isSquare)
     {
         var info = contract.Observation.ObservationInfo;
-        var date = FirstNonEmpty(info?.DisplayDate, ExtractDate(contract.Observation.ObservationWindow), contract.Observation.ObservationWindow);
-        var bestTime = FirstNonEmpty(info?.BestViewingWindowLocal, info?.DisplayWindowLocal, info?.DisplayTime, contract.Observation.BestViewingWindow);
+        var date = FirstNonEmpty(info?.DisplayDate, ExtractDate(contract.Observation.BestViewingWindow), contract.Observation.BestViewingWindow);
+        var bestTime = FirstNonEmpty(info?.DisplayTime, contract.Observation.BestViewingWindow, ExtractTimeCue(info?.BestViewingWindowLocal), ExtractTimeCue(info?.DisplayWindowLocal));
         var direction = FirstNonEmpty(info?.Direction, contract.Observation.Direction);
         var separation = ExtractSeparation(contract.Observation.Visibility);
         var equipment = terms.Language == "hi" ? "नंगी आँख; दूरबीन वैकल्पिक" : "Naked eye; binoculars optional";
@@ -280,10 +280,18 @@ Negative instructions: no separate background plate, no later text pass, no wate
         }
 
         var landscapeSeparation = string.IsNullOrWhiteSpace(separation) ? string.Empty : $"; {terms.Separation}: {separation}";
-        return $"premium landscape glass observation card: {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}{landscapeSeparation}; {terms.Equipment}: {equipment}; {terms.Cta}: {cta}; {terms.ObjectLabels}: every primary object. Do not render observation windows, long date ranges, technical wording, internal IDs, or footer tips.";
+        return $"premium landscape glass observation card: {terms.Date}: {date}; {terms.BestTime}: {bestTime}; {terms.Direction}: {direction}{landscapeSeparation}; {terms.Equipment}: {equipment}; {terms.Cta}: {cta}; {terms.ObjectLabels}: every primary object. Do not render long date ranges, technical wording, internal IDs, or footer tips.";
     }
 
-    private static string ExtractDate(string value)
+    private static string ExtractTimeCue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var text = value.Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"(?:\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b|\bafter sunset\b|\bbefore sunrise\b|\bafter midnight\b)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? match.Value.Trim() : text;
+    }
+
+    private static string ExtractDate(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
         var match = System.Text.RegularExpressions.Regex.Match(value, @"\b\d{4}-\d{2}-\d{2}\b");
@@ -376,7 +384,7 @@ public static class ThumbnailCompositionProfiles
         throw new InvalidOperationException($"Thumbnail composition profile validation failed: unsupported profile '{profileName}' for aspect ratio '{aspectRatio}'.");
     }
 
-    public static readonly CompositionProfile LandscapeProfile = new("LandscapeProfile", "16:9", ["YouTube", "Website"], ["premium wide documentary cover", "balanced twilight horizon", "strong negative space", "event occupies roughly 35-45% of frame", "safe text area", "finished-thumbnail layout guidance"], ["COMPOSITION PROFILE: LandscapeProfile for 16:9 YouTube and website surfaces.", "Use premium wide documentary framing, balanced twilight horizon, strong negative space, safe text area, and elegant final-thumbnail layout guidance.", "Keep the astronomical event roughly 35-45% of the frame with recognizable objects, no clipping, no overlap, and no borrowed aspect-ratio layout."], ["Landscape prompt must be generated natively for 16:9.", "CompositionProfile controls framing, negative space, object dominance, safe text area, and finished-thumbnail layout guidance."]);
+    public static readonly CompositionProfile LandscapeProfile = new("LandscapeProfile", "16:9", ["YouTube", "Website"], ["premium wide documentary cover", "balanced twilight horizon", "strong negative space", "event occupies roughly 35-45% of frame", "safe text area", "finished-thumbnail layout guidance", "LandscapeProfile = Stable"], ["COMPOSITION PROFILE: LandscapeProfile for 16:9 YouTube and website surfaces.", "Use premium wide documentary framing, balanced twilight horizon, strong negative space, safe text area, and elegant final-thumbnail layout guidance.", "Keep the astronomical event roughly 35-45% of the frame with recognizable objects, no clipping, no overlap, and no borrowed aspect-ratio layout."], ["Landscape prompt must be generated natively for 16:9.", "CompositionProfile controls framing, negative space, object dominance, safe text area, and finished-thumbnail layout guidance."]);
     public static readonly CompositionProfile PortraitProfile = new("PortraitProfile", "9:16", ["Shorts", "Instagram Reels"], ["vertical composition", "dominant subject", "large foreground object", "layered depth", "safe text area", "avoid squeezed landscape look"], ["COMPOSITION PROFILE: PortraitProfile for 9:16 Shorts and Instagram Reels surfaces.", "Use vertical cinematic framing, dominant foreground subject, layered depth, natural vertical framing, safe text areas, and phone-first layout guidance.", "Preserve sky storytelling while avoiding any squeezed or cropped landscape look."], ["Portrait prompt must be generated natively for 9:16.", "CompositionProfile does not decide which sections exist."]);
     public static readonly CompositionProfile SquareProfile = new("SquareProfile", "1:1", ["Facebook", "Mobile"], ["balanced composition", "centered hierarchy", "symmetrical framing", "safe text area", "no cropped dominant object"], ["COMPOSITION PROFILE: SquareProfile for 1:1 Facebook and mobile feed surfaces.", "Use centered balanced composition, equal visual weight, centered hierarchy, symmetrical framing, and compact safe text areas optimized for feed browsing.", "Keep the dominant object fully visible without cropped dominance or borrowed landscape/portrait layout."], ["Square prompt must be generated natively for 1:1.", "CompositionProfile controls layout only."]);
     private static string Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().Replace('_', ':');

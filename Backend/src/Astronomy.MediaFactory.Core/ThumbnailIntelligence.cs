@@ -209,9 +209,8 @@ public sealed record PlanetaryThumbnailGuideCardDto(
     string Date,
     string BestTime,
     string Direction,
-    string ViewingWindow,
-    string? Separation,
-    string? Altitude);
+    string Equipment,
+    string? Separation);
 
 public sealed record ThumbnailHookScoreDto(
     string Hook,
