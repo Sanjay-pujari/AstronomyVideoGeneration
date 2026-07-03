@@ -365,10 +365,17 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Equal(["Jupiter", "Venus"], saved.ObjectLabels);
         Assert.Equal(["1.63° APART"], saved.Callouts);
         Assert.NotNull(saved.GuideCard);
+        Assert.Equal("Jun 9, 2026", saved.GuideCard!.Date);
         Assert.Equal("10:00 PM", saved.GuideCard!.BestTime);
         Assert.Equal("East", saved.GuideCard.Direction);
         Assert.Equal("Naked eye; binoculars optional", saved.GuideCard.Equipment);
         Assert.Equal("1.63°", saved.GuideCard.Separation);
+        var guideText = string.Join(" ", saved.GuideCard.Date, saved.GuideCard.BestTime, saved.GuideCard.Direction, saved.GuideCard.Equipment, saved.GuideCard.Separation);
+        Assert.DoesNotContain("today", guideText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("tonight", guideText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("tomorrow", guideText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("this evening", guideText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("coming soon", guideText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("consolidated", saved.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.True(saved.Headline.Length <= 50);
     }
@@ -707,10 +714,10 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             eventType,
             title,
             shortTitle,
-            DateTimeOffset.UtcNow,
-            DateTimeOffset.UtcNow,
+            new DateTimeOffset(2026, 6, 9, 0, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 6, 9, 16, 30, 0, TimeSpan.Zero),
             "10:00 PM",
-            "Evening",
+            "Jun 9, 2026 10:00 PM IST",
             "East",
             "Global",
             primaryObjects,

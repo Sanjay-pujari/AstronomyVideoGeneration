@@ -1522,9 +1522,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             primary,
             [secondary, micro],
             [new ThumbnailHookScoreDto(primary, 98, 98, 96, 96, 97)],
-            "Urgency + Wonder",
+            "Utility + Wonder",
             "High",
-            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A complete AI-generated planetary sky-guide thumbnail with labels, direction, timing, and separation." : isMoon ? "A complete AI-generated Moon phase guide thumbnail with lunar phase, illumination, date/time, and moonrise cues when available." : "A timely astronomy event with direct click-through text.",
+            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A complete evergreen planetary sky-guide thumbnail with labels, absolute date, best time, direction, equipment, and separation." : isMoon ? "A complete AI-generated Moon phase guide thumbnail with lunar phase, illumination, date/time, and moonrise cues when available." : "A timely astronomy event with direct click-through text.",
             BuildPureV3VisualFocus(current),
             isPlanetary ? "AI generates the complete final thumbnail with integrated text, cards, callouts, icons, and footer." : isMoon ? "AI generates the complete final thumbnail with integrated text, cards, callouts, icons, and footer." : "AI generates the complete final thumbnail with integrated text, cards, callouts, icons, and footer.",
             "PureAzureImage2Prompt",
@@ -2192,16 +2192,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ? " Show 4 bright planets in the same visible sky region: Saturn, Mars, Jupiter, and Venus. Arrange them along a gentle arc above the eastern horizon, visually grouped and not randomly scattered, close enough to read as a grouped planet event but not colliding. No labels/text inside generated background; final text overlays are added by renderer only."
             : string.Empty;
         var conjunctionInstruction = isConjunction ? " For conjunction/grouping, show only the resolved current-event objects from eventObjectContext.objectNames; never substitute a default object pair." : string.Empty;
-        var basePrompt = $"Azure Image2 BACKGROUND ONLY for Thumbnail V5 global asset for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. No embedded text, labels, typography, UI, panels, guide cards, safety text, direction text, observing instructions, location references, event codes, or metadata boxes. Leave the visual sky dominant (at least 65% of canvas) and reserve no more than 35% for deterministic V5 guide overlay: compact information panel, sky labels, direction marker, and bottom viewing tips strip. Visual theme: {visualTheme}.{conjunctionInstruction}{groupingInstruction}";
+        var basePrompt = $"Azure Image2 BACKGROUND ONLY for Thumbnail V5 global asset for {title}. Event type: {eventType}. Use eventObjectContext.objectNames only for visible objects: {FirstNonEmpty(eventObjectContext.ObjectListText, title)}. No embedded text, labels, typography, UI, panels, guide cards, safety text, direction text, observing instructions, location references, event codes, or metadata boxes. Leave the visual sky dominant (at least 65% of canvas) and reserve no more than 35% for deterministic V5 guide overlay: compact information panel, sky labels, direction marker, and bottom observation guidance strip. Visual theme: {visualTheme}.{conjunctionInstruction}{groupingInstruction}";
         var text = rc1TextLines.Take(isMeteor ? 2 : 3).ToArray();
+        ValidateEvergreenThumbnailContent(text, [basePrompt]);
         var forbiddenInOverlayText = DetectThumbnailForbiddenTerms(ResolveThumbnailValidatorProfile(request), text);
         if (forbiddenInOverlayText.Count > 0)
             throw new InvalidOperationException("Thumbnail semantic validation failed: forbidden unrelated profile term(s) detected in thumbnail overlay text: " + string.Join(", ", forbiddenInOverlayText));
         return
         [
-            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 guide layout with fixed zones: left information card, right sky guide, bottom tips strip. {basePrompt}", text, "landscape-guide"),
-            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: {compositionType}. Native 9:16 guide layout with fixed zones: top title, middle sky guide, lower guide card, bottom tips strip. {basePrompt}", text, "portrait-guide"),
-            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: {compositionType}. Native 1:1 guide layout with fixed zones: top-left title, center/right sky guide, lower-left guide card, bottom tips strip. {basePrompt}", text, "square-guide")
+            ("landscape", "thumbnail-landscape.png", 1280, 720, $"Visual intent: {compositionType}. Native 16:9 guide layout with fixed zones: left information card, right sky guide, bottom observation guidance strip. {basePrompt}", text, "landscape-guide"),
+            ("portrait", "thumbnail-portrait.png", 1080, 1920, $"Visual intent: {compositionType}. Native 9:16 guide layout with fixed zones: top title, middle sky guide, lower guide card, bottom observation guidance strip. {basePrompt}", text, "portrait-guide"),
+            ("square", "thumbnail-square.png", 1080, 1080, $"Visual intent: {compositionType}. Native 1:1 guide layout with fixed zones: top-left title, center/right sky guide, lower-left guide card, bottom observation guidance strip. {basePrompt}", text, "square-guide")
         ];
     }
 
@@ -2351,7 +2352,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static IReadOnlyList<string> DetectRelativeDateWords(IEnumerable<string> values)
     {
         var text = string.Join(" ", values).ToLowerInvariant();
-        return new[] { "today", "tonight", "tomorrow" }.Where(text.Contains).ToArray();
+        return RelativeThumbnailTimeExpressions.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
+    private static readonly string[] RelativeThumbnailTimeExpressions =
+    [
+        "today", "tonight", "tomorrow", "this evening", "this week", "coming soon", "right now", "don't miss today", "watch tonight", "look tonight", "tonight only", "around jun"
+    ];
+
+    private static void ValidateEvergreenThumbnailContent(params IEnumerable<string>[] groups)
+    {
+        var detected = DetectRelativeDateWords(groups.SelectMany(group => group));
+        if (detected.Count > 0)
+            throw new InvalidOperationException("Thumbnail evergreen content validation failed: relative time expression(s) detected: " + string.Join(", ", detected));
     }
 
     private static int CountWords(string value) => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
@@ -2429,8 +2442,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var separation = current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : string.Empty;
         var altitude = current.AltitudeDegrees is decimal alt ? $"{alt:0.#}° altitude" : string.Empty;
         var date = current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event date";
-        var bestTime = FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "Best local time");
-        var window = FirstNonEmpty(current.BestViewingWindowLocal, "After sunset");
+        var bestTime = ResolveThumbnailBestTime(current);
+        var equipment = ResolveThumbnailEquipment(current);
 
         var titleBox = landscape
             ? new RectangleF(width * .045f, height * .075f, width * .216f, height * .60f)
@@ -2460,7 +2473,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ctx.DrawText(textLines.ElementAtOrDefault(1) ?? "CONJUNCTION", subFont, Color.FromRgb(255, 222, 91), new PointF(titlePoint.X + 3 * scale, titlePoint.Y + (landscape ? 50 : 62) * scale));
         if (!string.IsNullOrWhiteSpace(textLines.ElementAtOrDefault(2)))
             ctx.DrawText(textLines[2], microFont, Color.FromRgb(200, 230, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + (landscape ? 86 : 100) * scale));
-        var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}", "EQUIPMENT  BINOCULARS" };
+        var rows = new List<string> { $"DATE  {date}", $"BEST TIME  {bestTime}", $"DIRECTION  {direction}" };
+        if (square || landscape) rows.Add($"EQUIPMENT  {equipment.ToUpperInvariant()}");
+        if (landscape && !string.IsNullOrWhiteSpace(separation)) rows.Add($"SEPARATION  {separation}");
         for (var i = 0; i < rows.Count; i++)
             ctx.DrawText(rows[i], microFont, rows[i].Contains("DIRECTION", StringComparison.OrdinalIgnoreCase) ? Color.FromRgb(255, 222, 91) : Color.FromRgb(205, 235, 255), new PointF(titlePoint.X + 4 * scale, titlePoint.Y + (landscape ? 132 : 132) * scale + i * 34 * scale));
 
@@ -2479,12 +2494,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var cue = new PointF(directionBox.X + 34 * scale, directionBox.Y + directionBox.Height * .52f);
         DrawCompassCue(ctx, cue, 32 * scale, -0.05f);
         ctx.DrawText(direction.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(cue.X + 44 * scale, cue.Y - 16 * scale));
-        if (!string.IsNullOrWhiteSpace(window) && !landscape) ctx.DrawText($"WINDOW  {CondenseViewingWindow(window)}", microFont, Color.FromRgb(200, 230, 255), new PointF(skyGuideBox.X + skyGuideBox.Width * .52f, skyGuideBox.Y + skyGuideBox.Height * .78f));
+        var guidanceBadge = ResolveEvergreenObservationGuidance(current, equipment, direction);
+        if (!square) ctx.DrawText(guidanceBadge.ToUpperInvariant(), smallFont, Color.FromRgb(255, 222, 91), new PointF(skyGuideBox.X + skyGuideBox.Width * .52f, skyGuideBox.Y + skyGuideBox.Height * .78f));
 
-        var footerHeight = Math.Max(44, 52 * scale);
+        var footerHeight = landscape ? Math.Max(44, 52 * scale) : 0;
         var tips = new RectangleF(0, height - footerHeight, width, footerHeight);
-        ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
-        ctx.DrawText("TIPS  •  USE BINOCULARS IF NEEDED  •  CHECK MOONLIGHT  •  START AT TWILIGHT", ResolveThumbnailFont(Math.Max(17, (landscape ? 25 : square ? 26 : 29) * scale), FontStyle.Bold), Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 14 * scale));
+        if (landscape)
+        {
+            ctx.Fill(Color.FromRgba(0, 0, 0, 160), tips);
+            ctx.DrawText(guidanceBadge.ToUpperInvariant(), ResolveThumbnailFont(Math.Max(17, 25 * scale), FontStyle.Bold), Color.FromRgb(225, 240, 255), new PointF(width * .055f, tips.Y + 14 * scale));
+        }
 
         var count = 8 + objects.Take(2).Count() + rows.Count + (!string.IsNullOrWhiteSpace(separation) ? 1 : 0);
         return ValidateAndCreatePlanetaryOverlayDiagnostics(outputPath, count, width, height, titleBox, card, directionBox, tips, skyGuideBox, !string.IsNullOrWhiteSpace(separation), !string.IsNullOrWhiteSpace(altitude));
@@ -2872,10 +2891,25 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static PlanetaryThumbnailGuideCardDto BuildPlanetaryGuideCard(CurrentEventLock current)
         => new(
             current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? string.Empty,
-            FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "After sunset"),
+            ResolveThumbnailBestTime(current),
             NormalizeDirectionCue(current.SkyDirectionHint),
-            "Naked eye; binoculars optional",
+            ResolveThumbnailEquipment(current),
             current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : null);
+
+    private static string ResolveThumbnailBestTime(CurrentEventLock current)
+        => FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "");
+
+    private static string ResolveThumbnailEquipment(CurrentEventLock current)
+        => IsEclipseEvent(current.EventType, current.Title) && current.EventType.Contains("solar", StringComparison.OrdinalIgnoreCase)
+            ? "Certified solar filter"
+            : "Naked eye; binoculars optional";
+
+    private static string ResolveEvergreenObservationGuidance(CurrentEventLock current, string equipment, string direction)
+    {
+        if (equipment.Contains("naked", StringComparison.OrdinalIgnoreCase)) return "No Telescope Required";
+        if (!string.IsNullOrWhiteSpace(direction)) return $"Observe toward {direction}";
+        return "Visible After Sunset";
+    }
 
     private static IReadOnlyList<string> BuildPlanetaryCallouts(CurrentEventLock current)
     {
@@ -2903,7 +2937,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new InvalidOperationException("PlanetaryEvent thumbnail validation failed: shortTitle must not exceed 50 characters.");
         if (!IsPlanetaryConjunctionEvent(current.EventType)) return;
         var missing = new List<string>();
-        if (string.IsNullOrWhiteSpace(current.LocalPeakTime)) missing.Add("localPeakTime");
+        if (current.EventDate is null) missing.Add("eventDate");
+        if (string.IsNullOrWhiteSpace(ResolveThumbnailBestTime(current))) missing.Add("localPeakTime");
         if (string.IsNullOrWhiteSpace(current.SkyDirectionHint)) missing.Add("skyDirectionHint");
         if (string.IsNullOrWhiteSpace(current.BestViewingWindowLocal)) missing.Add("bestViewingWindowLocal");
         if (missing.Count > 0)
@@ -3406,7 +3441,7 @@ PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact 
             var prompt = CommonOpening(aspect, c, "Meteor shower observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Meteor shower observation guide poster using the Geminids reference as the design contract.
 VISUAL SCENE: dark realistic night sky with a clear radiant marker, multiple natural meteor streaks emanating from the radiant, atmospheric horizon, no random planets and no unrelated conjunction imagery.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon, Equipment. Include a strong direction cue and bottom footer tips: Dark Sky, Look Up, 20 Min Eyes.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon, Equipment. Include a strong direction cue and bottom observation guidance badge: No Telescope Required.
 EVENT NAME AND TITLE RULE: use exactly a natural shower event name such as "Perseids Meteor Shower", "Geminids Meteor Shower", or "Quadrantids Meteor Shower"; optional peak form is "{ShowerName} Meteor Shower Peak". Never render split titles like "Geminids + Meteors". Make the radiant and meteor streaks the visual focus.
 """ + CommonData(c, name);
             return Final(aspect, c, eventId, language, prompt, nameof(MeteorObservationGuidePromptBuilder), "Meteor", "Meteor shower guide with radiant marker, meteor streaks, aspect-native observation card, direction cue, short footer tips, no planets.");
@@ -3421,7 +3456,7 @@ EVENT NAME AND TITLE RULE: use exactly a natural shower event name such as "Pers
             var prompt = CommonOpening(aspect, c, "Professional full moon observation guide") + $$"""
 FAMILY-SPECIFIC TEMPLATE: professional full moon observation guide.
 VISUAL SCENE: one large realistic Moon as the hero object, detailed lunar texture, atmospheric horizon and subtle landscape silhouette. Moon type title must be visible: {{moonType}} (Wolf Moon / Blue Moon / Strawberry Moon style when applicable). No extra planets or unrelated celestial objects.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon Type, Equipment. Include elegant Moon callout, atmospheric horizon direction cue, and footer tips: Find Horizon, Moonrise, Naked Eye.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Best Time, Direction, Moon Type, Equipment. Include elegant Moon callout, atmospheric horizon direction cue, and observation guidance badge: No Telescope Required.
 """ + CommonData(c, moonType);
             return Final(aspect, c, eventId, language, prompt, nameof(MoonObservationGuidePromptBuilder), "Moon", $"Moon guide with visually dominant realistic {moonType}, aspect-native observation card, moonrise/direction/best time/equipment, short footer tips.");
         }
@@ -3436,7 +3471,7 @@ UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation car
             var prompt = CommonOpening(aspect, c, "Professional eclipse observation guide") + $$"""
 FAMILY-SPECIFIC TEMPLATE: professional eclipse observation guide.
 VISUAL SCENE: realistic eclipse scene with accurate Sun/Moon alignment and dramatic sky context. Show the eclipse bodies only; no random planets or unrelated celestial objects.
-UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Peak Time, Direction, Equipment, Safety. Include alignment callouts and bottom footer tips; solar eclipse footer must include safe viewing, lunar eclipse footer can include naked-eye viewing.
+UI ARCHITECTURE: follow the aspect-specific composition exactly. Observation card fields: Date, Peak Time, Direction, Equipment, Safety. Include alignment callouts and observation guidance badge; solar eclipse guidance must include safe viewing, lunar eclipse guidance can include naked-eye viewing.
 TITLE RULE: primary title must be the actual eclipse event name "{{eventName}}". Never generate or render "Sun + Moon" as the title.
 SAFETY: {{(solar ? "Strong solar safety section: CERTIFIED ECLIPSE GLASSES / SOLAR FILTER REQUIRED. Never look at the Sun directly without approved protection." : "Lunar eclipse safety: safe to view with eyes or binoculars; note direction and peak time clearly.")}}
 """ + CommonData(c, eventName);
@@ -3493,7 +3528,7 @@ LOCALIZED TEXT AND FACTS TO RENDER INSIDE THE FINAL THUMBNAIL:
 - Equipment: {{c.Equipment}}
 - Separation: {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}
 - Objects to render visually, not as observation-card fields: {{objectText}}
-- Footer tips: use the three short tips specified in the family template above.
+- Observation guidance badge: use one absolute, practical guidance phrase specified in the family template above.
 QUALITY RULES: complete finished thumbnail, no watermark, no external branding, no location text, no text outside canvas, premium dark blue and gold atmosphere, integrated polished infographic UI created by AI.
 CTR INSTRUCTIONS: Optimize the complete thumbnail for click-through recognition through large celestial objects, high contrast, atmospheric depth, integrated typography, and strong visual hierarchy.
 AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers, empty visual design.
@@ -3519,6 +3554,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
     private static ThumbnailPromptContract Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language, string prompt, string builder, string template, string summary)
     {
         var sanitizedPrompt = SanitizeThumbnailV8PromptText(prompt);
+        ValidateEvergreenThumbnailContent([sanitizedPrompt, summary, c.DateText, c.BestTime, c.Direction, c.Equipment]);
         var negativePrompt = ThumbnailArtworkPromptRules.NegativePrompt;
         var primaryObjects = c.Objects.Count > 0 ? c.Objects : [c.Title];
         var observationInfo = c.Intelligence?.ObservationInfo;
@@ -3577,7 +3613,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new PromptSection("compact-observation", "Compact Observation", 60, $"Compact observation: {c.Direction}, {c.BestTime}.", false),
             new PromptSection("equipment", "Equipment", 70, $"Equipment cue: {c.Equipment}.", false),
             new PromptSection("safety", "Safety", 80, safety, family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)),
-            new PromptSection("cta", "CTA", 90, "Short action cue: watch the sky tonight.", false),
+            new PromptSection("cta", "CTA", 90, "Short action cue: use the date, best time, direction, or equipment guidance only.", false),
             new PromptSection("footer", "Footer", 100, "Short footer tips may appear only on rich landscape layouts: look direction, best time, equipment.", false),
             new PromptSection("quality-rules", "Quality Rules", 110, $"Generate the complete final thumbnail at {aspect.Width}x{aspect.Height}, native {aspect.AspectRatio}. TEXT STYLE RULE: use natural title case, mobile-readable typography, high contrast text, and no technical identifiers. Premium cinematic astronomy style with integrated typography, UI panels, icons, labels, callouts, and footer where allowed. Require native aspect composition, no stretched landscape, no squeezed portrait, no cropped square, circular celestial bodies, physically correct astronomical geometry, object prominence, and text readability.", true)
         ];
