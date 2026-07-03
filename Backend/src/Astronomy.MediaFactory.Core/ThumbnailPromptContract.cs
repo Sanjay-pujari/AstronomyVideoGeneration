@@ -402,11 +402,11 @@ public static class PromptValidatorV9
     {
         ArgumentNullException.ThrowIfNull(contract);
         if (string.IsNullOrWhiteSpace(finalPrompt)) throw new InvalidOperationException("Prompt validation failed: final composed prompt is empty.");
-        var wordCount = CountWords(finalPrompt);
+        // Prompt word-count targets are optimization guidance for generation quality, not
+        // runtime blockers. Keep calculating the count so future diagnostics can mirror
+        // this validator, but do not fail validation solely because a target is exceeded.
+        _ = CountWords(finalPrompt);
         var aspect = contract.Platform.AspectRatio;
-        if (aspect == "16:9" && wordCount > 450) throw new InvalidOperationException($"Prompt validation failed: landscape prompt exceeds 450 words ({wordCount}).");
-        if (aspect == "1:1" && wordCount > 300) throw new InvalidOperationException($"Prompt validation failed: square prompt exceeds 300 words ({wordCount}).");
-        if (aspect == "9:16" && wordCount > 250) throw new InvalidOperationException($"Prompt validation failed: portrait prompt exceeds 250 words ({wordCount}).");
 
         var legacyPhrases = new[] { "V8", "background-only", "background only", "background artwork", "do not draw text", "do not render text", "do not draw title", "do not draw icons", "renderer will add", "renderer owns", "renderer-owned", "deterministic overlay", "manual overlay", "BackgroundOnly", "RendererPresentation", "ThumbnailV8AiNativeRenderer", "AzureImage2ThumbnailV5", "crop landscape" };
         if (ContainsAny(finalPrompt, legacyPhrases)) throw new InvalidOperationException("Prompt validation failed: forbidden V8/background/overlay phrase remains.");

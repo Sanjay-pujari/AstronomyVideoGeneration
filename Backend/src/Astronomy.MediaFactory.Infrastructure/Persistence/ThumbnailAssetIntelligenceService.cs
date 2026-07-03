@@ -382,7 +382,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
             promptWriterVersion = "V9.1",
             promptStyle = "CreativeBrief",
-            promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase),
+            promptWordCount = promptValidation.PromptWordCount,
+            targetWordCount = promptValidation.TargetWordCount,
+            promptLengthStatus = promptValidation.PromptLengthStatus,
+            optimizationNeeded = promptValidation.OptimizationNeeded,
+            optimizationWarnings = promptValidation.OptimizationWarnings,
             promptCompressionRatio = prompts.ToDictionary(p => p.Name, p => CalculatePromptCompressionRatio(p), StringComparer.OrdinalIgnoreCase),
             duplicateSectionsRemoved = prompts.ToDictionary(p => p.Name, p => CountDuplicateSectionsRemoved(p), StringComparer.OrdinalIgnoreCase),
             promptValidationReasons = promptValidation.FailureReasons,
@@ -457,7 +461,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
             promptWriterVersion = "V9.1",
             promptStyle = "CreativeBrief",
-            promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase),
+            promptWordCount = promptValidation.PromptWordCount,
+            targetWordCount = promptValidation.TargetWordCount,
+            promptLengthStatus = promptValidation.PromptLengthStatus,
+            optimizationNeeded = promptValidation.OptimizationNeeded,
+            optimizationWarnings = promptValidation.OptimizationWarnings,
             promptCompressionRatio = prompts.ToDictionary(p => p.Name, p => CalculatePromptCompressionRatio(p), StringComparer.OrdinalIgnoreCase),
             duplicateSectionsRemoved = prompts.ToDictionary(p => p.Name, p => CountDuplicateSectionsRemoved(p), StringComparer.OrdinalIgnoreCase),
             promptValidationReasons = promptValidation.FailureReasons,
@@ -575,7 +583,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             promptValidationStatus = promptValidation.FinalPromptPassedValidation ? "PASS" : "FAIL",
             promptWriterVersion = "V9.1",
             promptStyle = "CreativeBrief",
-            promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase),
+            promptWordCount = promptValidation.PromptWordCount,
+            targetWordCount = promptValidation.TargetWordCount,
+            promptLengthStatus = promptValidation.PromptLengthStatus,
+            optimizationNeeded = promptValidation.OptimizationNeeded,
+            optimizationWarnings = promptValidation.OptimizationWarnings,
             promptCompressionRatio = prompts.ToDictionary(p => p.Name, p => CalculatePromptCompressionRatio(p), StringComparer.OrdinalIgnoreCase),
             duplicateSectionsRemoved = prompts.ToDictionary(p => p.Name, p => CountDuplicateSectionsRemoved(p), StringComparer.OrdinalIgnoreCase),
             promptValidationReasons = promptValidation.FailureReasons,
@@ -731,7 +743,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         "viewing window", "recommended viewing window", "schedule description", "schedule descriptions"
     ];
 
-    private sealed record ThumbnailV8PromptValidationDiagnostics(IReadOnlyList<string> ForbiddenTokensDetected, IReadOnlyList<string> ForbiddenTokensRemoved, bool FinalPromptPassedValidation, IReadOnlyDictionary<string, bool> RequiredChecks, IReadOnlyList<string> FailureReasons);
+    private sealed record ThumbnailV8PromptValidationDiagnostics(
+        IReadOnlyList<string> ForbiddenTokensDetected,
+        IReadOnlyList<string> ForbiddenTokensRemoved,
+        bool FinalPromptPassedValidation,
+        IReadOnlyDictionary<string, bool> RequiredChecks,
+        IReadOnlyList<string> FailureReasons,
+        IReadOnlyDictionary<string, int> PromptWordCount,
+        IReadOnlyDictionary<string, int> TargetWordCount,
+        IReadOnlyDictionary<string, string> PromptLengthStatus,
+        bool OptimizationNeeded,
+        IReadOnlyList<string> OptimizationWarnings);
 
     private static object BuildThumbnailCompositionProfileDiagnostics(IReadOnlyList<ThumbnailPromptContract> contracts, IReadOnlyList<ThumbnailV8Prompt> prompts)
     {
@@ -892,18 +914,34 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ["title text"] = prompts.All(p => p.Prompt.Contains("Title:", StringComparison.OrdinalIgnoreCase)),
             ["aspect output size"] = prompts.All(p => p.Prompt.Contains($"{p.Width}x{p.Height}", StringComparison.OrdinalIgnoreCase)),
             ["creative brief sections"] = prompts.All(p => new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" }.All(h => p.Prompt.Contains(h, StringComparison.OrdinalIgnoreCase))),
-            ["landscape prompt <= 450 words"] = prompts.Where(p => p.AspectRatio == "16:9").All(p => CountPromptWords(p.Prompt) <= 450),
-            ["square prompt <= 300 words"] = prompts.Where(p => p.AspectRatio == "1:1").All(p => CountPromptWords(p.Prompt) <= 300),
-            ["portrait prompt <= 250 words"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => CountPromptWords(p.Prompt) <= 250),
             ["portrait no card footer table language"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => !new[] { "observation card", "footer", "equipment table", "dense infographic" }.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase))),
             ["square native composition"] = prompts.Where(p => p.AspectRatio == "1:1").All(p => p.Prompt.Contains("Native square", StringComparison.OrdinalIgnoreCase)),
             ["portrait native composition"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => p.Prompt.Contains("Native vertical", StringComparison.OrdinalIgnoreCase)),
             ["circular celestial bodies"] = prompts.All(p => p.Prompt.Contains("circular", StringComparison.OrdinalIgnoreCase)),
             ["legacy presentation phrases absent"] = prompts.All(p => !ThumbnailV8ForbiddenPromptTokens.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
         };
+        var promptWordCount = prompts.ToDictionary(p => p.Name, p => CountPromptWords(p.Prompt), StringComparer.OrdinalIgnoreCase);
+        var targetWordCount = prompts.ToDictionary(p => p.Name, p => GetPromptTargetWordCount(p.AspectRatio), StringComparer.OrdinalIgnoreCase);
+        var promptLengthStatus = prompts.ToDictionary(
+            p => p.Name,
+            p => CountPromptWords(p.Prompt) > GetPromptTargetWordCount(p.AspectRatio) ? "Warning" : "OK",
+            StringComparer.OrdinalIgnoreCase);
+        var optimizationWarnings = prompts
+            .Where(p => CountPromptWords(p.Prompt) > GetPromptTargetWordCount(p.AspectRatio))
+            .Select(p => $"{p.Name} prompt exceeds target word count ({CountPromptWords(p.Prompt)}/{GetPromptTargetWordCount(p.AspectRatio)}); generation may proceed, but prompt optimization is recommended.")
+            .ToArray();
         var failures = checks.Where(kv => !kv.Value).Select(kv => kv.Key).Concat(detected.Select(token => $"forbidden token: {token}")).ToArray();
-        return new ThumbnailV8PromptValidationDiagnostics(detected, removed, failures.Length == 0, checks, failures);
+        return new ThumbnailV8PromptValidationDiagnostics(detected, removed, failures.Length == 0, checks, failures, promptWordCount, targetWordCount, promptLengthStatus, optimizationWarnings.Length > 0, optimizationWarnings);
     }
+
+
+    private static int GetPromptTargetWordCount(string aspectRatio) => aspectRatio switch
+    {
+        "16:9" => 450,
+        "1:1" => 300,
+        "9:16" => 250,
+        _ => int.MaxValue
+    };
 
     private static void ValidateThumbnailV8Outputs(IReadOnlyList<ThumbnailV8Prompt> prompts, string thumbnailRoot, bool promptOnly, bool fallbackUsed)
     {
