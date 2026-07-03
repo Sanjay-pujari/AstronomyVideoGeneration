@@ -65,7 +65,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         "thumbnail-square-prompt.txt",
         "thumbnail-prompt-diff.md"
     ];
-    private const string ThumbnailV8AiNativeRendererName = "ThumbnailV9AiFinalThumbnailComposer";
+    private const string ThumbnailV9FinalThumbnailRendererName = "ThumbnailV9AiFinalThumbnailComposer";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
@@ -295,7 +295,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         foreach (var prompt in prompts)
         {
-            Console.WriteLine("Azure Image2 thumbnail background generation started");
+            Console.WriteLine("Azure Image2 thumbnail complete-image generation started");
             Console.WriteLine($"Generating full AI-native thumbnail: {prompt.Name}");
             var promptPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}-prompt.txt");
             var outputPath = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
@@ -333,8 +333,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
         {
             thumbnailVersion = "V9",
-            selectedRenderer = ThumbnailV8AiNativeRendererName,
-            selectedTemplate = "AiFinalPromptBasedThumbnail",
+            selectedRenderer = ThumbnailV9FinalThumbnailRendererName,
+            selectedTemplate = "AiCompleteFinalThumbnail",
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
             validator = "PromptValidatorV9",
@@ -350,10 +350,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var v8Diagnostics = new
         {
             thumbnailVersion = "V9",
-            selectedRenderer = ThumbnailV8AiNativeRendererName,
-            renderer = ThumbnailV8AiNativeRendererName,
+            selectedRenderer = ThumbnailV9FinalThumbnailRendererName,
+            renderer = ThumbnailV9FinalThumbnailRendererName,
             aiGeneratesFinalThumbnail = true,
-            aiNativeFullImage = true,
             completeThumbnailMode = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
@@ -369,8 +368,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             squareObjectsAreaPercentMin = 25,
             portraitComposition = "Native mobile-first Shorts/Reels cover, not cropped landscape: title max 12%, information max 20%, celestial objects min 35%, portrait-specific vertical balance.",
             squareComposition = "Native Instagram/Facebook post: top-left title, center/upper-right dominant objects, lower-left small observation badge, bottom footer tips.",
-            thumbnailV8Status = "LOCKED",
-            phase12ThumbnailV8Status = "COMPLETE",
+            thumbnailV9Status = "LOCKED",
+            phase12ThumbnailV9Status = "COMPLETE",
             architectureStatus = "LOCKED",
             familyStatuses = new { Planetary = "COMPLETE", Moon = "COMPLETE", Meteor = "COMPLETE", Eclipse = "COMPLETE" },
             aspectPromptsGenerated = true,
@@ -384,11 +383,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
-            selectedTemplate = "AiFinalPromptBasedThumbnail",
-            backgroundSource = "AzureImage2",
-            cropMode = "PerAspectGenerated",
-            layoutFamily = "AiGeneratedObservationGuide",
-            backgroundMode = "PerAspectAzureImage2",
+            selectedTemplate = "AiCompleteFinalThumbnail",
+            imageSource = "AzureImage2",
+            aspectGenerationMode = "PerAspectGenerated",
+            layoutFamily = "AiCompleteObservationGuide",
+            completeThumbnailModeName = "PerAspectAzureImage2CompleteThumbnail",
             azureImage2Generated = true,
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
@@ -417,14 +416,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             thumbnailVersion = "V9",
-            selectedRenderer = ThumbnailV8AiNativeRendererName,
-            renderer = ThumbnailV8AiNativeRendererName,
+            selectedRenderer = ThumbnailV9FinalThumbnailRendererName,
+            renderer = ThumbnailV9FinalThumbnailRendererName,
             thumbnailEngineVersion = "V9_AI_FINAL",
             provider = "AzureOpenAIForImage",
             model = imageOptions.Value.ImageDeployment,
             deployment = imageOptions.Value.ImageDeployment,
             aiGeneratesFinalThumbnail = true,
-            aiNativeFullImage = true,
             completeThumbnailMode = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
@@ -440,8 +438,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             squareObjectsAreaPercentMin = 25,
             portraitComposition = "Native mobile-first Shorts/Reels cover, not cropped landscape: title max 12%, information max 20%, celestial objects min 35%, portrait-specific vertical balance.",
             squareComposition = "Native Instagram/Facebook post: top-left title, center/upper-right dominant objects, lower-left small observation badge, bottom footer tips.",
-            thumbnailV8Status = "LOCKED",
-            phase12ThumbnailV8Status = "COMPLETE",
+            thumbnailV9Status = "LOCKED",
+            phase12ThumbnailV9Status = "COMPLETE",
             architectureStatus = "LOCKED",
             familyStatuses = new { Planetary = "COMPLETE", Moon = "COMPLETE", Meteor = "COMPLETE", Eclipse = "COMPLETE" },
             aspectPromptsGenerated = true,
@@ -455,11 +453,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
-            selectedTemplate = "AiFinalPromptBasedThumbnail",
-            backgroundSource = "AzureImage2",
-            cropMode = "PerAspectGenerated",
-            layoutFamily = "AiGeneratedObservationGuide",
-            backgroundMode = "PerAspectAzureImage2",
+            selectedTemplate = "AiCompleteFinalThumbnail",
+            imageSource = "AzureImage2",
+            aspectGenerationMode = "PerAspectGenerated",
+            layoutFamily = "AiCompleteObservationGuide",
+            completeThumbnailModeName = "PerAspectAzureImage2CompleteThumbnail",
             azureImage2Generated = true,
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
@@ -513,13 +511,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             request,
             allOutputs.Append(NormalizePath(diagnosticsPath)).Append(NormalizePath(v8DiagnosticsPath)).Append(NormalizePath(Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName))).Append(NormalizePath(promptJsonPath)).Append(NormalizePath(contractJsonPath)).Append(NormalizePath(compositionProfilePath)).Append(NormalizePath(visualPromptDiagnosticsPath)).Append(NormalizePath(promptAssemblyReportPath)).Concat(promptPaths.Values).ToArray(),
             validation,
-            requestedRenderer: ThumbnailV8AiNativeRendererName,
-            actualRendererUsed: ThumbnailV8AiNativeRendererName,
+            requestedRenderer: ThumbnailV9FinalThumbnailRendererName,
+            actualRendererUsed: ThumbnailV9FinalThumbnailRendererName,
             rendererSelectionReason: "Thumbnail V9 routes Phase 12 to complete final thumbnail prompts and per-aspect Azure Image generation; legacy presentation compositors and crop-based renderers are not called.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: false,
             photoCinematicRendererCompleted: false,
-            outputWriteSource: ThumbnailV8AiNativeRendererName,
+            outputWriteSource: ThumbnailV9FinalThumbnailRendererName,
             thumbnailLayoutValidationPath: NormalizePath(diagnosticsPath));
     }
 
@@ -534,16 +532,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
         {
             thumbnailVersion = "V9",
-            product = "Thumbnail V9 AI Native",
+            product = "Thumbnail V9 Complete AI Thumbnail",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            renderer = ThumbnailV8AiNativeRendererName,
-            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            renderer = ThumbnailV9FinalThumbnailRendererName,
+            selectedRenderer = ThumbnailV9FinalThumbnailRendererName,
             promptContractGenerated = true,
             completeThumbnailMode = true,
             backgroundOnlyMode = false,
             manualOverlayUsed = false,
             aiGeneratesFinalThumbnail = true,
-            aiNativeFullImage = true,
             compositionProfileGenerated = true,
             promptGenerationChanged = true,
             renderingBehaviorChanged = true,
@@ -642,11 +639,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             thumbnailVersion = "V9",
-            renderer = ThumbnailV8AiNativeRendererName,
-            selectedRenderer = ThumbnailV8AiNativeRendererName,
+            renderer = ThumbnailV9FinalThumbnailRendererName,
+            selectedRenderer = ThumbnailV9FinalThumbnailRendererName,
             validator = "PromptValidatorV9",
             aiGeneratesFinalThumbnail = true,
-            aiNativeFullImage = true,
             completeThumbnailMode = true,
             manualOverlayUsed = false,
             backgroundOnlyMode = false,
@@ -661,11 +657,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
-            selectedTemplate = "AiFinalPromptBasedThumbnail",
-            backgroundSource = "AzureImage2",
-            cropMode = "PerAspectGenerated",
-            layoutFamily = "AiGeneratedObservationGuide",
-            backgroundMode = "PerAspectAzureImage2",
+            selectedTemplate = "AiCompleteFinalThumbnail",
+            imageSource = "AzureImage2",
+            aspectGenerationMode = "PerAspectGenerated",
+            layoutFamily = "AiCompleteObservationGuide",
+            completeThumbnailModeName = "PerAspectAzureImage2CompleteThumbnail",
             azureImage2Generated = true,
             semanticValidationPassed = true,
             maximumVisibleInformation = new[] { "Date", "Best Time", "Direction", "Separation", "Equipment" },
@@ -676,8 +672,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             portraitNoLandscapePanel = true,
             noOverlappingTextRequired = true,
             noSqueezedLayoutRequired = true,
-            thumbnailV8Status = "LOCKED",
-            phase12ThumbnailV8Status = "COMPLETE",
+            thumbnailV9Status = "LOCKED",
+            phase12ThumbnailV9Status = "COMPLETE",
             architectureStatus = "LOCKED",
             familyStatuses = new { Planetary = "COMPLETE", Moon = "COMPLETE", Meteor = "COMPLETE", Eclipse = "COMPLETE" },
             outputFiles,
@@ -737,7 +733,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 {
                     "ThumbnailPromptBuilder consumed ThumbnailPromptContract and injected a resolved CompositionProfile.",
                     "Each aspect ratio receives a native optimized prompt.",
-                    "Renderer changes are not required for composition profile selection."
+                    "Composition profile selection is independent of output writing."
                 }
             },
             generatedUtc = DateTimeOffset.UtcNow
@@ -872,7 +868,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ["CTR instructions"] = prompts.All(p => p.Prompt.Contains("CTR INSTRUCTIONS", StringComparison.OrdinalIgnoreCase)),
             ["negative rules"] = prompts.All(p => p.Prompt.Contains("NEGATIVE RULES", StringComparison.OrdinalIgnoreCase)),
             ["localized language rules"] = prompts.All(p => p.Prompt.Contains("LOCALIZED", StringComparison.OrdinalIgnoreCase)),
-            ["background-only and renderer-owned phrases absent"] = prompts.All(p => !ThumbnailV8ForbiddenPromptTokens.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
+            ["legacy presentation phrases absent"] = prompts.All(p => !ThumbnailV8ForbiddenPromptTokens.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
         };
         var failures = checks.Where(kv => !kv.Value).Select(kv => kv.Key).Concat(detected.Select(token => $"forbidden token: {token}")).ToArray();
         return new ThumbnailV8PromptValidationDiagnostics(detected, removed, failures.Length == 0, checks, failures);
@@ -942,7 +938,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ThumbnailClickabilityScore: 96,
             ThumbnailCuriosityScore: 95,
             ThumbnailVisualSourceMode: "ThumbnailV7CinematicEventBackground",
-            SourceSceneUsed: "AzureImage2BackgroundOnly",
+            SourceSceneUsed: "AzureImage2PerVariantCompleteImage",
             ApprovedSceneFoundationUsed: false,
             IndependentPlanetRedrawUsed: false,
             ArtificialGlowRemoved: true,
@@ -1386,9 +1382,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             [new ThumbnailHookScoreDto(primary, 98, 98, 96, 96, 97)],
             "Urgency + Wonder",
             "High",
-            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A deterministic planetary sky-guide thumbnail with labels, direction, timing, and separation." : isMoon ? "A deterministic Moon phase guide thumbnail with lunar phase, illumination, date/time, and moonrise cues when available." : "A timely astronomy event with direct click-through text.",
+            isMeteor ? "A dramatic meteor-shower peak night that feels worth clicking immediately." : isPlanetary ? "A complete AI-generated planetary sky-guide thumbnail with labels, direction, timing, and separation." : isMoon ? "A complete AI-generated Moon phase guide thumbnail with lunar phase, illumination, date/time, and moonrise cues when available." : "A timely astronomy event with direct click-through text.",
             BuildPureV3VisualFocus(current),
-            isPlanetary ? "PlanetaryEvent thumbnail: Azure Image2 generates background only; deterministic overlay adds guide card, object labels, direction cue, and separation." : isMoon ? "Moon thumbnail: Azure Image2 generates a realistic Moon background only; deterministic overlay adds title, phase, date/time, illumination, and moonrise/moonset cues when available." : "Thumbnail V5 thumbnail: Azure Image2 generates background only; deterministic overlay adds clean title/subtitle.",
+            isPlanetary ? "AI generates the complete final thumbnail with integrated text, cards, callouts, icons, and footer." : isMoon ? "AI generates the complete final thumbnail with integrated text, cards, callouts, icons, and footer." : "AI generates the complete final thumbnail with integrated text, cards, callouts, icons, and footer.",
             "PureAzureImage2Prompt",
             "none",
             ["scene image selection", "approved scene assets", "hero-scene-manifest.json", "thumbnail-scene-manifest.json"],
@@ -3314,7 +3310,7 @@ Generate final finished thumbnail image.
 Include all text, icons, panels, callouts, labels, and footer inside the image.
 The AI image must be the complete final thumbnail.
 No post-processing overlay will be added.
-Create a {{posterType}} as a complete social thumbnail, not a background plate. 4K quality. Generate independently for this exact format; do not crop landscape and do not reuse another aspect-ratio prompt. No extra celestial objects. Do not render location text unless explicitly allowed. No city, region, country, or coordinates.
+Create a {{posterType}} as a complete social thumbnail. 4K quality. Generate independently for this exact format; compose natively and do not reuse another aspect-ratio prompt. No extra celestial objects. Do not render location text unless explicitly allowed. No city, region, country, or coordinates.
 OUTPUT SIZE: {{aspect.Width}}x{{aspect.Height}}. ASPECT: {{aspect.AspectRatio}}.
 ASPECT-SPECIFIC COMPOSITION: {{aspect.LayoutInstruction}}
 LOCALIZED TITLE TO RENDER: {{c.Title}}.
@@ -3339,8 +3335,8 @@ LOCALIZED TEXT AND FACTS TO RENDER INSIDE THE FINAL THUMBNAIL:
 - Footer tips: use the three short tips specified in the family template above.
 QUALITY RULES: complete finished thumbnail, no watermark, no external branding, no location text, no text outside canvas, premium dark blue and gold atmosphere, integrated polished infographic UI created by AI.
 CTR INSTRUCTIONS: Optimize the complete thumbnail for click-through recognition through large celestial objects, high contrast, atmospheric depth, integrated typography, and strong visual hierarchy.
-AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers, empty background artwork.
-NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random planets, no invented celestial objects, no cropping, no post-render overlay instructions, no plain background image, no watermark.
+AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers, empty visual design.
+NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random planets, no invented celestial objects, no cropping, no external compositing instructions, no unfinished image, no watermark.
 """;
 
     private static ThumbnailV8Prompt ToPrompt(ThumbnailPromptContract contract, ThumbnailPromptBuilder builder)
@@ -3371,11 +3367,11 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new ThumbnailDisplay(c.Title, c.Title, FirstNonEmpty(c.Current.ShortTitle, c.Title), [c.Title]),
             new ThumbnailObjects(primaryObjects, c.Current.SecondaryObjects ?? [], primaryObjects.ToDictionary(value => value, value => value, StringComparer.OrdinalIgnoreCase)),
             new ThumbnailObservation(observationInfo, FirstNonEmpty(c.Current.BestViewingWindowLocal, observationInfo?.DisplayWindowLocal, c.BestTime), c.BestTime, c.Direction, FirstNonEmpty(observationInfo?.VisibilityStatus, "Visibility derived from current event intelligence")),
-            new ThumbnailVisual(FirstNonEmpty(c.Intelligence?.VisualTheme, summary), "premium high-salience astronomy discovery", "communicate the event and observation essentials without renderer business logic", "maximize click-through recognition while preserving scientific trust"),
+            new ThumbnailVisual(FirstNonEmpty(c.Intelligence?.VisualTheme, summary), "premium high-salience astronomy discovery", "communicate the event and observation essentials as a finished image", "maximize click-through recognition while preserving scientific trust"),
             new ThumbnailPlatform("Thumbnail", aspect.AspectRatio, aspect.Name, aspect.Width, aspect.Height),
             new ThumbnailPromptInstructions(sanitizedPrompt, negativePrompt, primaryObjects, c.Current.ForbiddenObjectNames ?? []),
             new ThumbnailBrand("Natural title case, mobile-readable typography, no technical identifiers", "premium dark blue and gold astronomy magazine style", [FirstNonEmpty(language, c.Current.Language, "en"), "Do not bake location names into the image"]),
-            new ThumbnailValidation(["No null required fields", "Aspect-native image generation", "Renderer consumes contract only"], ["Render only required event objects", "Preserve event family safety and observation truth"], ["No cropping from another aspect ratio", "Respect safe zones and mobile readability"]),
+            new ThumbnailValidation(["No null required fields", "Aspect-native image generation", "Image generation consumes contract only"], ["Render only required event objects", "Preserve event family safety and observation truth"], ["No cropping from another aspect ratio", "Respect safe zones and mobile readability"]),
             new ThumbnailPromptDiagnostics("ThumbnailV9PromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow),
             BuildPromptSections(aspect, c, template, summary, primaryObjects, sanitizedPrompt));
     }
@@ -3574,9 +3570,9 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         var model = BuildThumbnailCompositionModel(request, intelligence);
         return model with
         {
-            Architecture = ThumbnailV8AiNativeRendererName,
-            LayoutStyle = "AiFinalPromptBasedThumbnail",
-            LayoutFamily = "AiGeneratedObservationGuide"
+            Architecture = ThumbnailV9FinalThumbnailRendererName,
+            LayoutStyle = "AiCompleteFinalThumbnail",
+            LayoutFamily = "AiCompleteObservationGuide"
         };
     }
 
@@ -3678,12 +3674,12 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
     {
         if (string.Equals(model.LayoutStyle, "ScrollStoppingAstronomyThumbnail", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Thumbnail composition validation failed: ScrollStoppingAstronomyThumbnail is blocked for Phase 12 guide thumbnails.");
-        var isV8 = string.Equals(model.Architecture, ThumbnailV8AiNativeRendererName, StringComparison.OrdinalIgnoreCase);
+        var isV8 = string.Equals(model.Architecture, ThumbnailV9FinalThumbnailRendererName, StringComparison.OrdinalIgnoreCase);
         var isV7 = string.Equals(model.Architecture, ThumbnailV7Architecture, StringComparison.OrdinalIgnoreCase);
         if (isV8)
         {
-            if (!string.Equals(model.LayoutStyle, "AiFinalPromptBasedThumbnail", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiGeneratedObservationGuide", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Thumbnail V9 composition validation failed: layoutStyle must be AiFinalPromptBasedThumbnail and layoutFamily must be AiGeneratedObservationGuide.");
+            if (!string.Equals(model.LayoutStyle, "AiCompleteFinalThumbnail", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiCompleteObservationGuide", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail V9 composition validation failed: layoutStyle must be AiCompleteFinalThumbnail and layoutFamily must be AiCompleteObservationGuide.");
         }
         else if (isV7)
         {
@@ -4059,13 +4055,13 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["thumbnailVersion"] = "V9",
-                ["thumbnailArchitecture"] = ThumbnailV8AiNativeRendererName,
-                ["selectedRenderer"] = ThumbnailV8AiNativeRendererName,
-                ["selectedTemplate"] = "AiFinalPromptBasedThumbnail",
-                ["backgroundSource"] = "AzureImage2",
+                ["thumbnailArchitecture"] = ThumbnailV9FinalThumbnailRendererName,
+                ["selectedRenderer"] = ThumbnailV9FinalThumbnailRendererName,
+                ["selectedTemplate"] = "AiCompleteFinalThumbnail",
+                ["imageSource"] = "AzureImage2",
                 ["cropMode"] = "PerAspectGenerated",
                 ["cropFromLandscape"] = "False",
-                ["layoutFamily"] = "AiGeneratedObservationGuide",
+                ["layoutFamily"] = "AiCompleteObservationGuide",
                 ["heroSceneManifestRequired"] = "False",
                 ["thumbnailSceneManifestRequired"] = "True",
                 ["approvedSceneAssetsRequired"] = "False"
