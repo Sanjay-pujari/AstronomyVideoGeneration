@@ -96,11 +96,14 @@ public sealed class ThumbnailRendererTests
         Assert.DoesNotContain("only one tiny hint", square);
         Assert.DoesNotContain("two compact facts", square);
 
-        Assert.Contains("mobile-clean vertical guide fields", portrait);
+        Assert.Contains("portrait cover badge", portrait);
         Assert.Contains(dateLabel, portrait);
         Assert.Contains(timeLabel, portrait);
         Assert.Contains(directionLabel, portrait);
         Assert.DoesNotContain(equipmentLabel, portrait);
+        Assert.DoesNotContain(separationLabel, portrait);
+        Assert.Contains("Date, Best Time, and Direction only", portrait);
+        Assert.Contains("Jupiter dominant", portrait);
         Assert.Contains("keep planets circular", portrait);
         Assert.DoesNotContain("only one tiny hint", portrait);
     }
