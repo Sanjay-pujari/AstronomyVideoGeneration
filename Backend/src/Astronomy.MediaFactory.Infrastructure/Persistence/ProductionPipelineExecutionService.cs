@@ -1527,7 +1527,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var options = thumbnailOptions?.Value;
         return options?.UseThumbnailV8 == true
             || options?.UseV8AiNative == true
-            || string.Equals(options?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(options?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase)
             || phase12ThumbnailV8DefaultEnabled;
     }
 
@@ -1553,7 +1553,7 @@ public sealed partial class ProductionPipelineExecutionService(
                             || response.ActualRendererUsed.Contains("V7", StringComparison.OrdinalIgnoreCase)
                             || response.OutputWriteSource.Contains("V7", StringComparison.OrdinalIgnoreCase)
                             || response.GeneratedFiles.Any(file => file.Contains("V7", StringComparison.OrdinalIgnoreCase))))
-                        throw new InvalidOperationException("Thumbnail V8 routing guard failed: selected renderer/output contains V7 while V8 is enabled.");
+                        throw new InvalidOperationException("Thumbnail V8 routing guard failed: selected renderer/output contains V7 while V9 is enabled.");
                     outputs.AddRange(response.GeneratedFiles);
                 }
                 catch (Exception ex)
@@ -1611,7 +1611,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var selectedRenderer = FirstNonEmpty(response.ActualRendererUsed, response.RequestedRenderer, response.OutputWriteSource, response.PhaseExecuted);
         var v8GeneratorCalled = v8Enabled && string.Equals(response.PhaseRequested, "Images", StringComparison.OrdinalIgnoreCase) &&
-            (selectedRenderer.Contains("V8", StringComparison.OrdinalIgnoreCase) || response.GeneratedFiles.Any(file => file.Contains("thumbnail-v8-diagnostics", StringComparison.OrdinalIgnoreCase)));
+            (selectedRenderer.Contains("V9", StringComparison.OrdinalIgnoreCase) || response.GeneratedFiles.Any(file => file.Contains("thumbnail-v9-diagnostics", StringComparison.OrdinalIgnoreCase)));
         step["selectedRenderer"] = selectedRenderer;
         step["v8GeneratorCalled"] = v8GeneratorCalled;
         step["v8GeneratorSucceeded"] = v8GeneratorCalled && response.GeneratedFiles.Any(file => file.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
@@ -1619,7 +1619,7 @@ public sealed partial class ProductionPipelineExecutionService(
         step["skippedDueToExistingOutputs"] = false;
         step["skippedDueToConfig"] = !v8Enabled;
         step["skippedDueToMissingInput"] = false;
-        step["skippedDueToRendererSelection"] = v8Enabled && string.Equals(response.PhaseRequested, "Images", StringComparison.OrdinalIgnoreCase) && !selectedRenderer.Contains("V8", StringComparison.OrdinalIgnoreCase);
+        step["skippedDueToRendererSelection"] = v8Enabled && string.Equals(response.PhaseRequested, "Images", StringComparison.OrdinalIgnoreCase) && !selectedRenderer.Contains("V9", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void UpdateThumbnailV8StepException(JsonObject step, Exception exception, string phase, bool v8Enabled, string thumbnailRoot)
@@ -1639,7 +1639,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task EnsureThumbnailV8DiagnosticsAsync(string thumbnailRoot, IReadOnlyList<JsonObject> stepDiagnostics, IReadOnlyList<string> outputFiles, Exception? exception, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(thumbnailRoot);
-        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v8-diagnostics.json");
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v9-diagnostics.json");
         JsonObject root;
         if (File.Exists(diagnosticsPath))
         {
@@ -1656,15 +1656,15 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             root = new JsonObject
             {
-                ["thumbnailVersion"] = "V8",
-                ["selectedRenderer"] = "ThumbnailV8AiNativeRenderer",
-                ["renderer"] = "ThumbnailV8AiNativeRenderer",
+                ["thumbnailVersion"] = "V9",
+                ["selectedRenderer"] = "ThumbnailV9AiFinalThumbnailComposer",
+                ["renderer"] = "ThumbnailV9AiFinalThumbnailComposer",
                 ["aiNativeFullImage"] = exception is null,
                 ["manualOverlayUsed"] = false,
                 ["backgroundOnlyMode"] = false,
                 ["cropFromLandscape"] = false,
                 ["azureImage2Generated"] = exception is null,
-                ["selectedTemplate"] = "AiNativePromptBasedThumbnail",
+                ["selectedTemplate"] = "AiFinalPromptBasedThumbnail",
                 ["layoutFamily"] = "AiGeneratedObservationGuide",
                 ["backgroundMode"] = "PerAspectAzureImage2",
                 ["validationPassed"] = exception is null
@@ -1693,10 +1693,10 @@ public sealed partial class ProductionPipelineExecutionService(
         if (exception is null && File.Exists(path)) return;
         var validation = new JsonObject
         {
-            ["thumbnailVersion"] = "V8",
-            ["renderer"] = "ThumbnailV8AiNativeRenderer",
-            ["selectedRenderer"] = "ThumbnailV8AiNativeRenderer",
-            ["validator"] = "ThumbnailV8Validator",
+            ["thumbnailVersion"] = "V9",
+            ["renderer"] = "ThumbnailV9AiFinalThumbnailComposer",
+            ["selectedRenderer"] = "ThumbnailV9AiFinalThumbnailComposer",
+            ["validator"] = "PromptValidatorV9",
             ["validationPassed"] = exception is null,
             ["status"] = exception is null ? "Succeeded" : "Failed",
             ["outputFiles"] = new JsonArray(outputFiles.Select(file => JsonValue.Create(NormalizePath(file))).ToArray<JsonNode?>()),
@@ -12340,9 +12340,9 @@ public sealed partial class ProductionPipelineExecutionService(
             phase12ThumbnailDiagnostics,
             thumbnailVersion = phase12ThumbnailDiagnostics?.ThumbnailVersion,
             selectedRenderer = phase12ThumbnailDiagnostics?.Renderer,
-            selectedTemplate = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "AiNativePromptBasedThumbnail" : null,
-            layoutFamily = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "AiGeneratedObservationGuide" : null,
-            backgroundMode = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V8", StringComparison.OrdinalIgnoreCase) ? "PerAspectAzureImage2" : null,
+            selectedTemplate = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "AiFinalPromptBasedThumbnail" : null,
+            layoutFamily = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "AiGeneratedObservationGuide" : null,
+            backgroundMode = string.Equals(phase12ThumbnailDiagnostics?.ThumbnailVersion, "V9", StringComparison.OrdinalIgnoreCase) ? "PerAspectAzureImage2" : null,
             renderer = phase12ThumbnailDiagnostics?.Renderer,
             validator = phase12ThumbnailDiagnostics?.Validator,
             thumbnailReviewJsonRequired = phase12ThumbnailDiagnostics?.ThumbnailReviewJsonRequired,
@@ -13226,43 +13226,43 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static void ValidateThumbnailV8Contract(string thumbnailRoot)
     {
-        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v8-diagnostics.json");
+        var diagnosticsPath = Path.Combine(thumbnailRoot, "thumbnail-v9-diagnostics.json");
         if (!File.Exists(diagnosticsPath))
-            throw new InvalidOperationException($"Thumbnail V8 validation failed: thumbnail-v8-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+            throw new InvalidOperationException($"Thumbnail V9 validation failed: thumbnail-v9-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
         using var document = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
         var root = document.RootElement;
-        if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V8", StringComparison.Ordinal)
-            || !string.Equals(GetJsonString(root, "selectedRenderer", string.Empty), "ThumbnailV8AiNativeRenderer", StringComparison.Ordinal))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report V8 and ThumbnailV8AiNativeRenderer.");
+        if (!string.Equals(GetJsonString(root, "thumbnailVersion", string.Empty), "V9", StringComparison.Ordinal)
+            || !string.Equals(GetJsonString(root, "selectedRenderer", string.Empty), "ThumbnailV9AiFinalThumbnailComposer", StringComparison.Ordinal))
+            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report V9 and ThumbnailV9AiFinalThumbnailComposer.");
         if (!GetJsonBool(root, "aiNativeFullImage") || GetJsonBool(root, "manualOverlayUsed") || GetJsonBool(root, "backgroundOnlyMode") || GetJsonBool(root, "cropFromLandscape") || !GetJsonBool(root, "azureImage2Generated"))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report full AI-native generation without manual overlay, background-only mode, or landscape crop.");
+            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report full AI-native generation without manual overlay, background-only mode, or landscape crop.");
         if (File.ReadAllText(diagnosticsPath).Contains("V7", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: V7 appeared in thumbnail-v8-diagnostics.json while V8 is enabled.");
-        if (!string.Equals(GetJsonString(root, "selectedTemplate", string.Empty), "AiNativePromptBasedThumbnail", StringComparison.Ordinal)
+            throw new InvalidOperationException("Thumbnail V9 validation failed: V7 appeared in thumbnail-v9-diagnostics.json while V9 is enabled.");
+        if (!string.Equals(GetJsonString(root, "selectedTemplate", string.Empty), "AiFinalPromptBasedThumbnail", StringComparison.Ordinal)
             || !string.Equals(GetJsonString(root, "layoutFamily", string.Empty), "AiGeneratedObservationGuide", StringComparison.Ordinal)
             || !string.Equals(GetJsonString(root, "backgroundMode", string.Empty), "PerAspectAzureImage2", StringComparison.Ordinal))
-            throw new InvalidOperationException("Thumbnail V8 validation failed: diagnostics must report AiNativePromptBasedThumbnail, AiGeneratedObservationGuide, and PerAspectAzureImage2.");
+            throw new InvalidOperationException("Thumbnail V9 validation failed: diagnostics must report AiFinalPromptBasedThumbnail, AiGeneratedObservationGuide, and PerAspectAzureImage2.");
         var required = new[] { "thumbnail-final.png", "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
             .Select(name => Path.Combine(thumbnailRoot, name))
             .ToArray();
         var missing = required.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0)
-            throw new InvalidOperationException("Thumbnail V8 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
+            throw new InvalidOperationException("Thumbnail V9 validation failed: generated file metadata is missing for required output(s): " + string.Join(", ", missing));
         var phase12ValidationPath = Path.Combine(thumbnailRoot, "phase-12-validation.json");
         if (!File.Exists(phase12ValidationPath))
-            throw new InvalidOperationException($"Thumbnail V8 validation failed: phase-12-validation.json is required at '{NormalizePath(phase12ValidationPath)}'.");
+            throw new InvalidOperationException($"Thumbnail V9 validation failed: phase-12-validation.json is required at '{NormalizePath(phase12ValidationPath)}'.");
         using (var phase12 = JsonDocument.Parse(File.ReadAllText(phase12ValidationPath)))
         {
             var phase12Root = phase12.RootElement;
-            if (!string.Equals(GetJsonString(phase12Root, "thumbnailVersion", string.Empty), "V8", StringComparison.Ordinal)
-                || !string.Equals(GetJsonString(phase12Root, "selectedRenderer", string.Empty), "ThumbnailV8AiNativeRenderer", StringComparison.Ordinal))
-                throw new InvalidOperationException("Thumbnail V8 validation failed: phase-12-validation.json must report V8 and ThumbnailV8AiNativeRenderer.");
+            if (!string.Equals(GetJsonString(phase12Root, "thumbnailVersion", string.Empty), "V9", StringComparison.Ordinal)
+                || !string.Equals(GetJsonString(phase12Root, "selectedRenderer", string.Empty), "ThumbnailV9AiFinalThumbnailComposer", StringComparison.Ordinal))
+                throw new InvalidOperationException("Thumbnail V9 validation failed: phase-12-validation.json must report V9 and ThumbnailV9AiFinalThumbnailComposer.");
             if (File.ReadAllText(phase12ValidationPath).Contains("V7", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Thumbnail V8 validation failed: V7 appeared in phase-12-validation.json while V8 is enabled.");
+                throw new InvalidOperationException("Thumbnail V9 validation failed: V7 appeared in phase-12-validation.json while V9 is enabled.");
         }
         var legacy = new[] { "landscape.png", "portrait.png", "square.png", "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
         if (legacy.Length > 0)
-            throw new InvalidOperationException("Thumbnail V8 validation failed: duplicate non-thumbnail-prefixed output(s) generated: " + string.Join(", ", legacy));
+            throw new InvalidOperationException("Thumbnail V9 validation failed: duplicate non-thumbnail-prefixed output(s) generated: " + string.Join(", ", legacy));
         EnsureNoV7ThumbnailJsonOutputs(thumbnailRoot);
     }
 
@@ -13282,7 +13282,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var text = File.ReadAllText(path);
             var matched = forbiddenTerms.FirstOrDefault(term => text.Contains(term, StringComparison.Ordinal));
             if (matched is not null)
-                throw new InvalidOperationException($"Thumbnail V8 validation failed: forbidden V7 token '{matched}' appeared in {NormalizePath(path)}.");
+                throw new InvalidOperationException($"Thumbnail V9 validation failed: forbidden V7 token '{matched}' appeared in {NormalizePath(path)}.");
         }
     }
 
@@ -13314,7 +13314,7 @@ public sealed partial class ProductionPipelineExecutionService(
             GoldenPilotLeakageDetected: false,
             SemanticValidationPassed: true,
             EventFamily: context.ProductionEventIntelligence.EventType,
-            ValidatorProfile: "ThumbnailV8Validator",
+            ValidatorProfile: "PromptValidatorV9",
             MoonPhaseName: string.Empty,
             MoonIlluminationPercent: string.Empty,
             MoonriseLocal: string.Empty,
@@ -13322,10 +13322,10 @@ public sealed partial class ProductionPipelineExecutionService(
             MoonGuideCardAdded: false,
             MoonObjectRendered: false,
             MoonForbiddenTermsDetected: Array.Empty<string>(),
-            ThumbnailVersion: "V8",
-            ThumbnailContract: "ThumbnailV8AiNative",
-            Renderer: "ThumbnailV8AiNativeRenderer",
-            Validator: "ThumbnailV8Validator",
+            ThumbnailVersion: "V9",
+            ThumbnailContract: "ThumbnailV9AiFinal",
+            Renderer: "ThumbnailV9AiFinalThumbnailComposer",
+            Validator: "PromptValidatorV9",
             ThumbnailReviewJsonRequired: false,
             V6RendererExecuted: false,
             V6ValidatorExecuted: false,

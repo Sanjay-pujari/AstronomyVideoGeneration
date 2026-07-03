@@ -44,7 +44,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string Phase12ThumbnailRenderer = "AzureImage2ThumbnailV5Variants";
     private const string Phase12OverlayRenderer = "ThumbnailV3PureAzureImage2CtrOverlay";
     private const string ThumbnailGenerationDiagnosticsFileName = "thumbnail-generation-diagnostics.json";
-    private const string ThumbnailV8DiagnosticsFileName = "thumbnail-v8-diagnostics.json";
+    private const string ThumbnailV8DiagnosticsFileName = "thumbnail-v9-diagnostics.json";
     private const string ThumbnailCompositionProfileFileName = "thumbnail-composition-profile.json";
     private const string ThumbnailStorytellingStrategyFileName = "thumbnail-storytelling-strategy.json";
     private const string ThumbnailPromptContractFileName = "thumbnail-prompt-contract.json";
@@ -65,7 +65,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         "thumbnail-square-prompt.txt",
         "thumbnail-prompt-diff.md"
     ];
-    private const string ThumbnailV8AiNativeRendererName = "ThumbnailV8AiNativeRenderer";
+    private const string ThumbnailV8AiNativeRendererName = "ThumbnailV9AiFinalThumbnailComposer";
     private const string DefaultThumbnailHook = "CURRENT SKY EVENT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private ProductionPipelineExecutionContext? _activeProductionContext;
@@ -95,7 +95,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private bool IsThumbnailV8Enabled(ThumbnailAssetGenerationRequest? request = null)
     {
         var options = thumbnailOptions?.Value;
-        return Phase12ThumbnailRouter.IsThumbnailV8Enabled(options, request);
+        return Phase12ThumbnailRouter.IsThumbnailV9Enabled(options, request);
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailCompositionModelAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
@@ -272,7 +272,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailV8AiNativeImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
-        Console.WriteLine("ThumbnailV8AiNativeRenderer executing");
+        Console.WriteLine("ThumbnailV9AiFinalThumbnailComposer executing");
         Directory.CreateDirectory(thumbnailRoot);
         DeleteThumbnailV8ForbiddenOutputs(thumbnailRoot);
         var contracts = ThumbnailV8AiNativePromptBuilder.BuildContracts(request);
@@ -285,7 +285,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var promptAssemblyReportPath = Path.Combine(thumbnailRoot, PromptAssemblyReportFileName);
         await File.WriteAllTextAsync(promptAssemblyReportPath, JsonSerializer.Serialize(new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             generatedUtc = DateTimeOffset.UtcNow,
             reports = prompts.Select(prompt => prompt.AssemblyReport).Where(report => report is not null).ToArray()
         }, JsonOptions), cancellationToken);
@@ -308,12 +308,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             else
             {
                 await NormalizeThumbnailDimensionsAsync(outputPath, prompt.Width, prompt.Height, cancellationToken);
-                Console.WriteLine($"Thumbnail V8 output written: {NormalizePath(outputPath)}");
+                Console.WriteLine($"Thumbnail V9 output written: {NormalizePath(outputPath)}");
             }
         }
 
         if (failures.Count > 0)
-            throw new InvalidOperationException("Thumbnail V8 AI-Native generation failed; fallback images are not allowed. " + string.Join(" | ", failures));
+            throw new InvalidOperationException("Thumbnail V9 AI-Native generation failed; fallback images are not allowed. " + string.Join(" | ", failures));
 
         var finalPath = Path.Combine(thumbnailRoot, ThumbnailFinalFileName);
         File.Copy(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), finalPath, overwrite: true);
@@ -322,7 +322,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         promptValidation = BuildThumbnailV8PromptValidationDiagnostics(prompts);
         await WriteThumbnailV8ManifestAsync(request, thumbnailRoot, cancellationToken);
         var contractJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptContractFileName);
-        await File.WriteAllTextAsync(contractJsonPath, JsonSerializer.Serialize(new { thumbnailVersion = "V8", contracts }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(contractJsonPath, JsonSerializer.Serialize(new { thumbnailVersion = "V9", contracts }, JsonOptions), cancellationToken);
         var compositionProfilePath = Path.Combine(thumbnailRoot, ThumbnailCompositionProfileFileName);
         await File.WriteAllTextAsync(compositionProfilePath, JsonSerializer.Serialize(compositionProfileDiagnostics, JsonOptions), cancellationToken);
         var storytellingStrategyPath = Path.Combine(thumbnailRoot, ThumbnailStorytellingStrategyFileName);
@@ -332,12 +332,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var promptJsonPath = Path.Combine(thumbnailRoot, ThumbnailPromptFileName);
         await File.WriteAllTextAsync(promptJsonPath, JsonSerializer.Serialize(new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             selectedRenderer = ThumbnailV8AiNativeRendererName,
-            selectedTemplate = "AiNativePromptBasedThumbnail",
+            selectedTemplate = "AiFinalPromptBasedThumbnail",
             selectedPromptBuilder = prompts.First().SelectedPromptBuilder,
             selectedFamilyTemplate = prompts.First().SelectedFamilyTemplate,
-            validator = "ThumbnailV8Validator",
+            validator = "PromptValidatorV9",
             prompts = prompts.Select(prompt => new { prompt.Name, prompt.Width, prompt.Height, prompt.AspectRatio, prompt.SelectedPromptBuilder, prompt.SelectedFamilyTemplate, prompt.PromptSummary, prompt.Prompt }).ToArray()
         }, JsonOptions), cancellationToken);
         var outputFileMap = outputPaths.Append(new KeyValuePair<string, string>("final", NormalizePath(finalPath))).ToDictionary(k => k.Key, v => v.Value);
@@ -349,9 +349,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var v8DiagnosticsPath = Path.Combine(thumbnailRoot, ThumbnailV8DiagnosticsFileName);
         var v8Diagnostics = new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             renderer = ThumbnailV8AiNativeRendererName,
+            aiGeneratesFinalThumbnail = true,
             aiNativeFullImage = true,
             completeThumbnailMode = true,
             manualOverlayUsed = false,
@@ -383,7 +384,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
-            selectedTemplate = "AiNativePromptBasedThumbnail",
+            selectedTemplate = "AiFinalPromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
             layoutFamily = "AiGeneratedObservationGuide",
@@ -397,7 +398,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             landscapePromptSummary = prompts.First(p => string.Equals(p.Name, "landscape", StringComparison.OrdinalIgnoreCase)).PromptSummary,
             portraitPromptSummary = prompts.First(p => string.Equals(p.Name, "portrait", StringComparison.OrdinalIgnoreCase)).PromptSummary,
             squarePromptSummary = prompts.First(p => string.Equals(p.Name, "square", StringComparison.OrdinalIgnoreCase)).PromptSummary,
-            validator = "ThumbnailV8Validator",
+            validator = "PromptValidatorV9",
             outputFiles = allOutputs,
             outputFilePaths = outputFileMap,
             promptFilePaths = promptPaths,
@@ -415,13 +416,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         await WriteThumbnailV8Phase12ValidationAsync(thumbnailRoot, allOutputs, promptValidation, cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             selectedRenderer = ThumbnailV8AiNativeRendererName,
             renderer = ThumbnailV8AiNativeRendererName,
-            thumbnailEngineVersion = "V8_AI_NATIVE",
+            thumbnailEngineVersion = "V9_AI_FINAL",
             provider = "AzureOpenAIForImage",
             model = imageOptions.Value.ImageDeployment,
             deployment = imageOptions.Value.ImageDeployment,
+            aiGeneratesFinalThumbnail = true,
             aiNativeFullImage = true,
             completeThumbnailMode = true,
             manualOverlayUsed = false,
@@ -453,7 +455,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
-            selectedTemplate = "AiNativePromptBasedThumbnail",
+            selectedTemplate = "AiFinalPromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
             layoutFamily = "AiGeneratedObservationGuide",
@@ -467,7 +469,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             landscapePromptSummary = prompts.First(p => string.Equals(p.Name, "landscape", StringComparison.OrdinalIgnoreCase)).PromptSummary,
             portraitPromptSummary = prompts.First(p => string.Equals(p.Name, "portrait", StringComparison.OrdinalIgnoreCase)).PromptSummary,
             squarePromptSummary = prompts.First(p => string.Equals(p.Name, "square", StringComparison.OrdinalIgnoreCase)).PromptSummary,
-            validator = "ThumbnailV8Validator",
+            validator = "PromptValidatorV9",
             aspectRatiosGenerated = prompts.Select(p => new { p.Name, p.Width, p.Height, p.AspectRatio }).ToArray(),
             promptFilePaths = promptPaths,
             promptHashes = prompts.ToDictionary(prompt => prompt.Name, prompt => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(prompt.Prompt))).ToLowerInvariant(), StringComparer.OrdinalIgnoreCase),
@@ -513,7 +515,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             validation,
             requestedRenderer: ThumbnailV8AiNativeRendererName,
             actualRendererUsed: ThumbnailV8AiNativeRendererName,
-            rendererSelectionReason: "Thumbnail:UseV8AiNative=true routes only thumbnail generation to complete prompt-driven Azure Image2 infographic renders per aspect ratio; old overlay, icon, celestial-object, and crop-based renderers are not called.",
+            rendererSelectionReason: "Thumbnail V9 routes Phase 12 to complete final thumbnail prompts and per-aspect Azure Image generation; legacy presentation compositors and crop-based renderers are not called.",
             oldRendererBypassed: true,
             photoCinematicRendererEntered: false,
             photoCinematicRendererCompleted: false,
@@ -531,8 +533,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     {
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
         {
-            thumbnailVersion = "V8",
-            product = "Thumbnail V8 AI Native",
+            thumbnailVersion = "V9",
+            product = "Thumbnail V9 AI Native",
             generatedAtUtc = DateTimeOffset.UtcNow,
             renderer = ThumbnailV8AiNativeRendererName,
             selectedRenderer = ThumbnailV8AiNativeRendererName,
@@ -540,10 +542,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             completeThumbnailMode = true,
             backgroundOnlyMode = false,
             manualOverlayUsed = false,
+            aiGeneratesFinalThumbnail = true,
             aiNativeFullImage = true,
             compositionProfileGenerated = true,
-            promptGenerationChanged = false,
-            renderingBehaviorChanged = false,
+            promptGenerationChanged = true,
+            renderingBehaviorChanged = true,
             eventId = request.EventId,
             regionId = request.RegionId,
             language = request.Language,
@@ -638,10 +641,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var validationPath = Path.Combine(thumbnailRoot, Phase12SemanticValidationFileName);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             renderer = ThumbnailV8AiNativeRendererName,
             selectedRenderer = ThumbnailV8AiNativeRendererName,
-            validator = "ThumbnailV8Validator",
+            validator = "PromptValidatorV9",
+            aiGeneratesFinalThumbnail = true,
             aiNativeFullImage = true,
             completeThumbnailMode = true,
             manualOverlayUsed = false,
@@ -657,7 +661,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             forbiddenTokensDetected = promptValidation.ForbiddenTokensDetected,
             forbiddenTokensRemoved = promptValidation.ForbiddenTokensRemoved,
             finalPromptPassedValidation = promptValidation.FinalPromptPassedValidation,
-            selectedTemplate = "AiNativePromptBasedThumbnail",
+            selectedTemplate = "AiFinalPromptBasedThumbnail",
             backgroundSource = "AzureImage2",
             cropMode = "PerAspectGenerated",
             layoutFamily = "AiGeneratedObservationGuide",
@@ -693,7 +697,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static readonly string[] ThumbnailV8ForbiddenPromptTokens =
     [
         "ThumbnailV7", "V7", "Udaipur", "Rajasthan", "India", "IN-RJ-UDAIPUR", "lat/lon", "around Jun",
-        "manual overlay", "crop from landscape", "background-only", "visibility window", "visibility windows",
+        "manual overlay", "manual overlay", "deterministic overlay", "do not draw text", "do not draw icons", "renderer will add title", "renderer owns presentation", "renderer-owned presentation", "background artwork only", "crop from landscape", "background-only", "background only", "visibility window", "visibility windows",
         "viewing window", "recommended viewing window", "schedule description", "schedule descriptions"
     ];
 
@@ -721,7 +725,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var profileGuidance = entries.SelectMany(e => e.injectedCompositionGuidance).ToArray();
         return new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             profileCount = entries.Length,
             profiles = entries,
             validation = new
@@ -778,7 +782,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         return new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             profileCount = entries.Length,
             profiles = entries,
             validation = new
@@ -820,7 +824,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var selectedStrategies = entries.Select(e => e.selectedStrategy).ToArray();
         return new
         {
-            thumbnailVersion = "V8",
+            thumbnailVersion = "V9",
             strategyCount = entries.Length,
             strategies = entries,
             validation = new
@@ -868,7 +872,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ["CTR instructions"] = prompts.All(p => p.Prompt.Contains("CTR INSTRUCTIONS", StringComparison.OrdinalIgnoreCase)),
             ["negative rules"] = prompts.All(p => p.Prompt.Contains("NEGATIVE RULES", StringComparison.OrdinalIgnoreCase)),
             ["localized language rules"] = prompts.All(p => p.Prompt.Contains("LOCALIZED", StringComparison.OrdinalIgnoreCase)),
-            ["background-only mode disabled"] = prompts.All(p => !p.Prompt.Contains("background artwork only", StringComparison.OrdinalIgnoreCase) && !p.Prompt.Contains("do not draw text", StringComparison.OrdinalIgnoreCase) && !p.Prompt.Contains("renderer will add", StringComparison.OrdinalIgnoreCase))
+            ["background-only and renderer-owned phrases absent"] = prompts.All(p => !ThumbnailV8ForbiddenPromptTokens.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
         };
         var failures = checks.Where(kv => !kv.Value).Select(kv => kv.Key).Concat(detected.Select(token => $"forbidden token: {token}")).ToArray();
         return new ThumbnailV8PromptValidationDiagnostics(detected, removed, failures.Length == 0, checks, failures);
@@ -876,25 +880,25 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static void ValidateThumbnailV8Outputs(IReadOnlyList<ThumbnailV8Prompt> prompts, string thumbnailRoot, bool promptOnly, bool fallbackUsed)
     {
-        if (fallbackUsed) throw new InvalidOperationException("Thumbnail V8 validation failed: fallback image was used.");
-        if (promptOnly) throw new InvalidOperationException("Thumbnail V8 validation failed: promptOnly cannot be true during real generation.");
+        if (fallbackUsed) throw new InvalidOperationException("Thumbnail V9 validation failed: fallback image was used.");
+        if (promptOnly) throw new InvalidOperationException("Thumbnail V9 validation failed: promptOnly cannot be true during real generation.");
         var forbiddenPromptTokens = ThumbnailV8ForbiddenPromptTokens;
         foreach (var prompt in prompts)
         {
             var matchedPromptToken = forbiddenPromptTokens.FirstOrDefault(token => prompt.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase));
-            if (matchedPromptToken is not null) throw new InvalidOperationException($"Thumbnail V8 validation failed: forbidden prompt token '{matchedPromptToken}' appeared in {prompt.Name} prompt.");
+            if (matchedPromptToken is not null) throw new InvalidOperationException($"Thumbnail V9 validation failed: forbidden prompt token '{matchedPromptToken}' appeared in {prompt.Name} prompt.");
             var path = Path.Combine(thumbnailRoot, $"thumbnail-{prompt.Name}.png");
-            if (!File.Exists(path)) throw new InvalidOperationException($"Thumbnail V8 validation failed: missing image file {NormalizePath(path)}.");
-            if (new FileInfo(path).Length < 100) throw new InvalidOperationException($"Thumbnail V8 validation failed: image file is too small {NormalizePath(path)}.");
+            if (!File.Exists(path)) throw new InvalidOperationException($"Thumbnail V9 validation failed: missing image file {NormalizePath(path)}.");
+            if (new FileInfo(path).Length < 100) throw new InvalidOperationException($"Thumbnail V9 validation failed: image file is too small {NormalizePath(path)}.");
             using var image = Image.Load(path);
             if (image.Width != prompt.Width || image.Height != prompt.Height)
-                throw new InvalidOperationException($"Thumbnail V8 validation failed: wrong dimensions for {NormalizePath(path)}; expected {prompt.Width}x{prompt.Height}, got {image.Width}x{image.Height}.");
+                throw new InvalidOperationException($"Thumbnail V9 validation failed: wrong dimensions for {NormalizePath(path)}; expected {prompt.Width}x{prompt.Height}, got {image.Width}x{image.Height}.");
             var normalized = NormalizePath(path);
             if (normalized.Contains("fallback", StringComparison.OrdinalIgnoreCase) || normalized.Contains("star-map", StringComparison.OrdinalIgnoreCase) || normalized.Contains("starmap", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Thumbnail V8 validation failed: output metadata/source path looks like old fallback star-map style.");
+                throw new InvalidOperationException("Thumbnail V9 validation failed: output metadata/source path looks like old fallback star-map style.");
         }
         var forbidden = new[] { "v7-background-landscape.png", "v7-background-portrait.png", "v7-background-square.png" }.Select(name => Path.Combine(thumbnailRoot, name)).Where(File.Exists).Select(NormalizePath).ToArray();
-        if (forbidden.Length > 0) throw new InvalidOperationException("Thumbnail V8 validation failed: V7 background output(s) must not exist: " + string.Join(", ", forbidden));
+        if (forbidden.Length > 0) throw new InvalidOperationException("Thumbnail V9 validation failed: V7 background output(s) must not exist: " + string.Join(", ", forbidden));
     }
 
 
@@ -914,7 +918,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var text = File.ReadAllText(path);
             var matched = forbiddenTerms.FirstOrDefault(term => text.Contains(term, StringComparison.Ordinal));
             if (matched is not null)
-                throw new InvalidOperationException($"Thumbnail V8 validation failed: forbidden V7 token '{matched}' appeared in {NormalizePath(path)}.");
+                throw new InvalidOperationException($"Thumbnail V9 validation failed: forbidden V7 token '{matched}' appeared in {NormalizePath(path)}.");
         }
     }
 
@@ -3372,7 +3376,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new ThumbnailPromptInstructions(sanitizedPrompt, negativePrompt, primaryObjects, c.Current.ForbiddenObjectNames ?? []),
             new ThumbnailBrand("Natural title case, mobile-readable typography, no technical identifiers", "premium dark blue and gold astronomy magazine style", [FirstNonEmpty(language, c.Current.Language, "en"), "Do not bake location names into the image"]),
             new ThumbnailValidation(["No null required fields", "Aspect-native image generation", "Renderer consumes contract only"], ["Render only required event objects", "Preserve event family safety and observation truth"], ["No cropping from another aspect ratio", "Respect safe zones and mobile readability"]),
-            new ThumbnailPromptDiagnostics("ThumbnailV8AiNativePromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow),
+            new ThumbnailPromptDiagnostics("ThumbnailV9PromptContractFactory", builder, template, summary, DateTimeOffset.UtcNow),
             BuildPromptSections(aspect, c, template, summary, primaryObjects, sanitizedPrompt));
     }
 
@@ -3571,7 +3575,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         return model with
         {
             Architecture = ThumbnailV8AiNativeRendererName,
-            LayoutStyle = "AiNativePromptBasedThumbnail",
+            LayoutStyle = "AiFinalPromptBasedThumbnail",
             LayoutFamily = "AiGeneratedObservationGuide"
         };
     }
@@ -3678,8 +3682,8 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         var isV7 = string.Equals(model.Architecture, ThumbnailV7Architecture, StringComparison.OrdinalIgnoreCase);
         if (isV8)
         {
-            if (!string.Equals(model.LayoutStyle, "AiNativePromptBasedThumbnail", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiGeneratedObservationGuide", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Thumbnail V8 composition validation failed: layoutStyle must be AiNativePromptBasedThumbnail and layoutFamily must be AiGeneratedObservationGuide.");
+            if (!string.Equals(model.LayoutStyle, "AiFinalPromptBasedThumbnail", StringComparison.OrdinalIgnoreCase) || !string.Equals(model.LayoutFamily, "AiGeneratedObservationGuide", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail V9 composition validation failed: layoutStyle must be AiFinalPromptBasedThumbnail and layoutFamily must be AiGeneratedObservationGuide.");
         }
         else if (isV7)
         {
@@ -3694,7 +3698,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         else
         {
             if (!string.Equals(model.Architecture, Rc1GuideThumbnailContract, StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Thumbnail composition validation failed: architecture must be ThumbnailV3PureAzureImage2CtrOverlay, ThumbnailV7CinematicOverlayRenderer, or ThumbnailV8AiNativeRenderer.");
+                throw new ArgumentException("Thumbnail composition validation failed: architecture must be ThumbnailV3PureAzureImage2CtrOverlay, ThumbnailV7CinematicOverlayRenderer, or ThumbnailV9AiFinalThumbnailComposer.");
             if (!string.Equals(model.LayoutFamily, "DetailedGuide", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Thumbnail composition validation failed: layoutFamily must be DetailedGuide.");
             if (model.Variants is null
@@ -4043,7 +4047,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new ThumbnailSceneManifestEntryDto(1, "ThumbnailV8Landscape", landscapePath, "landscape"),
             new ThumbnailSceneManifestEntryDto(2, "ThumbnailV8Portrait", portraitPath, "portrait"),
             new ThumbnailSceneManifestEntryDto(3, "ThumbnailV8Square", squarePath, "square"),
-            "ThumbnailV8AiNativeRenderer generates complete Azure Image2 thumbnail images independently for each aspect ratio.")
+            "ThumbnailV9AiFinalThumbnailComposer generates complete finished Azure Image thumbnails independently for each aspect ratio.")
         {
             PlanId = request.ProductionContext?.ContentGenerationPlanId?.ToString("D"),
             EventType = intelligence?.EventType ?? request.ProductionContext?.EventType ?? "Unknown",
@@ -4054,10 +4058,10 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             BackgroundImagePath = landscapePath,
             ValidationFacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["thumbnailVersion"] = "V8",
+                ["thumbnailVersion"] = "V9",
                 ["thumbnailArchitecture"] = ThumbnailV8AiNativeRendererName,
                 ["selectedRenderer"] = ThumbnailV8AiNativeRendererName,
-                ["selectedTemplate"] = "AiNativePromptBasedThumbnail",
+                ["selectedTemplate"] = "AiFinalPromptBasedThumbnail",
                 ["backgroundSource"] = "AzureImage2",
                 ["cropMode"] = "PerAspectGenerated",
                 ["cropFromLandscape"] = "False",
