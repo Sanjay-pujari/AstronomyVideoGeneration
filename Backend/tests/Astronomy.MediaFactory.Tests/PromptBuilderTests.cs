@@ -113,7 +113,7 @@ public sealed class PromptBuilderTests
         Assert.Contains("LandscapeProfile", landscape);
         Assert.Contains("wide cinematic framing", landscape);
         Assert.Contains("PortraitProfile", portrait);
-        Assert.Contains("phone-first layout guidance", portrait);
+        Assert.Contains("portrait cover art direction", portrait);
         Assert.Contains("SquareProfile", square);
         Assert.Contains("centered balanced composition", square);
         Assert.DoesNotContain("phone-first composition", landscape);
