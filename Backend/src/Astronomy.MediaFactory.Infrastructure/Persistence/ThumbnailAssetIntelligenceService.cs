@@ -2982,6 +2982,37 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             if (family == "Comet") return "Binoculars recommended";
             return ResolveThumbnailEquipment(current);
         }
+
+        private static IReadOnlyList<string> ResolveV8Objects(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var objects = NormalizeObjectList((current.PrimaryObjects ?? []).Concat(current.SecondaryObjects ?? []).Concat(current.RequiredVisualObjects ?? []));
+            if (objects.Count == 0 && IsPlanetaryEvent(current.EventType)) objects = ExtractPlanetObjectNames(FirstNonEmpty(current.ShortTitle, current.Title)).ToArray();
+            if (objects.Count == 0 && IsMeteorEvent(current.EventType, current.Title)) objects = [CleanMeteorDisplayName(FirstNonEmpty(current.ShortTitle, current.Title, "Meteor shower radiant"))];
+            if (objects.Count == 0 && IsMoonEvent(current.EventType, current.Title)) objects = [FirstNonEmpty(ResolveMoonPhaseName(current), current.ShortTitle, "Full Moon")];
+            if (objects.Count == 0 && IsEclipseEvent(current.EventType, current.Title)) objects = IsSolarEclipse(current) ? ["Sun", "Moon"] : ["Moon", "Earth shadow"];
+            var distinct = objects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var titleText = FirstNonEmpty(current.ShortTitle, current.Title);
+            var jupiterVenusEvent = titleText.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && titleText.Contains("Venus", StringComparison.OrdinalIgnoreCase) && !titleText.Contains("Mercury", StringComparison.OrdinalIgnoreCase);
+            return jupiterVenusEvent ? distinct.Where(value => !value.Equals("Mercury", StringComparison.OrdinalIgnoreCase)).ToArray() : distinct;
+        }
+
+        private static string ResolveShortBestTime(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var value = FirstNonEmpty(current.LocalPeakTime, current.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, "After Sunset");
+            if (value.Contains("sunset", StringComparison.OrdinalIgnoreCase)) return "After Sunset";
+            if (value.Contains("dawn", StringComparison.OrdinalIgnoreCase) || value.Contains("pre-dawn", StringComparison.OrdinalIgnoreCase)) return "Pre-Dawn";
+            if (value.Contains("midnight", StringComparison.OrdinalIgnoreCase)) return "Around Midnight";
+            var match = System.Text.RegularExpressions.Regex.Match(value, @"\b\d{1,2}:\d{2}\s*(AM|PM)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            return match.Success ? match.Value.ToUpperInvariant() : "After Sunset";
+        }
+
+        private static string ResolveShortDirection(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var value = FirstNonEmpty(current.SkyDirectionHint, intelligence?.SkyDirectionHint, "West");
+            foreach (var directionValue in new[] { "West", "East", "South", "North", "Southwest", "Southeast", "Northwest", "Northeast" })
+                if (value.Contains(directionValue, StringComparison.OrdinalIgnoreCase)) return directionValue;
+            return "West";
+        }
     }
 
     private static string ResolveThumbnailBestTime(CurrentEventLock current)
