@@ -498,8 +498,62 @@ public static class ThumbnailFieldFormatter
         var equipment = CleanEquipment(FirstNonEmpty(guideCard?.Equipment, language == "hi" ? "नंगी आँख; दूरबीन वैकल्पिक" : "Naked eye; binoculars optional"));
         var separation = CleanSeparation(FirstNonEmpty(guideCard?.Separation, ExtractSeparation(observation.Visibility)));
 
-        Validate(date, bestTime, direction, equipment, separation);
-        return new ThumbnailFormattedGuideFields(date, bestTime, direction, equipment, separation);
+        var presentation = ThumbnailPresentationLocalizer.Localize(language, date, bestTime, direction, equipment, separation);
+
+        Validate(presentation.Date, presentation.BestTime, presentation.Direction, presentation.Equipment, presentation.Separation);
+        return new ThumbnailFormattedGuideFields(presentation.Date, presentation.BestTime, presentation.Direction, presentation.Equipment, presentation.Separation);
+    }
+
+    private static class ThumbnailPresentationLocalizer
+    {
+        public static ThumbnailFormattedGuideFields Localize(string language, string date, string bestTime, string direction, string equipment, string? separation)
+        {
+            if (!IsHindi(language)) return new ThumbnailFormattedGuideFields(date, bestTime, direction, equipment, separation);
+            return new ThumbnailFormattedGuideFields(
+                date,
+                LocalizeBestTime(bestTime),
+                LocalizeDirection(direction),
+                LocalizeEquipment(equipment),
+                LocalizeSeparation(separation));
+        }
+
+        private static bool IsHindi(string language)
+            => !string.IsNullOrWhiteSpace(language) && language.StartsWith("hi", StringComparison.OrdinalIgnoreCase);
+
+        private static string LocalizeBestTime(string value)
+            => value
+                .Replace("After Sunset", "सूर्यास्त के बाद", StringComparison.OrdinalIgnoreCase)
+                .Replace("Pre-Dawn", "भोर से पहले", StringComparison.OrdinalIgnoreCase)
+                .Replace("Around Midnight", "आधी रात के आसपास", StringComparison.OrdinalIgnoreCase);
+
+        private static string LocalizeDirection(string value)
+        {
+            var normalized = value.Trim().ToLowerInvariant().Replace("-", " ");
+            return normalized switch
+            {
+                "n" or "north" => "उत्तर की ओर देखें",
+                "s" or "south" => "दक्षिण की ओर देखें",
+                "e" or "east" => "पूर्व की ओर देखें",
+                "w" or "west" => "पश्चिम की ओर देखें",
+                "ne" or "northeast" or "north east" => "उत्तर-पूर्व की ओर देखें",
+                "nw" or "northwest" or "north west" => "उत्तर-पश्चिम की ओर देखें",
+                "se" or "southeast" or "south east" => "दक्षिण-पूर्व की ओर देखें",
+                "sw" or "southwest" or "south west" => "दक्षिण-पश्चिम की ओर देखें",
+                _ => value
+            };
+        }
+
+        private static string LocalizeEquipment(string value)
+        {
+            if (value.Contains("naked eye", StringComparison.OrdinalIgnoreCase))
+                return value.Contains("binocular", StringComparison.OrdinalIgnoreCase) ? "नंगी आँखों से; दूरबीन वैकल्पिक" : "नंगी आँखों से";
+            if (value.Contains("binocular", StringComparison.OrdinalIgnoreCase)) return "दूरबीन वैकल्पिक";
+            if (value.Contains("solar", StringComparison.OrdinalIgnoreCase) || value.Contains("eclipse glasses", StringComparison.OrdinalIgnoreCase)) return "प्रमाणित सौर ग्रहण चश्मा / सौर फ़िल्टर";
+            return value;
+        }
+
+        private static string? LocalizeSeparation(string? value)
+            => string.IsNullOrWhiteSpace(value) ? value : value.Replace("Apart", "दूर", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CleanDate(string value)
