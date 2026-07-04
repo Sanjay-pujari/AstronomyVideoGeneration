@@ -120,9 +120,13 @@ public sealed class ContentPlanProductionExecutionService(
             var phase20Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 20);
             var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
             var partialPhaseExecution = IsPartialPhaseExecution(request);
-            var partialPhaseSuccess = partialPhaseExecution && CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success);
-            var productionFailed = partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
-            var productionCompleted = partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase20Succeeded;
+            var thumbnailV9Success = IsThumbnailV9Success(pipelineResult.PhaseResults, outputRoot);
+            var thumbnailOnlyExecution = IsThumbnailOnlyExecution(request, productionRequest);
+            var partialPhaseSuccess = partialPhaseExecution && (thumbnailOnlyExecution
+                ? thumbnailV9Success
+                : CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success));
+            var productionFailed = thumbnailOnlyExecution ? !thumbnailV9Success : partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
+            var productionCompleted = thumbnailOnlyExecution ? thumbnailV9Success : partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase20Succeeded;
             if (partialPhaseExecution)
             {
                 logger.LogDebug(
@@ -210,6 +214,37 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static bool IsPartialPhaseExecution(ContentPlanProductionExecutionRequest request)
         => request.StartPhaseNo.HasValue && request.EndPhaseNo.HasValue;
+
+    private static bool IsThumbnailOnlyExecution(ContentPlanProductionExecutionRequest request, ContentPlanProductionPipelineRequest productionRequest)
+        => request.StartPhaseNo == 12
+            && request.EndPhaseNo == 12
+            && IsRequestedOutput(productionRequest, "Thumbnail");
+
+    private static bool IsThumbnailV9Success(IReadOnlyList<ProductionPhaseResult>? phaseResults, string outputRoot)
+    {
+        var phase12Succeeded = phaseResults?.Any(p => p.PhaseNo == 12 && p.Status == ProductionPhaseStatus.Succeeded) == true;
+        if (!phase12Succeeded || !ThumbnailsExist(outputRoot)) return false;
+
+        var validationPath = Path.Combine(outputRoot, "thumbnails", "phase-12-validation.json");
+        var diagnosticsPath = Path.Combine(outputRoot, "thumbnails", "thumbnail-v9-diagnostics.json");
+        return ThumbnailV9ReportSucceeded(validationPath) || ThumbnailV9ReportSucceeded(diagnosticsPath);
+    }
+
+    private static bool ThumbnailV9ReportSucceeded(string path)
+    {
+        if (!File.Exists(path)) return false;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        var validationPassed = ReadJsonBool(root, "validationPassed") == true;
+        var status = ReadJsonString(root, "status");
+        return validationPassed && (string.Equals(status, "Succeeded", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(status));
+    }
+
+    private static bool? ReadJsonBool(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : null;
+
+    private static string? ReadJsonString(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
     {

@@ -992,7 +992,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ["creative brief sections"] = prompts.All(p => new[] { "Creative intent:", "Aspect/output size:", "Scene description:", "Layout guidance:", "Data to render:", "Typography/readability:", "Negative instructions:" }.All(h => p.Prompt.Contains(h, StringComparison.OrdinalIgnoreCase))),
             ["portrait no card footer table language"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => !new[] { "observation card", "footer", "equipment table", "dense infographic" }.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase))),
             ["square native composition"] = prompts.Where(p => p.AspectRatio == "1:1").All(p => p.Prompt.Contains("Native square", StringComparison.OrdinalIgnoreCase)),
-            ["portrait native composition"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => p.Prompt.Contains("Native vertical", StringComparison.OrdinalIgnoreCase)),
+            ["portrait native composition"] = prompts.Where(p => p.AspectRatio == "9:16").All(p => p.Prompt.Contains("premium mobile-first", StringComparison.OrdinalIgnoreCase)),
             ["circular celestial bodies"] = prompts.All(p => p.Prompt.Contains("circular", StringComparison.OrdinalIgnoreCase)),
             ["legacy presentation phrases absent"] = prompts.All(p => !ThumbnailV8ForbiddenPromptTokens.Any(token => p.Prompt.Contains(token, StringComparison.OrdinalIgnoreCase)))
         };
@@ -3419,7 +3419,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         [
             new("landscape", 3840, 2160, "16:9", "LANDSCAPE 16:9 YouTube thumbnail / social cover. Use a title top-left or strong left block, a compact observation card, footer tips, and no clutter. Main object large and prominent at 25-45% visual focus."),
             new("square", 2160, 2160, "1:1", "SQUARE 1:1 Instagram/Facebook square cover. Use centered or balanced native-square composition, large main object, fewer fields than landscape, and no squeezed landscape look. Main object at least 25% visual focus."),
-            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16 Shorts/Reels/Stories cover. Native vertical scene with safe top/bottom margins, large readable title, fewer fields, celestial object not oval or stretched, no squeezed landscape look. Celestial object area minimum 35% and primary visual focus.")
+            new("portrait", 2160, 3840, "9:16", "PORTRAIT 9:16 Shorts/Reels/Stories cover. Premium mobile-first YouTube Shorts cover with close-up cinematic camera framing, safe top/bottom margins, mobile-readable title, fewer fields, preserve perfectly circular planetary geometry, no squeezed landscape look, and a compact Apple-quality observation card.")
         ];
 
         public static IReadOnlyList<ThumbnailPromptContract> BuildContracts(ThumbnailAssetGenerationRequest request)
@@ -3499,9 +3499,32 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
-            if (IsPlanetaryEvent(current.EventType) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary)
-                return IsHindiLanguage(current.Language) ? "ग्रह संयोजन" : "Planet Conjunction";
-            return LocalizeThumbnailText(SanitizeThumbnailV8PromptText(HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.EventType, current.EventType, "Astronomy Viewing Guide"))), current.Language);
+            if (IsHindiLanguage(current.Language))
+            {
+                if (IsPlanetaryEvent(current.EventType) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary) return "ग्रह संयोजन";
+                return LocalizeThumbnailText(SanitizeThumbnailV8PromptText(HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.EventType, current.EventType, "Astronomy Viewing Guide"))), current.Language);
+            }
+
+            return ResolveAudienceFacingEnglishSubtitle(current, intelligence);
+        }
+
+        private static string ResolveAudienceFacingEnglishSubtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
+        {
+            var text = FirstNonEmpty(intelligence?.EventType, current.EventType, current.Title, current.ShortTitle);
+            var normalized = NormalizeEventTypeToken(text);
+            var title = FirstNonEmpty(current.Title, current.ShortTitle, intelligence?.Title);
+
+            if (IsMeteorEvent(text, title)) return title.Contains("peak", StringComparison.OrdinalIgnoreCase) ? "Meteor Shower Peak" : "Peak Night";
+            if (normalized.Contains("SOLAR", StringComparison.OrdinalIgnoreCase) || title.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase))
+                return normalized.Contains("PARTIAL", StringComparison.OrdinalIgnoreCase) || title.Contains("partial", StringComparison.OrdinalIgnoreCase) ? "Partial Solar Eclipse" : "Total Solar Eclipse";
+            if (normalized.Contains("LUNAR", StringComparison.OrdinalIgnoreCase) || title.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase)) return "Total Lunar Eclipse";
+            if (normalized.Contains("COMET", StringComparison.OrdinalIgnoreCase) || title.Contains("comet", StringComparison.OrdinalIgnoreCase))
+                return title.Contains("bright", StringComparison.OrdinalIgnoreCase) ? "Bright Comet" : "Comet Watch";
+            if (normalized.Contains("OPPOSITION", StringComparison.OrdinalIgnoreCase) || title.Contains("opposition", StringComparison.OrdinalIgnoreCase)) return "Opposition Night";
+            if (IsPlanetaryEvent(text) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary)
+                return normalized.Contains("APPROACH", StringComparison.OrdinalIgnoreCase) || title.Contains("closest approach", StringComparison.OrdinalIgnoreCase) ? "Closest Approach" : "Planet Conjunction";
+
+            return "Planet Conjunction";
         }
 
         private static bool IsHindiLanguage(string? language) => !string.IsNullOrWhiteSpace(language) && language.StartsWith("hi", StringComparison.OrdinalIgnoreCase);
@@ -3566,19 +3589,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var aspectPlanetPolish = aspect.Name.Equals("landscape", StringComparison.OrdinalIgnoreCase)
                 ? "LANDSCAPE CREATIVE POLISH: Frame Jupiter and Venus as recognizable telescope-quality planetary disks within the wide twilight composition; Jupiter shows banded atmospheric detail and Venus has a luminous circular glow. Use composition and perspective for importance, never distortion."
                 : aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase)
-                    ? "PORTRAIT CREATIVE POLISH: Apple-keynote / Netflix-documentary / National-Geographic mobile cover: premium title first, beautiful circular Jupiter and Venus second, compact observation card third, and generous negative space. Planets remain physically circular; never vertical ovals, elongated, stretched, or squeezed."
+                    ? "PORTRAIT CREATIVE POLISH: close-up cinematic camera framing for a premium mobile-first YouTube Shorts cover: premium title first, beautiful circular Jupiter and Venus second, compact Apple-quality observation card third, and generous negative space. Preserve perfectly circular planetary geometry; never oval, stretched, or squeezed."
                     : "SQUARE CREATIVE POLISH: Preserve the current square layout; add only subtle polish so Jupiter and Venus read as balanced circular planetary disks, not star-like dots.";
             var prompt = aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase)
                 ? CommonOpening(aspect, c, "Premium YouTube Shorts astronomy cover") + $$"""
-PORTRAIT CREATIVE BRIEF: Generate final finished thumbnail image as a complete final thumbnail. No post-processing overlay will be added. Output size 2160x3840. Native 9:16 portrait composition for a premium YouTube Shorts cover.
+PORTRAIT CREATIVE BRIEF: Generate final finished thumbnail image as a complete final thumbnail. No post-processing overlay will be added. Output size 2160x3840. Use close-up cinematic camera framing for a premium mobile-first YouTube Shorts cover.
 STYLE: astronomy documentary cover with National Geographic, NASA, Apple event poster, and Netflix polish. Dark blue and gold palette, premium magazine typography, high contrast, crisp mobile readability.
 EVENT: Jupiter + Venus conjunction. Jupiter is the hero and Venus is supporting, with clean separation and no extra planets, Moon, watermark, logo, or unrelated celestial objects.
-PLANET RENDERING: Render Jupiter as a premium telescope-quality planetary disk with clearly visible cloud bands, natural atmospheric depth, subtle Great Red Spot style detail when visible, physically realistic illumination, and premium astrophotography quality. Render Venus as a bright, naturally illuminated circular planetary disk with realistic atmospheric glow. The planets must immediately read as planets rather than stars. Increase visual dominance only through camera framing, perspective, composition, and camera distance; never by stretching, squeezing, elongating, or non-uniform scaling.
+PLANET RENDERING: Render Jupiter as a premium telescope-quality planetary disk with clearly visible cloud bands, natural atmospheric depth, subtle Great Red Spot style detail when visible, physically realistic illumination, and premium astrophotography quality. Render Venus as a bright, naturally illuminated circular planetary disk with realistic atmospheric glow. The planets must immediately read as planets rather than stars. Use close-up cinematic camera framing, perspective, composition, and camera distance to make the event readable while preserving perfectly circular planetary geometry; never stretch, squeeze, or non-uniformly scale planets.
 ASPECT PLANET POLISH: {{aspectPlanetPolish}}
-LAYOUT: Premium mobile cover hierarchy: Apple keynote poster restraint, Netflix documentary cover drama, National Geographic astronomy polish. Use a premium title at the top, beautiful circular Jupiter and Venus in the center, a compact observation card at the bottom, and large clean negative space. Render only Date, Best Time, Direction, Equipment, and Separation in the card.
+LAYOUT: Premium mobile-first YouTube Shorts cover hierarchy: Apple keynote poster restraint, Netflix documentary cover drama, National Geographic astronomy polish. Use a premium title at the top, beautiful circular Jupiter and Venus in the center, a compact Apple-quality observation card at the bottom, and clean negative space. Render only Date, Best Time, Direction, Equipment, and Separation in the card.
 TEXT TO RENDER: title {{c.Title}}; Date {{c.DateText}}; Best Time {{c.BestTime}}; Direction {{c.Direction}}; Equipment {{c.Equipment}}; Separation {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}.
 EVERGREEN WORDING: use only absolute date and time facts. No relative time words.
-NEGATIVE INSTRUCTIONS: no extra planets, no Moon, no watermark, no logo, no relative time words, no post-processing overlay instructions, no unfinished artwork, no star-like Jupiter or Venus, no vertical oval planets, no elongated planets, no stretched planets, no squeezed planets.
+NEGATIVE INSTRUCTIONS: no extra planets, no Moon, no watermark, no logo, no relative time words, no post-processing overlay instructions, no unfinished artwork, no star-like Jupiter or Venus, no oval planets, no stretched planets, no squeezed planets, no tall object language.
 """ + CommonData(c, objectText)
                 : CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Premium astronomy infographic thumbnail for a planet conjunction. NASA + National Geographic quality, cinematic twilight sky, ultra realistic celestial objects, modern glassmorphism UI, professional typography, high contrast, mobile readable, social-media optimized.
