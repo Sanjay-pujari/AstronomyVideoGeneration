@@ -3448,21 +3448,21 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         {
             var objectText = c.Objects.Count > 0 ? string.Join(" + ", c.Objects) : "event planets only";
             var aspectPlanetPolish = aspect.Name.Equals("landscape", StringComparison.OrdinalIgnoreCase)
-                ? "LANDSCAPE PLANET SCALE: Planets should occupy meaningful visual area, roughly 25-40% of the composition, while remaining circular and realistic."
+                ? "LANDSCAPE CREATIVE POLISH: Frame Jupiter and Venus as recognizable telescope-quality planetary disks within the wide twilight composition; Jupiter shows banded atmospheric detail and Venus has a luminous circular glow. Use composition and perspective for importance, never distortion."
                 : aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase)
-                    ? "PORTRAIT PLANET SCALE: Use the approved premium Shorts cover style: large title top, circular planets center, compact observation card bottom. Planets must not become vertical ovals."
-                    : "SQUARE PLANET SCALE: Preserve the current premium square quality with balanced circular planets and only minor polish.";
+                    ? "PORTRAIT CREATIVE POLISH: Apple-keynote / Netflix-documentary / National-Geographic mobile cover: premium title first, beautiful circular Jupiter and Venus second, compact observation card third, and generous negative space. Planets remain physically circular; never vertical ovals, elongated, stretched, or squeezed."
+                    : "SQUARE CREATIVE POLISH: Preserve the current square layout; add only subtle polish so Jupiter and Venus read as balanced circular planetary disks, not star-like dots.";
             var prompt = aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase)
                 ? CommonOpening(aspect, c, "Premium YouTube Shorts astronomy cover") + $$"""
 PORTRAIT CREATIVE BRIEF: Generate final finished thumbnail image as a complete final thumbnail. No post-processing overlay will be added. Output size 2160x3840. Native 9:16 portrait composition for a premium YouTube Shorts cover.
 STYLE: astronomy documentary cover with National Geographic, NASA, Apple event poster, and Netflix polish. Dark blue and gold palette, premium magazine typography, high contrast, crisp mobile readability.
 EVENT: Jupiter + Venus conjunction. Jupiter is the hero and Venus is supporting, with clean separation and no extra planets, Moon, watermark, logo, or unrelated celestial objects.
-PLANET RENDERING: Show Jupiter and Venus as recognizable circular planetary disks, not tiny dots of light. Jupiter must show realistic cloud bands and Great Red Spot style detail where visible. Venus must appear as a bright circular/phase-like planetary disk with natural glow. Increase object importance using camera framing and composition only. Never stretch, squash, elongate, or scale planets non-uniformly.
+PLANET RENDERING: Render Jupiter as a premium telescope-quality planetary disk with clearly visible cloud bands, natural atmospheric depth, subtle Great Red Spot style detail when visible, physically realistic illumination, and premium astrophotography quality. Render Venus as a bright, naturally illuminated circular planetary disk with realistic atmospheric glow. The planets must immediately read as planets rather than stars. Increase visual dominance only through camera framing, perspective, composition, and camera distance; never by stretching, squeezing, elongating, or non-uniform scaling.
 ASPECT PLANET POLISH: {{aspectPlanetPolish}}
-LAYOUT: Use the approved premium Shorts cover style: large title top, circular planets center, compact observation card bottom. Planets must not become vertical ovals. Render the card fields Date, Best Time, Direction, Equipment, and Separation only.
+LAYOUT: Premium mobile cover hierarchy: Apple keynote poster restraint, Netflix documentary cover drama, National Geographic astronomy polish. Use a premium title at the top, beautiful circular Jupiter and Venus in the center, a compact observation card at the bottom, and large clean negative space. Render only Date, Best Time, Direction, Equipment, and Separation in the card.
 TEXT TO RENDER: title {{c.Title}}; Date {{c.DateText}}; Best Time {{c.BestTime}}; Direction {{c.Direction}}; Equipment {{c.Equipment}}; Separation {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}.
 EVERGREEN WORDING: use only absolute date and time facts. No relative time words.
-NEGATIVE INSTRUCTIONS: no extra planets, no Moon, no watermark, no logo, no relative time words, no stretched planets, no post-processing overlay instructions, no unfinished artwork.
+NEGATIVE INSTRUCTIONS: no extra planets, no Moon, no watermark, no logo, no relative time words, no post-processing overlay instructions, no unfinished artwork, no star-like Jupiter or Venus, no vertical oval planets, no elongated planets, no stretched planets, no squeezed planets.
 """ + CommonData(c, objectText)
                 : CommonOpening(aspect, c, "Premium planetary observation guide poster") + $$"""
 FAMILY-SPECIFIC TEMPLATE: Premium astronomy infographic thumbnail for a planet conjunction. NASA + National Geographic quality, cinematic twilight sky, ultra realistic celestial objects, modern glassmorphism UI, professional typography, high contrast, mobile readable, social-media optimized.
@@ -3474,10 +3474,10 @@ Celestial objects are more important than the information panel.
 Objects must dominate visual hierarchy.
 Information supports the image and must never compete with the celestial objects.
 Objects must occupy 25-40% of visible composition where the aspect ratio allows.
-PLANET RENDERING: Show Jupiter and Venus as recognizable circular planetary disks, not tiny dots of light. Jupiter must show realistic cloud bands and Great Red Spot style detail where visible. Venus must appear as a bright circular/phase-like planetary disk with natural glow. Increase object importance using camera framing and composition only. Never stretch, squash, elongate, or scale planets non-uniformly.
+PLANET RENDERING: Render Jupiter as a premium telescope-quality planetary disk with clearly visible cloud bands, natural atmospheric depth, subtle Great Red Spot style detail when visible, physically realistic illumination, and premium astrophotography quality. Render Venus as a bright, naturally illuminated circular planetary disk with realistic atmospheric glow. The planets must immediately read as planets rather than stars. Increase visual dominance only through camera framing, perspective, composition, and camera distance; never by stretching, squeezing, elongating, or non-uniform scaling.
 ASPECT PLANET POLISH: {{aspectPlanetPolish}}
 PLANETARY FAMILY BALANCE: primary planet maximum 22% of total image area; secondary planet minimum 12% and maximum 16% of total image area. Keep realistic visual balance: large Jupiter with medium Venus is good; huge Jupiter with tiny Venus is bad. Do not allow any single planet to dominate more than 70% of the total celestial object area.
-Large recognizable realistic celestial bodies.
+Recognizable realistic planetary disks with strong first-glance identity.
 Do not render planets as tiny points of light.
 Keep Date / Best Time / Direction / Equipment / Separation exactly as supplied in LOCALIZED TEXT AND FACTS. Do not use relative day/night CTA wording; use only absolute date and time facts.
 PALETTE: dark blue + gold, premium astronomy magazine typography, crisp compact panels, elegant glow, clean spacing, no overlapping elements, no cropped celestial objects.
@@ -3566,7 +3566,7 @@ LOCALIZED TITLE TO RENDER: {{c.Title}}.
 LOCALIZED SUBTITLE TO RENDER: {{c.EventType}}.
 LOCALIZED FIELD LABELS TO RENDER: {{(IsThumbnailHindiLanguage(c.Current.Language) ? "तारीख, श्रेष्ठ समय, दिशा, दूरी, उपकरण, सुरक्षा" : "Date, Best Time, Direction, Separation, Equipment, Safety")}}.
 VISIBLE INFORMATION LIMIT: render only the fields requested by this aspect: Date, Best Time, Direction, Separation when available, Equipment, and Safety when applicable.
-OBJECT PROMINENCE RULE: the main celestial object or event object must be large, visible, and the strongest visual focus; landscape target 25-45% visual focus, square target at least 25%, portrait target at least 35%. Increase object importance using camera framing and composition only. Never stretch, squash, elongate, or scale planets non-uniformly.
+OBJECT PROMINENCE RULE: make the main celestial object or event object the strongest visual focus through camera framing, composition, perspective, and camera distance. Planets remain physically circular; never stretch, squash, elongate, or scale them non-uniformly.
 TEXT READABILITY RULE: all title, subtitle, labels, callouts, cards, and footer text must be crisp, correctly spelled, high-contrast, localized, and readable on mobile.
 """;
 
