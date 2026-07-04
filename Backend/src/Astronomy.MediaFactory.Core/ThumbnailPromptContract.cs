@@ -248,6 +248,93 @@ public sealed class ThumbnailPromptTemplateRenderer
     private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
 }
 
+
+public interface IThumbnailCreativeProfile
+{
+    string Name { get; }
+    string Subject { get; }
+    string Composition { get; }
+    string ObjectRenderingInstructions { get; }
+    string FamilyNegativeRules { get; }
+}
+
+public sealed record ThumbnailCreativeProfile(
+    string Name,
+    string Subject,
+    string Composition,
+    string ObjectRenderingInstructions,
+    string FamilyNegativeRules) : IThumbnailCreativeProfile;
+
+public static class ThumbnailCreativeProfileFactory
+{
+    private static readonly string[] PlanetNames = ["Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"];
+
+    public static IThumbnailCreativeProfile Create(ThumbnailPromptContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        var family = Normalize(contract.EventIdentity.EventFamily + " " + contract.EventIdentity.EventSubtype + " " + contract.EventIdentity.EventName + " " + contract.EventIdentity.EventAction);
+        if (family.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return MeteorCreativeProfile(contract);
+        if (family.Contains("solar eclipse", StringComparison.OrdinalIgnoreCase)) return SolarEclipseCreativeProfile(contract);
+        if (family.Contains("lunar eclipse", StringComparison.OrdinalIgnoreCase)) return LunarEclipseCreativeProfile(contract);
+        if (family.Contains("comet", StringComparison.OrdinalIgnoreCase)) return CometCreativeProfile(contract);
+        if (family.Contains("opposition", StringComparison.OrdinalIgnoreCase)) return OppositionCreativeProfile(contract);
+        if (family.Contains("visibility", StringComparison.OrdinalIgnoreCase) || family.Contains("elongation", StringComparison.OrdinalIgnoreCase)) return PlanetVisibilityCreativeProfile(contract);
+        if (family.Contains("occult", StringComparison.OrdinalIgnoreCase)) return OccultationCreativeProfile(contract);
+        if (family.Contains("constellation", StringComparison.OrdinalIgnoreCase) || family.Contains("sky guide", StringComparison.OrdinalIgnoreCase)) return ConstellationGuideCreativeProfile(contract);
+        return PlanetaryCreativeProfile(contract);
+    }
+
+    public static IThumbnailCreativeProfile PlanetaryCreativeProfile(ThumbnailPromptContract contract)
+    {
+        var objects = EventObjects(contract);
+        var rendering = new List<string> { "Render only the named event objects: " + ObjectPhrase(objects) + "." };
+        foreach (var obj in objects)
+        {
+            if (obj.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) rendering.Add("Render Jupiter as a premium telescope-quality circular planetary disk with visible cloud bands, natural atmospheric depth, subtle Great Red Spot style detail when visible, and realistic illumination; Jupiter dominant when it is the primary event object.");
+            else if (obj.Equals("Venus", StringComparison.OrdinalIgnoreCase)) rendering.Add("Render Venus as a bright, naturally illuminated circular planetary disk with realistic atmospheric glow.");
+            else if (PlanetNames.Any(p => p.Equals(obj, StringComparison.OrdinalIgnoreCase))) rendering.Add($"Render {obj} as a scientifically plausible circular planetary disk or bright naked-eye planet appropriate to the event scale.");
+            else rendering.Add($"Render {obj} only if it is an event object, with realistic astronomy scale and lighting.");
+        }
+        return new ThumbnailCreativeProfile("PlanetaryCreativeProfile", $"named planet/object event only: {ObjectPhrase(objects)}", "Event-object composition with clean separation, horizon context when useful, and no unrelated sky phenomena.", string.Join(" ", rendering), "No meteor, radiant, eclipse, comet-tail, or unrelated object wording; no random planets; no conjunction wording unless the event subtype is a conjunction.");
+    }
+
+    public static IThumbnailCreativeProfile MeteorCreativeProfile(ThumbnailPromptContract contract)
+    {
+        var shower = ObjectPhrase(EventObjects(contract));
+        return new ThumbnailCreativeProfile("MeteorCreativeProfile", $"meteor shower sky for {shower}", "Dark sky with radiant area, natural meteor streaks, wide horizon context, and open negative space for integrated guide UI.", "Render natural meteor streaks radiating from the radiant; include a subtle radiant marker only if useful for the guide; use dark sky, radiant, meteor streaks, and horizon as the artwork vocabulary.", "No close-pair wording, no planet disk wording, no unrelated bright planetary bodies, no Moon unless explicitly required by the guide-card object labels.");
+    }
+
+    public static IThumbnailCreativeProfile SolarEclipseCreativeProfile(ThumbnailPromptContract contract) =>
+        new("SolarEclipseCreativeProfile", "Sun and Moon eclipse geometry", "Centered eclipse phase with dramatic sky contrast and safety-aware guide UI.", "Render the Sun-Moon eclipse geometry with solar corona or partial eclipse phase as appropriate; include strong safety visual language such as eclipse glasses or safe-viewing cue when safety information is present.", "No planets, no meteor streaks, no comet tails, no unrelated night-sky objects.");
+
+    public static IThumbnailCreativeProfile LunarEclipseCreativeProfile(ThumbnailPromptContract contract) =>
+        new("LunarEclipseCreativeProfile", "Moon in Earth shadow", "Dominant circular Moon with shadow progression or umbra context and clean guide UI.", "Render the Moon in Earth shadow; use red or copper Moon treatment for total eclipse wording, otherwise show the appropriate eclipse phase with lunar surface detail.", "No planets or meteor streaks unless explicitly required by the event objects.");
+
+    public static IThumbnailCreativeProfile CometCreativeProfile(ThumbnailPromptContract contract) =>
+        new("CometCreativeProfile", $"comet with realistic tail: {ObjectPhrase(EventObjects(contract))}", "Comet-forward dark sky composition with tail direction, horizon depth, and clean readable UI.", "Render the comet nucleus, coma, and realistic dust/ion tail with astronomical plausibility; keep tail graceful rather than symbolic.", "No planets unless explicitly required by the event objects; no meteor-shower radiant field; no eclipse geometry.");
+
+    public static IThumbnailCreativeProfile OppositionCreativeProfile(ThumbnailPromptContract contract) =>
+        new("OppositionCreativeProfile", $"opposition planet as hero object: {ObjectPhrase(EventObjects(contract))}", "Hero planet composition with scale, texture, and observation-card safe space.", "Render the opposition target as the only hero planet with realistic circular geometry, illumination, and recognizable surface or atmospheric detail.", "No meteor streaks, no eclipse geometry, no unrelated planets.");
+
+    public static IThumbnailCreativeProfile PlanetVisibilityCreativeProfile(ThumbnailPromptContract contract) =>
+        new("PlanetVisibilityCreativeProfile", $"visible planet sky guide: {ObjectPhrase(EventObjects(contract))}", "Sky-guide composition showing only the target planet or planets with horizon/direction context.", "Render only the target visible planet(s), using realistic brightness, color, and scale for naked-eye viewing.", "No unrelated planets, no meteor shower, no eclipse geometry, no comet tail.");
+
+    public static IThumbnailCreativeProfile OccultationCreativeProfile(ThumbnailPromptContract contract) =>
+        new("OccultationCreativeProfile", $"occulting body and hidden object: {ObjectPhrase(EventObjects(contract))}", "Close sky-guide composition emphasizing disappearance or reappearance near the occulting limb.", "Render the occulting body and the hidden object only; show disappearance/reappearance concept when available without inventing extra bodies.", "No unrelated planets, no meteor streaks, no eclipse corona unless the event is explicitly an eclipse.");
+
+    public static IThumbnailCreativeProfile ConstellationGuideCreativeProfile(ThumbnailPromptContract contract) =>
+        new("ConstellationGuideCreativeProfile", $"constellation pattern and guide stars: {ObjectPhrase(EventObjects(contract))}", "Wide dark-sky guide with constellation line pattern, guide stars, and readable integrated UI.", "Render the constellation pattern and guide stars with restrained linework or markers suitable for a sky guide.", "No unrelated planets, no meteor shower, no eclipse geometry unless explicitly required by the event.");
+
+    private static IReadOnlyList<string> EventObjects(ThumbnailPromptContract contract)
+    {
+        var values = contract.Objects.PrimaryObjects.Concat(contract.Objects.SecondaryObjects).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return values.Count == 0 ? [contract.EventIdentity.EventName] : values;
+    }
+
+    private static string ObjectPhrase(IReadOnlyList<string> objects) => objects.Count == 0 ? "the event object" : string.Join(" and ", objects);
+    private static string Normalize(string value) => value.Replace("-", " ", StringComparison.OrdinalIgnoreCase).Replace("_", " ", StringComparison.OrdinalIgnoreCase);
+}
+
 public sealed class ThumbnailPromptWriterV9
 {
     public ThumbnailPromptBuildResult Write(ThumbnailPromptContract contract) => CreativeBriefPromptBuilder.Build(contract);
@@ -266,8 +353,7 @@ internal static class CreativeBriefPromptBuilder
         var terms = LocalizedPromptTerms.For(language);
         var fields = ThumbnailFieldFormatter.Format(contract.Observation, language);
         var aspect = ResolveAspect(contract);
-        var objectLabels = string.Join(" and ", contract.Objects.PrimaryObjects.Select(o => contract.Objects.LocalizedObjectNames.TryGetValue(o, out var local) ? local : o));
-        var prompt = string.Join(Environment.NewLine, BuildSections(contract, aspect, terms, fields, objectLabels)).Trim();
+        var prompt = string.Join(Environment.NewLine, BuildSections(contract, aspect, terms, fields)).Trim();
         PromptValidatorV9.Validate(contract, [], prompt, strategy);
 
         var report = new PromptAssemblyReport(
@@ -286,10 +372,11 @@ internal static class CreativeBriefPromptBuilder
         return new ThumbnailPromptBuildResult(prompt, PromptAssembler.AppendArtworkNegativeRules(contract.Prompt.NegativePrompt), strategy, report);
     }
 
-    private static IEnumerable<string> BuildSections(ThumbnailPromptContract contract, string aspect, LocalizedPromptTerms terms, ThumbnailFormattedGuideFields fields, string objectLabels)
+    private static IEnumerable<string> BuildSections(ThumbnailPromptContract contract, string aspect, LocalizedPromptTerms terms, ThumbnailFormattedGuideFields fields)
     {
         var size = $"{contract.Platform.Width}x{contract.Platform.Height}";
         var subtitle = contract.EventIdentity.EventSubtype.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) ? "Planet Conjunction" : contract.EventIdentity.EventAction;
+        var creativeProfile = ThumbnailCreativeProfileFactory.Create(contract);
         var optional = BuildOptionalGuideRows(contract.Observation.GuideCard);
         var card = $"{terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}" + (string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}") + optional;
         var title = contract.Display.LocalizedTitle;
@@ -307,9 +394,9 @@ internal static class CreativeBriefPromptBuilder
         };
         var composition = aspect switch
         {
-            "portrait" => "Premium mobile-cover hierarchy: cinematic title at the top, beautiful physically circular Jupiter and Venus in the center, compact observation card at the bottom, and generous clean negative space; increase planet dominance only with framing, perspective, and camera distance.",
-            "square" => "Center-weighted celestial pairing, readable title area, compact observation card, symmetrical breathing room, and no squeezed landscape or tall-poster leftovers.",
-            _ => "Wide twilight sky with an elegant horizon cue, dominant Jupiter-Venus pairing, readable title area, and one premium glass observation card."
+            "portrait" => "Premium mobile-cover hierarchy: cinematic title at the top, event artwork in the center, compact observation card at the bottom, and generous clean negative space; increase subject dominance only with framing, perspective, and camera distance.",
+            "square" => "Center-weighted event artwork, readable title area, compact observation card, symmetrical breathing room, and no squeezed landscape or tall-poster leftovers.",
+            _ => "Wide sky with an elegant horizon cue, dominant event artwork, readable title area, and one premium glass observation card."
         };
         var typography = aspect switch
         {
@@ -320,13 +407,15 @@ internal static class CreativeBriefPromptBuilder
 
         yield return $"Creative Intent: {intent}";
         yield return $"Canvas & Aspect: {canvas}";
-        yield return $"Subject: {objectLabels} conjunction in the western twilight sky. Render Jupiter as a premium telescope-quality planetary disk with visible cloud bands, natural atmospheric depth, subtle Great Red Spot style detail when visible, realistic illumination, and astrophotography polish. Render Venus as a bright, naturally illuminated circular planetary disk with realistic atmospheric glow. Both planets must be immediately recognizable as planets rather than stars.";
-        yield return $"Composition: {composition}";
+        yield return $"Creative Profile: {creativeProfile.Name}";
+        yield return $"Subject: {creativeProfile.Subject}.";
+        yield return $"Composition: {creativeProfile.Composition} {composition}";
+        yield return $"Object Rendering: {creativeProfile.ObjectRenderingInstructions}";
         yield return $"Information to Render: {card}. Use absolute date and time only.";
         yield return $"Typography & UI: {typography}";
-        yield return "Scientific Accuracy: Keep planets physically circular, naturally separated, and astronomically plausible; never stretch, squeeze, elongate, or turn planets into vertical ovals.";
-        yield return "Visual Style: Premium dark blue and gold astronomy documentary look, atmospheric depth, subtle horizon glow, polished integrated thumbnail UI, high contrast, clean negative space.";
-        yield return "Negative Rules: No relative-day or urgency phrases; no post-processing overlay instructions; no watermark, clutter, tiny text, random planets, empty poster look, external branding, star-like Jupiter or Venus, vertical oval planets, elongated planets, stretched planets, or squeezed planets.";
+        yield return "Scientific Accuracy: Keep celestial bodies physically circular where applicable, naturally separated, and astronomically plausible; keep planets circular; never stretch, squeeze, elongate, or turn circular bodies into vertical ovals.";
+        yield return "Visual Style: Premium dark blue and gold astronomy documentary look, atmospheric depth, subtle horizon glow, polished integrated thumbnail UI, high contrast, clean negative space, no watermark, native aspect ratio.";
+        yield return $"Negative Rules: {creativeProfile.FamilyNegativeRules} No relative-day or urgency phrases; no post-processing overlay instructions; no watermark, clutter, tiny text, random objects, empty poster look, external branding, vertical oval bodies, elongated bodies, stretched bodies, or squeezed bodies.";
         yield return "Final Objective: Deliver one complete final thumbnail that is clean, accurate, premium, and ready to publish.";
     }
 
