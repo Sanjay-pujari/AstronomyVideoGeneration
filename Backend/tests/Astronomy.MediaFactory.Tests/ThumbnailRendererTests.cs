@@ -103,8 +103,8 @@ public sealed class ThumbnailRendererTests
         Assert.DoesNotContain(equipmentLabel, portrait);
         Assert.DoesNotContain(separationLabel, portrait);
         Assert.Contains("Date, Best Time, and Direction only", portrait);
-        Assert.Contains("Jupiter dominant", portrait);
-        Assert.Contains("keep planets circular", portrait);
+        Assert.Contains("close-up cinematic camera framing", portrait);
+        Assert.Contains("preserve perfectly circular planetary geometry", portrait);
         Assert.DoesNotContain("only one tiny hint", portrait);
     }
 
