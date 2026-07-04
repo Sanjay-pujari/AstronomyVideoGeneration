@@ -1510,6 +1510,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var current = BuildCurrentEventLock(request);
         var isMeteor = IsMeteorEvent(current.EventType, current.Title);
         var isPlanetary = IsPlanetaryEvent(current.EventType);
+        var family = ThumbnailGuideCardFactory.ResolveFamily(current);
+        var guideCard = ThumbnailGuideCardFactory.Build(current);
         var isMoon = IsMoonEvent(current.EventType, current.Title);
         var textLines = BuildRc1ThumbnailTextLines(current, includeDateWhenAvailable: true);
         var primary = isPlanetary ? BuildPlanetaryCleanHeadline(current) : textLines.ElementAtOrDefault(0) ?? "SKY EVENT";
@@ -1538,12 +1540,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             scores,
             [],
             DateTimeOffset.UtcNow,
-            EventFamily: isPlanetary ? "PlanetaryEvent" : isMeteor ? "MeteorEvent" : isMoon ? "Moon" : null,
+            EventFamily: family,
             ThumbnailOverlayTemplate: ResolveThumbnailOverlayTemplate(request),
-            GuideCard: isPlanetary ? BuildPlanetaryGuideCard(current) : null,
-            ObjectLabels: isPlanetary ? ResolvePlanetaryObjectLabels(current) : null,
-            Callouts: isPlanetary ? BuildPlanetaryCallouts(current) : null,
-            SkyGuideCue: isPlanetary ? NormalizeDirectionCue(current.SkyDirectionHint).ToUpperInvariant() : null);
+            GuideCard: guideCard,
+            ObjectLabels: guideCard.ObjectLabels,
+            Callouts: guideCard.Callouts,
+            SkyGuideCue: guideCard.SkyGuideCue);
 
         if (!request.DryRun)
         {
@@ -2899,6 +2901,89 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ResolveThumbnailEquipment(current),
             current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : null);
 
+    private static class ThumbnailGuideCardFactory
+    {
+        public static string ResolveFamily(CurrentEventLock current)
+        {
+            var token = NormalizeEventTypeToken(current.EventType);
+            if (IsPlanetaryEvent(current.EventType)) return "PlanetaryEvent";
+            if (IsMeteorEvent(current.EventType, current.Title)) return "MeteorEvent";
+            if (IsSolarEclipse(current)) return "SolarEclipse";
+            if (token.Contains("LUNAR", StringComparison.OrdinalIgnoreCase) && token.Contains("ECLIPSE", StringComparison.OrdinalIgnoreCase)) return "LunarEclipse";
+            if (token.Contains("COMET", StringComparison.OrdinalIgnoreCase) || current.Title.Contains("Comet", StringComparison.OrdinalIgnoreCase)) return "Comet";
+            if (token.Contains("OPPOSITION", StringComparison.OrdinalIgnoreCase) || current.Title.Contains("Opposition", StringComparison.OrdinalIgnoreCase)) return "Opposition";
+            if (token.Contains("PLANETVISIBILITY", StringComparison.OrdinalIgnoreCase) || current.Title.Contains("Visibility", StringComparison.OrdinalIgnoreCase)) return "PlanetVisibility";
+            if (token.Contains("OCCULTATION", StringComparison.OrdinalIgnoreCase) || current.Title.Contains("Occultation", StringComparison.OrdinalIgnoreCase)) return "Occultation";
+            if (token.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) || token.Contains("SKYGUIDE", StringComparison.OrdinalIgnoreCase) || current.Title.Contains("Constellation", StringComparison.OrdinalIgnoreCase)) return "SkyGuide";
+            if (IsEclipseEvent(current.EventType, current.Title)) return "LunarEclipse";
+            return "SkyGuide";
+        }
+
+        public static PlanetaryThumbnailGuideCardDto Build(CurrentEventLock current)
+        {
+            var family = ResolveFamily(current);
+            var objects = ResolveV8Objects(current, null);
+            var date = current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? "Event Date";
+            var bestTime = ResolveThumbnailBestTime(current);
+            if (string.IsNullOrWhiteSpace(bestTime)) bestTime = ResolveShortBestTime(current, null);
+            var direction = NormalizeDirectionCue(FirstNonEmpty(current.SkyDirectionHint, ResolveShortDirection(current, null)));
+            var equipment = ResolveEquipment(current, family);
+
+            return family switch
+            {
+                "MeteorEvent" => new(date, bestTime, direction, "Naked Eye", null,
+                    Moon: current.MoonIlluminationPercent is decimal moon ? $"{moon:0}% illuminated" : null,
+                    Radiant: objects.FirstOrDefault(),
+                    Peak: date,
+                    ObjectLabels: [CleanMeteorDisplayName(FirstNonEmpty(objects.FirstOrDefault(), current.Title)), "Radiant", "Meteor streaks"],
+                    Callouts: ["Peak Night", "Dark Sky", "Look Up"],
+                    SkyGuideCue: direction),
+                "SolarEclipse" => new(date, bestTime, direction, "Certified solar eclipse glasses / solar filter", null,
+                    Safety: "Solar filter required",
+                    ObjectLabels: ["Sun", "Moon"],
+                    Callouts: ["Safety First", "Maximum Eclipse"],
+                    SkyGuideCue: direction),
+                "LunarEclipse" => new(date, bestTime, direction, "Naked Eye / binoculars optional", null,
+                    ObjectLabels: ["Moon"],
+                    Callouts: ["Maximum Eclipse", "Visible Phase"],
+                    SkyGuideCue: direction),
+                "Comet" => new(date, bestTime, direction, equipment, null,
+                    Magnitude: null,
+                    ObjectLabels: [FirstNonEmpty(objects.FirstOrDefault(), current.Title, "Comet")],
+                    Callouts: ["Tail Direction", "Closest Approach"],
+                    SkyGuideCue: direction),
+                "Opposition" => new(date, bestTime, direction, equipment, null,
+                    ObjectLabels: [FirstNonEmpty(objects.FirstOrDefault(), current.Title, "Planet")],
+                    Callouts: ["Brightest", "Closest", "Best View"],
+                    SkyGuideCue: direction),
+                "PlanetVisibility" => new(date, bestTime, direction, equipment, null,
+                    ObjectLabels: [FirstNonEmpty(objects.FirstOrDefault(), current.Title, "Planet")],
+                    Callouts: current.AltitudeDegrees is decimal alt ? [$"{alt:0.#}° Altitude", direction] : [direction],
+                    SkyGuideCue: direction),
+                "Occultation" => new(date, bestTime, direction, equipment, null,
+                    ObjectLabels: objects.Count >= 2 ? objects.Take(2).ToArray() : [FirstNonEmpty(current.Title, "Occultation")],
+                    Callouts: ["Disappearance", "Reappearance"],
+                    SkyGuideCue: direction),
+                "SkyGuide" => new(date, bestTime, direction, "Naked Eye", null,
+                    ObjectLabels: [FirstNonEmpty(objects.FirstOrDefault(), current.ShortTitle, current.Title, "Constellation")],
+                    Callouts: ["Find Pattern", "Bright Stars"],
+                    SkyGuideCue: direction),
+                _ => new(date, bestTime, direction, equipment, current.AngularSeparationDegrees is decimal sep ? $"{sep:0.##}°" : null,
+                    ObjectLabels: ResolvePlanetaryObjectLabels(current),
+                    Callouts: BuildPlanetaryCallouts(current),
+                    SkyGuideCue: direction)
+            };
+        }
+
+        private static string ResolveEquipment(CurrentEventLock current, string family)
+        {
+            if (family == "SolarEclipse") return "Certified solar eclipse glasses / solar filter";
+            if (family is "MeteorEvent" or "SkyGuide") return "Naked Eye";
+            if (family == "Comet") return "Binoculars recommended";
+            return ResolveThumbnailEquipment(current);
+        }
+    }
+
     private static string ResolveThumbnailBestTime(CurrentEventLock current)
         => FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "");
 
@@ -3313,7 +3398,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var family = ThumbnailFamilyResolver.Resolve(current);
             var builder = SelectBuilder(family);
             var objects = ResolveV8Objects(current, intelligence);
-            var guideCard = family == ThumbnailV8Family.Planetary ? BuildPlanetaryGuideCard(current) : null;
+            var guideCard = ThumbnailGuideCardFactory.Build(current);
             var context = new ThumbnailV8PromptContext(
                 Current: current,
                 Intelligence: intelligence,
@@ -3580,6 +3665,7 @@ LOCALIZED TEXT AND FACTS TO RENDER INSIDE THE FINAL THUMBNAIL:
 - Direction: {{c.Direction}}
 - Equipment: {{c.Equipment}}
 - Separation: {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}
+{{BuildOptionalGuideCardPromptRows(c.GuideCard)}}
 - Objects to render visually, not as observation-card fields: {{objectText}}
 - Observation guidance badge: use one absolute, practical guidance phrase specified in the family template above.
 QUALITY RULES: complete finished thumbnail, no watermark, no external branding, no location text, no text outside canvas, premium dark blue and gold atmosphere, integrated polished infographic UI created by AI.
@@ -3587,6 +3673,26 @@ CTR INSTRUCTIONS: Optimize the complete thumbnail for click-through recognition 
 AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers, empty visual design.
 NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random planets, no invented celestial objects, no cropping, no external compositing instructions, no unfinished image, no watermark.
 """;
+
+    private static string BuildOptionalGuideCardPromptRows(PlanetaryThumbnailGuideCardDto? guideCard)
+    {
+        if (guideCard is null) return string.Empty;
+        var rows = new List<string>();
+        Add("Moon", guideCard.Moon);
+        Add("Radiant", guideCard.Radiant);
+        Add("Peak", guideCard.Peak);
+        Add("Safety", guideCard.Safety);
+        Add("Magnitude", guideCard.Magnitude);
+        if (guideCard.ObjectLabels is { Count: > 0 }) Add("Object Labels", string.Join(", ", guideCard.ObjectLabels));
+        if (guideCard.Callouts is { Count: > 0 }) Add("Callouts", string.Join(", ", guideCard.Callouts));
+        Add("Sky Guide Cue", guideCard.SkyGuideCue);
+        return string.Join(Environment.NewLine, rows.Select(row => $"- {row}"));
+
+        void Add(string label, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value)) rows.Add($"{label}: {value.Trim()}");
+        }
+    }
 
     private static ThumbnailV8Prompt ToPrompt(ThumbnailPromptContract contract, ThumbnailPromptBuilder builder)
     {

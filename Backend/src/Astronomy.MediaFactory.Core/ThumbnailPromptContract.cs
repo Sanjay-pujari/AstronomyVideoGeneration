@@ -290,7 +290,8 @@ internal static class CreativeBriefPromptBuilder
     {
         var size = $"{contract.Platform.Width}x{contract.Platform.Height}";
         var subtitle = contract.EventIdentity.EventSubtype.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) ? "Planet Conjunction" : contract.EventIdentity.EventAction;
-        var card = $"{terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}" + (string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}");
+        var optional = BuildOptionalGuideRows(contract.Observation.GuideCard);
+        var card = $"{terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}" + (string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}") + optional;
         var title = contract.Display.LocalizedTitle;
         var intent = aspect switch
         {
@@ -338,6 +339,26 @@ internal static class CreativeBriefPromptBuilder
 
     private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private static string BuildOptionalGuideRows(PlanetaryThumbnailGuideCardDto? guideCard)
+    {
+        if (guideCard is null) return string.Empty;
+        var rows = new List<string>();
+        Add("Moon", guideCard.Moon);
+        Add("Radiant", guideCard.Radiant);
+        Add("Peak", guideCard.Peak);
+        Add("Safety", guideCard.Safety);
+        Add("Magnitude", guideCard.Magnitude);
+        if (guideCard.ObjectLabels is { Count: > 0 }) Add("Object Labels", string.Join(", ", guideCard.ObjectLabels.Where(v => !string.IsNullOrWhiteSpace(v))));
+        if (guideCard.Callouts is { Count: > 0 }) Add("Callouts", string.Join(", ", guideCard.Callouts.Where(v => !string.IsNullOrWhiteSpace(v))));
+        Add("Sky Guide Cue", guideCard.SkyGuideCue);
+        return rows.Count == 0 ? string.Empty : "; " + string.Join("; ", rows);
+
+        void Add(string label, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value)) rows.Add($"{label}: {value.Trim()}");
+        }
+    }
 
     private sealed record LocalizedPromptTerms(string Language, string Date, string BestTime, string Direction, string Separation, string Equipment)
     {
