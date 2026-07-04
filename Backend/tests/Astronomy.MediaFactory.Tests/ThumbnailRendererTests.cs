@@ -124,6 +124,35 @@ public sealed class ThumbnailRendererTests
         Assert.Equal("1.63° Apart", fields.Separation);
     }
 
+
+    [Fact]
+    public void ThumbnailPromptWriterV9_MeteorProfile_DoesNotLeakJupiterVenusArtworkLanguage()
+    {
+        var prompt = new ThumbnailPromptWriterV9().Write(BuildMeteorContract()).Prompt;
+
+        Assert.Contains("MeteorCreativeProfile", prompt);
+        Assert.Contains("meteor shower sky", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("radiant", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("meteor streaks", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Jupiter", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Venus", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("conjunction", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("planetary disk", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ThumbnailPromptWriterV9_PlanetaryProfile_OnlyRendersEventPlanets()
+    {
+        var prompt = new ThumbnailPromptWriterV9().Write(BuildJupiterVenusContract("landscape", "en")).Prompt;
+
+        Assert.Contains("PlanetaryCreativeProfile", prompt);
+        Assert.Contains("Render only the named event objects: Jupiter and Venus", prompt);
+        Assert.Contains("Render Jupiter", prompt);
+        Assert.Contains("Render Venus", prompt);
+        Assert.DoesNotContain("meteor streaks", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("radiant", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ThumbnailPromptContract BuildJupiterVenusContract(string aspect, string language)
     {
         var (name, ratio, w, h) = aspect switch { "portrait" => ("portrait", "9:16", 1080, 1920), "square" => ("square", "1:1", 1200, 1200), _ => ("landscape", "16:9", 1280, 720) };
@@ -133,6 +162,13 @@ public sealed class ThumbnailRendererTests
         var observation = new ProductionObservationInfo("PlanetConjunction", "Planetary", "IN-RJ", "Udaipur", "IST", null, true, "Visible", "Show", "2026-06-07", "19:30 IST", "2026-06-07 19:00–20:30 IST", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "25° altitude", [], "Close conjunction", "test", "High", [], []);
         var guideCard = new PlanetaryThumbnailGuideCardDto("Jun 9, 2026", "Jun 9, 2026 7:23 PM", "West After Sunset", "Naked eye; binoculars optional", "1.63°");
         return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity("JUPITER_VENUS_2026", "Jupiter Venus Conjunction", "Viewing guide", "Planetary", "Conjunction"), new ThumbnailDisplay(title, title, shortTitle, [title]), new ThumbnailObjects(["Jupiter", "Venus"], [], new Dictionary<string, string> { ["Jupiter"] = hi ? "बृहस्पति" : "Jupiter", ["Venus"] = hi ? "शुक्र" : "Venus" }), new ThumbnailObservation(observation, "2026-06-07", "2026-06-07 19:00–20:30 IST", hi ? "पश्चिमी आकाश" : "western sky after sunset", "minimum angular separation 1.63 degrees; visible if skies are clear", guideCard), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", ratio, name, w, h), new ThumbnailPromptInstructions("clean astronomy final thumbnail", ThumbnailArtworkPromptRules.NegativePrompt, ["Jupiter", "Venus"], []), new ThumbnailBrand("AI integrated typography", "Discovery Dark Gold", [language]), new ThumbnailValidation(["layout"], ["scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", "Planetary", "summary", DateTimeOffset.UtcNow));
+    }
+
+
+    private static ThumbnailPromptContract BuildMeteorContract()
+    {
+        var guideCard = new PlanetaryThumbnailGuideCardDto("Dec 13–14, 2026", "Midnight to pre-dawn", "East to overhead", "Naked eye", null, Radiant: "Gemini radiant", Peak: "Dec 14 pre-dawn", Moon: "Low moon interference");
+        return new ThumbnailPromptContract("1.0", new ThumbnailEventIdentity("GEMINIDS_2026", "Geminids Meteor Shower", "Viewing guide", "MeteorShower", "MeteorShower"), new ThumbnailDisplay("Geminids Meteor Shower", "Geminids Meteor Shower", "Geminids", ["Geminids Meteor Shower"]), new ThumbnailObjects(["Geminids"], ["Meteors"], new Dictionary<string, string> { ["Geminids"] = "Geminids", ["Meteors"] = "Meteors" }), new ThumbnailObservation(null, "Dec 13–14, 2026", "Midnight to pre-dawn", "East to overhead", "Visible under dark skies", guideCard), new ThumbnailVisual("cinematic", "wonder", "Observation guide", "recognition"), new ThumbnailPlatform("Thumbnail", "16:9", "landscape", 1280, 720), new ThumbnailPromptInstructions("clean meteor shower artwork", ThumbnailArtworkPromptRules.NegativePrompt, ["Geminids", "Meteors"], []), new ThumbnailBrand("AI integrated typography", "Discovery Dark Gold", ["en"]), new ThumbnailValidation(["layout"], ["scientific truth"], ["safe area"]), new ThumbnailPromptDiagnostics("test", "test", "MeteorShower", "summary", DateTimeOffset.UtcNow));
     }
 
     private static ThumbnailPromptContract BuildContract(string family, string aspect, string language)
