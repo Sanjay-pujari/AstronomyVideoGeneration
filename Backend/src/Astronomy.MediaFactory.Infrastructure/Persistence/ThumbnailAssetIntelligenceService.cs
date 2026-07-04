@@ -3499,18 +3499,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
+            var dynamicSubtitle = ResolveAudienceFacingEnglishSubtitle(current, intelligence);
             if (IsHindiLanguage(current.Language))
-            {
-                if (IsPlanetaryEvent(current.EventType) || ThumbnailFamilyResolver.Resolve(current) == ThumbnailV8Family.Planetary) return "ग्रह संयोजन";
-                return LocalizeThumbnailText(SanitizeThumbnailV8PromptText(HumanizeThumbnailV8Text(FirstNonEmpty(intelligence?.EventType, current.EventType, "Astronomy Viewing Guide"))), current.Language);
-            }
+                return LocalizeThumbnailText(dynamicSubtitle, current.Language);
 
-            return ResolveAudienceFacingEnglishSubtitle(current, intelligence);
+            return dynamicSubtitle;
         }
 
         private static string ResolveAudienceFacingEnglishSubtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
-            var text = FirstNonEmpty(intelligence?.EventType, current.EventType, current.Title, current.ShortTitle);
+            var text = FirstNonEmpty(intelligence?.ThumbnailCopy.SecondaryText, intelligence?.EventType, current.EventType, current.Title, current.ShortTitle);
             var normalized = NormalizeEventTypeToken(text);
             var title = FirstNonEmpty(current.Title, current.ShortTitle, intelligence?.Title);
 
@@ -3537,6 +3535,19 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 .Replace("Solar Eclipse", "सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
                 .Replace("Total Lunar Eclipse", "पूर्ण चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
                 .Replace("Lunar Eclipse", "चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Planet Pairing", "ग्रह जोड़ी", StringComparison.OrdinalIgnoreCase)
+                .Replace("Closest Approach", "सबसे नज़दीकी आगमन", StringComparison.OrdinalIgnoreCase)
+                .Replace("Planet Conjunction", "ग्रह संयोजन", StringComparison.OrdinalIgnoreCase)
+                .Replace("Meteor Shower Peak", "उल्का वर्षा चरम", StringComparison.OrdinalIgnoreCase)
+                .Replace("Peak Night", "चरम रात", StringComparison.OrdinalIgnoreCase)
+                .Replace("Total Solar Eclipse", "पूर्ण सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Partial Solar Eclipse", "आंशिक सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Solar Eclipse", "सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Total Lunar Eclipse", "पूर्ण चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Lunar Eclipse", "चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
+                .Replace("Bright Comet", "चमकीला धूमकेतु", StringComparison.OrdinalIgnoreCase)
+                .Replace("Comet Watch", "धूमकेतु दर्शन", StringComparison.OrdinalIgnoreCase)
+                .Replace("Opposition Night", "ऑपोज़िशन रात", StringComparison.OrdinalIgnoreCase)
                 .Replace("Astronomy Viewing Guide", "आकाश दर्शन गाइड", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -3773,7 +3784,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         var observationInfo = c.Intelligence?.ObservationInfo;
         return new ThumbnailPromptContract(
             "1.0",
-            new ThumbnailEventIdentity(FirstNonEmpty(eventId, c.Current.SourceExternalEventId, c.Current.PlanId), c.Title, FirstNonEmpty(c.Current.ContentStrategy, "Observation guide"), template, c.Current.EventType),
+            new ThumbnailEventIdentity(FirstNonEmpty(eventId, c.Current.SourceExternalEventId, c.Current.PlanId), c.Title, c.EventType, template, c.EventType),
             new ThumbnailDisplay(c.Title, c.Title, FirstNonEmpty(c.Current.ShortTitle, c.Title), [c.Title]),
             new ThumbnailObjects(primaryObjects, c.Current.SecondaryObjects ?? [], primaryObjects.ToDictionary(value => value, value => value, StringComparer.OrdinalIgnoreCase)),
             new ThumbnailObservation(observationInfo, FirstNonEmpty(c.Current.BestViewingWindowLocal, observationInfo?.DisplayWindowLocal, c.BestTime), c.BestTime, c.Direction, FirstNonEmpty(observationInfo?.VisibilityStatus, "Visibility derived from current event intelligence"), c.GuideCard),
@@ -3820,7 +3831,9 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             new PromptSection("localized-title", "Title", 10, $"Render the localized title exactly: '{c.Title}'.", true),
             new PromptSection("localized-subtitle", "Subtitle", 20, $"Render the localized subtitle: '{c.EventType}'.", false),
             new PromptSection("family-visual-scene", "Visual Scene", 30, $"{summary} Show only these event objects: {objectText}. No random planets, invented celestial objects, location text, watermark, database identifiers, or snake case.", true),
-            new PromptSection("dominant-object", "Dominant Object", 40, $"Make the event subject immediately recognizable: {objectText}. Celestial objects must drive the visual hierarchy and remain scientifically plausible.", true),
+            new PromptSection(aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase) ? "cinematic-framing" : "dominant-object", aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase) ? "Cinematic Framing" : "Dominant Object", 40, aspect.Name.Equals("portrait", StringComparison.OrdinalIgnoreCase)
+                ? $"Use close-up composition, hero framing, natural perspective, and cinematic camera framing to make the event subject immediately recognizable: {objectText}. Preserve perfectly circular geometry; do not stretch celestial bodies."
+                : $"Make the event subject immediately recognizable: {objectText}. Celestial objects must drive the visual hierarchy and remain scientifically plausible.", true),
             new PromptSection("observation-card", "Observation Card", 50, "Render an integrated observation card with localized field labels and values: " + string.Join("; ", observationFacts) + ". Keep it compact, polished, and readable.", true),
             new PromptSection("one-observation-hint", "One Observation Hint", 55, $"One compact observation hint only: {c.Direction} / {c.BestTime}.", false),
             new PromptSection("compact-observation", "Compact Observation", 60, $"Compact observation: {c.Direction}, {c.BestTime}.", false),

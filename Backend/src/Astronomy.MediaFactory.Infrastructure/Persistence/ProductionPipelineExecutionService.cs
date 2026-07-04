@@ -210,6 +210,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static bool CalculatePipelineSuccess(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, IReadOnlyList<string> errors)
     {
+        if (context.StartPhaseNo == 12 && context.EndPhaseNo == 12)
+            return IsPhase12ThumbnailV9Successful(context, phaseResults);
+
         if (errors.Count > 0) return false;
         foreach (var result in phaseResults)
         {
@@ -219,6 +222,40 @@ public sealed partial class ProductionPipelineExecutionService(
         }
 
         return true;
+    }
+
+    private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
+    {
+        var phase12 = phaseResults.LastOrDefault(result => result.PhaseNo == 12);
+        if (phase12 is null || phase12.Status != ProductionPhaseStatus.Succeeded) return false;
+
+        var validationCandidates = new[]
+        {
+            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "debug", "phase-12-validation.json"),
+            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "phase-12-validation.json")
+        };
+        var validationPath = validationCandidates.FirstOrDefault(File.Exists);
+        if (validationPath is null) return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(validationPath));
+            var root = document.RootElement;
+            var validationPassed = GetJsonBool(root, "validationPassed") || GetJsonBool(root, "semanticValidationPassed");
+            var status = GetJsonString(root, "status", string.Empty);
+            var statusSucceeded = string.IsNullOrWhiteSpace(status) || status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase);
+            var selectedRenderer = GetJsonString(root, "selectedRenderer", string.Empty);
+            var thumbnailVersion = GetJsonString(root, "thumbnailVersion", string.Empty);
+            var v9Result = selectedRenderer.Equals("ThumbnailV9AiFinalThumbnailComposer", StringComparison.OrdinalIgnoreCase)
+                || thumbnailVersion.Equals("V9", StringComparison.OrdinalIgnoreCase);
+            var requiredOutputs = new[] { "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
+                .Select(name => Path.Combine(context.ExecutionContext.ThumbnailRoot!, name));
+            return validationPassed && statusSucceeded && v9Result && requiredOutputs.All(File.Exists);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static IReadOnlyList<RequestedOutputCompletion> BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
@@ -13361,9 +13398,9 @@ public sealed partial class ProductionPipelineExecutionService(
             PortraitOverlayPercent: 0,
             PortraitOverlayWithinLimit: true,
             OverflowDetected: false,
-            ThumbnailLandscapeOutputPath: outputs[1],
-            ThumbnailPortraitOutputPath: outputs[2],
-            ThumbnailSquareOutputPath: outputs[3]);
+            ThumbnailLandscapeOutputPath: outputs[0],
+            ThumbnailPortraitOutputPath: outputs[1],
+            ThumbnailSquareOutputPath: outputs[2]);
     }
 
     private static string GetJsonString(JsonElement element, string name, string fallback)
