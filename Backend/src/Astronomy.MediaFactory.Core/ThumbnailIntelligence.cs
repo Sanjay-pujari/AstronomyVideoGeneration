@@ -210,7 +210,15 @@ public sealed record PlanetaryThumbnailGuideCardDto(
     string BestTime,
     string Direction,
     string Equipment,
-    string? Separation);
+    string? Separation,
+    string? Moon = null,
+    string? Radiant = null,
+    string? Peak = null,
+    string? Safety = null,
+    string? Magnitude = null,
+    IReadOnlyList<string>? ObjectLabels = null,
+    IReadOnlyList<string>? Callouts = null,
+    string? SkyGuideCue = null);
 
 public sealed record ThumbnailHookScoreDto(
     string Hook,
