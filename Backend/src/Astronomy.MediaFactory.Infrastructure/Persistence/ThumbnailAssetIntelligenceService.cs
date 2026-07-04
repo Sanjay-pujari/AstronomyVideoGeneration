@@ -3508,7 +3508,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         private static string ResolveAudienceFacingEnglishSubtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
-            var text = FirstNonEmpty(intelligence?.ThumbnailCopy.SecondaryText, intelligence?.EventType, current.EventType, current.Title, current.ShortTitle);
+            var text = FirstNonEmpty(intelligence?.EventType, current.EventType, current.Title, current.ShortTitle);
             var normalized = NormalizeEventTypeToken(text);
             var title = FirstNonEmpty(current.Title, current.ShortTitle, intelligence?.Title);
 
