@@ -2497,7 +2497,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var forbiddenBlocks = string.Equals(heroContract, "CinematicHero", StringComparison.OrdinalIgnoreCase) ? GetForbiddenCinematicHeroBlocks(renderedBlocks) : Array.Empty<string>();
         node["renderedBlocks"] = JsonSerializer.SerializeToNode(renderedBlocks, JsonOptions);
         node["forbiddenBlocks"] = JsonSerializer.SerializeToNode(forbiddenBlocks, JsonOptions);
-        node["failureBranchName"] = forbiddenBlocks.Length > 0 ? "CinematicHeroMinimalOverlayForbiddenBlocks" : string.Empty;
+        node["failureBranchName"] = forbiddenBlocks.Count > 0 ? "CinematicHeroMinimalOverlayForbiddenBlocks" : string.Empty;
         File.WriteAllText(layoutValidationPath, node.ToJsonString(JsonOptions));
     }
 
