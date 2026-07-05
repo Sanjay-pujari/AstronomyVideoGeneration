@@ -280,13 +280,18 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (partialPhaseExecution)
         {
-            var executedRequiredPhases = requiredPhases.Where(phaseNo => phaseNo >= context.StartPhaseNo && phaseNo <= context.EndPhaseNo).ToArray();
-            if (executedRequiredPhases.Length == 0)
+            var requestedStartPhase = Math.Clamp(context.PipelineRequest.RequestedStartPhaseNo!.Value, 1, 20);
+            var requestedEndPhase = Math.Clamp(context.PipelineRequest.RequestedEndPhaseNo!.Value, requestedStartPhase, 20);
+            var requestedRequiredPhases = requiredPhases.Where(phaseNo => phaseNo >= requestedStartPhase && phaseNo <= requestedEndPhase).ToArray();
+            if (requestedRequiredPhases.Length == 0)
                 return new RequestedOutputCompletion(outputType, true, "OutOfScope", requiredPhases, succeeded, failed, skipped);
 
-            var partialStatus = failed.Length > 0
+            var requestedRelated = related.Where(p => requestedRequiredPhases.Contains(p.PhaseNo)).ToArray();
+            var requestedSucceeded = requestedRelated.Where(p => p.Status == ProductionPhaseStatus.Succeeded).Select(p => p.PhaseNo).ToArray();
+            var requestedFailed = requestedRelated.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).ToArray();
+            var partialStatus = requestedFailed.Length > 0
                 ? "Failed"
-                : executedRequiredPhases.All(phaseNo => succeeded.Contains(phaseNo) || PreviousPhaseSucceeded(context, phaseNo)) ? "Succeeded" : "NotRun";
+                : requestedRequiredPhases.All(phaseNo => requestedSucceeded.Contains(phaseNo) || PreviousPhaseSucceeded(context, phaseNo)) ? "Succeeded" : "NotRun";
             return new RequestedOutputCompletion(outputType, true, partialStatus, requiredPhases, succeeded, failed, skipped);
         }
 
