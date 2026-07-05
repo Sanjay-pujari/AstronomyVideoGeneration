@@ -119,7 +119,8 @@ public sealed record BatchGenerateFromPlansResponse(
     string? RequestedLanguage = null,
     bool LanguageMismatchDetected = false,
     bool SiblingPlanFound = false,
-    bool SiblingPlanCreated = false);
+    bool SiblingPlanCreated = false,
+    SuccessAggregationDiagnostics? SuccessDiagnostics = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -475,8 +476,17 @@ public sealed record ContentPlanProductionExecutionResult(
     string? SelectionMode = null,
     bool PublishGateChecked = false,
     bool PublishApproved = false,
-    bool Phase19ReviewApproved = false);
+    bool Phase19ReviewApproved = false,
+    SuccessAggregationDiagnostics? SuccessDiagnostics = null);
 
+public sealed record SuccessAggregationDiagnostics(
+    int? RequestedStartPhase,
+    int? RequestedEndPhase,
+    IReadOnlyList<int> ExecutedPhaseNumbers,
+    bool AllExecutedPhasesSucceeded,
+    IReadOnlyList<int> FailedExecutedPhases,
+    IReadOnlyList<string> OutOfScopeOutputTypes,
+    string SuccessAggregationMode);
 
 public sealed record RequestedOutputCompletion(
     string OutputType,
