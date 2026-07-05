@@ -2935,7 +2935,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var direction = NormalizeDirectionCue(FirstNonEmpty(current.SkyDirectionHint, ResolveShortDirection(current, null)));
             var equipment = ResolveEquipment(current, family);
 
-            var guideCard = family switch
+            PlanetaryThumbnailGuideCardDto guideCard = family switch
             {
                 "MeteorEvent" => new(date, bestTime, direction, "Naked Eye", null,
                     Moon: current.MoonIlluminationPercent is decimal moon ? $"{moon:0}% illuminated" : null,
