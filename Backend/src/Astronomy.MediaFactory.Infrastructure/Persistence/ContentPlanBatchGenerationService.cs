@@ -191,7 +191,8 @@ public sealed class ContentPlanBatchGenerationService(
                 RequestedLanguage: languageMismatch.RequestedLanguage,
                 LanguageMismatchDetected: languageMismatch.LanguageMismatchDetected,
                 SiblingPlanFound: languageMismatch.SiblingPlanFound,
-                SiblingPlanCreated: languageMismatch.SiblingPlanCreated);
+                SiblingPlanCreated: languageMismatch.SiblingPlanCreated,
+                SuccessDiagnostics: execution.SuccessDiagnostics);
         }
 
         logger.LogInformation("Using placeholder planning pipeline");
