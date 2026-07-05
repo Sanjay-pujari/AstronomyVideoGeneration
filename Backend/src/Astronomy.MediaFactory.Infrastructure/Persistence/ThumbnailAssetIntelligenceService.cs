@@ -4700,7 +4700,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         LogSelectedFamilyProfile("thumbnail", familyResolution, familyProfile);
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
-            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == EventFamily.Eclipse ? "Eclipse" : familyResolution.Family == EventFamily.Moon ? "Moon" : "CurrentEvent";
+            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == Astronomy.MediaFactory.Core.EventFamily.Eclipse ? "Eclipse" : familyResolution.Family == Astronomy.MediaFactory.Core.EventFamily.Moon ? "Moon" : "CurrentEvent";
         var validatorProfile = eventFamily == "MeteorShower"
             ? "MeteorShower"
             : eventFamily == "Eclipse" ? familyProfile.ValidatorProfile
@@ -4736,14 +4736,14 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
     private static ThumbnailValidatorProfile ResolveThumbnailValidatorProfile(CurrentEventLock? current)
     {
         if (current is null)
-            return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent", EventFamily.Unknown.ToString(), EventFamilyResolver.ResolveWithDiagnostics(null, null, [], []).Input, "No current event lock was available.", nameof(EventFamilyProfileBase), EventFamilyProfiles.Version);
+            return new ThumbnailValidatorProfile(string.Empty, "CurrentEvent", [], [], [], "CurrentEvent", Astronomy.MediaFactory.Core.EventFamily.Unknown.ToString(), EventFamilyResolver.ResolveWithDiagnostics(null, null, [], []).Input, "No current event lock was available.", nameof(EventFamilyProfileBase), EventFamilyProfiles.Version);
         var expectedObjects = NormalizeObjectList(current.PrimaryObjects.Concat(current.SecondaryObjects).Concat(current.RequiredVisualObjects));
         var familyResolution = ResolveEventFamily(current.EventType, current.Category, current.PrimaryObjects, current.SecondaryObjects, current.Title);
         var familyProfile = EventFamilyProfiles.Resolve(familyResolution.Family, current.EventType);
         LogSelectedFamilyProfile("thumbnail", familyResolution, familyProfile);
         var eventFamily = IsMeteorEvent(current.EventType, current.Title)
             ? "MeteorShower"
-            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == EventFamily.Eclipse ? "Eclipse" : familyResolution.Family == EventFamily.Moon ? "Moon" : "CurrentEvent";
+            : IsPlanetaryEvent(current.EventType) ? "PlanetaryEvent" : familyResolution.Family == Astronomy.MediaFactory.Core.EventFamily.Eclipse ? "Eclipse" : familyResolution.Family == Astronomy.MediaFactory.Core.EventFamily.Moon ? "Moon" : "CurrentEvent";
         var validatorProfile = eventFamily == "MeteorShower"
             ? "MeteorShower"
             : eventFamily == "Eclipse" ? familyProfile.ValidatorProfile
