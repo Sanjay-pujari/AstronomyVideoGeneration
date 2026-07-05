@@ -16,6 +16,7 @@ using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EventScoring;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -29,6 +30,10 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddMediaFactory(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddOptions<VisualIntelligenceOptions>()
+            .Bind(configuration.GetSection(VisualIntelligenceOptions.SectionName));
+        services.AddVisualIntelligenceOrchestration();
+
         services.AddOptions<ProductionPipelineOptions>()
             .Bind(configuration.GetSection(ProductionPipelineOptions.SectionName))
             .Validate(options => options.StaleRunningThresholdMinutes > 0, "ProductionPipeline:StaleRunningThresholdMinutes must be greater than zero.")
