@@ -1517,6 +1517,12 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var primary = isPlanetary ? BuildPlanetaryCleanHeadline(current) : textLines.ElementAtOrDefault(0) ?? "SKY EVENT";
         var secondary = textLines.ElementAtOrDefault(1) ?? string.Empty;
         var micro = textLines.ElementAtOrDefault(2) ?? string.Empty;
+        if (IsHindiThumbnailIntelligenceLanguage(current.Language))
+        {
+            primary = VisualPromptLocalizationService.LocalizeText(primary, current.Language);
+            secondary = VisualPromptLocalizationService.LocalizeText(secondary, current.Language);
+            micro = VisualPromptLocalizationService.LocalizeText(micro, current.Language);
+        }
         if (isPlanetary) ValidatePlanetaryThumbnailProfile(current, primary);
         var copy = new ThumbnailCopyDto(primary, secondary, micro);
         var scores = new ThumbnailReadinessScoresDto(98, 98, 96, 96, 98);
@@ -2929,7 +2935,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var direction = NormalizeDirectionCue(FirstNonEmpty(current.SkyDirectionHint, ResolveShortDirection(current, null)));
             var equipment = ResolveEquipment(current, family);
 
-            return family switch
+            var guideCard = family switch
             {
                 "MeteorEvent" => new(date, bestTime, direction, "Naked Eye", null,
                     Moon: current.MoonIlluminationPercent is decimal moon ? $"{moon:0}% illuminated" : null,
@@ -2973,6 +2979,84 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                     Callouts: BuildPlanetaryCallouts(current),
                     SkyGuideCue: direction)
             };
+
+            return LocalizeGuideCardForThumbnailIntelligence(guideCard, current.Language);
+        }
+
+        private static PlanetaryThumbnailGuideCardDto LocalizeGuideCardForThumbnailIntelligence(PlanetaryThumbnailGuideCardDto guideCard, string? language)
+        {
+            if (!IsHindiThumbnailIntelligenceLanguage(language)) return guideCard;
+
+            var localized = new PlanetaryThumbnailGuideCardDto(
+                LocalizeGuideDate(guideCard.Date),
+                LocalizeGuideBestTime(guideCard.BestTime),
+                LocalizeGuideDirection(guideCard.Direction),
+                LocalizeGuideEquipment(guideCard.Equipment),
+                LocalizeGuideSeparation(guideCard.Separation),
+                Moon: VisualPromptLocalizationService.LocalizeText(guideCard.Moon ?? string.Empty, language),
+                Radiant: VisualPromptLocalizationService.LocalizeText(guideCard.Radiant ?? string.Empty, language),
+                Peak: LocalizeGuideDate(guideCard.Peak ?? string.Empty),
+                Safety: VisualPromptLocalizationService.LocalizeText(guideCard.Safety ?? string.Empty, language),
+                Magnitude: VisualPromptLocalizationService.LocalizeText(guideCard.Magnitude ?? string.Empty, language),
+                ObjectLabels: VisualPromptLocalizationService.LocalizeList(guideCard.ObjectLabels ?? [], language),
+                Callouts: (guideCard.Callouts ?? []).Select(LocalizeGuideCallout).Where(value => !string.IsNullOrWhiteSpace(value)).ToArray(),
+                SkyGuideCue: LocalizeSkyGuideCue(guideCard.SkyGuideCue));
+
+            ValidateHindiGuideCard(localized);
+            return localized;
+        }
+
+        private static string LocalizeGuideDate(string? value)
+            => VisualPromptLocalizationService.LocalizeText(value ?? string.Empty, "hi");
+
+        private static string LocalizeGuideBestTime(string? value)
+            => VisualPromptLocalizationService.LocalizeText(value ?? string.Empty, "hi")
+                .Replace("AM", "पूर्वाह्न", StringComparison.OrdinalIgnoreCase)
+                .Replace("PM", "अपराह्न", StringComparison.OrdinalIgnoreCase);
+
+        private static string LocalizeGuideDirection(string? value)
+        {
+            var text = value ?? string.Empty;
+            if (text.Contains("southeast", StringComparison.OrdinalIgnoreCase) || text.Contains("look se", StringComparison.OrdinalIgnoreCase) || string.Equals(text.Trim(), "SE", StringComparison.OrdinalIgnoreCase)) return "दक्षिण-पूर्व की ओर देखें";
+            if (text.Contains("northeast", StringComparison.OrdinalIgnoreCase)) return "उत्तर-पूर्व की ओर देखें";
+            if (text.Contains("southwest", StringComparison.OrdinalIgnoreCase)) return "दक्षिण-पश्चिम की ओर देखें";
+            if (text.Contains("northwest", StringComparison.OrdinalIgnoreCase)) return "उत्तर-पश्चिम की ओर देखें";
+            if (text.Contains("east", StringComparison.OrdinalIgnoreCase)) return "पूर्व की ओर देखें";
+            if (text.Contains("west", StringComparison.OrdinalIgnoreCase)) return "पश्चिम की ओर देखें";
+            if (text.Contains("south", StringComparison.OrdinalIgnoreCase)) return "दक्षिण की ओर देखें";
+            if (text.Contains("north", StringComparison.OrdinalIgnoreCase)) return "उत्तर की ओर देखें";
+            return VisualPromptLocalizationService.LocalizeText(text, "hi");
+        }
+
+        private static string LocalizeSkyGuideCue(string? value)
+        {
+            var text = value ?? string.Empty;
+            if (text.Contains("southeast", StringComparison.OrdinalIgnoreCase) || text.Contains("look se", StringComparison.OrdinalIgnoreCase) || string.Equals(text.Trim(), "SE", StringComparison.OrdinalIgnoreCase)) return "दक्षिण-पूर्व दिशा";
+            if (text.Contains("northeast", StringComparison.OrdinalIgnoreCase)) return "उत्तर-पूर्व दिशा";
+            if (text.Contains("southwest", StringComparison.OrdinalIgnoreCase)) return "दक्षिण-पश्चिम दिशा";
+            if (text.Contains("northwest", StringComparison.OrdinalIgnoreCase)) return "उत्तर-पश्चिम दिशा";
+            if (text.Contains("east", StringComparison.OrdinalIgnoreCase)) return "पूर्व दिशा";
+            if (text.Contains("west", StringComparison.OrdinalIgnoreCase)) return "पश्चिम दिशा";
+            if (text.Contains("south", StringComparison.OrdinalIgnoreCase)) return "दक्षिण दिशा";
+            if (text.Contains("north", StringComparison.OrdinalIgnoreCase)) return "उत्तर दिशा";
+            return VisualPromptLocalizationService.LocalizeText(text, "hi");
+        }
+
+        private static string LocalizeGuideEquipment(string? value)
+            => (value ?? string.Empty).Contains("naked eye", StringComparison.OrdinalIgnoreCase) ? "नंगी आँखों से" : VisualPromptLocalizationService.LocalizeText(value ?? string.Empty, "hi");
+
+        private static string? LocalizeGuideSeparation(string? value)
+            => string.IsNullOrWhiteSpace(value) ? value : VisualPromptLocalizationService.LocalizeText(value, "hi");
+
+        private static string LocalizeGuideCallout(string value)
+            => System.Text.RegularExpressions.Regex.Replace(VisualPromptLocalizationService.LocalizeText(value, "hi"), @"(\d+(?:\.\d+)?°)\s*दूर", "$1 दूर", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        private static void ValidateHindiGuideCard(PlanetaryThumbnailGuideCardDto guideCard)
+        {
+            var text = string.Join(" ", guideCard.Date, guideCard.BestTime, guideCard.Direction, guideCard.Equipment, guideCard.Separation, string.Join(" ", guideCard.ObjectLabels ?? []), string.Join(" ", guideCard.Callouts ?? []), guideCard.SkyGuideCue);
+            var forbidden = new[] { "Mars", "Jupiter", "Look Se", "APART", "Closest Approach", "Conjunction", "Object Labels", "Sky Guide Cue", "Callouts" };
+            var hits = forbidden.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (hits.Length > 0) throw new InvalidOperationException("Hindi ThumbnailIntelligence guide card contains English metadata: " + string.Join(", ", hits));
         }
 
         private static string ResolveEquipment(CurrentEventLock current, string family)
@@ -3014,6 +3098,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return "West";
         }
     }
+
+    private static bool IsHindiThumbnailIntelligenceLanguage(string? language)
+        => !string.IsNullOrWhiteSpace(language) && language.StartsWith("hi", StringComparison.OrdinalIgnoreCase);
 
     private static string ResolveThumbnailBestTime(CurrentEventLock current)
         => FirstNonEmpty(current.LocalPeakTime, ExtractTimeCue(current.BestViewingWindowLocal), "");
@@ -3500,7 +3587,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         private static string ResolveV8Subtitle(CurrentEventLock current, ProductionEventIntelligence? intelligence)
         {
             var dynamicSubtitle = ResolveAudienceFacingEnglishSubtitle(current, intelligence);
-            if (IsHindiLanguage(current.Language))
+            if (IsHindiThumbnailIntelligenceLanguage(current.Language))
                 return LocalizeThumbnailText(dynamicSubtitle, current.Language);
 
             return dynamicSubtitle;
@@ -5629,7 +5716,7 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
             SecondaryObjects: NormalizeObjectList(intelligence?.SecondaryObjects ?? []),
             SourceExternalEventId: context?.SourceExternalEventId,
             RegionId: FirstNonEmpty(context?.RegionId, request.RegionId),
-            Language: FirstNonEmpty(context?.Language, request.Language),
+            Language: FirstNonEmpty(request.Language, context?.Language),
             EventDate: intelligence?.EventDate,
             LocalPeakTime: intelligence?.LocalPeakTime,
             SkyDirectionHint: intelligence?.SkyDirectionHint,

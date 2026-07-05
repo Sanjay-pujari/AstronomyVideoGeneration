@@ -380,6 +380,76 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(saved.Headline.Length <= 50);
     }
 
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_HindiPlanetConjunctionIntelligenceLocalizesGuideMetadataBeforePromptComposer()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        var productionContext = BuildProductionContext(
+            workingDirectory,
+            "Mars and Jupiter conjunction over Udaipur; minimum angular separation 1.19 degrees",
+            "Mars and Jupiter",
+            "PlanetConjunction",
+            ["Mars"],
+            ["Jupiter"],
+            angularSeparationDegrees: 1.19m);
+
+        await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "hi",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true,
+            ProductionContext = productionContext
+        }, CancellationToken.None);
+
+        var json = await File.ReadAllTextAsync(Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-intelligence.json"));
+        var saved = JsonSerializer.Deserialize<ThumbnailIntelligenceDto>(json, JsonOptions);
+
+        Assert.NotNull(saved);
+        Assert.Equal("hi", saved!.Language);
+        Assert.Equal(["मंगल", "बृहस्पति"], saved.ObjectLabels);
+        Assert.Equal(["1.19° दूर"], saved.Callouts);
+        Assert.NotNull(saved.GuideCard);
+        Assert.Equal("जून 9, 2026", saved.GuideCard!.Date);
+        Assert.Equal("10:00 अपराह्न", saved.GuideCard.BestTime);
+        Assert.Equal("पूर्व की ओर देखें", saved.GuideCard.Direction);
+        Assert.Equal("नंगी आँखों से", saved.GuideCard.Equipment);
+        Assert.Equal("1.19°", saved.GuideCard.Separation);
+        Assert.Equal(["मंगल", "बृहस्पति"], saved.GuideCard.ObjectLabels);
+        Assert.Equal(["1.19° दूर"], saved.GuideCard.Callouts);
+        Assert.Equal("पूर्व दिशा", saved.GuideCard.SkyGuideCue);
+
+        var thumbnailMetadata = string.Join(" ",
+            saved.Headline,
+            saved.SelectedThumbnailHook,
+            saved.ThumbnailCopy.PrimaryText,
+            saved.ThumbnailCopy.SecondaryText,
+            saved.ThumbnailCopy.MicroText,
+            string.Join(" ", saved.ObjectLabels ?? []),
+            string.Join(" ", saved.Callouts ?? []),
+            saved.SkyGuideCue,
+            saved.GuideCard.Date,
+            saved.GuideCard.BestTime,
+            saved.GuideCard.Direction,
+            saved.GuideCard.Equipment,
+            saved.GuideCard.Separation,
+            string.Join(" ", saved.GuideCard.ObjectLabels ?? []),
+            string.Join(" ", saved.GuideCard.Callouts ?? []),
+            saved.GuideCard.SkyGuideCue);
+        var forbidden = new[] { "Mars", "Jupiter", "Look Se", "APART", "Closest Approach", "Conjunction", "Object Labels", "Sky Guide Cue", "Callouts" };
+        foreach (var term in forbidden)
+        {
+            Assert.DoesNotContain(term, thumbnailMetadata, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     [Fact]
     public async Task GenerateThumbnailAssetsAsync_SceneSelectionWritesThumbnailSceneManifestOnly()
     {
