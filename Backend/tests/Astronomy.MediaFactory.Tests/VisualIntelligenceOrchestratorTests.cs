@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
+using ContractEventFamily = Astronomy.MediaFactory.Contracts.EventFamily;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Rendering;
@@ -42,7 +43,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.NotNull(result.CreativeDirectionContract);
         Assert.Equal("3.2D", result.Cdl!.CdlVersion);
         Assert.Equal("3.2G", result.CreativeDirectionContract!.ContractVersion);
-        Assert.Equal(EventFamily.PlanetConjunction, result.CreativeDirectionContract.EventFamily);
+        Assert.Equal(ContractEventFamily.PlanetConjunction, result.CreativeDirectionContract.EventFamily);
         Assert.Contains(result.Diagnostics, d => d.Code == "visual_intelligence.stub");
     }
 
@@ -82,7 +83,7 @@ public sealed class VisualIntelligenceOrchestratorTests
     {
         var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { UseVisualCreativeDirector = true, UseCDL = true });
 
-        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { EventFamily = EventFamily.Unknown, EventType = "conjunction" });
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { EventFamily = ContractEventFamily.Unknown, EventType = "conjunction" });
 
         Assert.NotEmpty(result.Diagnostics);
         Assert.NotEmpty(result.Context.Diagnostics);
@@ -109,7 +110,7 @@ public sealed class VisualIntelligenceOrchestratorTests
     private static VisualIntelligenceOrchestrationRequest DefaultRequest() => new()
     {
         CorrelationId = "test-correlation",
-        EventFamily = EventFamily.PlanetConjunction,
+        EventFamily = ContractEventFamily.PlanetConjunction,
         EventType = "planet-conjunction",
         Language = "en",
         Platform = Platform.YouTubeThumbnail,
