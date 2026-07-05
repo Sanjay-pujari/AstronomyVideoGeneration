@@ -124,7 +124,7 @@ public sealed class ContentPlanProductionExecutionService(
             var thumbnailOnlyExecution = IsThumbnailOnlyExecution(request, productionRequest);
             var partialPhaseSuccess = partialPhaseExecution && (thumbnailOnlyExecution
                 ? thumbnailV9Success
-                : CalculatePartialPhaseSuccess(productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success));
+                : CalculatePartialPhaseSuccess(request, productionRequest, pipelineResult.PhaseResults, errors, pipelineResult.Success));
             var productionFailed = thumbnailOnlyExecution ? !thumbnailV9Success : partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
             var productionCompleted = thumbnailOnlyExecution ? thumbnailV9Success : partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase20Succeeded;
             if (partialPhaseExecution)
@@ -246,14 +246,21 @@ public sealed class ContentPlanProductionExecutionService(
     private static string? ReadJsonString(JsonElement root, string propertyName)
         => root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
+    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionExecutionRequest request, ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
     {
         if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess && errors.Count == 0;
 
-        // Partial rebuild/rerun success is based on the phases that actually ran.
-        // Requested output completion can still surface diagnostics for phases outside
-        // the rebuild range, but those diagnostics must not fail the partial request.
-        foreach (var result in phaseResults)
+        var requestedStartPhase = Math.Clamp(request.StartPhaseNo!.Value, 1, 20);
+        var requestedEndPhase = Math.Clamp(request.EndPhaseNo!.Value, requestedStartPhase, 20);
+        var executedRequestedPhaseResults = phaseResults
+            .Where(result => result.PhaseNo >= requestedStartPhase && result.PhaseNo <= requestedEndPhase)
+            .ToArray();
+        if (executedRequestedPhaseResults.Length == 0) return false;
+
+        // Partial rebuild/rerun success is based only on phases that actually ran
+        // inside the caller-requested range. Dependency-expanded prerequisites and
+        // output diagnostics outside that range must not fail the partial request.
+        foreach (var result in executedRequestedPhaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
             if (result.Status == ProductionPhaseStatus.Succeeded) continue;

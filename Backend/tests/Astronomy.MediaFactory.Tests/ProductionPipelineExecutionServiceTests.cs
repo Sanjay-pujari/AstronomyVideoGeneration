@@ -2225,6 +2225,32 @@ Second display cue.
         Assert.Contains(completion, item => item.OutputType == "Thumbnail" && item.Requested && item.Status == "Succeeded");
     }
 
+
+    [Fact]
+    public void RequestedOutputCompletion_PartialPhase12Only_MarksUnexecutedOutputsOutOfScope()
+    {
+        var context = CreateContext("PlanetPairing", ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"]);
+        var pipelineRequest = context.PipelineRequest with { RequestedStartPhaseNo = 12, RequestedEndPhaseNo = 12 };
+        context = context with { PipelineRequest = pipelineRequest, StartPhaseNo = 12, EndPhaseNo = 12 };
+        var now = DateTimeOffset.UtcNow;
+        ProductionPhaseResult[] phaseResults =
+        [
+            new(11, "Generate Hero Asset", ProductionPhaseStatus.Failed, now, now, 0, [], [], null, [], ["Hero was not executed in this partial request."], false),
+            new(12, "Generate Thumbnails", ProductionPhaseStatus.Succeeded, now, now, 0, [], [], null, [], [], false),
+            new(15, "Generate Long Narration", ProductionPhaseStatus.Failed, now, now, 0, [], [], null, [], ["Long narration was not executed in this partial request."], false),
+            new(16, "Generate Short TTS", ProductionPhaseStatus.Failed, now, now, 0, [], [], null, [], ["Short TTS was not executed in this partial request."], false),
+            new(18, "Assemble Short Video", ProductionPhaseStatus.Failed, now, now, 0, [], [], null, [], ["Short video was not executed in this partial request."], false),
+            new(19, "Assemble Long Video", ProductionPhaseStatus.Failed, now, now, 0, [], [], null, [], ["Long video was not executed in this partial request."], false)
+        ];
+
+        var completion = BuildRequestedOutputCompletion(context, phaseResults);
+
+        Assert.Contains(completion, item => item.OutputType == "Thumbnail" && item.Requested && item.Status == "Succeeded");
+        Assert.Contains(completion, item => item.OutputType == "HeroAsset" && item.Requested && item.Status == "OutOfScope");
+        Assert.Contains(completion, item => item.OutputType == "ShortVideo" && item.Requested && item.Status == "OutOfScope");
+        Assert.Contains(completion, item => item.OutputType == "LongVideo" && item.Requested && item.Status == "OutOfScope");
+    }
+
     [Fact]
     public void Phase10SceneAssetDiagnostics_CountsV2SceneAssetFinalPngs()
     {
