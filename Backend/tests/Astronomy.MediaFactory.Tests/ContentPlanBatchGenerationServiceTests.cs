@@ -979,6 +979,10 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Assert.True(response.Success);
             Assert.True(response.PartialPhaseExecution);
             Assert.True(response.PartialPhaseSuccess);
+            Assert.True(response.ThumbnailsGenerated);
+            Assert.Null(response.HeroGenerated);
+            Assert.Null(response.ShortVideoGenerated);
+            Assert.Null(response.LongVideoGenerated);
             Assert.Equal(10, response.RequestedStartPhase);
             Assert.Equal(12, response.RequestedEndPhase);
             Assert.Equal(3, response.ExpandedStartPhase);
