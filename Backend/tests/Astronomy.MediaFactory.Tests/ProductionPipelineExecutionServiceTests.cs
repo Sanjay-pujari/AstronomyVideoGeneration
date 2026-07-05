@@ -335,6 +335,104 @@ public sealed class ProductionPipelineExecutionServiceTests
 
 
     [Fact]
+    public void ValidateHeroVisualStyle_TreatsGuideBlocksAsGuideHeroBeforeCinematicRendererSelection()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-guide-contract-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var compositionPath = Path.Combine(tempRoot, "hero-composition-model.json");
+        var blueprintPath = Path.Combine(tempRoot, "hero-asset-blueprint.json");
+        var layoutPath = Path.Combine(tempRoot, "hero-layout-validation.json");
+
+        try
+        {
+            File.WriteAllText(compositionPath, "{}");
+            File.WriteAllText(blueprintPath, "{}");
+            File.WriteAllText(layoutPath, """
+            {
+              "rendererPathSelected": "AzureHeroRendererV2",
+              "isValid": true,
+              "renderedBlocks": ["Title", "Subtitle", "Direction", "Timing", "CTA"],
+              "variants": [
+                { "variant": "Landscape", "fileName": "hero-final.png" }
+              ],
+              "compositionReports": [
+                { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
+              ],
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTextSafeAreaPassed": true,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              }
+            }
+            """);
+
+            var method = GetPrivateStaticMethod("ValidateHeroVisualStyle", typeof(string), typeof(string), typeof(string), typeof(bool));
+            var exception = Record.Exception(() => method.Invoke(null, [compositionPath, blueprintPath, layoutPath, true]));
+
+            Assert.Null(exception);
+            using var doc = JsonDocument.Parse(File.ReadAllText(layoutPath));
+            Assert.Equal("GuideHero", doc.RootElement.GetProperty("heroContract").GetString());
+            Assert.Equal("GuideHero", doc.RootElement.GetProperty("validatorContract").GetString());
+            Assert.Equal("GuideHero", doc.RootElement.GetProperty("validationProfileUsed").GetString());
+            Assert.Empty(doc.RootElement.GetProperty("forbiddenBlocks").EnumerateArray());
+            Assert.Equal(string.Empty, doc.RootElement.GetProperty("failureBranchName").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ValidateHeroVisualStyle_DefaultsEmptyHeroContractToGuideHero()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-default-contract-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var compositionPath = Path.Combine(tempRoot, "hero-composition-model.json");
+        var blueprintPath = Path.Combine(tempRoot, "hero-asset-blueprint.json");
+        var layoutPath = Path.Combine(tempRoot, "hero-layout-validation.json");
+
+        try
+        {
+            File.WriteAllText(compositionPath, "{}");
+            File.WriteAllText(blueprintPath, "{}");
+            File.WriteAllText(layoutPath, PassingLayoutJson("""
+              "heroOverlayDiagnostics": {
+                "heroTextOverlapDetected": false,
+                "heroTitleSubtitleOverlap": false,
+                "heroTitleMetadataOverlap": false,
+                "heroTitleClipped": false,
+                "heroSubtitleClipped": false,
+                "heroTitleOverflowDetected": false,
+                "heroTextSafeAreaPassed": true,
+                "heroTitleSafeAreaPassed": true,
+                "safeArea": true
+              },
+            """));
+
+            var method = GetPrivateStaticMethod("ValidateHeroVisualStyle", typeof(string), typeof(string), typeof(string), typeof(bool));
+            var exception = Record.Exception(() => method.Invoke(null, [compositionPath, blueprintPath, layoutPath, true]));
+
+            Assert.Null(exception);
+            using var doc = JsonDocument.Parse(File.ReadAllText(layoutPath));
+            Assert.Equal("GuideHero", doc.RootElement.GetProperty("heroContract").GetString());
+            Assert.Equal("GuideHero", doc.RootElement.GetProperty("validatorContract").GetString());
+            Assert.Equal("GuideHero", doc.RootElement.GetProperty("validationProfileUsed").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+
+    [Fact]
     public void SummarizeHeroLayoutValidation_FallsBackToHeroGenerationDiagnosticsWhenLayoutOmitsOverlayDiagnostics()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "hero-summary-" + Guid.NewGuid().ToString("N"));
