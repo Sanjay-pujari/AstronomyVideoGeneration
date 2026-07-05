@@ -1,0 +1,256 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Astronomy.MediaFactory.Contracts;
+
+public static class VisualIntelligenceContractVersions
+{
+    public const string ContractVersion = "3.2G";
+    public const string CdlVersion = "3.2D";
+    public const string BrandVersion = "3.2B";
+    public const string RenderingRulesVersion = "3.2C";
+    public const string PromptComposerVersion = "3.2E";
+    public const string ProviderProfileVersion = "3.2E-azure-image2-v1";
+    public const string QualityReportVersion = "3.2F";
+}
+
+public static class VisualIntelligenceFeatureFlags
+{
+    public const string SectionName = "VisualIntelligence";
+    public const string UseVisualCreativeDirector = nameof(UseVisualCreativeDirector);
+    public const string UseCDL = nameof(UseCDL);
+    public const string UseCreativeDirectionContract = nameof(UseCreativeDirectionContract);
+    public const string UsePromptComposerV2 = nameof(UsePromptComposerV2);
+    public const string UseProviderProfiles = nameof(UseProviderProfiles);
+    public const string UseQualityScoring = nameof(UseQualityScoring);
+    public const string UseQualityScoringBlocking = nameof(UseQualityScoringBlocking);
+    public const string UseExperimentalRenderingRules = nameof(UseExperimentalRenderingRules);
+}
+
+public sealed class VisualIntelligenceOptions
+{
+    public const string SectionName = VisualIntelligenceFeatureFlags.SectionName;
+    public bool UseVisualCreativeDirector { get; init; }
+    public bool UseCDL { get; init; }
+    public bool UseCreativeDirectionContract { get; init; }
+    public bool UsePromptComposerV2 { get; init; }
+    public bool UseProviderProfiles { get; init; }
+    public bool UseQualityScoring { get; init; }
+    public bool UseQualityScoringBlocking { get; init; }
+    public bool UseExperimentalRenderingRules { get; init; }
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<EventFamily>))]
+public enum EventFamily { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("planetConjunction")] PlanetConjunction, [JsonStringEnumMemberName("lunarEvent")] LunarEvent, [JsonStringEnumMemberName("solarEvent")] SolarEvent, [JsonStringEnumMemberName("meteorShower")] MeteorShower, [JsonStringEnumMemberName("eclipse")] Eclipse, [JsonStringEnumMemberName("comet")] Comet, [JsonStringEnumMemberName("deepSkyObject")] DeepSkyObject, [JsonStringEnumMemberName("planetOpposition")] PlanetOpposition, [JsonStringEnumMemberName("spaceNews")] SpaceNews }
+[JsonConverter(typeof(JsonStringEnumConverter<Platform>))]
+public enum Platform { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("youtubeThumbnail")] YouTubeThumbnail, [JsonStringEnumMemberName("youtubeLongForm")] YouTubeLongForm, [JsonStringEnumMemberName("youtubeShorts")] YouTubeShorts, [JsonStringEnumMemberName("instagramReel")] InstagramReel, [JsonStringEnumMemberName("facebookReel")] FacebookReel, [JsonStringEnumMemberName("gallery")] Gallery, [JsonStringEnumMemberName("hero")] Hero }
+[JsonConverter(typeof(JsonStringEnumConverter<AspectRatio>))]
+public enum AspectRatio { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("16:9")] Landscape16x9, [JsonStringEnumMemberName("9:16")] Portrait9x16, [JsonStringEnumMemberName("1:1")] Square1x1, [JsonStringEnumMemberName("4:3")] Classic4x3 }
+[JsonConverter(typeof(JsonStringEnumConverter<CreativeStyle>))]
+public enum CreativeStyle { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("premiumDocumentary")] PremiumDocumentary, [JsonStringEnumMemberName("cinematicRealism")] CinematicRealism, [JsonStringEnumMemberName("scientificIllustration")] ScientificIllustration, [JsonStringEnumMemberName("educationalClarity")] EducationalClarity, [JsonStringEnumMemberName("minimalist")] Minimalist }
+[JsonConverter(typeof(JsonStringEnumConverter<CompositionStyle>))]
+public enum CompositionStyle { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("heroSubject")] HeroSubject, [JsonStringEnumMemberName("ruleOfThirds")] RuleOfThirds, [JsonStringEnumMemberName("centeredSubject")] CenteredSubject, [JsonStringEnumMemberName("splitComposition")] SplitComposition, [JsonStringEnumMemberName("lowerThirdObservationCard")] LowerThirdObservationCard, [JsonStringEnumMemberName("wideNegativeSpace")] WideNegativeSpace }
+[JsonConverter(typeof(JsonStringEnumConverter<PublicationDecisionStatus>))]
+public enum PublicationDecisionStatus { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("publish")] Publish, [JsonStringEnumMemberName("publishWithWarning")] PublishWithWarning, [JsonStringEnumMemberName("block")] Block, [JsonStringEnumMemberName("regenerate")] Regenerate, [JsonStringEnumMemberName("fallback")] Fallback }
+[JsonConverter(typeof(JsonStringEnumConverter<DiagnosticSeverity>))]
+public enum DiagnosticSeverity { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("info")] Info, [JsonStringEnumMemberName("warning")] Warning, [JsonStringEnumMemberName("error")] Error, [JsonStringEnumMemberName("blocking")] Blocking }
+[JsonConverter(typeof(JsonStringEnumConverter<ImageProviderType>))]
+public enum ImageProviderType { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("azureImage2")] AzureImage2, [JsonStringEnumMemberName("openAiImage")] OpenAiImage, [JsonStringEnumMemberName("localRenderer")] LocalRenderer, [JsonStringEnumMemberName("externalProvider")] ExternalProvider }
+[JsonConverter(typeof(JsonStringEnumConverter<QualityCategory>))]
+public enum QualityCategory { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("creativeIntentMatch")] CreativeIntentMatch, [JsonStringEnumMemberName("astronomicalPlausibility")] AstronomicalPlausibility, [JsonStringEnumMemberName("brandCompliance")] BrandCompliance, [JsonStringEnumMemberName("textReadability")] TextReadability, [JsonStringEnumMemberName("platformSuitability")] PlatformSuitability, [JsonStringEnumMemberName("providerCompliance")] ProviderCompliance }
+[JsonConverter(typeof(JsonStringEnumConverter<VisualIntelligenceFeatureFlagName>))]
+public enum VisualIntelligenceFeatureFlagName { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("useVisualCreativeDirector")] UseVisualCreativeDirector, [JsonStringEnumMemberName("useCDL")] UseCDL, [JsonStringEnumMemberName("useCreativeDirectionContract")] UseCreativeDirectionContract, [JsonStringEnumMemberName("usePromptComposerV2")] UsePromptComposerV2, [JsonStringEnumMemberName("useProviderProfiles")] UseProviderProfiles, [JsonStringEnumMemberName("useQualityScoring")] UseQualityScoring, [JsonStringEnumMemberName("useQualityScoringBlocking")] UseQualityScoringBlocking, [JsonStringEnumMemberName("useExperimentalRenderingRules")] UseExperimentalRenderingRules }
+
+public sealed record CDL
+{
+    public string CdlVersion { get; init; } = VisualIntelligenceContractVersions.CdlVersion;
+    public string DocumentId { get; init; } = string.Empty;
+    public List<CdlDirective> Directives { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record CdlDirective(string Name = "", string Value = "", int Priority = 0);
+
+public sealed record CreativeDirectionContract
+{
+    public string ContractVersion { get; init; } = VisualIntelligenceContractVersions.ContractVersion;
+    public string ContractId { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public string SourceEventId { get; init; } = string.Empty;
+    public EventFamily EventFamily { get; init; } = EventFamily.Unknown;
+    public Platform TargetPlatform { get; init; } = Platform.Unknown;
+    public string Language { get; init; } = "en";
+    public AspectRatio AspectRatio { get; init; } = AspectRatio.Unknown;
+    public VisualIntent VisualIntent { get; init; } = new();
+    public CDL Cdl { get; init; } = new();
+    public BrandRules BrandRules { get; init; } = new();
+    public PlanetRenderingRules PlanetRenderingRules { get; init; } = new();
+    public TypographyRules TypographyRules { get; init; } = new();
+    public ObservationCardRules ObservationCardRules { get; init; } = new();
+    public ProviderHints ProviderHints { get; init; } = new();
+    public QualityTargets QualityTargets { get; init; } = new();
+    public NegativeConstraints NegativeConstraints { get; init; } = new();
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record VisualIntent
+{
+    public string PrimarySubject { get; init; } = string.Empty;
+    public List<string> SecondarySubjects { get; init; } = [];
+    public string NarrativeRole { get; init; } = string.Empty;
+    public string Mood { get; init; } = string.Empty;
+    public string Composition { get; init; } = string.Empty;
+    public CreativeStyle CreativeStyle { get; init; } = CreativeStyle.Unknown;
+    public CompositionStyle CompositionStyle { get; init; } = CompositionStyle.Unknown;
+}
+
+public sealed record BrandRules
+{
+    public string BrandVersion { get; init; } = VisualIntelligenceContractVersions.BrandVersion;
+    public string BrandName { get; init; } = "Drashyam";
+    public string VisualTone { get; init; } = "premiumDocumentary";
+    public ColorPalette ColorPalette { get; init; } = new();
+    public List<string> StylePrinciples { get; init; } = [];
+    public LogoPolicy LogoPolicy { get; init; } = new();
+    public string ClutterPolicy { get; init; } = "minimal";
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+public sealed record ColorPalette { public List<string> Primary { get; init; } = []; public List<string> Accent { get; init; } = []; public List<string> Avoid { get; init; } = []; }
+public sealed record LogoPolicy { public string Usage { get; init; } = "optional"; public string Placement { get; init; } = "safeCornerOnly"; public double MinimumContrast { get; init; } = 4.5; }
+
+public sealed record PlanetRenderingRules
+{
+    public string RenderingRulesVersion { get; init; } = VisualIntelligenceContractVersions.RenderingRulesVersion;
+    public EventFamily EventFamily { get; init; } = EventFamily.Unknown;
+    public List<PlanetRenderingSubjectRule> Subjects { get; init; } = [];
+    public Dictionary<string, string> BackgroundRules { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+public sealed record PlanetRenderingSubjectRule
+{
+    public string BodyName { get; init; } = string.Empty; public string BodyType { get; init; } = string.Empty; public string RequiredShape { get; init; } = string.Empty; public string ColorBehavior { get; init; } = string.Empty; public string SurfaceDetail { get; init; } = string.Empty; public string Illumination { get; init; } = string.Empty; public string ScalePolicy { get; init; } = string.Empty; public List<string> ForbiddenArtifacts { get; init; } = [];
+}
+
+public sealed record TypographyRules
+{
+    public string BrandVersion { get; init; } = VisualIntelligenceContractVersions.BrandVersion;
+    public string TypographySystem { get; init; } = "drashyamPremiumSans";
+    public string TextPolicy { get; init; } = "minimalEssentialTextOnly";
+    public List<string> AllowedTextElements { get; init; } = [];
+    public Dictionary<string, object?> TitleRules { get; init; } = [];
+    public Dictionary<string, object?> LabelRules { get; init; } = [];
+    public List<string> ForbiddenText { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record ObservationCardRules
+{
+    public string BrandVersion { get; init; } = VisualIntelligenceContractVersions.BrandVersion;
+    public string CardUsage { get; init; } = "optionalWhenHelpful";
+    public string Placement { get; init; } = "lowerThirdSafeZone";
+    public int MaxFields { get; init; } = 4;
+    public List<string> AllowedFields { get; init; } = [];
+    public Dictionary<string, object?> VisualStyle { get; init; } = [];
+    public Dictionary<string, object?> DataIntegrity { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record ProviderHints
+{
+    public string ProviderProfileVersion { get; init; } = VisualIntelligenceContractVersions.ProviderProfileVersion;
+    public ImageProviderType PreferredProvider { get; init; } = ImageProviderType.Unknown;
+    public List<string> CapabilitiesRequired { get; init; } = [];
+    public string PromptStyle { get; init; } = string.Empty;
+    public Dictionary<string, object?> RenderingHints { get; init; } = [];
+    public Dictionary<string, object?> ProviderParameters { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record QualityTargets
+{
+    public string QualityReportVersion { get; init; } = VisualIntelligenceContractVersions.QualityReportVersion;
+    public string Mode { get; init; } = "observation";
+    public double OverallThreshold { get; init; } = 0.82;
+    public double BlockingThreshold { get; init; } = 0.65;
+    public List<QualityTargetDimension> Dimensions { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+public sealed record QualityTargetDimension { public QualityCategory Name { get; init; } = QualityCategory.Unknown; public double MinimumScore { get; init; } public double Weight { get; init; } public bool Blocking { get; init; } }
+
+public sealed record NegativeConstraints
+{
+    public List<string> Scientific { get; init; } = [];
+    public List<string> Brand { get; init; } = [];
+    public List<string> Typography { get; init; } = [];
+    public List<string> Provider { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record PromptPackage
+{
+    public string PromptComposerVersion { get; init; } = VisualIntelligenceContractVersions.PromptComposerVersion;
+    public string PromptPackageId { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public string ContractId { get; init; } = string.Empty;
+    public ImageProviderType ProviderName { get; init; } = ImageProviderType.Unknown;
+    public string ProviderProfileVersion { get; init; } = VisualIntelligenceContractVersions.ProviderProfileVersion;
+    public string PositivePrompt { get; init; } = string.Empty;
+    public string NegativePrompt { get; init; } = string.Empty;
+    public Dictionary<string, string> PromptSections { get; init; } = [];
+    public Dictionary<string, object?> ProviderParameters { get; init; } = [];
+    public List<DiagnosticMessage> Diagnostics { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record QualityReport
+{
+    public string QualityReportVersion { get; init; } = VisualIntelligenceContractVersions.QualityReportVersion;
+    public string QualityReportId { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public string ContractId { get; init; } = string.Empty;
+    public string PromptPackageId { get; init; } = string.Empty;
+    public ImageProviderType ProviderName { get; init; } = ImageProviderType.Unknown;
+    public string ProviderProfileVersion { get; init; } = VisualIntelligenceContractVersions.ProviderProfileVersion;
+    public string Mode { get; init; } = "observation";
+    public double OverallScore { get; init; }
+    public List<QualityDimensionScore> DimensionScores { get; init; } = [];
+    public List<DiagnosticMessage> Diagnostics { get; init; } = [];
+    public PublicationDecisionStatus RecommendedDecision { get; init; } = PublicationDecisionStatus.Unknown;
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+public sealed record QualityDimensionScore { public QualityCategory Name { get; init; } = QualityCategory.Unknown; public double Score { get; init; } public bool Passed { get; init; } public List<string> Findings { get; init; } = []; }
+
+public sealed record PublicationDecision
+{
+    public string DecisionId { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public string ContractId { get; init; } = string.Empty;
+    public string QualityReportId { get; init; } = string.Empty;
+    public PublicationDecisionStatus Decision { get; init; } = PublicationDecisionStatus.Unknown;
+    public string Reason { get; init; } = string.Empty;
+    public bool Blocking { get; init; }
+    public bool FallbackApplied { get; init; }
+    public string? FallbackReason { get; init; }
+    public bool RequiresHumanReview { get; init; }
+    public List<DiagnosticMessage> Diagnostics { get; init; } = [];
+    public Dictionary<string, object?> ExtensionFields { get; init; } = [];
+}
+
+public sealed record DiagnosticMessage
+{
+    public DiagnosticSeverity Severity { get; init; } = DiagnosticSeverity.Info;
+    public string Code { get; init; } = string.Empty;
+    public string Message { get; init; } = string.Empty;
+    public string? Source { get; init; }
+    public QualityCategory Category { get; init; } = QualityCategory.Unknown;
+    public Dictionary<string, object?> Metadata { get; init; } = [];
+}
+
+public static class VisualIntelligenceJson
+{
+    public static JsonSerializerOptions CreateSerializerOptions(bool writeIndented = false) => new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = writeIndented,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+}
