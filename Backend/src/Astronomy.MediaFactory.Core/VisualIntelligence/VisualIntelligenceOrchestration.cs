@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
+using ContractEventFamily = Astronomy.MediaFactory.Contracts.EventFamily;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -52,7 +53,7 @@ public sealed record VisualIntelligenceVersionSnapshot
 public sealed record VisualIntelligenceOrchestrationRequest
 {
     public string? CorrelationId { get; init; }
-    public EventFamily EventFamily { get; init; } = EventFamily.Unknown;
+    public ContractEventFamily EventFamily { get; init; } = ContractEventFamily.Unknown;
     public string EventType { get; init; } = string.Empty;
     public string Language { get; init; } = "en";
     public Platform Platform { get; init; } = Platform.Unknown;
@@ -63,7 +64,7 @@ public sealed record VisualIntelligenceOrchestrationRequest
 public sealed record VisualIntelligenceOrchestrationContext
 {
     public string CorrelationId { get; init; } = string.Empty;
-    public EventFamily EventFamily { get; init; } = EventFamily.Unknown;
+    public ContractEventFamily EventFamily { get; init; } = ContractEventFamily.Unknown;
     public string EventType { get; init; } = string.Empty;
     public string Language { get; init; } = "en";
     public Platform Platform { get; init; } = Platform.Unknown;
@@ -184,7 +185,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     {
         var flags = VisualIntelligenceFlagSnapshot.FromOptions(options.Value ?? new VisualIntelligenceOptions());
         diagnostics.Add(Info("visual_intelligence.context_created", "Visual Intelligence orchestration context created."));
-        if (request.EventFamily == EventFamily.Unknown && !string.IsNullOrWhiteSpace(request.EventType))
+        if (request.EventFamily == ContractEventFamily.Unknown && !string.IsNullOrWhiteSpace(request.EventType))
             diagnostics.Add(Info("visual_intelligence.event_family_placeholder", "Event family profile resolution placeholder used."));
         return new VisualIntelligenceOrchestrationContext
         {
