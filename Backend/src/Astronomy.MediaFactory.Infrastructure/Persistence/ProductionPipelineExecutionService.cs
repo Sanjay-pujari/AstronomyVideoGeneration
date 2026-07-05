@@ -12306,7 +12306,13 @@ public sealed partial class ProductionPipelineExecutionService(
             reason = "Validation passed.";
             canRetry = false;
         }
-        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, outputFiles, validationPath, warnings, errors, canRetry, reason);
+        var phase12ValidationPersistence = phaseNo == 12
+            ? await PreparePhase12ValidationArtifactAsync(context, validationPath, cancellationToken)
+            : null;
+        var resultOutputFiles = phaseNo == 12
+            ? outputFiles.Concat(new[] { validationPath }).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : outputFiles;
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason);
         if (phaseNo == 14 && File.Exists(validationPath))
             return result;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
@@ -12369,13 +12375,19 @@ public sealed partial class ProductionPipelineExecutionService(
             preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context),
             executedPhaseNumbers = sceneAssetsV3Diagnostics?.ExecutedPhaseNumbers ?? (status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>()),
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
-            filesGeneratedThisRun = outputFiles,
+            filesGeneratedThisRun = resultOutputFiles,
             inputFiles,
-            outputFiles,
+            outputFiles = resultOutputFiles,
             warnings,
             errors,
             reason,
             canRetry,
+            validationFileCreated = phase12ValidationPersistence?.ValidationFileCreated,
+            validationFileSourcePath = phase12ValidationPersistence?.ValidationFileSourcePath,
+            validationFileDestinationPath = phase12ValidationPersistence?.ValidationFileDestinationPath,
+            validationFileCopied = phase12ValidationPersistence?.ValidationFileCopied,
+            validationFileExists = phase12ValidationPersistence?.ValidationFileExists,
+            validationFileLength = phase12ValidationPersistence?.ValidationFileLength,
             phase6SceneEnrichmentDiagnostics,
             planetGroupingStrategyActivated = planetGroupingDiagnostics?.PlanetGroupingStrategyActivated,
             planetGroupingEnricherExecuted = planetGroupingDiagnostics?.PlanetGroupingEnricherExecuted,
@@ -12519,11 +12531,66 @@ public sealed partial class ProductionPipelineExecutionService(
             titleFoundInReview = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInReview"),
             titleFoundInOcr = GetPhase10TitleDiagnostic(phase10TitleDiagnostics, "titleFoundInOcr")
         }, JsonOptions), cancellationToken);
+        if (!File.Exists(result.ValidationReportPath))
+            throw new InvalidOperationException($"Phase {phaseNo:00} validation persistence failed: validationReportPath does not exist at '{NormalizePath(result.ValidationReportPath)}'.");
+        if (phaseNo == 12)
+            await RefreshPhase12ValidationPersistenceDiagnosticsAsync(result.ValidationReportPath, cancellationToken);
         return result;
     }
 
 
 
+
+    private static async Task<Phase12ValidationPersistenceDiagnostics> PreparePhase12ValidationArtifactAsync(ProductionPhaseContext context, string destinationPath, CancellationToken cancellationToken)
+    {
+        var thumbnailRoot = context.ExecutionContext.ThumbnailRoot!;
+        var sourceCandidates = new[]
+        {
+            Path.Combine(thumbnailRoot, "debug", "phase-12-validation.json"),
+            Path.Combine(thumbnailRoot, "phase-12-validation.json")
+        };
+        var sourcePath = sourceCandidates.FirstOrDefault(File.Exists);
+        var copied = false;
+        if (!string.IsNullOrWhiteSpace(sourcePath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            await using var source = File.Open(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            await using var destination = File.Create(destinationPath);
+            await source.CopyToAsync(destination, cancellationToken);
+            copied = true;
+        }
+
+        return new Phase12ValidationPersistenceDiagnostics(
+            ValidationFileCreated: File.Exists(destinationPath),
+            ValidationFileSourcePath: NormalizePath(sourcePath ?? string.Empty),
+            ValidationFileDestinationPath: NormalizePath(destinationPath),
+            ValidationFileCopied: copied,
+            ValidationFileExists: File.Exists(destinationPath),
+            ValidationFileLength: File.Exists(destinationPath) ? new FileInfo(destinationPath).Length : 0);
+    }
+
+    private sealed record Phase12ValidationPersistenceDiagnostics(
+        bool ValidationFileCreated,
+        string ValidationFileSourcePath,
+        string ValidationFileDestinationPath,
+        bool ValidationFileCopied,
+        bool ValidationFileExists,
+        long ValidationFileLength);
+
+    private static async Task RefreshPhase12ValidationPersistenceDiagnosticsAsync(string validationPath, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var length = File.Exists(validationPath) ? new FileInfo(validationPath).Length : 0;
+            var document = JsonNode.Parse(await File.ReadAllTextAsync(validationPath, cancellationToken))?.AsObject()
+                ?? throw new InvalidOperationException($"Phase 12 validation persistence failed: validationReportPath could not be parsed at '{NormalizePath(validationPath)}'.");
+            document["validationFileCreated"] = true;
+            document["validationFileDestinationPath"] = NormalizePath(validationPath);
+            document["validationFileExists"] = File.Exists(validationPath);
+            document["validationFileLength"] = length;
+            await File.WriteAllTextAsync(validationPath, document.ToJsonString(JsonOptions), cancellationToken);
+        }
+    }
 
     private static string SceneAssetsHookDiagnosticsPath(ProductionPhaseContext context, int phaseNo)
         => Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-scene-hook-diagnostics.json");
