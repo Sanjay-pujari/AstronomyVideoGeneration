@@ -1169,6 +1169,9 @@ public sealed class HeroAssetStoryGenerator(
                 : FirstNonEmpty(heroStory.HeroVisualFocus, heroStory.HeroStorySource.What, "primary sky target");
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
         var heroContract = ResolveHeroContract(request.ProductionContext, intelligence);
+        eventTitle = VisualPromptLocalizationService.LocalizeText(eventTitle, request.Language);
+        eventType = VisualPromptLocalizationService.LocalizeText(eventType, request.Language);
+        primaryObjects = VisualPromptLocalizationService.LocalizeText(primaryObjects, request.Language);
         var titleOverlay = HeroMetadataNormalizer.NormalizeTitle(BuildCinematicHeroTitleOverlay(eventObjectContext, eventTitle, eventType, selectedHook), eventType, request.Language);
         var normalizedTitleBlockText = IsHindi(request.Language)
             ? BuildHeroOverlayLines(heroStory, selectedHook, intelligence).Title
@@ -1180,11 +1183,12 @@ public sealed class HeroAssetStoryGenerator(
         var rawTimeText = FirstNonEmpty(heroStory.HeroStorySource.When, intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow);
         var timeText = HeroMetadataNormalizer.NormalizeTime(rawTimeText, eventType, request.Language);
         var rawDirectionText = FirstNonEmpty(heroStory.HeroAction, heroStory.HeroStorySource.Where, intelligence?.SkyDirectionHint);
-        var directionText = HeroMetadataNormalizer.NormalizeDirection(rawDirectionText, eventType, request.Language);
-        var objectText = FirstNonEmpty(eventObjectContext.ObjectListText, primaryObjects, eventObjectContext.ObjectHeadlineText, "Key event objects");
+        var directionText = VisualPromptLocalizationService.LocalizeText(HeroMetadataNormalizer.NormalizeDirection(rawDirectionText, eventType, request.Language), request.Language);
+        var objectText = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(eventObjectContext.ObjectListText, primaryObjects, eventObjectContext.ObjectHeadlineText, "Key event objects"), request.Language);
         var prompt = heroContract == "GuideHero"
             ? BuildGuideHeroBackgroundPrompt(eventTitle, eventType, objectText, dateText, timeText, directionText)
             : BuildCinematicHeroBackgroundPrompt(eventTitle, eventType, objectText);
+        VisualPromptLocalizationService.ValidateHindiPrompt(prompt, request.Language);
 
         return new HeroCompositionModelDto(
             new HeroCompositionHookBlockDto(normalizedHookBlockText),
@@ -1291,16 +1295,16 @@ public sealed class HeroAssetStoryGenerator(
             intelligence?.SkyGuideTheme,
             intelligence?.EventSpecificStrategySource
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        return haystack.Contains("ObservingGuide", StringComparison.OrdinalIgnoreCase) || haystack.Contains("GuideHero", StringComparison.OrdinalIgnoreCase)
-            ? "GuideHero"
-            : "CinematicHero";
+        return haystack.Contains("CinematicHero", StringComparison.OrdinalIgnoreCase)
+            ? "CinematicHero"
+            : "GuideHero";
     }
 
     private static string BuildCinematicHeroBackgroundPrompt(string eventTitle, string eventType, string objectText)
-        => $"Azure Image2 background only for a cinematic, clean astronomy hero. Generate a beautiful event-specific realistic sky image for {eventTitle}. Event type: {eventType}. Visible astronomy subjects from eventObjectContext.objectNames only: {objectText}. No embedded text, no labels, no guide panels, no date/time/direction panels, no CTA slogan, no narration hook, no watermark, no logo, no black information bars.";
+        => $"Azure Image2 background only for a cinematic, clean astronomy hero. Generate a beautiful event-specific realistic sky image for {eventTitle}. Event type: {eventType}. Visible astronomy subjects from eventObjectContext.objectNames only: {objectText}. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Generate each native aspect ratio separately, not as a crop from another aspect. No embedded text, no labels, no guide panels, no date/time/direction panels, no CTA slogan, no narration hook, no watermark, no logo, no black information bars.";
 
     private static string BuildGuideHeroBackgroundPrompt(string eventTitle, string eventType, string objectText, string dateText, string timeText, string directionText)
-        => $"Azure Image2 background only for an observing guide hero. Generate a realistic astronomy sky background for {eventTitle}. Event type: {eventType}. Key objects from eventObjectContext.objectNames only: {objectText}. Deterministic overlay will add compact date {dateText}, local time {timeText}, direction {directionText}. No embedded text, no labels, no watermark, no logo, no unrelated event imagery.";
+        => $"Azure Image2 background only for an observing guide hero. Generate a realistic astronomy sky background for {eventTitle}. Event type: {eventType}. Key objects from eventObjectContext.objectNames only: {objectText}. Deterministic overlay will add compact date {dateText}, local time {timeText}, direction {directionText}. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Generate each native aspect ratio separately, not as a crop from another aspect. No embedded text, no labels, no watermark, no logo, no unrelated event imagery.";
 
     private async Task<HeroPhysicalWriteResult> GenerateHeroImageFilesAsync(
         string heroAssetsRoot,
@@ -1569,12 +1573,12 @@ public sealed class HeroAssetStoryGenerator(
 
     private static IReadOnlyList<(string Variant, string FileName, int Width, int Height, string Prompt)> BuildHeroV5AzurePrompts(HeroAssetStoryDto heroStory, string selectedHook, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
     {
-        var eventTitle = FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event");
-        var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
+        var eventTitle = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(intelligence?.Title, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event"), heroStory.Language);
+        var eventType = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(intelligence?.EventType, "AstronomyEvent"), heroStory.Language);
         var eventObjectContext = EventObjectContextBuilder.FromIntelligence(intelligence);
-        var objectText = eventObjectContext.ObjectListText;
+        var objectText = VisualPromptLocalizationService.LocalizeText(eventObjectContext.ObjectListText, heroStory.Language);
         var dateText = intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture) ?? intelligence?.LocalPeakTime ?? intelligence?.BestViewingWindowLocal ?? "peak window";
-        var directionText = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "event-approved viewing direction");
+        var directionText = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "event-approved viewing direction"), heroStory.Language);
         var visualTheme = FirstNonEmpty(intelligence?.VisualTheme, string.Join(", ", intelligence?.VisualMotifs ?? []), "premium event-poster astronomy");
         var skyGuideTheme = FirstNonEmpty(intelligence?.SkyGuideTheme, intelligence?.SkyDirectionHint, "clear where-to-look sky guidance");
         var forbidden = intelligence?.ForbiddenTerms.Concat(EventContentGuard.DefaultForbiddenTermsForEventType(eventType)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
@@ -1585,12 +1589,13 @@ public sealed class HeroAssetStoryGenerator(
         var guidePanelAllowed = heroContract == "GuideHero";
         var planetGroupingPromptApplied = IsPlanetGroupingHeroFamily(eventType);
         var planetGroupingInstruction = planetGroupingPromptApplied
-            ? $" Create a cinematic realistic twilight sky for the grouped objects: {objectText}. Show the grouped planets along a gentle arc with each object visually grouped, close enough to read as one grouped sky event but not colliding. Keep the sky scientifically respectful but not a fake star map. No text, no labels, no watermarks, no diagrams, no UI; final text overlays are added by renderer only."
+            ? $" Create a cinematic realistic twilight sky for the grouped objects: {objectText}. Show the grouped planets along a gentle arc with each object visually grouped, close enough to read as one grouped sky event but not colliding. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Keep the sky scientifically respectful but not a fake star map. No text, no labels, no watermarks, no diagrams, no UI; final text overlays are added by renderer only."
             : string.Empty;
         var basePrompt = guidePanelAllowed
             ? $"Azure Image2 background only for guide hero. Event-specific astronomy sky for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Deterministic overlay may add compact date/time/direction guide details. No embedded text, no watermark, no logo, no unrelated event imagery.{planetGroupingInstruction}"
             : $"Azure Image2 background only for cinematic clean hero. Beautiful event-specific astronomy image for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Minimal deterministic title/subtitle overlay will be added later. No embedded text, no guide panels, no CTA slogan, no narration sentence, no bottom subtitles, no labels, no watermark, no logo, no unrelated event imagery.{planetGroupingInstruction}";
         EventContentGuard.ValidateNoForbiddenTerms("HeroAssetIntelligenceEngine", "hero prompt", basePrompt, forbidden);
+        VisualPromptLocalizationService.ValidateHindiPrompt(basePrompt, heroStory.Language);
         return
         [
             ("landscape", HeroLandscapeFileName, 1920, 1080, $"Visual intent: CinematicHero. Composition type: wide cinematic astronomy image. Prompt variation: clean landscape background with safe title space, no cropping. Landscape variant-specific composition: side-by-side composition. {basePrompt}"),
@@ -1608,15 +1613,16 @@ public sealed class HeroAssetStoryGenerator(
             ProductionEventIntelligence? intelligence,
             ProductionPipelineExecutionContext? context)
         {
-            var eventTitle = FirstNonEmpty(intelligence?.Title, intelligence?.ShortTitle, compositionModel.HookBlock.Text, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event");
-            var eventType = FirstNonEmpty(intelligence?.EventType, "AstronomyEvent");
+            var eventTitle = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(intelligence?.Title, intelligence?.ShortTitle, compositionModel.HookBlock.Text, heroStory.HeroStorySource.What, selectedHook, "the selected astronomy event"), heroStory.Language);
+            var eventType = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(intelligence?.EventType, "AstronomyEvent"), heroStory.Language);
             var objects = EventObjectContextBuilder.FromIntelligence(intelligence);
-            var objectText = FirstNonEmpty(objects.ObjectListText, heroStory.HeroVisualFocus, compositionModel.VisualBlock.SourceScene, eventTitle);
+            var objectText = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(objects.ObjectListText, heroStory.HeroVisualFocus, compositionModel.VisualBlock.SourceScene, eventTitle), heroStory.Language);
             var safeSpace = "Leave clean safe space for deterministic overlay title and compact footer metadata; do not generate text in that space.";
             var enrichment = ResolveEventFamilyPromptEnrichment(eventType, eventTitle);
-            var basePrompt = $"Visual intent: CinematicHero. Premium YouTube thumbnail style cinematic astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Use dramatic lighting, high contrast, deep cinematic color, premium astrophotography-inspired atmosphere, and a clean event-poster composition. {enrichment.Enrichment} Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, telescope UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no UI, no embedded text. {safeSpace}";
+            var basePrompt = $"Visual intent: CinematicHero. Premium YouTube thumbnail style cinematic astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Generate each native aspect ratio separately, not as a crop from another aspect. Use dramatic lighting, high contrast, deep cinematic color, premium astrophotography-inspired atmosphere, and a clean event-poster composition. {enrichment.Enrichment} Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, telescope UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no UI, no embedded text. {safeSpace}";
 
             EventContentGuard.ValidateNoForbiddenTerms("AzureHeroPromptBuilderV2", "hero prompt", basePrompt, intelligence?.ForbiddenTerms ?? []);
+            VisualPromptLocalizationService.ValidateHindiPrompt(basePrompt, heroStory.Language);
             return
             [
                 ("landscape", HeroLandscapeFileName, 1920, 1080, $"Aspect ratio 16:9 landscape. Landscape variant-specific composition: side-by-side composition; for conjunctions show both planets fully visible, separated horizontally, with neither planet clipped by frame edges. Keep the dominant event large and cinematic with safe overlay space in the upper-left and footer. {basePrompt}"),
