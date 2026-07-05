@@ -197,7 +197,8 @@ public sealed class ThumbnailPromptTemplateRenderer
         foreach (var (key, value) in values)
             template = template.Replace("{{" + key + "}}", value, StringComparison.OrdinalIgnoreCase);
 
-        return template.Trim();
+        var rendered = template.Trim();
+        return language == "hi" ? LocalizeHindiPromptText(rendered) : rendered;
     }
 
     public async Task<string> SaveAsync(ThumbnailPromptContract contract, string thumbnailRoot, CancellationToken cancellationToken = default)
@@ -246,6 +247,17 @@ public sealed class ThumbnailPromptTemplateRenderer
     }
 
     private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
+    private static string LocalizeHindiPromptText(string value) => value
+        .Replace("Object Labels", "ग्रह नाम", StringComparison.OrdinalIgnoreCase)
+        .Replace("Callouts", "मुख्य संकेत", StringComparison.OrdinalIgnoreCase)
+        .Replace("Sky Guide Cue", "दिशा संकेत", StringComparison.OrdinalIgnoreCase)
+        .Replace("Look Se", "दक्षिण-पूर्व दिशा", StringComparison.OrdinalIgnoreCase)
+        .Replace("APART", "दूर", StringComparison.OrdinalIgnoreCase)
+        .Replace("Closest Approach", "सबसे निकट स्थिति", StringComparison.OrdinalIgnoreCase)
+        .Replace("Planet Conjunction", "ग्रह संयोजन", StringComparison.OrdinalIgnoreCase)
+        .Replace("Conjunction", "संयोजन", StringComparison.OrdinalIgnoreCase)
+        .Replace("Mars", "मंगल", StringComparison.OrdinalIgnoreCase)
+        .Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase);
 }
 
 
@@ -354,6 +366,7 @@ internal static class CreativeBriefPromptBuilder
         var fields = ThumbnailFieldFormatter.Format(contract.Observation, language);
         var aspect = ResolveAspect(contract);
         var prompt = string.Join(Environment.NewLine, BuildSections(contract, aspect, terms, fields)).Trim();
+        if (language == "hi") prompt = LocalizeHindiPromptText(prompt);
         PromptValidatorV9.Validate(contract, [], prompt, strategy);
 
         var report = new PromptAssemblyReport(
@@ -377,7 +390,7 @@ internal static class CreativeBriefPromptBuilder
         var size = $"{contract.Platform.Width}x{contract.Platform.Height}";
         var subtitle = contract.EventIdentity.EventSubtype.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) ? "Planet Conjunction" : contract.EventIdentity.EventAction;
         var creativeProfile = ThumbnailCreativeProfileFactory.Create(contract);
-        var optional = BuildOptionalGuideRows(contract.Observation.GuideCard);
+        var optional = BuildOptionalGuideRows(contract.Observation.GuideCard, terms.Language);
         var card = $"{terms.Date}: {fields.Date}; {terms.BestTime}: {fields.BestTime}; {terms.Direction}: {fields.Direction}; {terms.Equipment}: {fields.Equipment}" + (string.IsNullOrWhiteSpace(fields.Separation) ? string.Empty : $"; {terms.Separation}: {fields.Separation}") + optional;
         var title = contract.Display.LocalizedTitle;
         var intent = aspect switch
@@ -439,9 +452,20 @@ internal static class CreativeBriefPromptBuilder
     }
 
     private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
+    private static string LocalizeHindiPromptText(string value) => value
+        .Replace("Object Labels", "ग्रह नाम", StringComparison.OrdinalIgnoreCase)
+        .Replace("Callouts", "मुख्य संकेत", StringComparison.OrdinalIgnoreCase)
+        .Replace("Sky Guide Cue", "दिशा संकेत", StringComparison.OrdinalIgnoreCase)
+        .Replace("Look Se", "दक्षिण-पूर्व दिशा", StringComparison.OrdinalIgnoreCase)
+        .Replace("APART", "दूर", StringComparison.OrdinalIgnoreCase)
+        .Replace("Closest Approach", "सबसे निकट स्थिति", StringComparison.OrdinalIgnoreCase)
+        .Replace("Planet Conjunction", "ग्रह संयोजन", StringComparison.OrdinalIgnoreCase)
+        .Replace("Conjunction", "संयोजन", StringComparison.OrdinalIgnoreCase)
+        .Replace("Mars", "मंगल", StringComparison.OrdinalIgnoreCase)
+        .Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase);
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
-    private static string BuildOptionalGuideRows(PlanetaryThumbnailGuideCardDto? guideCard)
+    private static string BuildOptionalGuideRows(PlanetaryThumbnailGuideCardDto? guideCard, string language)
     {
         if (guideCard is null) return string.Empty;
         var rows = new List<string>();
@@ -450,9 +474,9 @@ internal static class CreativeBriefPromptBuilder
         Add("Peak", guideCard.Peak);
         Add("Safety", guideCard.Safety);
         Add("Magnitude", guideCard.Magnitude);
-        if (guideCard.ObjectLabels is { Count: > 0 }) Add("Object Labels", string.Join(", ", guideCard.ObjectLabels.Where(v => !string.IsNullOrWhiteSpace(v))));
-        if (guideCard.Callouts is { Count: > 0 }) Add("Callouts", string.Join(", ", guideCard.Callouts.Where(v => !string.IsNullOrWhiteSpace(v))));
-        Add("Sky Guide Cue", guideCard.SkyGuideCue);
+        if (guideCard.ObjectLabels is { Count: > 0 }) Add(language == "hi" ? "ग्रह नाम" : "Object Labels", string.Join(", ", guideCard.ObjectLabels.Where(v => !string.IsNullOrWhiteSpace(v))));
+        if (guideCard.Callouts is { Count: > 0 }) Add(language == "hi" ? "मुख्य संकेत" : "Callouts", string.Join(", ", guideCard.Callouts.Where(v => !string.IsNullOrWhiteSpace(v))));
+        Add(language == "hi" ? "दिशा संकेत" : "Sky Guide Cue", guideCard.SkyGuideCue);
         return rows.Count == 0 ? string.Empty : "; " + string.Join("; ", rows);
 
         void Add(string label, string? value)
@@ -742,11 +766,15 @@ public static class PromptValidatorV9
 
         // Validate normalized guide-card values before/independent of prompt rendering.
         // Do not parse rendered prose as structured date data; Best Time legitimately contains AM/PM in English.
-        _ = ThumbnailFieldFormatter.Format(contract.Observation, contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
+        var language = NormalizeLanguage(contract.Brand.LocalizationRules.FirstOrDefault() ?? "en");
+        _ = ThumbnailFieldFormatter.Format(contract.Observation, language);
+        if (language == "hi" && ContainsAny(finalPrompt, "Object Labels", "Callouts", "Sky Guide Cue", "Look Se", "APART", "Mars", "Jupiter", "Closest Approach", "Conjunction"))
+            throw new InvalidOperationException("Prompt validation failed: Hindi thumbnail prompt contains forbidden English schema or event text.");
         if (ContainsAny(finalPrompt, "Today", "Tonight", "Tomorrow", "This evening", "This week", "Look tonight", "Watch tonight", "Don’t miss", "Don't miss", "Coming soon", "Right now")) throw new InvalidOperationException("Prompt validation failed: relative time words are forbidden in evergreen thumbnail prompts.");
     }
 
     private static bool ContainsAny(string value, params string[] tokens) => tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
+    private static string NormalizeLanguage(string value) => value.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? "hi" : "en";
     private static int CountWords(string value) => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
 

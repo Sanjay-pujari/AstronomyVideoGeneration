@@ -271,12 +271,27 @@ public sealed partial class ProductionPipelineExecutionService(
     private static RequestedOutputCompletion BuildRequestedOutputCompletion(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, string outputType, IReadOnlyList<int> requiredPhases)
     {
         var requested = IsRequestedOutput(context, outputType);
+        var partialPhaseExecution = context.PipelineRequest.RequestedStartPhaseNo.HasValue && context.PipelineRequest.RequestedEndPhaseNo.HasValue;
         var related = phaseResults.Where(p => requiredPhases.Contains(p.PhaseNo)).ToArray();
         var succeeded = related.Where(p => p.Status == ProductionPhaseStatus.Succeeded).Select(p => p.PhaseNo).ToArray();
         var failed = related.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).ToArray();
         var skipped = related.Where(p => p.Status == ProductionPhaseStatus.Skipped).Select(p => p.PhaseNo).ToArray();
-        var status = !requested ? "Skipped" : failed.Length > 0 ? "Failed" : requiredPhases.All(phaseNo => succeeded.Contains(phaseNo) || PreviousPhaseSucceeded(context, phaseNo)) ? "Succeeded" : "Failed";
-        return new RequestedOutputCompletion(outputType, requested, status, requested ? requiredPhases : Array.Empty<int>(), succeeded, failed, skipped);
+        if (!requested) return new RequestedOutputCompletion(outputType, false, "Skipped", Array.Empty<int>(), succeeded, failed, skipped);
+
+        if (partialPhaseExecution)
+        {
+            var executedRequiredPhases = requiredPhases.Where(phaseNo => phaseNo >= context.StartPhaseNo && phaseNo <= context.EndPhaseNo).ToArray();
+            if (executedRequiredPhases.Length == 0)
+                return new RequestedOutputCompletion(outputType, true, "OutOfScope", requiredPhases, succeeded, failed, skipped);
+
+            var partialStatus = failed.Length > 0
+                ? "Failed"
+                : executedRequiredPhases.All(phaseNo => succeeded.Contains(phaseNo) || PreviousPhaseSucceeded(context, phaseNo)) ? "Succeeded" : "NotRun";
+            return new RequestedOutputCompletion(outputType, true, partialStatus, requiredPhases, succeeded, failed, skipped);
+        }
+
+        var status = failed.Length > 0 ? "Failed" : requiredPhases.All(phaseNo => succeeded.Contains(phaseNo) || PreviousPhaseSucceeded(context, phaseNo)) ? "Succeeded" : "Failed";
+        return new RequestedOutputCompletion(outputType, true, status, requiredPhases, succeeded, failed, skipped);
     }
 
     private static bool PreviousPhaseSucceeded(ProductionPhaseContext context, int phaseNo)
