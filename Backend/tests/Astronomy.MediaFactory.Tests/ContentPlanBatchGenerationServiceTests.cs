@@ -986,10 +986,10 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Assert.Equal(Enumerable.Range(10, 3), response.PhaseResults!.Select(p => p.PhaseNo));
             Assert.All(response.PhaseResults!, phase => Assert.Equal(ProductionPhaseStatus.Succeeded, phase.Status));
             var shortVideoCompletion = response.RequestedOutputCompletion!.Single(output => output.OutputType == "ShortVideo");
-            Assert.Equal("Failed", shortVideoCompletion.Status);
+            Assert.Equal("OutOfScope", shortVideoCompletion.Status);
             Assert.Empty(shortVideoCompletion.SucceededPhases);
-            Assert.Equal([13, 15, 17], shortVideoCompletion.RequiredPhases);
-            Assert.Contains("ShortVideo output incomplete outside requested rebuild range.", response.Errors);
+            Assert.Equal([16, 18], shortVideoCompletion.RequiredPhases);
+            Assert.DoesNotContain("ShortVideo output incomplete outside requested rebuild range.", response.Errors);
         }
         finally
         {
@@ -1573,13 +1573,13 @@ public sealed class ContentPlanBatchGenerationServiceTests
                 FinalLongVideoPath: string.Empty,
                 GeneratedFiles: [],
                 Warnings: [],
-                Errors: ["ShortVideo output incomplete outside requested rebuild range."],
+                Errors: [],
                 PhaseResults: phaseResults,
                 RequestedOutputCompletion:
                 [
-                    new RequestedOutputCompletion("ShortVideo", true, "Failed", [13, 15, 17], [], [], []),
-                    new RequestedOutputCompletion("LongVideo", true, "Failed", [14, 16, 18], [], [], []),
-                    new RequestedOutputCompletion("HeroAsset", true, "Succeeded", [11], [11], [], []),
+                    new RequestedOutputCompletion("ShortVideo", true, "OutOfScope", [16, 18], [], [], []),
+                    new RequestedOutputCompletion("LongVideo", true, "OutOfScope", [15, 16, 17, 18, 19], [], [], []),
+                    new RequestedOutputCompletion("HeroAsset", true, "OutOfScope", [11], [], [], []),
                     new RequestedOutputCompletion("Thumbnail", true, "Succeeded", [12], [12], [], [])
                 ]));
         }
