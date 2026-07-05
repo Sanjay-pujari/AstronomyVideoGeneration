@@ -3428,18 +3428,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var intelligence = request.ProductionContext?.ProductionEventIntelligence;
             var family = ThumbnailFamilyResolver.Resolve(current);
             var builder = SelectBuilder(family);
-            var objects = ResolveV8Objects(current, intelligence);
+            var objects = VisualPromptLocalizationService.LocalizeList(ResolveV8Objects(current, intelligence), request.Language);
             var guideCard = ThumbnailGuideCardFactory.Build(current);
             var context = new ThumbnailV8PromptContext(
                 Current: current,
                 Intelligence: intelligence,
-                Title: ResolveV8Title(current, intelligence, objects, request.EventId, family),
-                EventType: ResolveV8Subtitle(current, intelligence),
-                DateText: FirstNonEmpty(guideCard?.Date, current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), "Event date"),
-                BestTime: FirstNonEmpty(guideCard?.BestTime, ResolveShortBestTime(current, intelligence)),
-                Separation: FirstNonEmpty(guideCard?.Separation, ResolveShortSeparation(current)),
-                Direction: FirstNonEmpty(guideCard?.Direction, ResolveShortDirection(current, intelligence)),
-                Equipment: FirstNonEmpty(guideCard?.Equipment, ResolveV8Equipment(current, intelligence)),
+                Title: VisualPromptLocalizationService.LocalizeText(ResolveV8Title(current, intelligence, objects, request.EventId, family), request.Language),
+                EventType: VisualPromptLocalizationService.LocalizeText(ResolveV8Subtitle(current, intelligence), request.Language),
+                DateText: VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(guideCard?.Date, current.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), "Event date"), request.Language),
+                BestTime: VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(guideCard?.BestTime, ResolveShortBestTime(current, intelligence)), request.Language),
+                Separation: VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(guideCard?.Separation, ResolveShortSeparation(current)), request.Language),
+                Direction: VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(guideCard?.Direction, ResolveShortDirection(current, intelligence)), request.Language),
+                Equipment: VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(guideCard?.Equipment, ResolveV8Equipment(current, intelligence)), request.Language),
                 GuideCard: guideCard,
                 Tips: [],
                 Objects: objects);
@@ -3536,8 +3536,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 .Replace("Total Lunar Eclipse", "पूर्ण चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
                 .Replace("Lunar Eclipse", "चंद्र ग्रहण", StringComparison.OrdinalIgnoreCase)
                 .Replace("Planet Pairing", "ग्रह जोड़ी", StringComparison.OrdinalIgnoreCase)
-                .Replace("Closest Approach", "सबसे नज़दीकी आगमन", StringComparison.OrdinalIgnoreCase)
-                .Replace("Planet Conjunction", "ग्रह संयोजन", StringComparison.OrdinalIgnoreCase)
+                .Replace("Closest Approach", "सबसे नज़दीकी स्थिति", StringComparison.OrdinalIgnoreCase)
+                .Replace("Planet Conjunction", "ग्रह संयोग", StringComparison.OrdinalIgnoreCase)
                 .Replace("Meteor Shower Peak", "उल्का वर्षा चरम", StringComparison.OrdinalIgnoreCase)
                 .Replace("Peak Night", "चरम रात", StringComparison.OrdinalIgnoreCase)
                 .Replace("Total Solar Eclipse", "पूर्ण सूर्य ग्रहण", StringComparison.OrdinalIgnoreCase)
@@ -3730,16 +3730,16 @@ LOCALIZED TEXT AND FACTS TO RENDER INSIDE THE FINAL THUMBNAIL:
 - Direction: {{c.Direction}}
 - Equipment: {{c.Equipment}}
 - Separation: {{(string.IsNullOrWhiteSpace(c.Separation) ? "not applicable" : c.Separation)}}
-{{BuildOptionalGuideCardPromptRows(c.GuideCard)}}
+{{BuildOptionalGuideCardPromptRows(c.GuideCard, c.Current.Language)}}
 - Objects to render visually, not as observation-card fields: {{objectText}}
 - Observation guidance badge: use one absolute, practical guidance phrase specified in the family template above.
-QUALITY RULES: complete finished thumbnail, no watermark, no external branding, no location text, no text outside canvas, premium dark blue and gold atmosphere, integrated polished infographic UI created by AI.
+QUALITY RULES: complete finished thumbnail, no watermark, no external branding, no location text, no text outside canvas, premium dark blue and gold atmosphere, integrated polished infographic UI created by AI. Keep planets circular; never stretch, squeeze, elongate, or make vertical ovals. Generate this native aspect ratio separately, never by cropping another aspect.
 CTR INSTRUCTIONS: Optimize the complete thumbnail for click-through recognition through large celestial objects, high contrast, atmospheric depth, integrated typography, and strong visual hierarchy.
 AVOID: dense information, small text, tiny icons, scientific report layout, generic poster layout, clutter, underscores, snake case, database field names, technical identifiers, empty visual design.
 NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random planets, no invented celestial objects, no cropping, no external compositing instructions, no unfinished image, no watermark.
 """;
 
-    private static string BuildOptionalGuideCardPromptRows(PlanetaryThumbnailGuideCardDto? guideCard)
+    private static string BuildOptionalGuideCardPromptRows(PlanetaryThumbnailGuideCardDto? guideCard, string? language)
     {
         if (guideCard is null) return string.Empty;
         var rows = new List<string>();
@@ -3748,14 +3748,14 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         Add("Peak", guideCard.Peak);
         Add("Safety", guideCard.Safety);
         Add("Magnitude", guideCard.Magnitude);
-        if (guideCard.ObjectLabels is { Count: > 0 }) Add("Object Labels", string.Join(", ", guideCard.ObjectLabels));
-        if (guideCard.Callouts is { Count: > 0 }) Add("Callouts", string.Join(", ", guideCard.Callouts));
-        Add("Sky Guide Cue", guideCard.SkyGuideCue);
+        if (guideCard.ObjectLabels is { Count: > 0 }) Add("Objects", string.Join(", ", VisualPromptLocalizationService.LocalizeList(guideCard.ObjectLabels, language)));
+        if (guideCard.Callouts is { Count: > 0 }) Add("Guide Cues", string.Join(", ", VisualPromptLocalizationService.LocalizeList(guideCard.Callouts, language)));
+        Add("Sky Cue", guideCard.SkyGuideCue);
         return string.Join(Environment.NewLine, rows.Select(row => $"- {row}"));
 
         void Add(string label, string? value)
         {
-            if (!string.IsNullOrWhiteSpace(value)) rows.Add($"{label}: {value.Trim()}");
+            if (!string.IsNullOrWhiteSpace(value)) rows.Add($"{VisualPromptLocalizationService.LocalizeText(label, language)}: {VisualPromptLocalizationService.LocalizeText(value.Trim(), language)}");
         }
     }
 
@@ -3777,8 +3777,9 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
 
     private static ThumbnailPromptContract Final(ThumbnailV8AspectSpec aspect, ThumbnailV8PromptContext c, string eventId, string language, string prompt, string builder, string template, string summary)
     {
-        var sanitizedPrompt = SanitizeThumbnailV8PromptText(prompt);
+        var sanitizedPrompt = SanitizeThumbnailV8PromptText(VisualPromptLocalizationService.LocalizeText(prompt, language));
         ValidateEvergreenThumbnailContent([sanitizedPrompt, summary, c.DateText, c.BestTime, c.Direction, c.Equipment]);
+        VisualPromptLocalizationService.ValidateHindiPrompt(sanitizedPrompt, language);
         var negativePrompt = ThumbnailArtworkPromptRules.NegativePrompt;
         var primaryObjects = c.Objects.Count > 0 ? c.Objects : [c.Title];
         var observationInfo = c.Intelligence?.ObservationInfo;
@@ -3814,11 +3815,11 @@ NEGATIVE RULES: no generic sky poster, no placeholder empty panels, no random pl
         var objectText = primaryObjects.Count > 0 ? string.Join(" + ", primaryObjects) : c.Title;
         var observationFacts = new[]
         {
-            $"Date {c.DateText}",
-            $"Best time {c.BestTime}",
-            $"Direction {c.Direction}",
-            string.IsNullOrWhiteSpace(c.Separation) ? string.Empty : $"Separation {c.Separation}",
-            $"Equipment {c.Equipment}"
+            $"{VisualPromptLocalizationService.LocalizeText("Date", c.Current.Language)} {c.DateText}",
+            $"{VisualPromptLocalizationService.LocalizeText("Best time", c.Current.Language)} {c.BestTime}",
+            $"{VisualPromptLocalizationService.LocalizeText("Direction", c.Current.Language)} {c.Direction}",
+            string.IsNullOrWhiteSpace(c.Separation) ? string.Empty : $"{VisualPromptLocalizationService.LocalizeText("Separation", c.Current.Language)} {c.Separation}",
+            $"{VisualPromptLocalizationService.LocalizeText("Equipment", c.Current.Language)} {c.Equipment}"
         }.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
 
         var safety = family.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)

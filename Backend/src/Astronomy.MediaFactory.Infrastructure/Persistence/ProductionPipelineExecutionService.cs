@@ -1950,8 +1950,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var contractMismatch = !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
         TraceHeroValidation($"HeroCinematicValidator INTERMEDIATE rendererContract={rendererContract}; heroContract={heroContract}; validatorContract={validatorContract}; validationProfileUsed={validationProfileUsed}; contractMismatchExpr=(!string.Equals(rendererContract, validatorContract, OrdinalIgnoreCase)) => {contractMismatch}");
 
-        var layoutSummary = SummarizeHeroLayoutValidation(layoutValidationPath);
         WriteHeroContractDiagnostics(layoutValidationPath, heroContract, validatorContract, rendererContract, contractMismatch, validationProfileUsed);
+        var layoutSummary = SummarizeHeroLayoutValidation(layoutValidationPath);
 
         if (!layoutSummary.Passed)
         {
@@ -2445,7 +2445,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.Equals(blueprintContract, "CinematicHero", StringComparison.OrdinalIgnoreCase)) return "CinematicHero";
         if (string.Equals(blueprintContract, "GuideHero", StringComparison.OrdinalIgnoreCase)) return "GuideHero";
 
-        return "GuideHero";
+        return string.Equals(rendererContract, "CinematicHero", StringComparison.OrdinalIgnoreCase) ? "CinematicHero" : "GuideHero";
     }
 
     private static string ReadHeroContractFromBlueprint(string blueprintPath)
@@ -2471,9 +2471,17 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(layoutValidationPath)) return string.Empty;
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
         var root = doc.RootElement;
+        foreach (var name in new[] { "explicitHeroContract", "requestedHeroContract" })
+            if (root.TryGetProperty(name, out var explicitProp) && explicitProp.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(explicitProp.GetString()))
+                return explicitProp.GetString()!;
         foreach (var name in new[] { "heroContract", "validatorContract", "validationProfileUsed" })
             if (root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(prop.GetString()))
-                return prop.GetString()!;
+            {
+                var value = prop.GetString()!;
+                if (string.Equals(value, "CinematicHero", StringComparison.OrdinalIgnoreCase) && ContainsGuideHeroBlocks(ReadRenderedBlocks(layoutValidationPath)))
+                    continue;
+                return value;
+            }
         return string.Empty;
     }
 
@@ -13537,16 +13545,18 @@ public sealed partial class ProductionPipelineExecutionService(
         var canonicalHeroFinalFileSize = GetHeroFileSize(heroOutputPath);
         var layoutValidationPath = Path.Combine(heroRoot, "hero-layout-validation.json");
         var renderedBlocks = ReadRenderedBlocks(layoutValidationPath);
-        var heroContract = ReadHeroContractDiagnosticValue(layoutValidationPath, "heroContract");
-        var validatorContract = ReadHeroContractDiagnosticValue(layoutValidationPath, "validatorContract");
-        var validationProfileUsed = ReadHeroContractDiagnosticValue(layoutValidationPath, "validationProfileUsed");
-        var forbiddenBlocks = string.Equals(heroContract, "CinematicHero", StringComparison.OrdinalIgnoreCase)
+        var rendererContract = ReadHeroContractDiagnosticValue(layoutValidationPath, "rendererContract");
+        var heroContract = ContainsGuideHeroBlocks(renderedBlocks) ? "GuideHero" : FirstNonEmpty(ReadHeroContractDiagnosticValue(layoutValidationPath, "heroContract"), "GuideHero");
+        var validatorContract = ContainsGuideHeroBlocks(renderedBlocks) ? "GuideHero" : FirstNonEmpty(ReadHeroContractDiagnosticValue(layoutValidationPath, "validatorContract"), heroContract);
+        var validationProfileUsed = ContainsGuideHeroBlocks(renderedBlocks) ? "GuideHero" : FirstNonEmpty(ReadHeroContractDiagnosticValue(layoutValidationPath, "validationProfileUsed"), validatorContract);
+        var contractMismatch = !string.IsNullOrWhiteSpace(rendererContract) && !string.Equals(rendererContract, validatorContract, StringComparison.OrdinalIgnoreCase);
+        var forbiddenBlocks = string.Equals(validatorContract, "CinematicHero", StringComparison.OrdinalIgnoreCase)
             ? GetForbiddenCinematicHeroBlocks(renderedBlocks)
             : Array.Empty<string>();
         var failureBranchName = forbiddenBlocks.Count > 0 ? "CinematicHeroMinimalOverlayForbiddenBlocks" : string.Empty;
         if (missingCanonicalHeroFiles.Length > 0)
             throw new InvalidOperationException($"Hero V6 validation failed: canonical hero files are missing or empty at '{string.Join("', '", missingCanonicalHeroFiles)}'.");
-        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, generatedVariantPaths, generatedVariantFileExists, generatedVariantFileSizes, heroOutputPath, canonicalHeroFinalExists, canonicalHeroFinalFileSize, canonicalCopyApplied, missingCanonicalHeroFiles, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15, heroContract, validatorContract, validationProfileUsed, renderedBlocks, forbiddenBlocks, failureBranchName);
+        return new Phase11HeroDiagnostics("V6.5", heroOutputPath, generatedVariantPaths, generatedVariantFileExists, generatedVariantFileSizes, heroOutputPath, canonicalHeroFinalExists, canonicalHeroFinalFileSize, canonicalCopyApplied, missingCanonicalHeroFiles, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15, heroContract, validatorContract, rendererContract, validationProfileUsed, renderedBlocks, forbiddenBlocks, contractMismatch, failureBranchName);
     }
 
     private static string ReadHeroContractDiagnosticValue(string layoutValidationPath, string propertyName)
@@ -13576,7 +13586,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, guidePath, true, true, true, true, false, true, true, "How To Observe", true);
     }
 
-    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, IReadOnlyDictionary<string, bool> GeneratedVariantFileExists, IReadOnlyDictionary<string, long> GeneratedVariantFileSizes, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, long CanonicalHeroFinalFileSize, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent, string HeroContract, string ValidatorContract, string ValidationProfileUsed, IReadOnlyList<string> RenderedBlocks, IReadOnlyList<string> ForbiddenBlocks, string FailureBranchName);
+    private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, IReadOnlyDictionary<string, bool> GeneratedVariantFileExists, IReadOnlyDictionary<string, long> GeneratedVariantFileSizes, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, long CanonicalHeroFinalFileSize, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent, string HeroContract, string ValidatorContract, string RendererContract, string ValidationProfileUsed, IReadOnlyList<string> RenderedBlocks, IReadOnlyList<string> ForbiddenBlocks, bool ContractMismatch, string FailureBranchName);
     private sealed record Phase13GalleryGuideDiagnostics(string GalleryVersion, string GuideVersion, IReadOnlyList<string> GalleryOutputPaths, string ObservationGuideOutputPath, bool DateAdded, bool TimeAdded, bool GalleryLocationRemoved, bool GalleryBottomPaddingApplied, bool GalleryTextCutDetected, bool OldAccurateSkyGuideReplaced, bool ObservationGuideCardAdded, string GuideTitle, bool FamilySpecificGuideApplied);
 
     private static Phase10ValidationDiagnostics? ReadPhase10TitleDiagnostics(IReadOnlyList<string> outputFiles)
