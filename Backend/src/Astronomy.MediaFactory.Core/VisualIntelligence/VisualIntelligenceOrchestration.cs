@@ -265,8 +265,9 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             var heroIntelligenceContract = CreateHeroIntelligenceContract(resolvedContext, direction.EditorialDecision, direction.VisualStory, direction.CreativeDirectionContract, qualityReport);
             if (heroIntelligenceContract is not null)
             {
-                promptPackage = promptPackage is null ? null : promptPackage with { PositivePrompt = ComposeHeroV4IntelligencePrompt(heroIntelligenceContract, direction.CreativeDirectionContract) };
-                diagnostics.Add(Info("hero_intelligence_contract.created", "Hero Intelligence Contract created for observation-mode Hero V4."));
+                if (!heroIntelligenceContract.FallbackApplied)
+                    promptPackage = promptPackage is null ? null : promptPackage with { PositivePrompt = ComposeHeroV4IntelligencePrompt(heroIntelligenceContract, direction.CreativeDirectionContract) };
+                diagnostics.Add(Info(heroIntelligenceContract.FallbackApplied ? "hero_intelligence_contract.fallback_created" : "hero_intelligence_contract.created", heroIntelligenceContract.FallbackApplied ? "Fallback Hero Intelligence Contract created for observation-mode Hero V4 because required inputs were missing." : "Hero Intelligence Contract created for observation-mode Hero V4."));
             }
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
             logger.LogInformation("Visual Intelligence generated artifacts summary. CorrelationId={CorrelationId} Cdl={CdlGenerated} Contract={ContractGenerated} PromptPackage={PromptPackageGenerated} QualityReport={QualityReportGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null, promptPackage is not null, qualityReport is not null);
@@ -357,6 +358,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             result.Diagnostics.Add(Info("visual_intelligence.diagnostics_disabled", "Visual Intelligence diagnostic file writing is disabled."));
         }
 
+        await TryWriteRunHeroIntelligenceContractAsync(result, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
         await TryWriteHeroCreativeReviewDiagnosticsAsync(result, cancellationToken).ConfigureAwait(false);
         await TryGenerateHeroImageV4ComparisonAsync(result, cancellationToken).ConfigureAwait(false);
 
@@ -506,7 +508,14 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
 
     private static HeroIntelligenceContract? CreateHeroIntelligenceContract(VisualIntelligenceOrchestrationContext context, EditorialDecision? editorialDecision, VisualStory? story, CreativeDirectionContract? contract, QualityReport? qualityReport)
     {
-        if (context.Platform != Platform.Hero || editorialDecision is null || story is null) return null;
+        if (context.Platform != Platform.Hero) return null;
+        var missingInputs = new List<string>();
+        if (editorialDecision is null) missingInputs.Add(nameof(EditorialDecision));
+        if (story is null) missingInputs.Add(nameof(VisualStory));
+        if (contract is null) missingInputs.Add(nameof(CreativeDirectionContract));
+        if (missingInputs.Count > 0)
+            return CreateFallbackHeroIntelligenceContract(context, editorialDecision, story, qualityReport, missingInputs);
+
         var compositionResult = new StoryCompositionEngine().Compose(story);
         var composition = compositionResult.HeroComposition.Decision;
         var strategy = new ProductEditorialStrategyEngine().Create(story, compositionResult).HeroEditorialStrategy.Strategy;
@@ -536,6 +545,35 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         };
     }
 
+    private static HeroIntelligenceContract CreateFallbackHeroIntelligenceContract(VisualIntelligenceOrchestrationContext context, EditorialDecision? editorialDecision, VisualStory? story, QualityReport? qualityReport, IReadOnlyList<string> missingInputs)
+    {
+        var primaryObject = context.PrimaryObjects.FirstOrDefault();
+        var subject = FirstNonEmpty(primaryObject, context.EventName, context.EventType, "astronomy event");
+        return new HeroIntelligenceContract
+        {
+            PlanId = context.ContentGenerationPlanId?.ToString() ?? context.CorrelationId,
+            EventType = context.EventType,
+            EventFamily = context.EventFamily.ToString(),
+            EditorialDecisionId = editorialDecision?.StoryId ?? "fallback-editorial-decision",
+            VisualStoryId = story?.StoryId ?? "fallback-visual-story",
+            HeroCompositionId = "fallback-hero-composition",
+            HeroEditorialStrategyId = "fallback-hero-editorial-strategy",
+            ViewerQuestion = FirstNonEmpty(story?.ViewerQuestion, $"Why does {subject} matter for sky watchers?"),
+            PrimaryStory = FirstNonEmpty(story?.PrimaryStory, $"A safe diagnostic Hero V4 intelligence fallback for {subject}."),
+            ViewerTakeaway = FirstNonEmpty(story?.ViewerTakeaway, "Required Hero V4 intelligence inputs were unavailable, so production Hero routing remains unchanged."),
+            EmotionalHook = FirstNonEmpty(story?.EmotionalHook, "Diagnostic fallback only; no production prompt replacement."),
+            CompositionGoal = "Preserve production Hero routing and record missing V4 intelligence inputs for review.",
+            EditorialGoal = "Non-blocking diagnostic fallback contract.",
+            ViewerEmotion = "informed",
+            VisualRelationship = FirstNonEmpty(story?.VisualRelationship, "unknown; fallback contract generated without complete V4 intelligence inputs"),
+            PlatformVariantRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
+            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(editorialDecision?.Confidence ?? 0, story?.StoryConfidence ?? 0, 0, 0, qualityReport?.OverallScore),
+            FallbackApplied = true,
+            MissingInputs = missingInputs,
+            Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."]
+        };
+    }
+
     private static string ComposeHeroV4IntelligencePrompt(HeroIntelligenceContract c, CreativeDirectionContract? contract)
     {
         var platform = c.PlatformVariantRecommendations.TryGetValue("landscape", out var landscape) ? landscape : string.Join(" ", c.PlatformVariantRecommendations.Values);
@@ -559,9 +597,16 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     private async Task TryWriteRunHeroIntelligenceContractAsync(VisualIntelligenceOrchestrationResult result, JsonSerializerOptions json, CancellationToken cancellationToken)
     {
         if (result.Context.Platform != Platform.Hero || string.IsNullOrWhiteSpace(result.Context.RunOutputFolder) || result.HeroIntelligenceContract is null) return;
-        var folder = Path.Combine(result.Context.RunOutputFolder, "hero", "diagnostics");
-        Directory.CreateDirectory(folder);
-        await WriteJsonAsync(folder, "HeroIntelligenceContract.json", result.HeroIntelligenceContract, json, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var folder = Path.Combine(result.Context.RunOutputFolder, "hero", "diagnostics");
+            Directory.CreateDirectory(folder);
+            await WriteJsonAsync(folder, "HeroIntelligenceContract.json", result.HeroIntelligenceContract, json, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            result.Diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "hero_intelligence_contract.write_failed", Message = "Hero Intelligence Contract diagnostic writing failed; pipeline execution continues.", Source = nameof(VisualIntelligenceOrchestrator), Metadata = new Dictionary<string, object?> { ["exceptionType"] = ex.GetType().Name } });
+        }
     }
 
     private static Task WriteJsonAsync<T>(string folder, string fileName, T value, JsonSerializerOptions json, CancellationToken cancellationToken) =>
