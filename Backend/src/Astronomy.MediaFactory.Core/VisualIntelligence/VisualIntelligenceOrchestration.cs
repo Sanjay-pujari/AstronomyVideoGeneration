@@ -123,6 +123,7 @@ public sealed record VisualCreativeDirectorResult
     public EditorialDecision? EditorialDecision { get; init; }
     public CDL? Cdl { get; init; }
     public CreativeDirectionContract? CreativeDirectionContract { get; init; }
+    public VisualStory? VisualStory { get; init; }
     public PromptPackage? PromptPackage { get; init; }
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
 }
@@ -134,6 +135,7 @@ public sealed record VisualIntelligenceOrchestrationResult
     public VisualIntelligenceOrchestrationContext Context { get; init; } = new();
     public CDL? Cdl { get; init; }
     public CreativeDirectionContract? CreativeDirectionContract { get; init; }
+    public VisualStory? VisualStory { get; init; }
     public PromptPackage? PromptPackage { get; init; }
     public QualityReport? QualityReport { get; init; }
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
@@ -262,7 +264,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
             logger.LogInformation("Visual Intelligence generated artifacts summary. CorrelationId={CorrelationId} Cdl={CdlGenerated} Contract={ContractGenerated} PromptPackage={PromptPackageGenerated} QualityReport={QualityReportGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null, promptPackage is not null, qualityReport is not null);
             diagnostics.Add(Info("visual_intelligence.observation_advisory_only", "Observation mode artifacts are advisory only; active prompts, Azure calls, and publication decisions are unchanged."));
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = resolvedContext, EditorialDecision = direction.EditorialDecision, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = resolvedContext, EditorialDecision = direction.EditorialDecision, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, VisualStory = direction.VisualStory, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -478,10 +480,13 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (result.Cdl is not null) { await WriteJsonAsync(folder, "CDL.json", result.Cdl, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CDL.json"); }
         if (result.CreativeDirectionContract is not null) { await WriteJsonAsync(folder, "CreativeDirectionContract.json", result.CreativeDirectionContract, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeDirectionContract.json"); }
         if (result.EditorialDecision is not null) { await WriteJsonAsync(folder, "EditorialDecision.json", result.EditorialDecision, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("EditorialDecision.json"); }
+        if (result.VisualStory is not null) { await WriteJsonAsync(folder, "VisualStory.json", result.VisualStory, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("VisualStory.json"); }
         if (result.PromptPackage is not null) { await WriteJsonAsync(folder, "PromptPackage.json", result.PromptPackage, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PromptPackage.json"); }
         if (result.QualityReport is not null) { await WriteJsonAsync(folder, "QualityReport.json", result.QualityReport, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("QualityReport.json"); }
         var knowledgeReview = CreateCreativeKnowledgeReview(result);
         if (knowledgeReview is not null) { await WriteJsonAsync(folder, "CreativeKnowledgeReview.json", knowledgeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeKnowledgeReview.json"); }
+        var visualStoryReview = CreateVisualStoryReview(result);
+        if (visualStoryReview is not null) { await WriteJsonAsync(folder, "VisualStoryReview.json", visualStoryReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("VisualStoryReview.json"); }
         var editorialReview = CreateEditorialReasoningReview(result);
         if (editorialReview is not null) { await WriteJsonAsync(folder, "EditorialReasoningReview.json", editorialReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("EditorialReasoningReview.json"); }
         var creativeReview = CreateHeroCreativeReview(result);
@@ -518,6 +523,24 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             viewerQuestion = knowledge.ViewerQuestion,
             compositionStrategy = knowledge.CompositionStrategy,
             editorialNotes = knowledge.EditorialNotes
+        };
+    }
+
+    private static object? CreateVisualStoryReview(VisualIntelligenceOrchestrationResult result)
+    {
+        var story = result.VisualStory;
+        if (story is null) return null;
+        return new
+        {
+            storyGoal = story.PrimaryStory,
+            viewerQuestion = story.ViewerQuestion,
+            storyArc = story.StoryArc,
+            visualHierarchy = new { primary = story.PrimaryVisualSubject, secondary = story.SecondaryVisualSubjects, relationship = story.VisualRelationship, viewerFocus = story.RecommendedViewerFocus },
+            platformRecommendations = story.RecommendedPlatformVariations,
+            storyConfidence = story.StoryConfidence,
+            editorialReasoningSource = story.EditorialReasoningVersion,
+            creativeKnowledgeSource = story.CreativeKnowledgeVersion,
+            recommendations = new[] { story.RecommendedComposition, story.EnvironmentRecommendation, story.LightingRecommendation, story.RecommendedNegativeSpace }
         };
     }
 
@@ -646,6 +669,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IHeroPromptMigrationService, HeroPromptMigrationService>();
         services.AddSingleton<ICreativeKnowledgeLibrary, CreativeKnowledgeLibrary>();
         services.AddScoped<IEditorialReasoningEngine, EditorialReasoningEngine>();
+        services.AddScoped<IVisualStoryModel, VisualStoryModel>();
         services.AddScoped<IEditorialCompositionDirector, EditorialCompositionDirector>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();

@@ -143,6 +143,8 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.True(File.Exists(Path.Combine(folder, "QualityReport.json")));
         Assert.True(File.Exists(Path.Combine(folder, "CreativeKnowledgeReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "EditorialDecision.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "VisualStory.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "VisualStoryReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "EditorialReasoningReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "OrchestrationSummary.json")));
     }
@@ -162,6 +164,23 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.Contains("What makes", review.RootElement.GetProperty("viewerQuestion").GetString());
         Assert.NotEmpty(review.RootElement.GetProperty("compositionStrategy").GetString());
         Assert.NotEmpty(review.RootElement.GetProperty("editorialNotes").EnumerateArray());
+    }
+
+
+    [Fact]
+    public async Task Diagnostics_writing_creates_visual_story_review()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest() with { EventType = "PlanetPairing", PrimaryObjects = ["Jupiter"], SupportingObjects = ["Venus"] });
+
+        var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(path, "test-correlation", "VisualStoryReview.json")));
+        Assert.Equal("Two bright planets appear unusually close together.", review.RootElement.GetProperty("storyGoal").GetString());
+        Assert.Equal("Relationship", review.RootElement.GetProperty("visualHierarchy").GetProperty("primary").GetString());
+        Assert.True(review.RootElement.GetProperty("platformRecommendations").TryGetProperty("landscape", out _));
+        Assert.Equal("4.2A", review.RootElement.GetProperty("editorialReasoningSource").GetString());
+        Assert.Equal("4.1A", review.RootElement.GetProperty("creativeKnowledgeSource").GetString());
     }
 
     [Fact]
@@ -212,7 +231,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         await orchestrator.OrchestrateAsync(DefaultRequest());
 
         var files = Directory.GetFiles(Path.Combine(path, "test-correlation")).Select(Path.GetFileName).OrderBy(name => name).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "CreativeKnowledgeReview.json", "EditorialDecision.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json"], files);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "CreativeKnowledgeReview.json", "EditorialDecision.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json", "VisualStory.json", "VisualStoryReview.json"], files);
     }
 
     [Fact]
@@ -276,7 +295,7 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
         var artifacts = summary.RootElement.GetProperty("generatedArtifacts").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "EditorialDecision.json", "PromptPackage.json", "CreativeKnowledgeReview.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json"], artifacts);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "EditorialDecision.json", "VisualStory.json", "PromptPackage.json", "CreativeKnowledgeReview.json", "VisualStoryReview.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json"], artifacts);
         Assert.NotEqual(default, summary.RootElement.GetProperty("startedAtUtc").GetDateTimeOffset());
         Assert.NotEqual(default, summary.RootElement.GetProperty("completedAtUtc").GetDateTimeOffset());
         Assert.True(summary.RootElement.GetProperty("durationMs").GetInt64() >= 0);
@@ -405,6 +424,7 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         Assert.Contains(services, d => d.ServiceType == typeof(IVisualAssetProvider) && d.ImplementationType == typeof(StellariumVisualGenerationService));
         Assert.Contains(services, d => d.ServiceType == typeof(IVisualIntelligenceOrchestrator) && d.ImplementationType == typeof(VisualIntelligenceOrchestrator));
+        Assert.Contains(services, d => d.ServiceType == typeof(IVisualStoryModel) && d.ImplementationType == typeof(VisualStoryModel));
         Assert.DoesNotContain(services, d => d.ServiceType == typeof(IVisualAssetProvider) && d.ImplementationType == typeof(VisualIntelligenceOrchestrator));
     }
 
