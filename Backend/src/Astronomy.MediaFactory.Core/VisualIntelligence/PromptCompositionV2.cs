@@ -47,7 +47,7 @@ public sealed class PromptSectionBuilder : IPromptSectionBuilder
             Add(map, "supportingSubjects", contract.VisualIntent.SecondarySubjects);
             Add(map, "composition", contract.VisualIntent.Composition, contract.VisualIntent.CompositionStyle.ToString());
             AddEditorialComposition(map, contract);
-            Add(map, "astronomicalRendering", contract.PlanetRenderingRules.Subjects.Select(s => $"{s.BodyName}: {s.RequiredShape}; {s.ColorBehavior}; {s.SurfaceDetail}; {s.Illumination}; {s.ScalePolicy}; avoid {string.Join(", ", s.ForbiddenArtifacts)}"));
+            Add(map, "astronomicalRendering", contract.PlanetRenderingRules.Subjects.Select(BuildPlanetRenderingRule));
             Add(map, "astronomicalRendering", contract.PlanetRenderingRules.BackgroundRules.Select(kv => $"{kv.Key}: {kv.Value}"));
             Add(map, "typography", contract.TypographyRules.TypographySystem, contract.TypographyRules.TextPolicy);
             Add(map, "typography", contract.TypographyRules.AllowedTextElements.Select(x => $"allowed text: {x}"));
@@ -77,6 +77,17 @@ public sealed class PromptSectionBuilder : IPromptSectionBuilder
             Add(map, "documentaryContext", decision.DocumentaryComposition);
             Add(map, "composition", decision.Template.SubjectPlacement, decision.Template.Balance, decision.Template.HorizonUsage, decision.Template.NegativeSpace, decision.Template.OverlaySafeArea);
         }
+    }
+
+    private static string BuildPlanetRenderingRule(PlanetRenderingSubjectRule subject)
+    {
+        var details = new[] { subject.RequiredShape, subject.ColorBehavior, subject.SurfaceDetail, subject.Illumination, subject.ScalePolicy }
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim())
+            .ToList();
+        var forbidden = subject.ForbiddenArtifacts.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).ToList();
+        if (forbidden.Count > 0) details.Add($"avoid {string.Join(", ", forbidden)}");
+        return details.Count == 0 ? subject.BodyName : $"{subject.BodyName}: {string.Join("; ", details)}";
     }
 
     private static void Add(Dictionary<string, List<string>> map, string key, params string[] values) => Add(map, key, values.AsEnumerable());
@@ -233,8 +244,7 @@ public sealed class AzurePromptProviderAdapter : IProviderAdapter
         var sb = new StringBuilder();
         sb.AppendLine("Create a premium astronomy hero image as if briefing an expert creative director for Azure Image.");
         AppendParagraph(sb, "Opening paragraph", Join(sections, "sceneSummary"));
-        AppendParagraph(sb, "Primary subject", Join(sections, "heroSubject"));
-        AppendParagraph(sb, "Supporting subject", Join(sections, "supportingSubjects"));
+        AppendParagraph(sb, "Creative focus", BuildCreativeFocus(sections));
         AppendParagraph(sb, "Editorial story", Join(sections, "storytellingEmphasis", "documentaryContext"));
         AppendParagraph(sb, "Composition", Join(sections, "composition", "framing"));
         AppendParagraph(sb, "Lighting", Join(sections, "lighting", "atmosphere"));
@@ -272,15 +282,42 @@ public sealed class AzurePromptProviderAdapter : IProviderAdapter
     }
 
     private static string Join(PromptSections sections, params string[] keys)
-        => string.Join(" ", keys.Where(k => sections.Sections.ContainsKey(k)).SelectMany(k => sections.Sections[k])).Trim();
+        => CleanCreativeBriefText(string.Join(" ", keys.Where(k => sections.Sections.ContainsKey(k)).SelectMany(k => sections.Sections[k])));
+
+    private static string BuildCreativeFocus(PromptSections sections)
+    {
+        var primary = sections.Sections.TryGetValue("heroSubject", out var hero) ? hero.Where(v => !string.IsNullOrWhiteSpace(v)).ToList() : [];
+        var supporting = sections.Sections.TryGetValue("supportingSubjects", out var support) ? support.Where(v => !string.IsNullOrWhiteSpace(v)).ToList() : [];
+        var subjects = primary.Concat(supporting).SelectMany(SplitSubjectNames).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (subjects.Count >= 2)
+            return $"Treat {ToNaturalList(subjects)} together as the hero of the image; the visual relationship between them is the main subject, not a single dominant object with a secondary speck.";
+        return CleanCreativeBriefText(string.Join(" ", primary.Concat(supporting)));
+    }
+
+    private static IEnumerable<string> SplitSubjectNames(string value)
+        => value.Split([',', '+', '&'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .SelectMany(part => part.Contains(" and ", StringComparison.OrdinalIgnoreCase) ? part.Split(" and ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) : [part])
+            .Where(part => !string.IsNullOrWhiteSpace(part));
+
+    private static string ToNaturalList(IReadOnlyList<string> values)
+        => values.Count switch { 0 => string.Empty, 1 => values[0], 2 => $"{values[0]} and {values[1]}", _ => string.Join(", ", values.Take(values.Count - 1)) + ", and " + values[^1] };
 
     private static void AppendParagraph(StringBuilder sb, string label, string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        sb.AppendLine().Append(label).Append(": ").AppendLine(EnsureSentence(text));
+        sb.AppendLine().Append(label).Append(": ").AppendLine(EnsureSentence(CleanCreativeBriefText(text)));
     }
 
     private static string EnsureSentence(string text) => text.EndsWith('.') ? text : text + ".";
+
+    private static string CleanCreativeBriefText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var cleaned = text.Replace("HeroSubject", "main subject", StringComparison.OrdinalIgnoreCase);
+        while (cleaned.Contains("; ;", StringComparison.Ordinal)) cleaned = cleaned.Replace("; ;", ";", StringComparison.Ordinal);
+        cleaned = cleaned.Replace("; .", ".", StringComparison.Ordinal).Replace(";.", ".", StringComparison.Ordinal);
+        return string.Join(" ", cleaned.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim(' ', ';');
+    }
 
     private static string RewriteAstronomy(string text, PromptSections sections)
     {
