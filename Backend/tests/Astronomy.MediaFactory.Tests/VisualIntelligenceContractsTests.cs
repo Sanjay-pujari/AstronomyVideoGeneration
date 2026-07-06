@@ -13,7 +13,7 @@ public sealed class VisualIntelligenceContractsTests
         Assert.Equal("3.2D", contract.Cdl.CdlVersion);
         Assert.Equal("3.2B", contract.BrandRules.BrandVersion);
         Assert.Equal("3.2C", contract.PlanetRenderingRules.RenderingRulesVersion);
-        Assert.Equal("3.2F", contract.QualityTargets.QualityReportVersion);
+        Assert.Equal("3.3H", contract.QualityTargets.QualityReportVersion);
         Assert.Empty(contract.NegativeConstraints.Scientific);
         Assert.Equal("en", contract.Language);
     }
@@ -62,7 +62,7 @@ public sealed class VisualIntelligenceContractsTests
 
         var json = JsonSerializer.Serialize(report, VisualIntelligenceJson.CreateSerializerOptions());
 
-        Assert.Contains("\"qualityReportVersion\":\"3.2F\"", json);
+        Assert.Contains("\"qualityReportVersion\":\"3.3H\"", json);
         Assert.Contains("\"providerName\":\"azureImage2\"", json);
         Assert.Contains("\"recommendedDecision\":\"publishWithWarning\"", json);
         Assert.Contains("\"severity\":\"warning\"", json);

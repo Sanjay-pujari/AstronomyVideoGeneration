@@ -14,7 +14,7 @@ public static class VisualIntelligenceContractVersions
     public const string GenericProviderProfileVersion = "3.3E-generic-provider-profile-v1";
     public const string AzureImageProviderProfileVersion = "3.3G-azure-image-provider-profile-v1";
     public const string ProviderCapabilitiesVersion = "3.3E-provider-capabilities-v1";
-    public const string QualityReportVersion = "3.2F";
+    public const string QualityReportVersion = "3.3H";
 }
 
 public static class VisualIntelligenceFeatureFlags
@@ -54,13 +54,33 @@ public enum CreativeStyle { [JsonStringEnumMemberName("unknown")] Unknown = 0, [
 [JsonConverter(typeof(JsonStringEnumConverter<CompositionStyle>))]
 public enum CompositionStyle { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("heroSubject")] HeroSubject, [JsonStringEnumMemberName("ruleOfThirds")] RuleOfThirds, [JsonStringEnumMemberName("centeredSubject")] CenteredSubject, [JsonStringEnumMemberName("splitComposition")] SplitComposition, [JsonStringEnumMemberName("lowerThirdObservationCard")] LowerThirdObservationCard, [JsonStringEnumMemberName("wideNegativeSpace")] WideNegativeSpace }
 [JsonConverter(typeof(JsonStringEnumConverter<PublicationDecisionStatus>))]
-public enum PublicationDecisionStatus { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("publish")] Publish, [JsonStringEnumMemberName("publishWithWarning")] PublishWithWarning, [JsonStringEnumMemberName("block")] Block, [JsonStringEnumMemberName("regenerate")] Regenerate, [JsonStringEnumMemberName("fallback")] Fallback }
+public enum PublicationDecisionStatus { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("publish")] Publish, [JsonStringEnumMemberName("publishWithWarning")] PublishWithWarning, [JsonStringEnumMemberName("block")] Block, [JsonStringEnumMemberName("regenerate")] Regenerate, [JsonStringEnumMemberName("fallback")] Fallback, [JsonStringEnumMemberName("approved")] Approved, [JsonStringEnumMemberName("approvedWithWarning")] ApprovedWithWarning, [JsonStringEnumMemberName("needsRegeneration")] NeedsRegeneration, [JsonStringEnumMemberName("needsManualReview")] NeedsManualReview, [JsonStringEnumMemberName("rejected")] Rejected, [JsonStringEnumMemberName("skipped")] Skipped }
 [JsonConverter(typeof(JsonStringEnumConverter<DiagnosticSeverity>))]
 public enum DiagnosticSeverity { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("info")] Info, [JsonStringEnumMemberName("warning")] Warning, [JsonStringEnumMemberName("error")] Error, [JsonStringEnumMemberName("blocking")] Blocking }
 [JsonConverter(typeof(JsonStringEnumConverter<ImageProviderType>))]
 public enum ImageProviderType { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("azureImage2")] AzureImage2 = 1, [JsonStringEnumMemberName("openAiImage")] OpenAiImage = 2, [JsonStringEnumMemberName("localRenderer")] LocalRenderer = 3, [JsonStringEnumMemberName("externalProvider")] ExternalProvider = 4, [JsonStringEnumMemberName("azureImage")] AzureImage = 5 }
 [JsonConverter(typeof(JsonStringEnumConverter<QualityCategory>))]
 public enum QualityCategory { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("creativeIntentMatch")] CreativeIntentMatch, [JsonStringEnumMemberName("astronomicalPlausibility")] AstronomicalPlausibility, [JsonStringEnumMemberName("brandCompliance")] BrandCompliance, [JsonStringEnumMemberName("textReadability")] TextReadability, [JsonStringEnumMemberName("platformSuitability")] PlatformSuitability, [JsonStringEnumMemberName("providerCompliance")] ProviderCompliance }
+
+[JsonConverter(typeof(JsonStringEnumConverter<CreativeQualityCategory>))]
+public enum CreativeQualityCategory
+{
+    [JsonStringEnumMemberName("unknown")] Unknown = 0,
+    [JsonStringEnumMemberName("astronomicalAccuracy")] AstronomicalAccuracy,
+    [JsonStringEnumMemberName("planetRenderingAccuracy")] PlanetRenderingAccuracy,
+    [JsonStringEnumMemberName("brandConsistency")] BrandConsistency,
+    [JsonStringEnumMemberName("composition")] Composition,
+    [JsonStringEnumMemberName("visualHierarchy")] VisualHierarchy,
+    [JsonStringEnumMemberName("typography")] Typography,
+    [JsonStringEnumMemberName("observationCard")] ObservationCard,
+    [JsonStringEnumMemberName("labelQuality")] LabelQuality,
+    [JsonStringEnumMemberName("platformOptimization")] PlatformOptimization,
+    [JsonStringEnumMemberName("readability")] Readability,
+    [JsonStringEnumMemberName("scientificCredibility")] ScientificCredibility,
+    [JsonStringEnumMemberName("documentaryAesthetic")] DocumentaryAesthetic,
+    [JsonStringEnumMemberName("overallProductionQuality")] OverallProductionQuality
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<VisualIntelligenceFeatureFlagName>))]
 public enum VisualIntelligenceFeatureFlagName { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("useVisualCreativeDirector")] UseVisualCreativeDirector, [JsonStringEnumMemberName("useCDL")] UseCDL, [JsonStringEnumMemberName("useCreativeDirectionContract")] UseCreativeDirectionContract, [JsonStringEnumMemberName("usePromptComposerV2")] UsePromptComposerV2, [JsonStringEnumMemberName("useProviderProfiles")] UseProviderProfiles, [JsonStringEnumMemberName("useQualityScoring")] UseQualityScoring, [JsonStringEnumMemberName("useQualityScoringBlocking")] UseQualityScoringBlocking, [JsonStringEnumMemberName("useExperimentalRenderingRules")] UseExperimentalRenderingRules }
 
@@ -220,11 +240,20 @@ public sealed record QualityReport
     public string ProviderProfileVersion { get; init; } = VisualIntelligenceContractVersions.ProviderProfileVersion;
     public string Mode { get; init; } = "observation";
     public double OverallScore { get; init; }
+    public double Confidence { get; init; }
+    public PublicationDecisionStatus PublicationDecision { get; init; } = PublicationDecisionStatus.Unknown;
+    public List<CreativeQualityCategoryScore> CategoryScores { get; init; } = [];
+    public List<string> Warnings { get; init; } = [];
+    public List<string> CriticalIssues { get; init; } = [];
+    public List<string> Recommendations { get; init; } = [];
+    public Dictionary<string, object?> ProviderInformation { get; init; } = [];
+    public Dictionary<string, string> Versions { get; init; } = [];
     public List<QualityDimensionScore> DimensionScores { get; init; } = [];
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
     public PublicationDecisionStatus RecommendedDecision { get; init; } = PublicationDecisionStatus.Unknown;
     public Dictionary<string, object?> ExtensionFields { get; init; } = [];
 }
+public sealed record CreativeQualityCategoryScore { public CreativeQualityCategory Name { get; init; } = CreativeQualityCategory.Unknown; public double Score { get; init; } public bool Passed { get; init; } public List<string> Findings { get; init; } = []; }
 public sealed record QualityDimensionScore { public QualityCategory Name { get; init; } = QualityCategory.Unknown; public double Score { get; init; } public bool Passed { get; init; } public List<string> Findings { get; init; } = []; }
 
 public sealed record PublicationDecision
