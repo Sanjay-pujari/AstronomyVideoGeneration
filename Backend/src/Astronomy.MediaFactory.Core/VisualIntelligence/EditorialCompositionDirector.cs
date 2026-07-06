@@ -13,6 +13,17 @@ public sealed record HeroCompositionTemplate
     public required string OverlaySafeArea { get; init; }
 }
 
+public sealed record PlanetRelationshipReview
+{
+    public string ReviewVersion { get; init; } = "4.4B.1";
+    public required double RelationshipScore { get; init; }
+    public required double VisualBalanceScore { get; init; }
+    public required double DocumentaryScore { get; init; }
+    public required string PlanetProminenceAssessment { get; init; }
+    public required string CompositionRecommendation { get; init; }
+    public IReadOnlyList<string> CreativeNotes { get; init; } = [];
+}
+
 public sealed record EditorialCompositionDecision
 {
     public required HeroCompositionTemplate Template { get; init; }
@@ -27,6 +38,7 @@ public sealed record EditorialCompositionDecision
     public double VisualHierarchyScore { get; init; }
     public IReadOnlyList<string> StorytellingNotes { get; init; } = [];
     public IReadOnlyList<string> Recommendations { get; init; } = [];
+    public PlanetRelationshipReview? PlanetRelationshipReview { get; init; }
 }
 
 public interface IEditorialCompositionDirector
@@ -34,8 +46,57 @@ public interface IEditorialCompositionDirector
     EditorialCompositionDecision Decide(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, CreativeKnowledge? knowledge = null);
 }
 
+public interface IPlanetRelationshipDirector
+{
+    PlanetRelationshipReview? Review(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, CreativeKnowledge? knowledge, HeroCompositionTemplate template);
+}
+
+public sealed class PlanetRelationshipDirector : IPlanetRelationshipDirector
+{
+    public PlanetRelationshipReview? Review(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, CreativeKnowledge? knowledge, HeroCompositionTemplate template)
+    {
+        var subjects = Normalize(profile.PrimaryObjects.Concat(profile.SupportingObjects));
+        if (profile.EventFamily is not (ContractEventFamily.PlanetConjunction or ContractEventFamily.PlanetOpposition) || subjects.Count is < 2 or > 2) return null;
+        var pair = string.Join(" + ", subjects);
+        var prominence = $"Balanced relationship-first prominence for {pair}; recommend relative prominence through brightness, clean separation, and placement rather than absolute planet dominance.";
+        var composition = template.Name switch
+        {
+            "PlanetPairing_Twilight" => "Use twilight atmosphere with horizontal or gentle diagonal balance, a subtle low horizon only if it clarifies observation, and generous negative space.",
+            "PlanetPairing_Horizon" => "Use horizontal balance above a subtle horizon while keeping both planets bright, intentional, and unusually close together.",
+            _ => "Prefer diagonal balance or horizontal balance with generous negative space; avoid centered static layouts and tiny secondary planets."
+        };
+        var notes = new List<string>
+        {
+            "Primary story: relationship; two bright planets appear unusually close together.",
+            "Target balanced prominence; avoid a dominant giant planet with a tiny secondary.",
+            "Maintain astronomical plausibility with calm premium documentary realism.",
+            "Avoid generic AI poster styling, fantasy colors, and artificial glow."
+        };
+        if (knowledge is not null) notes.Add($"Knowledge guidance: {knowledge.CompositionStrategy}");
+        return new PlanetRelationshipReview
+        {
+            RelationshipScore = .96,
+            VisualBalanceScore = .94,
+            DocumentaryScore = .93,
+            PlanetProminenceAssessment = prominence,
+            CompositionRecommendation = composition,
+            CreativeNotes = notes
+        };
+    }
+
+    private static List<string> Normalize(IEnumerable<string> values) => values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+}
+
 public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
 {
+    private readonly IPlanetRelationshipDirector planetRelationshipDirector;
+
+    public EditorialCompositionDirector() : this(new PlanetRelationshipDirector()) { }
+
+    public EditorialCompositionDirector(IPlanetRelationshipDirector planetRelationshipDirector)
+    {
+        this.planetRelationshipDirector = planetRelationshipDirector;
+    }
     private static readonly HeroCompositionTemplate CloseApproach = new()
     {
         Name = "PlanetPairing_CloseApproach",
@@ -84,6 +145,7 @@ public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
         var contextChoice = SelectDocumentaryContext(text, template);
         var subjects = Normalize(profile.PrimaryObjects.Concat(profile.SupportingObjects));
         var relationship = isPairing ? string.Join(" + ", subjects.DefaultIfEmpty(profile.Hero)) : profile.Hero;
+        var relationshipReview = planetRelationshipDirector.Review(context, profile, knowledge, template);
 
         return new EditorialCompositionDecision
         {
@@ -93,16 +155,17 @@ public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
             VisualHierarchy = "Story first, then relationship, then beauty, then scale.",
             DocumentaryComposition = knowledge is null ? contextChoice : $"{contextChoice} {knowledge.DocumentaryGuidance}",
             EnvironmentalContext = contextChoice,
-            RelationshipScore = isPairing ? .94 : .78,
-            DocumentaryScore = contextChoice.Contains("No foreground", StringComparison.OrdinalIgnoreCase) ? .82 : .9,
+            RelationshipScore = relationshipReview?.RelationshipScore ?? (isPairing ? .94 : .78),
+            DocumentaryScore = relationshipReview?.DocumentaryScore ?? (contextChoice.Contains("No foreground", StringComparison.OrdinalIgnoreCase) ? .82 : .9),
             AstronomyScore = isPairing ? .92 : .88,
-            VisualHierarchyScore = .93,
+            VisualHierarchyScore = relationshipReview?.VisualBalanceScore ?? .93,
             StorytellingNotes = knowledge?.EditorialNotes ?? (isPairing
                 ? ["Treat the conjunction itself as the hero, not Jupiter alone.", "Planets should feel paired through placement, brightness, and separation.", "Preserve circular planetary geometry and plausible relative appearance."]
                 : ["Use documentary context only when it clarifies the observable event."]),
             Recommendations = knowledge?.AvoidPatterns.Select(p => $"Avoid {p}.").ToList() ?? (isPairing
                 ? ["Target balanced prominence between Jupiter and Venus when both are present.", "Keep foreground silhouettes optional and minimal.", "Avoid clutter, fake glow, stretched planets, and technical prompt language."]
-                : ["Keep the composition editorial and uncluttered."])
+                : ["Keep the composition editorial and uncluttered."]),
+            PlanetRelationshipReview = relationshipReview
         };
     }
 
