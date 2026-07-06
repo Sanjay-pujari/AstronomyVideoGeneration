@@ -104,6 +104,7 @@ public sealed record VisualIntelligenceOrchestrationResult
     public CDL? Cdl { get; init; }
     public CreativeDirectionContract? CreativeDirectionContract { get; init; }
     public PromptPackage? PromptPackage { get; init; }
+    public QualityReport? QualityReport { get; init; }
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
     public bool FallbackApplied { get; init; }
     public string? FallbackReason { get; init; }
@@ -155,13 +156,18 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     private readonly IOptions<VisualIntelligenceOptions> options;
     private readonly IVisualCreativeDirector director;
     private readonly IPromptComposerV2 promptComposer;
+    private readonly ICreativeQualityScoringEngine? qualityScoringEngine;
     private readonly ILogger<VisualIntelligenceOrchestrator> logger;
 
     public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, IPromptComposerV2 promptComposer, ILogger<VisualIntelligenceOrchestrator> logger)
+        : this(options, director, promptComposer, null, logger) { }
+
+    public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, IPromptComposerV2 promptComposer, ICreativeQualityScoringEngine? qualityScoringEngine, ILogger<VisualIntelligenceOrchestrator> logger)
     {
         this.options = options;
         this.director = director;
         this.promptComposer = promptComposer;
+        this.qualityScoringEngine = qualityScoringEngine;
         this.logger = logger;
     }
 
@@ -201,8 +207,15 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             {
                 diagnostics.Add(Info("prompt_composer_v2.skipped", "PromptComposerV2 feature flag is disabled; prompt package composition skipped."));
             }
+            QualityReport? qualityReport = null;
+            if (context.FeatureFlags.UseQualityScoring)
+            {
+                var scorer = qualityScoringEngine ?? new CreativeQualityScoringEngine(options, Microsoft.Extensions.Logging.Abstractions.NullLogger<CreativeQualityScoringEngine>.Instance);
+                qualityReport = await scorer.ScoreAsync(new CreativeQualityScoringRequest { Context = context, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
+                diagnostics.AddRange(qualityReport.Diagnostics.Where(d => !diagnostics.Any(existing => existing.Code == d.Code && existing.Message == d.Message)));
+            }
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
-            return Complete(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, Diagnostics = diagnostics });
+            return Complete(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -271,6 +284,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IProviderAdapter>(sp => new ProviderAdapterResolver([sp.GetRequiredService<AzurePromptProviderAdapter>(), sp.GetRequiredService<GenericProviderAdapter>()]));
         services.AddScoped<IPromptPackageBuilder, PromptPackageBuilder>();
         services.AddScoped<IPromptComposerV2, PromptComposerV2>();
+        services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();
         services.AddScoped<IVisualIntelligenceOrchestrator, VisualIntelligenceOrchestrator>();
