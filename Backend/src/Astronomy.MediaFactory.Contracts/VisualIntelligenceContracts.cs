@@ -28,11 +28,21 @@ public static class VisualIntelligenceFeatureFlags
     public const string UseQualityScoring = nameof(UseQualityScoring);
     public const string UseQualityScoringBlocking = nameof(UseQualityScoringBlocking);
     public const string UseExperimentalRenderingRules = nameof(UseExperimentalRenderingRules);
+    public const string Enabled = nameof(Enabled);
+    public const string WriteDiagnostics = nameof(WriteDiagnostics);
+    public const string DiagnosticsOutputPath = nameof(DiagnosticsOutputPath);
+    public const string DefaultProvider = nameof(DefaultProvider);
+    public const string ObservationMode = nameof(ObservationMode);
 }
 
 public sealed class VisualIntelligenceOptions
 {
     public const string SectionName = VisualIntelligenceFeatureFlags.SectionName;
+    public bool Enabled { get; init; }
+    public bool WriteDiagnostics { get; init; }
+    public string DiagnosticsOutputPath { get; init; } = string.Empty;
+    public ImageProviderType DefaultProvider { get; init; } = ImageProviderType.Unknown;
+    public bool ObservationMode { get; init; } = true;
     public bool UseVisualCreativeDirector { get; init; }
     public bool UseCDL { get; init; }
     public bool UseCreativeDirectionContract { get; init; }
