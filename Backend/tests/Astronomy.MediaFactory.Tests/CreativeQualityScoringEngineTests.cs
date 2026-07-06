@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using ContractEventFamily = Astronomy.MediaFactory.Contracts.EventFamily;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -85,7 +84,7 @@ public sealed class CreativeQualityScoringEngineTests
         Assert.Equal(CreativeQualityCategory.OverallProductionQuality, roundTrip.CategoryScores.Last().Name);
     }
 
-    private static CreativeQualityScoringEngine Engine(VisualIntelligenceOptions options) => new(Options.Create(options), NullLogger<CreativeQualityScoringEngine>.Instance);
+    private static CreativeQualityScoringEngine Engine(VisualIntelligenceOptions options) => new(Microsoft.Extensions.Options.Options.Create(options), NullLogger<CreativeQualityScoringEngine>.Instance);
     private static VisualIntelligenceOptions Options(bool blocking = false) => new() { UseQualityScoring = true, UsePromptComposerV2 = true, UseQualityScoringBlocking = blocking };
     private static CreativeQualityScoringRequest Request(CDL? cdl, CreativeDirectionContract? contract, PromptPackage? prompt) => new() { Context = Context(useQuality: true), Cdl = cdl, CreativeDirectionContract = contract, PromptPackage = prompt };
 
@@ -102,7 +101,7 @@ public sealed class CreativeQualityScoringEngineTests
     {
         var context = Context(useQuality: true) with { FeatureFlags = new VisualIntelligenceFlagSnapshot { UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, UsePromptComposerV2 = true, UseQualityScoring = true } };
         var direction = await new VisualCreativeDirector(NullLogger<VisualCreativeDirector>.Instance).CreateDirectionAsync(context);
-        var composer = new PromptComposerV2(Options.Create(new VisualIntelligenceOptions { UsePromptComposerV2 = true }), new PromptSectionBuilder(), new PromptOptimizer(), new GenericProviderAdapter(), new PromptPackageBuilder(), new ImageProviderProfileRegistry([new GenericImageProviderProfile()]));
+        var composer = new PromptComposerV2(Microsoft.Extensions.Options.Options.Create(new VisualIntelligenceOptions { UsePromptComposerV2 = true }), new PromptSectionBuilder(), new PromptOptimizer(), new GenericProviderAdapter(), new PromptPackageBuilder(), new ImageProviderProfileRegistry([new GenericImageProviderProfile()]));
         var prompt = await composer.ComposeAsync(direction.Cdl, direction.CreativeDirectionContract);
         return (direction.Cdl!, direction.CreativeDirectionContract!, prompt.PromptPackage!);
     }
