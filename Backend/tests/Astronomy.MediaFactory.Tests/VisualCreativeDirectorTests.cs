@@ -99,6 +99,45 @@ public sealed class VisualCreativeDirectorTests
     }
 
 
+
+    [Fact]
+    public async Task VisualStoryModel_generates_planet_pairing_story_without_largest_planet_priority()
+    {
+        var result = await Create(Request("PlanetPairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        Assert.NotNull(result.VisualStory);
+        Assert.Equal("Relationship", result.VisualStory!.PrimaryVisualSubject);
+        Assert.Equal("This is an apparent conjunction.", result.VisualStory.ViewerTakeaway);
+        Assert.Equal("Wonder.", result.VisualStory.EmotionalHook);
+        Assert.Equal("Balanced pairing", result.VisualStory.RecommendedComposition);
+        Assert.Contains("do not prioritize the largest planet", result.VisualStory.VisualRelationship, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task VisualStoryModel_falls_back_for_unknown_family_and_serializes()
+    {
+        var result = await Create(Request("mystery-sky-event", family: ContractEventFamily.Unknown));
+
+        var json = JsonSerializer.Serialize(result.VisualStory, VisualIntelligenceJson.CreateSerializerOptions());
+        var reparsed = JsonSerializer.Deserialize<VisualStory>(json, VisualIntelligenceJson.CreateSerializerOptions());
+
+        Assert.NotNull(reparsed);
+        Assert.Equal("4.3A", reparsed!.StoryVersion);
+        Assert.Equal("Observable sky event", reparsed.PrimaryVisualSubject);
+    }
+
+    [Theory]
+    [InlineData("landscape", "wide documentary composition")]
+    [InlineData("portrait", "large hero objects")]
+    [InlineData("square", "balanced centered composition")]
+    public async Task VisualStoryModel_includes_platform_recommendations(string key, string expected)
+    {
+        var result = await Create(Request("PlanetPairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        Assert.True(result.VisualStory!.RecommendedPlatformVariations.ContainsKey(key));
+        Assert.Contains(expected, result.VisualStory.RecommendedPlatformVariations[key].Recommendation, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void CreativeKnowledgeLibrary_retrieves_planet_pairing_knowledge()
     {

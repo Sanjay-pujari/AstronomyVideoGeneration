@@ -49,6 +49,7 @@ public interface ICreativeKnowledgeLibrary
 
 public sealed class CreativeKnowledgeLibrary : ICreativeKnowledgeLibrary
 {
+    public const string Version = "4.1A";
     private readonly IReadOnlyDictionary<CreativeKnowledgeFamily, CreativeKnowledge> entries;
 
     public CreativeKnowledgeLibrary()

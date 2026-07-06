@@ -11,6 +11,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
     private readonly IEditorialCompositionDirector editorialDirector;
     private readonly ICreativeKnowledgeLibrary knowledgeLibrary;
     private readonly IEditorialReasoningEngine editorialReasoningEngine;
+    private readonly IVisualStoryModel visualStoryModel = new VisualStoryModel();
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger)
         : this(logger, CreateDefaultResolver()) { }
@@ -45,6 +46,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
             diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "visual_director.unknown_family", Message = "Unknown event family; generic astronomy documentary CDL used.", Source = nameof(VisualCreativeDirector) });
         var knowledge = knowledgeLibrary.Resolve(resolvedContext, profileResult, diagnostics);
         var editorialDecision = editorialReasoningEngine.Decide(resolvedContext, knowledge, diagnostics);
+        var visualStory = visualStoryModel.Create(resolvedContext, editorialDecision, knowledge, diagnostics);
         var editorial = editorialDirector.Decide(resolvedContext, profileResult, knowledge);
         diagnostics.Add(Info("visual_director.editorial_composition_applied", $"Editorial composition template selected: {editorial.Template.Name}."));
         var model = BuildModel(resolvedContext, profileResult, editorial, knowledge, editorialDecision);
@@ -62,7 +64,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
             logger.LogInformation("VisualCreativeDirector contract generated. CorrelationId={CorrelationId} ContractId={ContractId}", context.CorrelationId, contract.ContractId);
         }
 
-        return Task.FromResult(new VisualCreativeDirectorResult { EditorialDecision = editorialDecision, Cdl = cdl, CreativeDirectionContract = contract, Diagnostics = diagnostics });
+        return Task.FromResult(new VisualCreativeDirectorResult { EditorialDecision = editorialDecision, VisualStory = visualStory, Cdl = cdl, CreativeDirectionContract = contract, Diagnostics = diagnostics });
     }
 
     private static DirectionModel BuildModel(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, EditorialCompositionDecision editorial, CreativeKnowledge knowledge, EditorialDecision editorialDecision)
@@ -123,10 +125,11 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
 
     private static Dictionary<string, object?> BuildCommonExtensions(VisualIntelligenceOrchestrationContext c, DirectionModel m)
     {
-        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints, ["editorialComposition"] = m.Editorial, ["creativeKnowledge"] = m.Knowledge, ["creativeKnowledgeFamily"] = m.Knowledge.Family.ToString(), ["editorialDecision"] = m.EditorialDecision, ["viewerQuestion"] = m.Knowledge.ViewerQuestion, ["storyGoal"] = m.Knowledge.StoryGoal, ["compositionTemplateUsed"] = m.Editorial.Template.Name, ["relationshipScore"] = m.Editorial.RelationshipScore, ["documentaryScore"] = m.Editorial.DocumentaryScore, ["astronomyScore"] = m.Editorial.AstronomyScore, ["visualHierarchyScore"] = m.Editorial.VisualHierarchyScore, ["storytellingNotes"] = m.Editorial.StorytellingNotes, ["recommendations"] = m.Editorial.Recommendations };
+        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints, ["editorialComposition"] = m.Editorial, ["creativeKnowledge"] = m.Knowledge, ["creativeKnowledgeFamily"] = m.Knowledge.Family.ToString(), ["editorialDecision"] = m.EditorialDecision, ["visualStory"] = BuildVisualStoryExtension(m), ["viewerQuestion"] = m.Knowledge.ViewerQuestion, ["storyGoal"] = m.Knowledge.StoryGoal, ["compositionTemplateUsed"] = m.Editorial.Template.Name, ["relationshipScore"] = m.Editorial.RelationshipScore, ["documentaryScore"] = m.Editorial.DocumentaryScore, ["astronomyScore"] = m.Editorial.AstronomyScore, ["visualHierarchyScore"] = m.Editorial.VisualHierarchyScore, ["storytellingNotes"] = m.Editorial.StorytellingNotes, ["recommendations"] = m.Editorial.Recommendations };
         foreach (var item in m.ProfileExtensions) extensions[item.Key] = item.Value;
         return extensions;
     }
+    private static object BuildVisualStoryExtension(DirectionModel m) => new { m.EditorialDecision.StoryId, StoryVersion = VisualStoryModel.Version, m.EditorialDecision.ViewerQuestion, m.EditorialDecision.PrimaryStory, m.EditorialDecision.ViewerTakeaway };
     private static string BuildObservationCard(VisualIntelligenceOrchestrationContext c) => string.Join("; ", new[] { c.ObservationDateTime?.ToString("u") ?? "date/time if available", Safe(c.Location, Safe(c.Region, "viewer region if available")), Safe(c.VisibilityGuidance, "visibility guidance if available") });
     private static List<string> NormalizeObjects(IEnumerable<string> values) => values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     private static string DefaultPrimary(VisualIntelligenceOrchestrationContext c, ContractEventFamily f) { var text = $"{c.EventType} {c.EventName}".ToLowerInvariant(); if (text.Contains("jupiter") && text.Contains("venus")) return "Jupiter and Venus"; return f switch { ContractEventFamily.MeteorShower => "meteor shower radiant", ContractEventFamily.LunarEvent => "Moon", ContractEventFamily.SolarEvent => "eclipsed Sun", ContractEventFamily.PlanetConjunction => "bright planets", _ => "night sky event" }; }
