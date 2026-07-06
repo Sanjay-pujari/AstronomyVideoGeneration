@@ -29,6 +29,7 @@ public static class VisualIntelligenceFeatureFlags
     public const string UseQualityScoringBlocking = nameof(UseQualityScoringBlocking);
     public const string UseExperimentalRenderingRules = nameof(UseExperimentalRenderingRules);
     public const string UseHeroPromptV4 = nameof(UseHeroPromptV4);
+    public const string UseHeroImageV4Comparison = nameof(UseHeroImageV4Comparison);
     public const string Enabled = nameof(Enabled);
     public const string WriteDiagnostics = nameof(WriteDiagnostics);
     public const string DiagnosticsOutputPath = nameof(DiagnosticsOutputPath);
@@ -53,6 +54,7 @@ public sealed class VisualIntelligenceOptions
     public bool UseQualityScoringBlocking { get; init; }
     public bool UseExperimentalRenderingRules { get; init; }
     public bool UseHeroPromptV4 { get; init; }
+    public bool UseHeroImageV4Comparison { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<EventFamily>))]
