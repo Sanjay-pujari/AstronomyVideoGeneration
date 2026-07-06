@@ -2933,7 +2933,7 @@ Second display cue.
             Path.Combine(outputRoot, "validation"),
             intelligence,
             new GenericAstronomyEventStrategy(),
-            null);
+            EnableSubtitles: false);
         var pipelineRequest = new ProductionPipelineRequest(request, Guid.NewGuid(), outputRoot, false, ExecutionContext: executionContext, EnableSceneVariants: enableSceneVariants);
         return new ProductionPhaseContext(pipelineRequest, request, Guid.NewGuid(), Guid.NewGuid().ToString("D"), outputRoot, executionContext, intelligence, new GenericAstronomyEventStrategy(), false, false, 1, 20, false);
     }

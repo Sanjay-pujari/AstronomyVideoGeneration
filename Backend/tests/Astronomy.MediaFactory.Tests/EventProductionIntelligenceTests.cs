@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -5,6 +6,7 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class EventProductionIntelligenceTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     [Fact]
     public void AstronomyAdapter_NormalizesMeteorShowerWithoutGeminidsHardcoding()
     {

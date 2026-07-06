@@ -35,7 +35,7 @@ public sealed class ManualContentPlanCreationTests
         Assert.Equal("Draft", plan.Status);
         Assert.Equal("Draft", plan.PlanStatus);
         Assert.Equal("CosmicStoryShort", plan.ContentCategoryCode);
-        Assert.Equal("PlanetGrouping", pipelineRequest.ContentCategoryCode);
+        Assert.Equal("PlanetGrouping", pipelineRequest.Category);
         Assert.Equal("PLANET_GROUPING", plan.PrimaryAstronomyEventTypeCode);
         Assert.Equal("planet-grouping-udaipur-2026", plan.SourceExternalEventId);
         Assert.Equal(40, plan.Priority);

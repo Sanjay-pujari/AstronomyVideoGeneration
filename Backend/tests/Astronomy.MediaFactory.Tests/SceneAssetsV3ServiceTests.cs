@@ -1,3 +1,4 @@
+using SixLabors.ImageSharp;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;

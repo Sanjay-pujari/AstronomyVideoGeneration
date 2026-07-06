@@ -1234,7 +1234,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
         var blocks = ((System.Collections.IEnumerable)method!.Invoke(null, [new[] { scene }, workingDirectory, "test", options])!).Cast<object>().ToArray();
 
-        Assert.True(blocks.Count > 1);
+        Assert.True(blocks.Length > 1);
         Assert.All(blocks, block =>
         {
             var lines = (IReadOnlyList<string>)block.GetType().GetProperty("Lines")!.GetValue(block)!;
