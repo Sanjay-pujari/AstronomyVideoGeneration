@@ -41,7 +41,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
         var supporting = NormalizeObjects(context.SupportingObjects).ToList();
         var aspect = context.AspectRatio == AspectRatio.Unknown ? DefaultAspectRatio(context.Platform) : context.AspectRatio;
         var platform = context.Platform == Platform.Unknown ? Platform.YouTubeThumbnail : context.Platform;
-        return family switch
+        DirectionModel model = family switch
         {
             ContractEventFamily.PlanetConjunction => new(family, primary, supporting, "Show the close apparent pairing of planets as a premium astronomy documentary moment.", string.Join(" and ", primary), "nearby planetary companion(s), twilight gradient, clean star field", "multi-object hierarchy with bright circular planetary disks, clear separation, and primary/secondary emphasis", CompositionStyle.RuleOfThirds, "cinematic realistic planet pairing"),
             ContractEventFamily.MeteorShower => new(family, primary, supporting, "Convey meteor activity from a dark sky with radiant awareness and observation usefulness.", primary[0], "radiant region, sparse meteor streaks, horizon context", "radiant and sky dome first, meteor streaks supporting not chaotic", CompositionStyle.WideNegativeSpace, "dark-sky meteor shower documentary"),
@@ -49,7 +49,9 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
             ContractEventFamily.LunarEvent => new(family, primary, supporting, "Make the named full Moon the calm hero subject with scientifically respectful atmosphere.", "Moon", "thin clouds, horizon silhouette, date and viewing cue", "large circular Moon with restrained texture and readable negative space", CompositionStyle.HeroSubject, "premium full Moon portrait"),
             ContractEventFamily.SolarEvent => new(family, primary, supporting, "Show a solar eclipse safely with corona-focused documentary realism and no unsafe viewing cues.", "eclipsed Sun", "corona, lunar silhouette, minimal sky context", "black lunar disk, circular solar rim, corona as subtle structure", CompositionStyle.CenteredSubject, "solar eclipse corona realism"),
             _ => new(family, primary, supporting, "Create a generic premium astronomy documentary visual that explains the sky event clearly.", primary[0], "night sky, subtle labels, observation context", "single clear hero astronomy subject with supporting context", CompositionStyle.HeroSubject, "premium astronomy documentary")
-        } with { Platform = platform, AspectRatio = aspect };
+        };
+
+        return model with { Platform = platform, AspectRatio = aspect };
     }
 
     private static CDL BuildCdl(VisualIntelligenceOrchestrationContext c, DirectionModel m) => new()
