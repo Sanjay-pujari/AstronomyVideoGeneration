@@ -1,6 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
+using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using ContractEventFamily = Astronomy.MediaFactory.Contracts.EventFamily;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -29,6 +35,7 @@ public sealed record VisualIntelligenceFlagSnapshot
     public bool UseQualityScoringBlocking { get; init; }
     public bool UseExperimentalRenderingRules { get; init; }
     public bool UseHeroPromptV4 { get; init; }
+    public bool UseHeroImageV4Comparison { get; init; }
     public bool Enabled { get; init; }
     public bool WriteDiagnostics { get; init; }
     public bool ObservationMode { get; init; } = true;
@@ -45,6 +52,7 @@ public sealed record VisualIntelligenceFlagSnapshot
         UseQualityScoringBlocking = options.UseQualityScoringBlocking,
         UseExperimentalRenderingRules = options.UseExperimentalRenderingRules,
         UseHeroPromptV4 = options.UseHeroPromptV4,
+        UseHeroImageV4Comparison = options.UseHeroImageV4Comparison,
         Enabled = options.Enabled,
         WriteDiagnostics = options.WriteDiagnostics,
         ObservationMode = options.ObservationMode,
@@ -182,17 +190,19 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     private readonly IPromptComposerV2 promptComposer;
     private readonly ICreativeQualityScoringEngine? qualityScoringEngine;
     private readonly ILogger<VisualIntelligenceOrchestrator> logger;
+    private readonly IAICinematicImageGenerator? imageGenerator;
 
     public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, IPromptComposerV2 promptComposer, ILogger<VisualIntelligenceOrchestrator> logger)
-        : this(options, director, promptComposer, null, logger) { }
+        : this(options, director, promptComposer, null, logger, null) { }
 
-    public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, IPromptComposerV2 promptComposer, ICreativeQualityScoringEngine? qualityScoringEngine, ILogger<VisualIntelligenceOrchestrator> logger)
+    public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, IPromptComposerV2 promptComposer, ICreativeQualityScoringEngine? qualityScoringEngine, ILogger<VisualIntelligenceOrchestrator> logger, IAICinematicImageGenerator? imageGenerator = null)
     {
         this.options = options;
         this.director = director;
         this.promptComposer = promptComposer;
         this.qualityScoringEngine = qualityScoringEngine;
         this.logger = logger;
+        this.imageGenerator = imageGenerator;
     }
 
     public async Task<VisualIntelligenceOrchestrationResult> OrchestrateAsync(VisualIntelligenceOrchestrationRequest request, CancellationToken cancellationToken = default)
@@ -336,8 +346,104 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             result.Diagnostics.Add(Info("visual_intelligence.diagnostics_disabled", "Visual Intelligence diagnostic file writing is disabled."));
         }
 
+        await TryGenerateHeroImageV4ComparisonAsync(result, cancellationToken).ConfigureAwait(false);
+
         logger.LogInformation("Visual Intelligence observation completed. CorrelationId={CorrelationId} Status={Status} FallbackApplied={FallbackApplied}", result.Context.CorrelationId, result.Status, result.FallbackApplied);
         return result;
+    }
+
+    private async Task TryGenerateHeroImageV4ComparisonAsync(VisualIntelligenceOrchestrationResult result, CancellationToken cancellationToken)
+    {
+        if (!result.Context.FeatureFlags.UseHeroImageV4Comparison) return;
+        try
+        {
+            logger.LogInformation("V4 comparison started");
+            var heroDirectory = string.IsNullOrWhiteSpace(result.Context.RunOutputFolder) ? string.Empty : Path.Combine(result.Context.RunOutputFolder, "hero");
+            var productionHeroPath = Path.Combine(heroDirectory, "hero.png");
+            if (string.IsNullOrWhiteSpace(heroDirectory) || !File.Exists(productionHeroPath))
+                throw new FileNotFoundException("Production Hero image was not found for V4 comparison.", productionHeroPath);
+
+            var comparisonDirectory = Path.Combine(heroDirectory, "comparison");
+            Directory.CreateDirectory(comparisonDirectory);
+            var v3Prompt = ResolveLegacyHeroPrompt(result);
+            var v4Prompt = result.PromptPackage?.PositivePrompt ?? string.Empty;
+            await File.WriteAllTextAsync(Path.Combine(comparisonDirectory, "hero-v3-prompt.txt"), v3Prompt, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(Path.Combine(comparisonDirectory, "hero-v4-prompt.txt"), v4Prompt, cancellationToken).ConfigureAwait(false);
+
+            var v3ImagePath = Path.Combine(comparisonDirectory, "hero-v3.png");
+            File.Copy(productionHeroPath, v3ImagePath, overwrite: true);
+            logger.LogInformation("V3 hero copied");
+
+            var v4ImagePath = Path.Combine(comparisonDirectory, "hero-v4.png");
+            var v4Generated = false;
+            var provider = imageGenerator?.IsConfigured == true ? $"AzureOpenAIForImage:{imageGenerator.DeploymentName}" : "AzureOpenAIForImage:NotConfigured";
+            if (imageGenerator?.IsConfigured == true && !string.IsNullOrWhiteSpace(v4Prompt))
+            {
+                var generation = await imageGenerator.GenerateAsync(new AICinematicAssetRequest("hero-v4-experimental", "hero-v4-comparison", "HeroEvent", "V4Comparison", "hero-v4-experimental", "ExperimentalComparisonOnly", "Manual review", "Still", "V4 experimental hero comparison only", v4Prompt, "No text, labels, watermarks, logos, UI, or production replacement.", 1792, 1024, v4ImagePath), cancellationToken).ConfigureAwait(false);
+                v4Generated = string.Equals(generation.GenerationStatus, "Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(v4ImagePath);
+            }
+            if (!v4Generated)
+                CreatePlaceholderV4Image(v3ImagePath, v4ImagePath, "V4 Experimental\nAzure Image provider not configured");
+            logger.LogInformation("V4 hero generated");
+
+            var sideBySidePath = Path.Combine(comparisonDirectory, "hero-side-by-side.png");
+            CreateSideBySide(v3ImagePath, v4ImagePath, sideBySidePath);
+            logger.LogInformation("side-by-side created");
+
+            await File.WriteAllTextAsync(Path.Combine(comparisonDirectory, "hero-comparison.json"), JsonSerializer.Serialize(new
+            {
+                planId = result.Context.ContentGenerationPlanId?.ToString() ?? result.Context.CorrelationId,
+                eventType = result.Context.EventType,
+                eventFamily = result.Context.EventFamily.ToString(),
+                provider,
+                v3PromptLength = v3Prompt.Length,
+                v4PromptLength = v4Prompt.Length,
+                v4Generated,
+                productionUnchanged = File.Exists(productionHeroPath) && !string.Equals(Path.GetFullPath(productionHeroPath), Path.GetFullPath(v4ImagePath), StringComparison.OrdinalIgnoreCase),
+                sideBySidePath,
+                recommendation = "ManualReviewRequired"
+            }, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true)), cancellationToken).ConfigureAwait(false);
+            logger.LogInformation("production unchanged");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "V4 Hero image comparison failed; continuing pipeline.");
+            result.Diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "hero_image_v4_comparison.failed", Message = "V4 Hero image comparison failed; pipeline continues.", Source = nameof(VisualIntelligenceOrchestrator), Metadata = new Dictionary<string, object?> { ["exceptionType"] = ex.GetType().Name } });
+        }
+    }
+
+    private static string ResolveLegacyHeroPrompt(VisualIntelligenceOrchestrationResult result)
+        => result.CreativeDirectionContract is null
+            ? "Legacy production Hero prompt retained by active Hero renderer."
+            : $"Legacy production Hero prompt retained by active Hero renderer. Event: {result.CreativeDirectionContract.EventFamily}. Subject: {result.CreativeDirectionContract.VisualIntent.PrimarySubject}. Production Azure Hero request remains unchanged.";
+
+    private static void CreatePlaceholderV4Image(string sourcePath, string outputPath, string label)
+    {
+        using var image = Image.Load<Rgba32>(sourcePath);
+        image.Mutate(ctx => { ctx.GaussianBlur(8f); ctx.Fill(Color.Black.WithAlpha(0.42f)); DrawLabel(ctx, label, 32, 48); });
+        image.Save(outputPath);
+    }
+
+    private static void CreateSideBySide(string leftPath, string rightPath, string outputPath)
+    {
+        using var left = Image.Load<Rgba32>(leftPath);
+        using var right = Image.Load<Rgba32>(rightPath);
+        var width = Math.Max(left.Width, right.Width);
+        var height = Math.Max(left.Height, right.Height);
+        left.Mutate(x => x.Resize(width, height));
+        right.Mutate(x => x.Resize(width, height));
+        using var canvas = new Image<Rgba32>(width * 2, height, Color.Black);
+        canvas.Mutate(ctx => { ctx.DrawImage(left, new Point(0, 0), 1f); ctx.DrawImage(right, new Point(width, 0), 1f); DrawLabel(ctx, "V3 Production", 24, 24); DrawLabel(ctx, "V4 Experimental", width + 24, 24); });
+        canvas.Save(outputPath);
+    }
+
+    private static void DrawLabel(IImageProcessingContext ctx, string text, float x, float y)
+    {
+        var family = SystemFonts.Collection.Families.FirstOrDefault();
+        var font = family.CreateFont(30, FontStyle.Bold);
+        var options = new RichTextOptions(font) { Origin = new PointF(x, y) };
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(x + 2, y + 2) }, text, Color.Black);
+        ctx.DrawText(options, text, Color.White);
     }
 
     private async Task<string> WriteDiagnosticsAsync(VisualIntelligenceOrchestrationResult result, CancellationToken cancellationToken)
@@ -418,6 +524,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (!flags.UseQualityScoringBlocking) disabled.Add(nameof(flags.UseQualityScoringBlocking));
         if (!flags.UseExperimentalRenderingRules) disabled.Add(nameof(flags.UseExperimentalRenderingRules));
         if (!flags.UseHeroPromptV4) disabled.Add(nameof(flags.UseHeroPromptV4));
+        if (!flags.UseHeroImageV4Comparison) disabled.Add(nameof(flags.UseHeroImageV4Comparison));
         return disabled;
     }
 
