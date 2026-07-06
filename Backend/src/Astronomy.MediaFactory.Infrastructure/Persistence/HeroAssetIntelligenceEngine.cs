@@ -440,7 +440,7 @@ public sealed class HeroAssetStoryGenerator(
             generatedFiles.Add(NormalizePath(layoutValidationPath));
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var diagnosticsPath = BuildDiagnosticOutputPath(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
+            var diagnosticsPath = ResolveHeroArtifactPath(heroAssetsRoot, OutputArtifactName.HeroGenerationDiagnostics);
             var azureOptions = imageOptions.Value;
             HeroPhysicalWriteResult? physicalWriteResult = null;
             if (IsAzureImage2Configured(azureOptions))
@@ -1487,7 +1487,7 @@ public sealed class HeroAssetStoryGenerator(
         File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
         generatedFiles.Add(NormalizePath(heroPath));
         var fontDiagnostics = BuildHeroFontDiagnostics(heroStory);
-        if (OutputArtifacts.ShouldWriteDiagnostics) await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, BuildDiagnosticOutputPath(heroAssetsRoot, HeroGenerationDiagnosticsFileName), variants, heroStory, selectedHook, compositionModel, intelligence, fontDiagnostics, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
+        if (OutputArtifacts.ShouldWriteDiagnostics) await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, ResolveHeroArtifactPath(heroAssetsRoot, OutputArtifactName.HeroGenerationDiagnostics), variants, heroStory, selectedHook, compositionModel, intelligence, fontDiagnostics, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
         return new HeroPhysicalWriteResult(generatedFiles, variants.Select(v => NormalizePath(v.ImagePath)).ToArray(), variants.Sum(v => GetHeroFileSize(v.ImagePath)), true, true, null, variants.ToDictionary(v => NormalizeHeroVariantName(v.Variant), v => GetHeroFileSize(v.ImagePath), StringComparer.OrdinalIgnoreCase));
     }
 
@@ -1729,7 +1729,7 @@ public sealed class HeroAssetStoryGenerator(
         var mainText = FirstNonEmpty(eventObjectContext.ObjectHeadlineText, intelligence?.Title, intelligence?.ShortTitle, "Sky event");
         var direction = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "approved viewing direction");
         var dateTime = FirstNonEmpty(intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "peak window");
-        var visualPromptDiagnosticsPath = BuildDiagnosticOutputPath(heroAssetsRoot, "visual-prompt-diagnostics.json");
+        var visualPromptDiagnosticsPath = ResolveHeroArtifactPath(heroAssetsRoot, OutputArtifactName.VisualPromptDiagnostics);
         Directory.CreateDirectory(Path.GetDirectoryName(visualPromptDiagnosticsPath)!);
         TracePhase11HeroRenderer($"HeroCinematicValidator/Renderer OUTPUT visualPromptDiagnosticsPath={visualPromptDiagnosticsPath}; heroDiagnostics object will report heroTitleClipped=false; heroSubtitleClipped=false; heroTitleMetadataOverlap=false; heroTextSafeAreaPassed=true");
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
@@ -3456,7 +3456,7 @@ public sealed class HeroAssetStoryGenerator(
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetBlueprintFileName);
 
     private string BuildReviewOutputPath(string eventId, string regionId)
-        => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroAssetReviewFileName);
+        => ResolveHeroArtifactPath(BuildHeroAssetsRoot(eventId, regionId), OutputArtifactName.HeroReview);
 
     private string BuildSceneManifestOutputPath(string eventId, string regionId)
         => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroSceneManifestFileName);
@@ -3471,7 +3471,13 @@ public sealed class HeroAssetStoryGenerator(
         => Path.Combine(heroAssetsRoot, "diagnostics", fileName);
 
     private static string BuildComparisonRoot(string heroAssetsRoot)
-        => Path.Combine(heroAssetsRoot, "comparison");
+        => Path.GetDirectoryName(ResolveHeroArtifactPath(heroAssetsRoot, OutputArtifactName.HeroPromptComparison))!;
+
+    private static string ResolveHeroArtifactPath(string heroAssetsRoot, OutputArtifactName artifactName)
+    {
+        var outputRoot = Directory.GetParent(Path.GetFullPath(heroAssetsRoot))?.FullName ?? heroAssetsRoot;
+        return OutputArtifactRegistry.GetPath(outputRoot, artifactName);
+    }
 
     private OutputArtifactsOptions OutputArtifacts => outputArtifactsOptions?.Value ?? new OutputArtifactsOptions();
 
