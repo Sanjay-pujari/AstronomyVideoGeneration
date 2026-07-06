@@ -37,6 +37,64 @@ public static class VisualIntelligenceFeatureFlags
     public const string ObservationMode = nameof(ObservationMode);
 }
 
+
+public enum OutputArtifactName
+{
+    HeroReview,
+    HeroGenerationDiagnostics,
+    VisualPromptDiagnostics,
+    HeroPromptComparison,
+    HeroMigrationReport,
+    HeroV3Prompt,
+    HeroV4Prompt,
+    HeroFinal
+}
+
+public static class OutputArtifactRegistry
+{
+    private static readonly IReadOnlyDictionary<OutputArtifactName, string> PrimaryRelativePaths = new Dictionary<OutputArtifactName, string>
+    {
+        [OutputArtifactName.HeroReview] = Path.Combine("hero", "diagnostics", "hero-review.json"),
+        [OutputArtifactName.HeroGenerationDiagnostics] = Path.Combine("hero", "diagnostics", "hero-generation-diagnostics.json"),
+        [OutputArtifactName.VisualPromptDiagnostics] = Path.Combine("hero", "diagnostics", "visual-prompt-diagnostics.json"),
+        [OutputArtifactName.HeroPromptComparison] = Path.Combine("hero", "comparison", "hero-prompt-comparison.json"),
+        [OutputArtifactName.HeroMigrationReport] = Path.Combine("hero", "comparison", "hero-migration-report.json"),
+        [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "comparison", "hero-v3-prompt.txt"),
+        [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "comparison", "hero-v4-prompt.txt"),
+        [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png")
+    };
+
+    private static readonly IReadOnlyDictionary<OutputArtifactName, string> LegacyRelativePaths = new Dictionary<OutputArtifactName, string>
+    {
+        [OutputArtifactName.HeroReview] = Path.Combine("hero", "hero-review.json"),
+        [OutputArtifactName.HeroGenerationDiagnostics] = Path.Combine("hero", "hero-generation-diagnostics.json"),
+        [OutputArtifactName.VisualPromptDiagnostics] = Path.Combine("hero", "visual-prompt-diagnostics.json"),
+        [OutputArtifactName.HeroPromptComparison] = Path.Combine("hero", "hero-prompt-comparison.json"),
+        [OutputArtifactName.HeroMigrationReport] = Path.Combine("hero", "hero-migration-report.json"),
+        [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "hero-v3-prompt.txt"),
+        [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "hero-v4-prompt.txt"),
+        [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png")
+    };
+
+    public static string GetRelativePath(OutputArtifactName artifactName) => PrimaryRelativePaths[artifactName];
+
+    public static string GetLegacyRelativePath(OutputArtifactName artifactName) => LegacyRelativePaths[artifactName];
+
+    public static string GetPath(string outputRoot, OutputArtifactName artifactName)
+        => Path.Combine(outputRoot, GetRelativePath(artifactName));
+
+    public static string GetLegacyPath(string outputRoot, OutputArtifactName artifactName)
+        => Path.Combine(outputRoot, GetLegacyRelativePath(artifactName));
+
+    public static string ResolveExistingPath(string outputRoot, OutputArtifactName artifactName)
+    {
+        var primary = GetPath(outputRoot, artifactName);
+        if (File.Exists(primary)) return primary;
+        var legacy = GetLegacyPath(outputRoot, artifactName);
+        return File.Exists(legacy) ? legacy : primary;
+    }
+}
+
 public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }
 
 public sealed class OutputArtifactsOptions

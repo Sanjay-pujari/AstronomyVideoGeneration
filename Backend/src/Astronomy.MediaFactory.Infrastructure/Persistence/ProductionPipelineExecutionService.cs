@@ -41,7 +41,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IOptions<ThumbnailOptions>? thumbnailOptions = null,
     IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null,
     INarrationV31Composer? narrationV31Composer = null,
-    INarrationGenerationService? narrationGenerationService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    INarrationGenerationService? narrationGenerationService = null,
+    IOptions<OutputArtifactsOptions>? outputArtifactsOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -1575,7 +1576,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var response = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, HeroAssetGenerationPhase.Full, context.ExecutionContext, context.Request), cancellationToken);
-        return await ValidateAndMaterializeHeroContractAsync(context, response, renderingOptions.Value.EnableStrictHeroOverlayValidation, cancellationToken);
+        return await ValidateAndMaterializeHeroContractAsync(context, response, renderingOptions.Value.EnableStrictHeroOverlayValidation, outputArtifactsOptions?.Value ?? new OutputArtifactsOptions(), cancellationToken);
     }
 
     private bool IsThumbnailV8Enabled()
@@ -1928,20 +1929,20 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
 
-    private static async Task<IReadOnlyList<string>> ValidateAndMaterializeHeroContractAsync(ProductionPhaseContext context, HeroAssetGenerationResponse response, bool enableStrictHeroOverlayValidation, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> ValidateAndMaterializeHeroContractAsync(ProductionPhaseContext context, HeroAssetGenerationResponse response, bool enableStrictHeroOverlayValidation, OutputArtifactsOptions outputArtifacts, CancellationToken cancellationToken)
     {
         var outputs = new List<string>(response.GeneratedFiles);
         var heroRoot = context.ExecutionContext.HeroRoot!;
         var storyPath = Path.Combine(heroRoot, "hero-asset-story.json");
         var blueprintPath = Path.Combine(heroRoot, "hero-asset-blueprint.json");
         var layoutValidationPath = Path.Combine(heroRoot, "hero-layout-validation.json");
-        var heroPath = Path.Combine(heroRoot, "hero-final.png");
-        var reviewPath = Path.Combine(heroRoot, "hero-review.json");
+        var heroPath = ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroFinal);
+        var reviewPath = ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroReview);
 
         if (!response.IsValid)
             throw new InvalidOperationException("Hero generation failed contract validation: " + string.Join("; ", response.Warnings.DefaultIfEmpty("hero engine returned IsValid=false")));
 
-        var requiredFiles = new[] { heroPath, reviewPath };
+        var requiredFiles = BuildExpectedHeroValidationArtifacts(heroRoot, outputArtifacts);
         var missing = requiredFiles.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missing.Length > 0)
             throw new InvalidOperationException("Hero generation failed contract validation: required hero files are missing: " + string.Join(", ", missing));
@@ -1956,6 +1957,31 @@ public sealed partial class ProductionPipelineExecutionService(
 
         outputs.AddRange(requiredFiles);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildExpectedHeroValidationArtifacts(string heroRoot, OutputArtifactsOptions outputArtifacts)
+    {
+        var artifacts = new List<string> { ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroFinal) };
+        if (outputArtifacts.ShouldWriteDiagnostics)
+        {
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroReview));
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroGenerationDiagnostics));
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.VisualPromptDiagnostics));
+        }
+        if (outputArtifacts.ShouldWriteComparison)
+        {
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroPromptComparison));
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroMigrationReport));
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroV3Prompt));
+            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroV4Prompt));
+        }
+        return artifacts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string ResolveHeroArtifactPath(string heroRoot, OutputArtifactName artifactName)
+    {
+        var outputRoot = Directory.GetParent(Path.GetFullPath(heroRoot))?.FullName ?? heroRoot;
+        return OutputArtifactRegistry.ResolveExistingPath(outputRoot, artifactName);
     }
 
     private static void ValidateHeroVisualStyle(string compositionModelPath, string blueprintPath, string layoutValidationPath, bool enableStrictHeroOverlayValidation)
@@ -14071,12 +14097,18 @@ public sealed partial class ProductionPipelineExecutionService(
         CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero-landscape.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-square.png"), Path.Combine(outputRoot, "hero", "hero-square.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-portrait.png"), Path.Combine(outputRoot, "hero", "hero-portrait.png"), copied);
-        CopyFile(Path.Combine(eventRoot, "hero-assets", "hero-review.json"), Path.Combine(outputRoot, "hero", "hero-review.json"), copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroReview, copied);
         CopyFile(Path.Combine(eventRoot, "hero", "hero-final.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero-landscape.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero", "hero-square.png"), Path.Combine(outputRoot, "hero", "hero-square.png"), copied);
         CopyFile(Path.Combine(eventRoot, "hero", "hero-portrait.png"), Path.Combine(outputRoot, "hero", "hero-portrait.png"), copied);
-        CopyFile(Path.Combine(eventRoot, "hero", "hero-review.json"), Path.Combine(outputRoot, "hero", "hero-review.json"), copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroReview, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroGenerationDiagnostics, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.VisualPromptDiagnostics, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroPromptComparison, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroMigrationReport, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroV3Prompt, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroV4Prompt, copied);
         CopyFile(Path.Combine(outputRoot, "hero", "hero-landscape.png"), Path.Combine(outputRoot, "hero", "hero-final.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-landscape.png"), Path.Combine(outputRoot, "thumbnails", "landscape.png"), copied);
         CopyFile(Path.Combine(eventRoot, "thumbnail-assets", "thumbnail-square.png"), Path.Combine(outputRoot, "thumbnails", "square.png"), copied);
@@ -14105,6 +14137,23 @@ public sealed partial class ProductionPipelineExecutionService(
             Directory.CreateDirectory(root);
             var scenes = Directory.EnumerateFiles(root, "scene-*.png").OrderBy(x => x).Select((path, index) => new { sceneNumber = index + 1, path }).ToArray();
             await File.WriteAllTextAsync(Path.Combine(root, "scenes.json"), JsonSerializer.Serialize(new { profile, scenes }, JsonOptions), cancellationToken);
+        }
+    }
+
+
+    private static void CopyHeroArtifact(string eventRoot, string outputRoot, OutputArtifactName artifactName, List<string> copied)
+    {
+        var target = OutputArtifactRegistry.GetPath(outputRoot, artifactName);
+        var heroRelativePath = OutputArtifactRegistry.GetRelativePath(artifactName)[("hero" + Path.DirectorySeparatorChar).Length..];
+        var legacyHeroRelativePath = OutputArtifactRegistry.GetLegacyRelativePath(artifactName)[("hero" + Path.DirectorySeparatorChar).Length..];
+        foreach (var source in new[]
+        {
+            Path.Combine(eventRoot, "hero-assets", heroRelativePath),
+            Path.Combine(eventRoot, "hero-assets", legacyHeroRelativePath),
+            OutputArtifactRegistry.ResolveExistingPath(eventRoot, artifactName)
+        })
+        {
+            CopyFile(source, target, copied);
         }
     }
 
@@ -14200,7 +14249,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record SceneImageValidationPath(IReadOnlyList<string> CheckedPaths, string SelectedPath);
 
-    private static bool HeroContractExists(string outputRoot) => File.Exists(Path.Combine(outputRoot, "hero", "hero-final.png")) && File.Exists(Path.Combine(outputRoot, "hero", "hero-review.json"));
+    private static bool HeroContractExists(string outputRoot) => File.Exists(OutputArtifactRegistry.ResolveExistingPath(outputRoot, OutputArtifactName.HeroFinal)) && File.Exists(OutputArtifactRegistry.ResolveExistingPath(outputRoot, OutputArtifactName.HeroReview));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
 
     private sealed record Phase8SceneVariantManifestItem(
