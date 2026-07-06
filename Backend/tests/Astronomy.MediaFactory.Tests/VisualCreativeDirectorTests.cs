@@ -13,10 +13,20 @@ public sealed class VisualCreativeDirectorTests
     [Fact]
     public async Task PlanetPairing_creates_jupiter_venus_style_cdl()
     {
-        var result = await Create(Request("planet-pairing", primary: ["Jupiter", "Venus"]));
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
         AssertDirectiveContains(result.Cdl!, "heroSubject", "Jupiter");
-        AssertDirectiveContains(result.Cdl!, "heroSubject", "Venus");
+        Assert.Contains("Venus", result.CreativeDirectionContract!.VisualIntent.SecondarySubjects);
         AssertDirectiveContains(result.Cdl!, "astronomicalRendering", "perfectly circular");
+    }
+
+    [Fact]
+    public async Task PlanetPairing_rendering_rules_include_primary_and_secondary_subjects()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        var subjects = result.CreativeDirectionContract!.PlanetRenderingRules.Subjects.Select(s => s.BodyName).ToArray();
+        Assert.Contains("Jupiter", subjects);
+        Assert.Contains("Venus", subjects);
     }
 
     [Fact]
@@ -93,7 +103,7 @@ public sealed class VisualCreativeDirectorTests
             FeatureFlags = new VisualIntelligenceFlagSnapshot { UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true }
         });
 
-    private static VisualIntelligenceOrchestrationRequest Request(string eventType, ContractEventFamily family = ContractEventFamily.PlanetConjunction, string eventName = "", List<string>? primary = null) => new()
+    private static VisualIntelligenceOrchestrationRequest Request(string eventType, ContractEventFamily family = ContractEventFamily.PlanetConjunction, string eventName = "", List<string>? primary = null, List<string>? supporting = null) => new()
     {
         CorrelationId = "director-test",
         EventFamily = family,
@@ -103,7 +113,8 @@ public sealed class VisualCreativeDirectorTests
         Platform = Platform.YouTubeThumbnail,
         AspectRatio = AspectRatio.Landscape16x9,
         RequestedAssetType = "thumbnail",
-        PrimaryObjects = primary ?? []
+        PrimaryObjects = primary ?? [],
+        SupportingObjects = supporting ?? []
     };
 
     private static void AssertDirectiveContains(CDL cdl, string name, string expected) =>

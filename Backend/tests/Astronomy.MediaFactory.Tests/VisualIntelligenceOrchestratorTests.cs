@@ -231,6 +231,19 @@ public sealed class VisualIntelligenceOrchestratorTests
     }
 
     [Fact]
+    public async Task Summary_uses_resolved_event_family_after_visual_director_resolution()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true });
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { EventFamily = ContractEventFamily.Unknown, EventType = "PlanetPairing", PrimaryObjects = ["Jupiter"], SupportingObjects = ["Venus"] });
+
+        var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
+        Assert.Equal(ContractEventFamily.PlanetConjunction, result.Context.EventFamily);
+        Assert.Equal("planetConjunction", summary.RootElement.GetProperty("eventFamily").GetString());
+    }
+
+    [Fact]
     public async Task Summary_contains_generated_artifacts_timestamps_and_duration()
     {
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
