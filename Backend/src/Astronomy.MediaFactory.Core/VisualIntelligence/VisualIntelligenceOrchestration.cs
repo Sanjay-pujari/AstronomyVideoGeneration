@@ -671,6 +671,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IEditorialReasoningEngine, EditorialReasoningEngine>();
         services.AddScoped<IVisualStoryModel, VisualStoryModel>();
         services.AddScoped<IStoryCompositionEngine, StoryCompositionEngine>();
+        services.AddScoped<IProductEditorialStrategyEngine, ProductEditorialStrategyEngine>();
         services.AddScoped<IEditorialCompositionDirector, EditorialCompositionDirector>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
