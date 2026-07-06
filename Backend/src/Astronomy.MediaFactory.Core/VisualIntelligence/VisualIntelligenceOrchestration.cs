@@ -597,15 +597,20 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     private async Task TryWriteRunHeroIntelligenceContractAsync(VisualIntelligenceOrchestrationResult result, JsonSerializerOptions json, CancellationToken cancellationToken)
     {
         if (result.Context.Platform != Platform.Hero || string.IsNullOrWhiteSpace(result.Context.RunOutputFolder) || result.HeroIntelligenceContract is null) return;
+        logger.LogInformation("HeroIntelligenceContract generation started");
+        if (result.HeroIntelligenceContract.FallbackApplied)
+            logger.LogInformation("HeroIntelligenceContract fallback used");
         try
         {
             var folder = Path.Combine(result.Context.RunOutputFolder, "hero", "diagnostics");
             Directory.CreateDirectory(folder);
             await WriteJsonAsync(folder, "HeroIntelligenceContract.json", result.HeroIntelligenceContract, json, cancellationToken).ConfigureAwait(false);
+            logger.LogInformation("HeroIntelligenceContract generated");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             result.Diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "hero_intelligence_contract.write_failed", Message = "Hero Intelligence Contract diagnostic writing failed; pipeline execution continues.", Source = nameof(VisualIntelligenceOrchestrator), Metadata = new Dictionary<string, object?> { ["exceptionType"] = ex.GetType().Name } });
+            logger.LogWarning(ex, "HeroIntelligenceContract write failed");
         }
     }
 
