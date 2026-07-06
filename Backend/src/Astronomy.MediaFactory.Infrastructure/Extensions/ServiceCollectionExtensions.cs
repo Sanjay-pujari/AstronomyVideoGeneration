@@ -32,6 +32,8 @@ public static class ServiceCollectionExtensions
     {
         services.AddOptions<VisualIntelligenceOptions>()
             .Bind(configuration.GetSection(VisualIntelligenceOptions.SectionName));
+        services.AddOptions<OutputArtifactsOptions>()
+            .Bind(configuration.GetSection(OutputArtifactsOptions.SectionName));
         services.AddVisualIntelligenceOrchestration();
 
         services.AddOptions<ProductionPipelineOptions>()

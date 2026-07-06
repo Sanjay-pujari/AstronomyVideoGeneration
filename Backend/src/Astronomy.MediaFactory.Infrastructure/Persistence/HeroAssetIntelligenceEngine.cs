@@ -41,7 +41,8 @@ public sealed class HeroAssetStoryGenerator(
     IHeroCompositionEngine compositionEngine,
     IOptions<ThumbnailFontOptions> fontOptions,
     IRuntimeAssetPathResolver assetPathResolver,
-    IHeroPromptMigrationService? heroPromptMigrationService = null) : IHeroAssetStoryGenerator
+    IHeroPromptMigrationService? heroPromptMigrationService = null,
+    IOptions<OutputArtifactsOptions>? outputArtifactsOptions = null) : IHeroAssetStoryGenerator
 {
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
@@ -400,8 +401,8 @@ public sealed class HeroAssetStoryGenerator(
             {
                 DeleteExistingHeroImageOutputs(heroAssetsRoot);
                 Directory.CreateDirectory(heroAssetsRoot);
-                await File.WriteAllTextAsync(layoutValidationPath, JsonSerializer.Serialize(layoutValidation, JsonOptions), cancellationToken);
-                if (!File.Exists(layoutValidationPath))
+                await WriteHeroDiagnosticFileAsync(layoutValidationPath, JsonSerializer.Serialize(layoutValidation, JsonOptions), warnings, generatedFiles, cancellationToken);
+                if (OutputArtifacts.ShouldWriteDiagnostics && !File.Exists(layoutValidationPath))
                     throw new InvalidOperationException($"Hero layout validation was not generated at '{NormalizePath(layoutValidationPath)}'; aborting image generation.");
                 generatedFiles.Add(NormalizePath(layoutValidationPath));
             }
@@ -413,7 +414,7 @@ public sealed class HeroAssetStoryGenerator(
                 HeroSceneManifestGenerated = false,
                 HeroSceneManifestPath = null,
                 HeroCompositionModelGenerated = false,
-                LayoutValidationGenerated = request.DryRun || File.Exists(layoutValidationPath),
+                LayoutValidationGenerated = request.DryRun || !OutputArtifacts.ShouldWriteDiagnostics || File.Exists(layoutValidationPath),
                 DuplicateBlocksDetected = layoutValidation.DuplicateBlocksDetected,
                 TextOverlapDetected = layoutValidation.TextOverlapDetected,
                 ObjectsVisible = layoutValidation.ObjectsVisible
@@ -423,8 +424,8 @@ public sealed class HeroAssetStoryGenerator(
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
-            await File.WriteAllTextAsync(sceneManifestPath, JsonSerializer.Serialize(selectedSceneManifest, JsonOptions), cancellationToken);
-            if (!File.Exists(sceneManifestPath))
+            await WriteHeroDiagnosticFileAsync(sceneManifestPath, JsonSerializer.Serialize(selectedSceneManifest, JsonOptions), warnings, generatedFiles, cancellationToken);
+            if (OutputArtifacts.ShouldWriteDiagnostics && !File.Exists(sceneManifestPath))
                 throw new InvalidOperationException($"Hero scene manifest was not generated at '{NormalizePath(sceneManifestPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(sceneManifestPath));
 
@@ -433,13 +434,13 @@ public sealed class HeroAssetStoryGenerator(
                 throw new InvalidOperationException($"Hero composition model was not generated at '{NormalizePath(compositionModelPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(compositionModelPath));
 
-            await File.WriteAllTextAsync(layoutValidationPath, JsonSerializer.Serialize(layoutValidation, JsonOptions), cancellationToken);
-            if (!File.Exists(layoutValidationPath))
+            await WriteHeroDiagnosticFileAsync(layoutValidationPath, JsonSerializer.Serialize(layoutValidation, JsonOptions), warnings, generatedFiles, cancellationToken);
+            if (OutputArtifacts.ShouldWriteDiagnostics && !File.Exists(layoutValidationPath))
                 throw new InvalidOperationException($"Hero layout validation was not generated at '{NormalizePath(layoutValidationPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(layoutValidationPath));
 
             var heroPath = Path.Combine(heroAssetsRoot, HeroFileName);
-            var diagnosticsPath = Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
+            var diagnosticsPath = BuildDiagnosticOutputPath(heroAssetsRoot, HeroGenerationDiagnosticsFileName);
             var azureOptions = imageOptions.Value;
             HeroPhysicalWriteResult? physicalWriteResult = null;
             if (IsAzureImage2Configured(azureOptions))
@@ -465,7 +466,7 @@ public sealed class HeroAssetStoryGenerator(
                     var canonicalCopyApplied = EnsureCanonicalHeroFinalFile(heroAssetsRoot);
                     generatedFiles.Add(NormalizePath(heroPath));
                     var generatedVariantsForFallback = HeroImageSpecs.Where(spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName))).Select(spec => spec.Variant).ToArray();
-                    await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariantsForFallback, canonicalCopyApplied, physicalWriteResult, cancellationToken, ex.Message);
+                    if (OutputArtifacts.ShouldWriteDiagnostics) await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariantsForFallback, canonicalCopyApplied, physicalWriteResult, cancellationToken, ex.Message);
                 }
             }
             else
@@ -475,7 +476,7 @@ public sealed class HeroAssetStoryGenerator(
                 var canonicalCopyApplied = EnsureCanonicalHeroFinalFile(heroAssetsRoot);
                 generatedFiles.Add(NormalizePath(heroPath));
                 var generatedVariantsForGeneric = HeroImageSpecs.Where(spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName))).Select(spec => spec.Variant).ToArray();
-                await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariantsForGeneric, canonicalCopyApplied, physicalWriteResult, cancellationToken, "Azure image generation is not configured or enabled.");
+                if (OutputArtifacts.ShouldWriteDiagnostics) await WriteGenericHeroGenerationDiagnosticsAsync(diagnosticsPath, heroAssetsRoot, eventFamily, planetGroupingRendererApplied, compositionModel, generatedVariantsForGeneric, canonicalCopyApplied, physicalWriteResult, cancellationToken, "Azure image generation is not configured or enabled.");
             }
 
             var expectedVariants = HeroImageSpecs.Select(spec => spec.Variant).ToArray();
@@ -495,14 +496,14 @@ public sealed class HeroAssetStoryGenerator(
                 .Select(NormalizePath)
                 .ToArray();
             var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, request.ProductionContext?.ProductionEventIntelligence);
-            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), cancellationToken);
+            await WriteHeroDiagnosticFileAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), warnings, generatedFiles, cancellationToken);
         }
 
-        var heroSceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
+        var heroSceneManifestGenerated = request.DryRun || !OutputArtifacts.ShouldWriteDiagnostics || File.Exists(sceneManifestPath);
         var heroCompositionModelGenerated = request.DryRun || File.Exists(compositionModelPath);
-        var layoutValidationGenerated = request.DryRun || File.Exists(layoutValidationPath);
+        var layoutValidationGenerated = request.DryRun || !OutputArtifacts.ShouldWriteDiagnostics || File.Exists(layoutValidationPath);
         var heroImageGenerated = request.DryRun || File.Exists(Path.Combine(heroAssetsRoot, HeroFileName));
-        var reviewGenerated = request.DryRun || File.Exists(reviewPath);
+        var reviewGenerated = request.DryRun || !OutputArtifacts.ShouldWriteDiagnostics || File.Exists(reviewPath);
         var imageGenerationExecuted = !request.DryRun && heroImageGenerated && reviewGenerated && generatedFiles.Any(file => Path.GetFileName(file).Equals(HeroFileName, StringComparison.OrdinalIgnoreCase));
         if (!request.DryRun && !imageGenerationExecuted)
         {
@@ -1440,8 +1441,8 @@ public sealed class HeroAssetStoryGenerator(
             compositionModelUsed = HeroCompositionModelIsUsable(compositionModel),
             variants = prompts.Select(p => new { p.Variant, p.FileName, p.Width, p.Height, p.Prompt })
         }, JsonOptions), cancellationToken);
-        await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, prompts, intelligence, context, cancellationToken);
-        await GenerateHeroPromptMigrationDiagnosticsAsync(heroAssetsRoot, prompts.FirstOrDefault().Prompt ?? string.Empty, intelligence, heroStory.Language, cancellationToken);
+        if (OutputArtifacts.ShouldWriteDiagnostics) try { await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, prompts, intelligence, context, cancellationToken); } catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning(ex, "Hero visual prompt diagnostics write failed; continuing pipeline."); }
+        if (OutputArtifacts.ShouldWriteComparison) await GenerateHeroPromptMigrationDiagnosticsAsync(heroAssetsRoot, prompts.FirstOrDefault().Prompt ?? string.Empty, intelligence, heroStory.Language, cancellationToken);
 
         var generatedFiles = new List<string> { NormalizePath(promptPath) };
         var variants = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
@@ -1486,7 +1487,7 @@ public sealed class HeroAssetStoryGenerator(
         File.Copy(Path.Combine(heroAssetsRoot, HeroLandscapeFileName), heroPath, overwrite: true);
         generatedFiles.Add(NormalizePath(heroPath));
         var fontDiagnostics = BuildHeroFontDiagnostics(heroStory);
-        await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, Path.Combine(heroAssetsRoot, HeroGenerationDiagnosticsFileName), variants, heroStory, selectedHook, compositionModel, intelligence, fontDiagnostics, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
+        if (OutputArtifacts.ShouldWriteDiagnostics) await WriteHeroV6GenerationSummaryDiagnosticsAsync(options, heroPath, promptPath, BuildDiagnosticOutputPath(heroAssetsRoot, HeroGenerationDiagnosticsFileName), variants, heroStory, selectedHook, compositionModel, intelligence, fontDiagnostics, variants.Sum(v => v.Result.AzureRequestMs + v.Result.ImageDownloadMs), cancellationToken);
         return new HeroPhysicalWriteResult(generatedFiles, variants.Select(v => NormalizePath(v.ImagePath)).ToArray(), variants.Sum(v => GetHeroFileSize(v.ImagePath)), true, true, null, variants.ToDictionary(v => NormalizeHeroVariantName(v.Variant), v => GetHeroFileSize(v.ImagePath), StringComparer.OrdinalIgnoreCase));
     }
 
@@ -1531,7 +1532,7 @@ public sealed class HeroAssetStoryGenerator(
         {
             CreativeDirectionContract = contract,
             LegacyPrompt = legacyPrompt,
-            HeroDirectory = heroAssetsRoot,
+            HeroDirectory = BuildComparisonRoot(heroAssetsRoot),
             RequestedProvider = ImageProviderType.AzureImage
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -1728,7 +1729,8 @@ public sealed class HeroAssetStoryGenerator(
         var mainText = FirstNonEmpty(eventObjectContext.ObjectHeadlineText, intelligence?.Title, intelligence?.ShortTitle, "Sky event");
         var direction = FirstNonEmpty(intelligence?.SkyDirectionHint, intelligence?.PreferredViewingWindow, "approved viewing direction");
         var dateTime = FirstNonEmpty(intelligence?.EventDate?.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), intelligence?.LocalPeakTime, intelligence?.BestViewingWindowLocal, "peak window");
-        var visualPromptDiagnosticsPath = Path.Combine(heroAssetsRoot, "visual-prompt-diagnostics.json");
+        var visualPromptDiagnosticsPath = BuildDiagnosticOutputPath(heroAssetsRoot, "visual-prompt-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(visualPromptDiagnosticsPath)!);
         TracePhase11HeroRenderer($"HeroCinematicValidator/Renderer OUTPUT visualPromptDiagnosticsPath={visualPromptDiagnosticsPath}; heroDiagnostics object will report heroTitleClipped=false; heroSubtitleClipped=false; heroTitleMetadataOverlap=false; heroTextSafeAreaPassed=true");
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -2318,6 +2320,7 @@ public sealed class HeroAssetStoryGenerator(
         var renderedCtaText = rendered.RenderedCtaText;
         var titleFitPassed = !string.IsNullOrWhiteSpace(heroTitle) && !heroTitle.EndsWith(",", StringComparison.Ordinal) && heroTitle.Length <= 40 && !string.IsNullOrWhiteSpace(heroSubtitle);
         var planetGroupingApplied = IsPlanetGroupingHeroFamily(eventFamily);
+        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath) ?? ResolveWorkingDirectoryRoot());
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
@@ -3453,16 +3456,41 @@ public sealed class HeroAssetStoryGenerator(
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetBlueprintFileName);
 
     private string BuildReviewOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetReviewFileName);
+        => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroAssetReviewFileName);
 
     private string BuildSceneManifestOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroSceneManifestFileName);
+        => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroSceneManifestFileName);
 
     private string BuildCompositionModelOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroCompositionModelFileName);
 
     private string BuildLayoutValidationOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroLayoutValidationFileName);
+        => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroLayoutValidationFileName);
+
+    private static string BuildDiagnosticOutputPath(string heroAssetsRoot, string fileName)
+        => Path.Combine(heroAssetsRoot, "diagnostics", fileName);
+
+    private static string BuildComparisonRoot(string heroAssetsRoot)
+        => Path.Combine(heroAssetsRoot, "comparison");
+
+    private OutputArtifactsOptions OutputArtifacts => outputArtifactsOptions?.Value ?? new OutputArtifactsOptions();
+
+    private async Task WriteHeroDiagnosticFileAsync(string path, string content, List<string> warnings, List<string> generatedFiles, CancellationToken cancellationToken)
+    {
+        if (!OutputArtifacts.ShouldWriteDiagnostics)
+            return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, content, cancellationToken).ConfigureAwait(false);
+            generatedFiles.Add(NormalizePath(path));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            warnings.Add($"Hero diagnostic artifact write failed for '{Path.GetFileName(path)}': {ex.Message}");
+            logger.LogWarning(ex, "Hero diagnostic artifact write failed for {Path}; continuing pipeline.", NormalizePath(path));
+        }
+    }
 
 
     private sealed record HeroPhysicalWriteResult(

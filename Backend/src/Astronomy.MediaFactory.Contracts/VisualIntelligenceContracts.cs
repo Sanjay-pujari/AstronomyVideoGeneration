@@ -37,6 +37,32 @@ public static class VisualIntelligenceFeatureFlags
     public const string ObservationMode = nameof(ObservationMode);
 }
 
+public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }
+
+public sealed class OutputArtifactsOptions
+{
+    public const string SectionName = "OutputArtifacts";
+    public OutputArtifactMode Mode { get; init; } = OutputArtifactMode.Development;
+    public bool WriteDiagnostics { get; init; } = true;
+    public bool WriteComparison { get; init; } = true;
+    public bool WriteIntermediateFiles { get; init; }
+    public bool CleanupTemporaryFiles { get; init; } = true;
+
+    public bool ShouldWriteDiagnostics => Mode switch
+    {
+        OutputArtifactMode.Production => WriteDiagnostics,
+        OutputArtifactMode.CI => WriteDiagnostics,
+        _ => true
+    };
+
+    public bool ShouldWriteComparison => Mode switch
+    {
+        OutputArtifactMode.Production => WriteComparison,
+        OutputArtifactMode.CI => false,
+        _ => true
+    };
+}
+
 public sealed class VisualIntelligenceOptions
 {
     public const string SectionName = VisualIntelligenceFeatureFlags.SectionName;

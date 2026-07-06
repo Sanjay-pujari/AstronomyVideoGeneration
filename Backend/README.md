@@ -9,6 +9,7 @@ Astronomy Media Factory is the backend for an AI-assisted astronomy video genera
 - `docs/configuration-guide.md`: configuration sections, required fields, optional fields, and safe defaults.
 - `docs/api-overview.md`: health, pipeline, jobs, analytics, ops, and platform publication endpoints.
 - `docs/operations-runbook.md`: operator recovery procedures and incident handling.
+- `docs/output-artifacts.md`: Hero production, diagnostics, and comparison artifact layout and `OutputArtifacts` configuration modes.
 - `docs/production-checklist.md`: pre-go-live and verification checklist.
 - `docs/developer-onboarding.md`: project structure, local run steps, tests, debugging, and future-safe extension guidance.
 - `docs/project-structure.md`: repository layout and extension points.
