@@ -49,6 +49,7 @@ public enum OutputArtifactName
     HeroMigrationReport,
     HeroV3Prompt,
     HeroV4Prompt,
+    HeroIntelligenceContract,
     HeroFinal,
     HeroArtifactManifest
 }
@@ -66,6 +67,7 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.HeroMigrationReport] = Path.Combine("hero", "comparison", "hero-migration-report.json"),
         [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "comparison", "hero-v3-prompt.txt"),
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "comparison", "hero-v4-prompt.txt"),
+        [OutputArtifactName.HeroIntelligenceContract] = Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"),
         [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
         [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json")
     };
@@ -81,6 +83,7 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.HeroMigrationReport] = Path.Combine("hero", "hero-migration-report.json"),
         [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "hero-v3-prompt.txt"),
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "hero-v4-prompt.txt"),
+        [OutputArtifactName.HeroIntelligenceContract] = Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"),
         [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
         [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json")
     };
@@ -107,7 +110,7 @@ public static class OutputArtifactRegistry
     {
         var artifacts = new List<OutputArtifactName> { OutputArtifactName.HeroFinal };
         if (options.ShouldWriteDiagnostics)
-            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics]);
+            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics, OutputArtifactName.HeroIntelligenceContract]);
         if (options.ShouldWriteComparison)
             artifacts.AddRange([OutputArtifactName.HeroPromptComparison, OutputArtifactName.HeroMigrationReport, OutputArtifactName.HeroV3Prompt, OutputArtifactName.HeroV4Prompt]);
         return artifacts;

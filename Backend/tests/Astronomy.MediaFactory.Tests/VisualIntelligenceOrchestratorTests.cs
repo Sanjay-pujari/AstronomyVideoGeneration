@@ -183,6 +183,41 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.Equal("4.1A", review.RootElement.GetProperty("creativeKnowledgeSource").GetString());
     }
 
+
+    [Fact]
+    public async Task Hero_platform_writes_hero_intelligence_contract_to_run_diagnostics()
+    {
+        var runOutputFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, UsePromptComposerV2 = true });
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { Platform = Platform.Hero, RequestedAssetType = "hero", RunOutputFolder = runOutputFolder, EventType = "PlanetPairing", PrimaryObjects = ["Jupiter"], SupportingObjects = ["Venus"] });
+
+        Assert.NotNull(result.HeroIntelligenceContract);
+        var path = Path.Combine(runOutputFolder, "hero", "diagnostics", "HeroIntelligenceContract.json");
+        Assert.True(File.Exists(path));
+        using var contract = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+        Assert.Equal("test-correlation", contract.RootElement.GetProperty("planId").GetString());
+        Assert.Equal("PlanetPairing", contract.RootElement.GetProperty("eventType").GetString());
+        Assert.Contains("Why", contract.RootElement.GetProperty("viewerQuestion").GetString());
+        Assert.Contains("relationship", contract.RootElement.GetProperty("visualRelationship").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(contract.RootElement.TryGetProperty("platformVariantRecommendations", out _));
+        Assert.True(contract.RootElement.TryGetProperty("confidenceSummary", out _));
+    }
+
+    [Fact]
+    public async Task Non_hero_platform_does_not_change_thumbnail_gallery_or_scene_diagnostics()
+    {
+        var runOutputFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, UsePromptComposerV2 = true });
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { Platform = Platform.YouTubeThumbnail, RunOutputFolder = runOutputFolder });
+
+        Assert.Null(result.HeroIntelligenceContract);
+        Assert.False(File.Exists(Path.Combine(runOutputFolder, "hero", "diagnostics", "HeroIntelligenceContract.json")));
+        Assert.False(Directory.Exists(Path.Combine(runOutputFolder, "gallery")));
+        Assert.False(Directory.Exists(Path.Combine(runOutputFolder, "scene-frames")));
+    }
+
     [Fact]
     public async Task Empty_diagnostics_path_resolves_to_run_output_folder()
     {

@@ -76,6 +76,31 @@ public sealed class HeroPromptMigrationServiceTests
         Assert.DoesNotContain("providerHints", result.V4Prompt);
     }
 
+
+    [Fact]
+    public async Task V4_prompt_uses_hero_intelligence_contract_fields()
+    {
+        var legacy = "legacy production hero prompt";
+        var contract = IntelligenceContract();
+
+        var result = await CreateService(useHeroPromptV4: false).GenerateAsync(new HeroPromptMigrationRequest
+        {
+            CreativeDirectionContract = Contract(),
+            HeroIntelligenceContract = contract,
+            LegacyPrompt = legacy
+        });
+
+        Assert.Equal(legacy, result.LegacyPrompt);
+        Assert.Contains(contract.ViewerQuestion, result.V4Prompt);
+        Assert.Contains(contract.PrimaryStory, result.V4Prompt);
+        Assert.Contains(contract.CompositionGoal, result.V4Prompt);
+        Assert.Contains(contract.EditorialGoal, result.V4Prompt);
+        Assert.Contains(contract.VisualRelationship, result.V4Prompt);
+        Assert.Contains("relationship between objects", result.V4Prompt);
+        Assert.DoesNotContain("HeroIntelligenceContract", result.V4Prompt);
+        Assert.DoesNotContain(";;", result.V4Prompt);
+    }
+
     [Fact]
     public async Task Comparison_json_contains_quality_cleanup_metrics()
     {
@@ -102,6 +127,27 @@ public sealed class HeroPromptMigrationServiceTests
             new PromptComposerV2(Options.Create(options), new PromptSectionBuilder(), new PromptOptimizer(), new AzurePromptProviderAdapter(), new PromptPackageBuilder(), registry),
             NullLogger<HeroPromptMigrationService>.Instance);
     }
+
+    private static HeroIntelligenceContract IntelligenceContract() => new()
+    {
+        PlanId = "plan-1",
+        EventType = "planet-conjunction",
+        EventFamily = "PlanetConjunction",
+        EditorialDecisionId = "story-1",
+        VisualStoryId = "story-1",
+        HeroCompositionId = "composition-hero",
+        HeroEditorialStrategyId = "editorial-hero",
+        ViewerQuestion = "Why do Jupiter and Venus look so close tonight?",
+        PrimaryStory = "Jupiter and Venus form an apparent close pairing in the evening sky.",
+        ViewerTakeaway = "The planets look close from Earth but are not physically close.",
+        EmotionalHook = "Wonder.",
+        CompositionGoal = "Balanced planets communicating their relationship.",
+        EditorialGoal = "Stop scrolling.",
+        ViewerEmotion = "Wonder.",
+        VisualRelationship = "The apparent closeness is the subject; neither planet dominates.",
+        PlatformVariantRecommendations = new Dictionary<string, string> { ["landscape"] = "Use shared negative space around both planets." },
+        ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0.9, 0.9, 0.9, 0.9, null)
+    };
 
     private static CreativeDirectionContract Contract() => new()
     {
