@@ -246,6 +246,8 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IFamilyCreativeProfile, SolarEclipseCreativeProfile>();
         services.AddScoped<IFamilyCreativeProfile, LunarEclipseCreativeProfile>();
         services.AddScoped<IFamilyCreativeProfile, GenericAstronomyCreativeProfile>();
+        services.AddSingleton<IImageProviderProfile, GenericImageProviderProfile>();
+        services.AddSingleton<IImageProviderProfileRegistry, ImageProviderProfileRegistry>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();
         services.AddScoped<IVisualIntelligenceOrchestrator, VisualIntelligenceOrchestrator>();
