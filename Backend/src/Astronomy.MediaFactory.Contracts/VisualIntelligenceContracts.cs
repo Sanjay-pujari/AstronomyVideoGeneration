@@ -196,6 +196,10 @@ public sealed record PromptPackage
     public string ContractId { get; init; } = string.Empty;
     public ImageProviderType ProviderName { get; init; } = ImageProviderType.Unknown;
     public string ProviderProfileVersion { get; init; } = VisualIntelligenceContractVersions.ProviderProfileVersion;
+    public string CdlVersion { get; init; } = VisualIntelligenceContractVersions.CdlVersion;
+    public string BrandVersion { get; init; } = VisualIntelligenceContractVersions.BrandVersion;
+    public string RenderingVersion { get; init; } = VisualIntelligenceContractVersions.RenderingRulesVersion;
+    public string QualityTargetVersion { get; init; } = VisualIntelligenceContractVersions.QualityReportVersion;
     public string PositivePrompt { get; init; } = string.Empty;
     public string NegativePrompt { get; init; } = string.Empty;
     public Dictionary<string, string> PromptSections { get; init; } = [];

@@ -93,6 +93,7 @@ public sealed record VisualCreativeDirectorResult
 {
     public CDL? Cdl { get; init; }
     public CreativeDirectionContract? CreativeDirectionContract { get; init; }
+    public PromptPackage? PromptPackage { get; init; }
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
 }
 
@@ -102,6 +103,7 @@ public sealed record VisualIntelligenceOrchestrationResult
     public VisualIntelligenceOrchestrationContext Context { get; init; } = new();
     public CDL? Cdl { get; init; }
     public CreativeDirectionContract? CreativeDirectionContract { get; init; }
+    public PromptPackage? PromptPackage { get; init; }
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
     public bool FallbackApplied { get; init; }
     public string? FallbackReason { get; init; }
@@ -152,12 +154,14 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
 {
     private readonly IOptions<VisualIntelligenceOptions> options;
     private readonly IVisualCreativeDirector director;
+    private readonly IPromptComposerV2 promptComposer;
     private readonly ILogger<VisualIntelligenceOrchestrator> logger;
 
-    public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, ILogger<VisualIntelligenceOrchestrator> logger)
+    public VisualIntelligenceOrchestrator(IOptions<VisualIntelligenceOptions> options, IVisualCreativeDirector director, IPromptComposerV2 promptComposer, ILogger<VisualIntelligenceOrchestrator> logger)
     {
         this.options = options;
         this.director = director;
+        this.promptComposer = promptComposer;
         this.logger = logger;
     }
 
@@ -186,8 +190,19 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             logger.LogInformation("VisualCreativeDirector started. CorrelationId={CorrelationId}", context.CorrelationId);
             var direction = await director.CreateDirectionAsync(context with { Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
             diagnostics.AddRange(direction.Diagnostics);
+            PromptPackage? promptPackage = null;
+            if (context.FeatureFlags.UsePromptComposerV2)
+            {
+                var promptResult = await promptComposer.ComposeAsync(direction.Cdl, direction.CreativeDirectionContract, direction.CreativeDirectionContract?.ProviderHints.PreferredProvider ?? ImageProviderType.Unknown, cancellationToken).ConfigureAwait(false);
+                diagnostics.AddRange(promptResult.Diagnostics);
+                promptPackage = promptResult.PromptPackage;
+            }
+            else
+            {
+                diagnostics.Add(Info("prompt_composer_v2.skipped", "PromptComposerV2 feature flag is disabled; prompt package composition skipped."));
+            }
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
-            return Complete(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, Diagnostics = diagnostics });
+            return Complete(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, Diagnostics = diagnostics });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -248,6 +263,11 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IFamilyCreativeProfile, GenericAstronomyCreativeProfile>();
         services.AddSingleton<IImageProviderProfile, GenericImageProviderProfile>();
         services.AddSingleton<IImageProviderProfileRegistry, ImageProviderProfileRegistry>();
+        services.AddScoped<IPromptSectionBuilder, PromptSectionBuilder>();
+        services.AddScoped<IPromptOptimizer, PromptOptimizer>();
+        services.AddScoped<IProviderAdapter, GenericProviderAdapter>();
+        services.AddScoped<IPromptPackageBuilder, PromptPackageBuilder>();
+        services.AddScoped<IPromptComposerV2, PromptComposerV2>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();
         services.AddScoped<IVisualIntelligenceOrchestrator, VisualIntelligenceOrchestrator>();
