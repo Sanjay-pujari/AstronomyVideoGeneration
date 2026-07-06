@@ -18,6 +18,16 @@ public sealed class HeroImageV4ComparisonTests
         await RunAsync(temp.Root, useComparison: false, generator: new FakeGenerator(configured: true));
 
         Assert.False(Directory.Exists(Path.Combine(temp.Root, "hero", "comparison")));
+        var reviewPath = Path.Combine(temp.Root, "hero", "diagnostics", "HeroCreativeReview.json");
+        Assert.True(File.Exists(reviewPath));
+        var review = await File.ReadAllTextAsync(reviewPath);
+        Assert.Contains("compositionTemplateUsed", review);
+        Assert.Contains("relationshipScore", review);
+        Assert.Contains("documentaryScore", review);
+        Assert.Contains("astronomyScore", review);
+        Assert.Contains("visualHierarchyScore", review);
+        Assert.Contains("storytellingNotes", review);
+        Assert.Contains("recommendations", review);
     }
 
     [Fact]
@@ -41,6 +51,12 @@ public sealed class HeroImageV4ComparisonTests
         Assert.NotEqual(Path.GetFullPath(productionHeroPath), Path.GetFullPath(Path.Combine(comparison, "hero-v4.png")));
         Assert.Contains("ManualReviewRequired", await File.ReadAllTextAsync(Path.Combine(comparison, "hero-comparison.json")));
         Assert.Contains("compositionTemplateUsed", await File.ReadAllTextAsync(Path.Combine(comparison, "HeroCreativeReview.json")));
+        var v4Prompt = await File.ReadAllTextAsync(Path.Combine(comparison, "hero-v4-prompt.txt"));
+        Assert.DoesNotContain("HeroSubject", v4Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Supporting subject: Jupiter Venus", v4Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("; ;", v4Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("preserve circular geometry; ; ; ;", v4Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Jupiter and Venus together as the hero", v4Prompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"v4Generated\": true", await File.ReadAllTextAsync(Path.Combine(comparison, "hero-comparison.json")));
     }
 

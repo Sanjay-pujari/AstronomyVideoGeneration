@@ -346,10 +346,29 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             result.Diagnostics.Add(Info("visual_intelligence.diagnostics_disabled", "Visual Intelligence diagnostic file writing is disabled."));
         }
 
+        await TryWriteHeroCreativeReviewDiagnosticsAsync(result, cancellationToken).ConfigureAwait(false);
         await TryGenerateHeroImageV4ComparisonAsync(result, cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation("Visual Intelligence observation completed. CorrelationId={CorrelationId} Status={Status} FallbackApplied={FallbackApplied}", result.Context.CorrelationId, result.Status, result.FallbackApplied);
         return result;
+    }
+
+
+    private async Task TryWriteHeroCreativeReviewDiagnosticsAsync(VisualIntelligenceOrchestrationResult result, CancellationToken cancellationToken)
+    {
+        if (result.Context.Platform != Platform.Hero || string.IsNullOrWhiteSpace(result.Context.RunOutputFolder)) return;
+        var creativeReview = CreateHeroCreativeReview(result);
+        if (creativeReview is null) return;
+        try
+        {
+            var folder = Path.Combine(result.Context.RunOutputFolder, "hero", "diagnostics");
+            Directory.CreateDirectory(folder);
+            await WriteJsonAsync(folder, "HeroCreativeReview.json", creativeReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            result.Diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "hero_creative_review.write_failed", Message = "Hero creative review diagnostics writing failed; pipeline execution continues.", Source = nameof(VisualIntelligenceOrchestrator), Metadata = new Dictionary<string, object?> { ["exceptionType"] = ex.GetType().Name } });
+        }
     }
 
     private async Task TryGenerateHeroImageV4ComparisonAsync(VisualIntelligenceOrchestrationResult result, CancellationToken cancellationToken)
