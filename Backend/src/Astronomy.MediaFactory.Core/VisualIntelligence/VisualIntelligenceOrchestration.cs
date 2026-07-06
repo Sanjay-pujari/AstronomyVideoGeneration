@@ -28,6 +28,7 @@ public sealed record VisualIntelligenceFlagSnapshot
     public bool UseQualityScoring { get; init; }
     public bool UseQualityScoringBlocking { get; init; }
     public bool UseExperimentalRenderingRules { get; init; }
+    public bool UseHeroPromptV4 { get; init; }
     public bool Enabled { get; init; }
     public bool WriteDiagnostics { get; init; }
     public bool ObservationMode { get; init; } = true;
@@ -43,6 +44,7 @@ public sealed record VisualIntelligenceFlagSnapshot
         UseQualityScoring = options.UseQualityScoring,
         UseQualityScoringBlocking = options.UseQualityScoringBlocking,
         UseExperimentalRenderingRules = options.UseExperimentalRenderingRules,
+        UseHeroPromptV4 = options.UseHeroPromptV4,
         Enabled = options.Enabled,
         WriteDiagnostics = options.WriteDiagnostics,
         ObservationMode = options.ObservationMode,
@@ -415,6 +417,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (!flags.UseQualityScoring) disabled.Add(nameof(flags.UseQualityScoring));
         if (!flags.UseQualityScoringBlocking) disabled.Add(nameof(flags.UseQualityScoringBlocking));
         if (!flags.UseExperimentalRenderingRules) disabled.Add(nameof(flags.UseExperimentalRenderingRules));
+        if (!flags.UseHeroPromptV4) disabled.Add(nameof(flags.UseHeroPromptV4));
         return disabled;
     }
 
@@ -445,6 +448,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IProviderAdapter>(sp => new ProviderAdapterResolver([sp.GetRequiredService<AzurePromptProviderAdapter>(), sp.GetRequiredService<GenericProviderAdapter>()]));
         services.AddScoped<IPromptPackageBuilder, PromptPackageBuilder>();
         services.AddScoped<IPromptComposerV2, PromptComposerV2>();
+        services.AddScoped<IHeroPromptMigrationService, HeroPromptMigrationService>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();
