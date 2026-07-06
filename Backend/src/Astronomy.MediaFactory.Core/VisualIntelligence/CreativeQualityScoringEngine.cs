@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
+using ContractEventFamily = Astronomy.MediaFactory.Contracts.EventFamily;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -92,7 +93,7 @@ public sealed class CreativeQualityScoringEngine(IOptions<VisualIntelligenceOpti
 
         bool cdl = r.Cdl?.Directives.Count > 0 == true;
         bool hero = !string.IsNullOrWhiteSpace(r.CreativeDirectionContract?.VisualIntent.PrimarySubject) || HasDirective(r.Cdl, "heroSubject");
-        bool family = r.CreativeDirectionContract?.EventFamily != EventFamily.Unknown || r.Context.EventFamily != EventFamily.Unknown;
+        bool family = r.CreativeDirectionContract?.EventFamily != ContractEventFamily.Unknown || r.Context.EventFamily != ContractEventFamily.Unknown;
         bool aspect = r.CreativeDirectionContract?.AspectRatio != AspectRatio.Unknown || r.Context.AspectRatio != AspectRatio.Unknown;
         bool brand = r.CreativeDirectionContract is not null && !string.IsNullOrWhiteSpace(r.CreativeDirectionContract.BrandRules.BrandName) && (!string.IsNullOrWhiteSpace(r.CreativeDirectionContract.BrandRules.VisualTone) || r.CreativeDirectionContract.BrandRules.StylePrinciples.Count > 0);
         bool rendering = r.CreativeDirectionContract?.PlanetRenderingRules.Subjects.Count > 0 == true || HasDirective(r.Cdl, "astronomicalRendering");
