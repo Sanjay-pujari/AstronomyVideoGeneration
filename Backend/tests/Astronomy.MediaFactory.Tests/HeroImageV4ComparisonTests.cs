@@ -36,9 +36,11 @@ public sealed class HeroImageV4ComparisonTests
         Assert.True(File.Exists(Path.Combine(comparison, "hero-v4.png")));
         Assert.True(File.Exists(Path.Combine(comparison, "hero-side-by-side.png")));
         Assert.True(File.Exists(Path.Combine(comparison, "hero-comparison.json")));
+        Assert.True(File.Exists(Path.Combine(comparison, "HeroCreativeReview.json")));
         Assert.Equal(before, await File.ReadAllBytesAsync(productionHeroPath));
         Assert.NotEqual(Path.GetFullPath(productionHeroPath), Path.GetFullPath(Path.Combine(comparison, "hero-v4.png")));
         Assert.Contains("ManualReviewRequired", await File.ReadAllTextAsync(Path.Combine(comparison, "hero-comparison.json")));
+        Assert.Contains("compositionTemplateUsed", await File.ReadAllTextAsync(Path.Combine(comparison, "HeroCreativeReview.json")));
         Assert.Contains("\"v4Generated\": true", await File.ReadAllTextAsync(Path.Combine(comparison, "hero-comparison.json")));
     }
 

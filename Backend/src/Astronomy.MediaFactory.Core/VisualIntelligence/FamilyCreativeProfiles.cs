@@ -87,7 +87,11 @@ public sealed class PlanetPairingCreativeProfile : FamilyCreativeProfileBase
     public override string ProfileName => nameof(PlanetPairingCreativeProfile);
     public override IReadOnlySet<ContractEventFamily> SupportedFamilies { get; } = new HashSet<ContractEventFamily> { ContractEventFamily.PlanetConjunction, ContractEventFamily.PlanetOpposition };
     public override bool Supports(VisualIntelligenceOrchestrationContext c) => base.Supports(c) && !TextHas(c, "grouping");
-    public override FamilyCreativeProfileResult Create(VisualIntelligenceOrchestrationContext c) => Result(c, ContractEventFamily.PlanetConjunction, "Show one hero object and one supporting object in a conjunction or close approach composition with premium telescope realism.", string.Join(" and ", Normalize(c.PrimaryObjects).DefaultIfEmpty("bright planets")), "supporting planet, twilight gradient, clean star field", "one hero object with one supporting object; perfect circular planets and close-approach separation", CompositionStyle.RuleOfThirds, "cinematic realistic planet pairing", [D("familyCreativeDirection", "one hero object; one supporting object; conjunction/close approach composition; perfect circular planets; premium telescope realism", 99)]);
+    public override FamilyCreativeProfileResult Create(VisualIntelligenceOrchestrationContext c)
+    {
+        var relationship = string.Join(" and ", Normalize(c.PrimaryObjects.Concat(c.SupportingObjects)).DefaultIfEmpty("bright planets"));
+        return Result(c, ContractEventFamily.PlanetConjunction, "Show the planetary conjunction as the hero relationship, with both planets visually connected in a premium observational sky composition.", relationship, "balanced companion planet, calm twilight atmosphere, clean star field", "story first, then planetary relationship, then beauty, then scale; balanced visual prominence with close-approach separation", CompositionStyle.RuleOfThirds, "editorial documentary planet pairing", [D("familyCreativeDirection", "conjunction is the hero; balanced visual prominence; planets feel visually connected; no tiny secondary planet; perfect circular planets; premium telescope realism", 99)]);
+    }
 }
 
 public sealed class PlanetGroupingCreativeProfile : FamilyCreativeProfileBase

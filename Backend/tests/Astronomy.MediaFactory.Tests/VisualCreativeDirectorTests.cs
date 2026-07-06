@@ -29,6 +29,27 @@ public sealed class VisualCreativeDirectorTests
         Assert.Contains("Venus", subjects);
     }
 
+
+    [Fact]
+    public async Task PlanetPairing_treats_conjunction_relationship_as_hero()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        Assert.Contains("conjunction is the hero", result.CreativeDirectionContract!.VisualIntent.PrimarySubject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Jupiter + Venus", result.CreativeDirectionContract.VisualIntent.PrimarySubject, StringComparison.OrdinalIgnoreCase);
+        AssertDirectiveContains(result.Cdl!, "composition", "balanced visual prominence");
+        AssertDirectiveContains(result.Cdl!, "visualHierarchy", "Story first");
+    }
+
+    [Fact]
+    public async Task Editorial_composition_context_is_optional_for_clean_close_approach()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        AssertDirectiveContains(result.Cdl!, "documentaryContext", "No foreground by default");
+        Assert.Equal("PlanetPairing_CloseApproach", result.CreativeDirectionContract!.ExtensionFields["compositionTemplateUsed"]);
+    }
+
     [Fact]
     public async Task PlanetGrouping_creates_multi_object_hierarchy()
     {
