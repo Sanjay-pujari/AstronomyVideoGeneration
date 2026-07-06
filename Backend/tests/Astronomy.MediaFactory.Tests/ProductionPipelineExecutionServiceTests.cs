@@ -2877,6 +2877,7 @@ Second display cue.
             "9 PM to midnight",
             null,
             null,
+            null,
             requestedOutputs,
             [],
             []);
