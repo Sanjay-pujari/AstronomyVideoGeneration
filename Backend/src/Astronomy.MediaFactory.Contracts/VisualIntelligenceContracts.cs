@@ -11,6 +11,8 @@ public static class VisualIntelligenceContractVersions
     public const string RenderingRulesVersion = "3.2C";
     public const string PromptComposerVersion = "3.2E";
     public const string ProviderProfileVersion = "3.2E-azure-image2-v1";
+    public const string GenericProviderProfileVersion = "3.3E-generic-provider-profile-v1";
+    public const string ProviderCapabilitiesVersion = "3.3E-provider-capabilities-v1";
     public const string QualityReportVersion = "3.2F";
 }
 
