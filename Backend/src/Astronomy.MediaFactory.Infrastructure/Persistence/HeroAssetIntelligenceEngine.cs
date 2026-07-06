@@ -1536,15 +1536,15 @@ public sealed class HeroAssetStoryGenerator(
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    private static EventFamily ResolveHeroMigrationEventFamily(string? eventType, string? title)
+    private static Astronomy.MediaFactory.Contracts.EventFamily ResolveHeroMigrationEventFamily(string? eventType, string? title)
     {
         var text = $"{eventType} {title}";
-        if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return EventFamily.MeteorShower;
-        if (text.Contains("solar", StringComparison.OrdinalIgnoreCase) || text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return EventFamily.SolarEvent;
-        if (text.Contains("lunar", StringComparison.OrdinalIgnoreCase) || text.Contains("moon", StringComparison.OrdinalIgnoreCase)) return EventFamily.LunarEvent;
-        if (text.Contains("comet", StringComparison.OrdinalIgnoreCase)) return EventFamily.Comet;
-        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || text.Contains("alignment", StringComparison.OrdinalIgnoreCase)) return EventFamily.PlanetConjunction;
-        return EventFamily.Unknown;
+        if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return Astronomy.MediaFactory.Contracts.EventFamily.MeteorShower;
+        if (text.Contains("solar", StringComparison.OrdinalIgnoreCase) || text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return Astronomy.MediaFactory.Contracts.EventFamily.SolarEvent;
+        if (text.Contains("lunar", StringComparison.OrdinalIgnoreCase) || text.Contains("moon", StringComparison.OrdinalIgnoreCase)) return Astronomy.MediaFactory.Contracts.EventFamily.LunarEvent;
+        if (text.Contains("comet", StringComparison.OrdinalIgnoreCase)) return Astronomy.MediaFactory.Contracts.EventFamily.Comet;
+        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || text.Contains("alignment", StringComparison.OrdinalIgnoreCase)) return Astronomy.MediaFactory.Contracts.EventFamily.PlanetConjunction;
+        return Astronomy.MediaFactory.Contracts.EventFamily.Unknown;
     }
 
     private static string StrengthenHeroVariantCompositionPrompt(string prompt, HeroVariantCompositionReportDto report)
