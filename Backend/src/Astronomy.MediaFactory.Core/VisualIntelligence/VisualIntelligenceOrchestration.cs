@@ -390,6 +390,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             CreateSideBySide(v3ImagePath, v4ImagePath, sideBySidePath);
             logger.LogInformation("side-by-side created");
 
+            await File.WriteAllTextAsync(Path.Combine(comparisonDirectory, "HeroCreativeReview.json"), JsonSerializer.Serialize(CreateHeroCreativeReview(result) ?? new { mode = "observation", recommendation = "Creative direction contract unavailable" }, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true)), cancellationToken).ConfigureAwait(false);
+
             await File.WriteAllTextAsync(Path.Combine(comparisonDirectory, "hero-comparison.json"), JsonSerializer.Serialize(new
             {
                 planId = result.Context.ContentGenerationPlanId?.ToString() ?? result.Context.CorrelationId,
@@ -456,6 +458,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (result.CreativeDirectionContract is not null) { await WriteJsonAsync(folder, "CreativeDirectionContract.json", result.CreativeDirectionContract, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeDirectionContract.json"); }
         if (result.PromptPackage is not null) { await WriteJsonAsync(folder, "PromptPackage.json", result.PromptPackage, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PromptPackage.json"); }
         if (result.QualityReport is not null) { await WriteJsonAsync(folder, "QualityReport.json", result.QualityReport, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("QualityReport.json"); }
+        var creativeReview = CreateHeroCreativeReview(result);
+        if (creativeReview is not null) { await WriteJsonAsync(folder, "HeroCreativeReview.json", creativeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("HeroCreativeReview.json"); }
         generatedArtifacts.Add("OrchestrationSummary.json");
         await WriteJsonAsync(folder, "OrchestrationSummary.json", CreateSummary(result, folder, generatedArtifacts, fallbackApplied, fallbackReason), json, cancellationToken).ConfigureAwait(false);
         return folder;
@@ -475,6 +479,27 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         fallbackApplied = true;
         fallbackReason = "runOutputFolder unavailable";
         return Path.Combine(AppContext.BaseDirectory, "diagnostics", "visual-intelligence", Sanitize(context.CorrelationId));
+    }
+
+    private static object? CreateHeroCreativeReview(VisualIntelligenceOrchestrationResult result)
+    {
+        if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("editorialComposition", out var value) != true || value is not EditorialCompositionDecision review)
+            return null;
+        return new
+        {
+            mode = "observation",
+            productionHeroUnchanged = !result.Context.FeatureFlags.UseHeroPromptV4,
+            compositionTemplateUsed = review.Template.Name,
+            relationshipScore = review.RelationshipScore,
+            documentaryScore = review.DocumentaryScore,
+            astronomyScore = review.AstronomyScore,
+            visualHierarchyScore = review.VisualHierarchyScore,
+            storytellingNotes = review.StorytellingNotes,
+            recommendations = review.Recommendations,
+            visualBalance = review.VisualBalance,
+            storytellingEmphasis = review.StorytellingEmphasis,
+            documentaryComposition = review.DocumentaryComposition
+        };
     }
 
     private static object CreateSummary(VisualIntelligenceOrchestrationResult result, string diagnosticsOutputPath, IReadOnlyList<string> generatedArtifacts, bool diagnosticsPathFallbackApplied, string? diagnosticsPathFallbackReason) => new
@@ -556,6 +581,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IPromptPackageBuilder, PromptPackageBuilder>();
         services.AddScoped<IPromptComposerV2, PromptComposerV2>();
         services.AddScoped<IHeroPromptMigrationService, HeroPromptMigrationService>();
+        services.AddScoped<IEditorialCompositionDirector, EditorialCompositionDirector>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();

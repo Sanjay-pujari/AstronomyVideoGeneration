@@ -192,7 +192,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         await orchestrator.OrchestrateAsync(DefaultRequest());
 
         var files = Directory.GetFiles(Path.Combine(path, "test-correlation")).Select(Path.GetFileName).OrderBy(name => name).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "OrchestrationSummary.json"], files);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "HeroCreativeReview.json", "OrchestrationSummary.json"], files);
     }
 
     [Fact]
@@ -205,6 +205,7 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         Assert.True(File.Exists(Path.Combine(path, "test-correlation", "PromptPackage.json")));
         Assert.False(File.Exists(Path.Combine(path, "test-correlation", "QualityReport.json")));
+        Assert.True(File.Exists(Path.Combine(path, "test-correlation", "HeroCreativeReview.json")));
     }
 
     [Fact]
@@ -216,6 +217,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         await orchestrator.OrchestrateAsync(DefaultRequest());
 
         Assert.True(File.Exists(Path.Combine(path, "test-correlation", "QualityReport.json")));
+        Assert.True(File.Exists(Path.Combine(path, "test-correlation", "HeroCreativeReview.json")));
     }
 
     [Fact]
@@ -254,7 +256,7 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
         var artifacts = summary.RootElement.GetProperty("generatedArtifacts").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "PromptPackage.json", "OrchestrationSummary.json"], artifacts);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "PromptPackage.json", "HeroCreativeReview.json", "OrchestrationSummary.json"], artifacts);
         Assert.NotEqual(default, summary.RootElement.GetProperty("startedAtUtc").GetDateTimeOffset());
         Assert.NotEqual(default, summary.RootElement.GetProperty("completedAtUtc").GetDateTimeOffset());
         Assert.True(summary.RootElement.GetProperty("durationMs").GetInt64() >= 0);

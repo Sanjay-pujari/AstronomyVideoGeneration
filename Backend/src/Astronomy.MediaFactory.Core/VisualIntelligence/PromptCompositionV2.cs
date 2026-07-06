@@ -35,7 +35,7 @@ public sealed record ProviderPrompt
 
 public sealed class PromptSectionBuilder : IPromptSectionBuilder
 {
-    private static readonly string[] Order = ["sceneSummary", "heroSubject", "supportingSubjects", "composition", "framing", "lighting", "atmosphere", "astronomicalRendering", "typography", "observationCard", "labels", "brandStyle", "qualityTargets", "negativeConstraints", "outputExpectations"];
+    private static readonly string[] Order = ["sceneSummary", "heroSubject", "supportingSubjects", "storytellingEmphasis", "documentaryContext", "composition", "framing", "lighting", "atmosphere", "astronomicalRendering", "typography", "observationCard", "labels", "brandStyle", "qualityTargets", "negativeConstraints", "outputExpectations"];
 
     public PromptSections Build(CDL? cdl, CreativeDirectionContract? contract)
     {
@@ -46,6 +46,7 @@ public sealed class PromptSectionBuilder : IPromptSectionBuilder
             Add(map, "heroSubject", contract.VisualIntent.PrimarySubject);
             Add(map, "supportingSubjects", contract.VisualIntent.SecondarySubjects);
             Add(map, "composition", contract.VisualIntent.Composition, contract.VisualIntent.CompositionStyle.ToString());
+            AddEditorialComposition(map, contract);
             Add(map, "astronomicalRendering", contract.PlanetRenderingRules.Subjects.Select(s => $"{s.BodyName}: {s.RequiredShape}; {s.ColorBehavior}; {s.SurfaceDetail}; {s.Illumination}; {s.ScalePolicy}; avoid {string.Join(", ", s.ForbiddenArtifacts)}"));
             Add(map, "astronomicalRendering", contract.PlanetRenderingRules.BackgroundRules.Select(kv => $"{kv.Key}: {kv.Value}"));
             Add(map, "typography", contract.TypographyRules.TypographySystem, contract.TypographyRules.TextPolicy);
@@ -60,12 +61,24 @@ public sealed class PromptSectionBuilder : IPromptSectionBuilder
         }
         foreach (var d in cdl?.Directives ?? contract?.Cdl.Directives ?? [])
         {
-            var key = map.ContainsKey(d.Name) ? d.Name : d.Name switch { "visualHierarchy" => "composition", "creativeIntent" => "sceneSummary", _ => "outputExpectations" };
+            var key = map.ContainsKey(d.Name) ? d.Name : d.Name switch { "visualHierarchy" => "composition", "creativeIntent" => "sceneSummary", "brandDesign" => "brandStyle", _ => "outputExpectations" };
             Add(map, key, d.Value);
         }
         Add(map, "outputExpectations", "provider-neutral plain text image prompt", "preserve all scientific, brand, typography, and safety constraints");
         return new PromptSections { Sections = map.Where(kv => kv.Value.Count > 0).ToDictionary(kv => kv.Key, kv => kv.Value), Diagnostics = [Diag("prompt_sections.built", $"Prompt sections built: {map.Count(kv => kv.Value.Count > 0)}.", nameof(PromptSectionBuilder))] };
     }
+    private static void AddEditorialComposition(Dictionary<string, List<string>> map, CreativeDirectionContract contract)
+    {
+        if (contract.ExtensionFields.TryGetValue("compositionTemplateUsed", out var template) && template is not null)
+            Add(map, "composition", $"Use the {template} editorial composition template.");
+        if (contract.ExtensionFields.TryGetValue("editorialComposition", out var editorial) && editorial is EditorialCompositionDecision decision)
+        {
+            Add(map, "storytellingEmphasis", decision.StorytellingEmphasis, decision.VisualHierarchy);
+            Add(map, "documentaryContext", decision.DocumentaryComposition);
+            Add(map, "composition", decision.Template.SubjectPlacement, decision.Template.Balance, decision.Template.HorizonUsage, decision.Template.NegativeSpace, decision.Template.OverlaySafeArea);
+        }
+    }
+
     private static void Add(Dictionary<string, List<string>> map, string key, params string[] values) => Add(map, key, values.AsEnumerable());
     private static void Add(Dictionary<string, List<string>> map, string key, IEnumerable<string?> values) { if (!map.TryGetValue(key, out var list)) map[key] = list = []; foreach (var v in values.Where(v => !string.IsNullOrWhiteSpace(v))) list.Add(v!.Trim()); }
     private static DiagnosticMessage Diag(string code, string message, string source) => new() { Severity = DiagnosticSeverity.Info, Code = code, Message = message, Source = source };
@@ -222,6 +235,7 @@ public sealed class AzurePromptProviderAdapter : IProviderAdapter
         AppendParagraph(sb, "Opening paragraph", Join(sections, "sceneSummary"));
         AppendParagraph(sb, "Primary subject", Join(sections, "heroSubject"));
         AppendParagraph(sb, "Supporting subject", Join(sections, "supportingSubjects"));
+        AppendParagraph(sb, "Editorial story", Join(sections, "storytellingEmphasis", "documentaryContext"));
         AppendParagraph(sb, "Composition", Join(sections, "composition", "framing"));
         AppendParagraph(sb, "Lighting", Join(sections, "lighting", "atmosphere"));
         AppendParagraph(sb, "Rendering requirements", RewriteAstronomy(Join(sections, "astronomicalRendering", "outputExpectations"), sections));
