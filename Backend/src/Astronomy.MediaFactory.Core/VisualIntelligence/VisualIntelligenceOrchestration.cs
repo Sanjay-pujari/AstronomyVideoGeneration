@@ -91,6 +91,9 @@ public sealed record VisualIntelligenceOrchestrationRequest
     public string VisibilityGuidance { get; init; } = string.Empty;
     public string? RunOutputFolder { get; init; }
     public ImageProviderType RequestedProvider { get; init; } = ImageProviderType.Unknown;
+    public string? BenchmarkScenarioId { get; init; }
+    public string? BenchmarkGroup { get; init; }
+    public IReadOnlyList<string> BenchmarkTags { get; init; } = [];
 }
 
 public sealed record VisualIntelligenceOrchestrationContext
@@ -113,6 +116,9 @@ public sealed record VisualIntelligenceOrchestrationContext
     public string VisibilityGuidance { get; init; } = string.Empty;
     public string? RunOutputFolder { get; init; }
     public ImageProviderType RequestedProvider { get; init; } = ImageProviderType.Unknown;
+    public string? BenchmarkScenarioId { get; init; }
+    public string? BenchmarkGroup { get; init; }
+    public IReadOnlyList<string> BenchmarkTags { get; init; } = [];
     public VisualIntelligenceFlagSnapshot FeatureFlags { get; init; } = new();
     public VisualIntelligenceVersionSnapshot Versions { get; init; } = new();
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
@@ -308,6 +314,9 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             VisibilityGuidance = request.VisibilityGuidance,
             RunOutputFolder = request.RunOutputFolder,
             RequestedProvider = request.RequestedProvider,
+            BenchmarkScenarioId = request.BenchmarkScenarioId,
+            BenchmarkGroup = request.BenchmarkGroup,
+            BenchmarkTags = request.BenchmarkTags,
             FeatureFlags = flags,
             Versions = new VisualIntelligenceVersionSnapshot(),
             Diagnostics = diagnostics
@@ -377,6 +386,9 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             var folder = Path.Combine(result.Context.RunOutputFolder, "hero", "diagnostics");
             Directory.CreateDirectory(folder);
             await WriteJsonAsync(folder, "HeroCreativeReview.json", creativeReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
+            var relationshipReview = CreatePlanetRelationshipReview(result);
+            if (relationshipReview is not null)
+                await WriteJsonAsync(folder, "PlanetRelationshipReview.json", relationshipReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -501,6 +513,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (editorialReview is not null) { await WriteJsonAsync(folder, "EditorialReasoningReview.json", editorialReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("EditorialReasoningReview.json"); }
         var creativeReview = CreateHeroCreativeReview(result);
         if (creativeReview is not null) { await WriteJsonAsync(folder, "HeroCreativeReview.json", creativeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("HeroCreativeReview.json"); }
+        var planetRelationshipReview = CreatePlanetRelationshipReview(result);
+        if (planetRelationshipReview is not null) { await WriteJsonAsync(folder, "PlanetRelationshipReview.json", planetRelationshipReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PlanetRelationshipReview.json"); }
         generatedArtifacts.Add("OrchestrationSummary.json");
         await WriteJsonAsync(folder, "OrchestrationSummary.json", CreateSummary(result, folder, generatedArtifacts, fallbackApplied, fallbackReason), json, cancellationToken).ConfigureAwait(false);
         return folder;
@@ -682,6 +696,24 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
                 decision.RecommendedNarrativeArc,
                 decision.ScientificPriority
             }
+        };
+    }
+
+    private static object? CreatePlanetRelationshipReview(VisualIntelligenceOrchestrationResult result)
+    {
+        if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("planetRelationshipReview", out var value) != true || value is not PlanetRelationshipReview review)
+            return null;
+        return new
+        {
+            mode = "observation",
+            productionHeroUnchanged = !result.Context.FeatureFlags.UseHeroPromptV4,
+            benchmark = string.IsNullOrWhiteSpace(result.Context.BenchmarkScenarioId) ? null : new { result.Context.BenchmarkScenarioId, result.Context.BenchmarkGroup, result.Context.BenchmarkTags },
+            relationshipScore = review.RelationshipScore,
+            visualBalanceScore = review.VisualBalanceScore,
+            documentaryScore = review.DocumentaryScore,
+            planetProminenceAssessment = review.PlanetProminenceAssessment,
+            compositionRecommendation = review.CompositionRecommendation,
+            creativeNotes = review.CreativeNotes
         };
     }
 

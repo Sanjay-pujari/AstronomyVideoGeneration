@@ -90,6 +90,39 @@ public sealed class EditorialReasoningEngineTests
         Assert.True(review.RootElement.GetProperty("reasoningConfidence").GetDouble() >= .9);
     }
 
+
+    [Fact]
+    public async Task Diagnostics_generation_writes_planet_relationship_review()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = new VisualIntelligenceOrchestrator(
+            Options.Create(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true }),
+            new VisualCreativeDirector(NullLogger<VisualCreativeDirector>.Instance),
+            new PromptComposerV2(Options.Create(new VisualIntelligenceOptions()), new PromptSectionBuilder(), new PromptOptimizer(), new GenericProviderAdapter(), new PromptPackageBuilder(), new ImageProviderProfileRegistry([new GenericImageProviderProfile()])),
+            NullLogger<VisualIntelligenceOrchestrator>.Instance);
+
+        await orchestrator.OrchestrateAsync(new VisualIntelligenceOrchestrationRequest
+        {
+            CorrelationId = "relationship-review",
+            EventFamily = ContractEventFamily.PlanetConjunction,
+            EventType = "planet-conjunction",
+            EventName = "Venus Jupiter conjunction",
+            Platform = Platform.Hero,
+            PrimaryObjects = ["Venus"],
+            SupportingObjects = ["Jupiter"],
+            BenchmarkScenarioId = "representative-bright-planet-conjunction",
+            BenchmarkGroup = "planet-pairing",
+            BenchmarkTags = ["conjunction", "hero", "relationship"]
+        });
+
+        var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(path, "relationship-review", "PlanetRelationshipReview.json")));
+        Assert.True(review.RootElement.GetProperty("relationshipScore").GetDouble() >= .95);
+        Assert.True(review.RootElement.GetProperty("visualBalanceScore").GetDouble() >= .9);
+        Assert.Contains("relationship-first", review.RootElement.GetProperty("planetProminenceAssessment").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dominant giant planet", review.RootElement.GetProperty("creativeNotes")[1].GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("representative-bright-planet-conjunction", review.RootElement.GetProperty("benchmark").GetProperty("benchmarkScenarioId").GetString());
+    }
+
     [Fact]
     public async Task Production_default_pipeline_remains_disabled()
     {

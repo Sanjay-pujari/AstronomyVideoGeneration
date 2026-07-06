@@ -41,6 +41,20 @@ public sealed class VisualCreativeDirectorTests
         AssertDirectiveContains(result.Cdl!, "visualHierarchy", "Story first");
     }
 
+
+    [Fact]
+    public async Task PlanetPairing_refinement_recommends_balanced_relationship_prominence()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        var review = Assert.IsType<PlanetRelationshipReview>(result.CreativeDirectionContract!.ExtensionFields["planetRelationshipReview"]);
+        Assert.True(review.RelationshipScore >= .95);
+        Assert.True(review.VisualBalanceScore >= .9);
+        Assert.Contains("relationship-first", review.PlanetProminenceAssessment, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("avoid a dominant giant planet", string.Join(" ", review.CreativeNotes), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("negative space", review.CompositionRecommendation, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Editorial_composition_context_is_optional_for_clean_close_approach()
     {
