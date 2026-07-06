@@ -45,13 +45,16 @@ public sealed class OutputArtifactRegistryTests : IDisposable
     public void Registry_resolves_hero_artifacts_to_v2_layout()
     {
         Assert.Equal(Path.Combine("hero", "diagnostics", "hero-review.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroReview));
+        Assert.Equal(Path.Combine("hero", "diagnostics", "hero-layout-validation.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroLayoutValidation));
         Assert.Equal(Path.Combine("hero", "diagnostics", "hero-generation-diagnostics.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroGenerationDiagnostics));
+        Assert.Equal(Path.Combine("hero", "diagnostics", "hero-scene-manifest.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroSceneManifest));
         Assert.Equal(Path.Combine("hero", "diagnostics", "visual-prompt-diagnostics.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.VisualPromptDiagnostics));
         Assert.Equal(Path.Combine("hero", "comparison", "hero-prompt-comparison.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroPromptComparison));
         Assert.Equal(Path.Combine("hero", "comparison", "hero-migration-report.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroMigrationReport));
         Assert.Equal(Path.Combine("hero", "comparison", "hero-v3-prompt.txt"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroV3Prompt));
         Assert.Equal(Path.Combine("hero", "comparison", "hero-v4-prompt.txt"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroV4Prompt));
         Assert.Equal(Path.Combine("hero", "hero-final.png"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroFinal));
+        Assert.Equal(Path.Combine("hero", "HeroArtifactManifest.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroArtifactManifest));
     }
 
     [Fact]
@@ -75,6 +78,32 @@ public sealed class OutputArtifactRegistryTests : IDisposable
         File.WriteAllText(legacyPath, "legacy");
 
         Assert.Equal(legacyPath, OutputArtifactRegistry.ResolveExistingPath(root, OutputArtifactName.HeroReview));
+    }
+
+    [Fact]
+    public void Registry_produces_manifest_with_logical_names_and_physical_paths()
+    {
+        var manifest = OutputArtifactRegistry.CreateHeroArtifactManifest(root, new OutputArtifactsOptions { Mode = OutputArtifactMode.Debug });
+
+        Assert.Contains(OutputArtifactName.HeroLayoutValidation.ToString(), manifest.ExpectedArtifacts);
+        Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroLayoutValidation), manifest.Artifacts[OutputArtifactName.HeroLayoutValidation.ToString()]);
+        Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroSceneManifest), manifest.Artifacts[OutputArtifactName.HeroSceneManifest.ToString()]);
+    }
+
+    [Fact]
+    public void Registry_resolves_manifest_path_before_legacy_layout()
+    {
+        var manifestPath = OutputArtifactRegistry.GetManifestPath(root);
+        var customLayout = Path.Combine(root, "custom", "layout.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(customLayout)!);
+        var manifest = new HeroArtifactManifest("test", "Development", [OutputArtifactName.HeroLayoutValidation.ToString()], new Dictionary<string, string>
+        {
+            [OutputArtifactName.HeroLayoutValidation.ToString()] = customLayout
+        });
+        File.WriteAllText(manifestPath, System.Text.Json.JsonSerializer.Serialize(manifest, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+
+        Assert.Equal(customLayout, OutputArtifactRegistry.ResolvePathFromManifestOrLegacy(root, OutputArtifactName.HeroLayoutValidation));
     }
 
     public void Dispose()
@@ -113,7 +142,9 @@ public sealed class Phase11HeroArtifactValidationPolicyTests
 
         Assert.Contains(OutputArtifactName.HeroFinal, artifacts);
         Assert.Contains(OutputArtifactName.HeroReview, artifacts);
+        Assert.Contains(OutputArtifactName.HeroLayoutValidation, artifacts);
         Assert.Contains(OutputArtifactName.HeroGenerationDiagnostics, artifacts);
+        Assert.Contains(OutputArtifactName.HeroSceneManifest, artifacts);
         Assert.Contains(OutputArtifactName.VisualPromptDiagnostics, artifacts);
         Assert.Contains(OutputArtifactName.HeroPromptComparison, artifacts);
         Assert.Contains(OutputArtifactName.HeroMigrationReport, artifacts);
@@ -145,7 +176,7 @@ public sealed class Phase11HeroArtifactValidationPolicyTests
     {
         var artifacts = new List<OutputArtifactName> { OutputArtifactName.HeroFinal };
         if (options.ShouldWriteDiagnostics)
-            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.VisualPromptDiagnostics]);
+            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics]);
         if (options.ShouldWriteComparison)
             artifacts.AddRange([OutputArtifactName.HeroPromptComparison, OutputArtifactName.HeroMigrationReport, OutputArtifactName.HeroV3Prompt, OutputArtifactName.HeroV4Prompt]);
         return artifacts;

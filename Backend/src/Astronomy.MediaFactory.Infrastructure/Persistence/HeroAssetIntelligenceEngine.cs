@@ -497,6 +497,7 @@ public sealed class HeroAssetStoryGenerator(
                 .ToArray();
             var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, request.ProductionContext?.ProductionEventIntelligence);
             await WriteHeroDiagnosticFileAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), warnings, generatedFiles, cancellationToken);
+            await WriteHeroArtifactManifestAsync(heroAssetsRoot, warnings, generatedFiles, cancellationToken);
         }
 
         var heroSceneManifestGenerated = request.DryRun || !OutputArtifacts.ShouldWriteDiagnostics || File.Exists(sceneManifestPath);
@@ -3459,13 +3460,13 @@ public sealed class HeroAssetStoryGenerator(
         => ResolveHeroArtifactPath(BuildHeroAssetsRoot(eventId, regionId), OutputArtifactName.HeroReview);
 
     private string BuildSceneManifestOutputPath(string eventId, string regionId)
-        => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroSceneManifestFileName);
+        => ResolveHeroArtifactPath(BuildHeroAssetsRoot(eventId, regionId), OutputArtifactName.HeroSceneManifest);
 
     private string BuildCompositionModelOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroCompositionModelFileName);
 
     private string BuildLayoutValidationOutputPath(string eventId, string regionId)
-        => BuildDiagnosticOutputPath(BuildHeroAssetsRoot(eventId, regionId), HeroLayoutValidationFileName);
+        => ResolveHeroArtifactPath(BuildHeroAssetsRoot(eventId, regionId), OutputArtifactName.HeroLayoutValidation);
 
     private static string BuildDiagnosticOutputPath(string heroAssetsRoot, string fileName)
         => Path.Combine(heroAssetsRoot, "diagnostics", fileName);
@@ -3477,6 +3478,24 @@ public sealed class HeroAssetStoryGenerator(
     {
         var outputRoot = Directory.GetParent(Path.GetFullPath(heroAssetsRoot))?.FullName ?? heroAssetsRoot;
         return OutputArtifactRegistry.GetPath(outputRoot, artifactName);
+    }
+
+    private async Task WriteHeroArtifactManifestAsync(string heroAssetsRoot, List<string> warnings, List<string> generatedFiles, CancellationToken cancellationToken)
+    {
+        var outputRoot = Directory.GetParent(Path.GetFullPath(heroAssetsRoot))?.FullName ?? heroAssetsRoot;
+        var manifest = OutputArtifactRegistry.CreateHeroArtifactManifest(outputRoot, OutputArtifacts);
+        var manifestPath = OutputArtifactRegistry.GetManifestPath(outputRoot);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken).ConfigureAwait(false);
+            generatedFiles.Add(NormalizePath(manifestPath));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            warnings.Add($"Hero artifact manifest write failed: {ex.Message}");
+            logger.LogWarning(ex, "Hero artifact manifest write failed for {Path}; continuing pipeline.", NormalizePath(manifestPath));
+        }
     }
 
     private OutputArtifactsOptions OutputArtifacts => outputArtifactsOptions?.Value ?? new OutputArtifactsOptions();
