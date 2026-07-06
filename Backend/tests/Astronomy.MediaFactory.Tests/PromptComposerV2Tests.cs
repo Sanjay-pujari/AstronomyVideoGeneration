@@ -39,10 +39,27 @@ public sealed class PromptComposerV2Tests
 
         var optimized = new PromptOptimizer().Optimize(sections, new GenericImageProviderProfile());
 
-        Assert.Equal(2, optimized.Sections["negativeConstraints"].Count);
-        Assert.Contains(optimized.Sections["negativeConstraints"], v => v == "no fake glow");
+        Assert.Single(optimized.Sections["negativeConstraints"]);
+        Assert.Contains("fake glow", optimized.Sections["negativeConstraints"][0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("distortion", optimized.Sections["negativeConstraints"][0], StringComparison.OrdinalIgnoreCase);
         Assert.Contains(optimized.Sections["astronomicalRendering"], v => v.Contains("perfectly circular", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(optimized.Diagnostics, d => d.Code == "prompt_optimizer.duplicates_removed");
+        Assert.Contains(optimized.Diagnostics, d => d.Code == "prompt_optimizer.prompt_quality_improved");
+    }
+
+    [Fact]
+    public void Optimizer_semantically_merges_repeated_style_and_composition_concepts()
+    {
+        var sections = new PromptSections { Sections = new Dictionary<string, List<string>> { ["composition"] = ["RuleOfThirds", "RuleOfThirds", "rule of thirds"], ["brandStyle"] = ["premium", "premiumDocumentary", "documentary", "scientifically grounded"] } };
+
+        var optimized = new PromptOptimizer().Optimize(sections, new GenericImageProviderProfile());
+
+        Assert.Single(optimized.Sections["composition"]);
+        Assert.Equal("Rule of thirds composition", optimized.Sections["composition"][0]);
+        Assert.Single(optimized.Sections["brandStyle"]);
+        Assert.Contains("premium astronomy documentary", optimized.Sections["brandStyle"][0], StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, optimized.Sections["brandStyle"].Count(v => v.Contains("premium", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(optimized.Diagnostics, d => d.Code == "prompt_optimizer.duplicate_groups_merged");
     }
 
     [Fact]
@@ -94,15 +111,14 @@ public sealed class PromptComposerV2Tests
 
         var result = new AzurePromptProviderAdapter().Adapt(sections, new AzureImageProviderProfile());
 
-        Assert.Contains("Scene summary: premium astronomy scene", result.Prompt);
-        Assert.Contains("Hero subject: Jupiter and Venus", result.Prompt);
-        Assert.Contains("Supporting subjects: moonlit horizon", result.Prompt);
+        Assert.Contains("Opening paragraph: premium astronomy scene", result.Prompt);
+        Assert.Contains("Primary subject: Jupiter and Venus", result.Prompt);
+        Assert.Contains("Supporting subject: moonlit horizon", result.Prompt);
         Assert.Contains("Composition: rule of thirds", result.Prompt);
-        Assert.Contains("Astronomical rendering rules: Jupiter remains circular", result.Prompt);
-        Assert.Contains("Brand style: Drashyam; premiumDocumentary", result.Prompt);
-        Assert.Contains("Observation card: lowerThirdSafeZone", result.Prompt);
-        Assert.Contains("Quality targets: observation; overall threshold: 0.82", result.Prompt);
-        Assert.Contains("Avoid / do not include: no fake glow; no distorted planets", result.Prompt);
+        Assert.Contains("Rendering requirements:", result.Prompt);
+        Assert.Contains("Brand guidance: Drashyam premiumDocumentary", result.Prompt);
+        Assert.Contains("Observation guidance: lowerThirdSafeZone", result.Prompt);
+        Assert.Contains("Negative constraints: no fake glow no distorted planets", result.Prompt);
         Assert.Equal(string.Empty, result.NegativePrompt);
         Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.used");
         Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.negative_prompt_not_supported");
@@ -123,10 +139,12 @@ public sealed class PromptComposerV2Tests
         Assert.NotNull(result.PromptPackage);
         Assert.Equal(ImageProviderType.AzureImage, result.PromptPackage!.ProviderName);
         Assert.Equal(VisualIntelligenceContractVersions.AzureImageProviderProfileVersion, result.PromptPackage.ProviderProfileVersion);
-        Assert.Contains("Hero subject:", result.PromptPackage.PositivePrompt);
-        Assert.Contains("Astronomical rendering rules:", result.PromptPackage.PositivePrompt);
-        Assert.Contains("Brand style:", result.PromptPackage.PositivePrompt);
-        Assert.Contains("Avoid / do not include:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Primary subject:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Rendering requirements:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Brand guidance:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Negative constraints:", result.PromptPackage.PositivePrompt);
+        Assert.DoesNotContain("PromptSections", result.PromptPackage.PositivePrompt);
+        Assert.DoesNotContain("CreativeDirectionContract", result.PromptPackage.PositivePrompt);
         Assert.Equal(string.Empty, result.PromptPackage.NegativePrompt);
         Assert.Contains(result.PromptPackage.ProviderParameters, kv => kv.Key == "adapter" && (string)kv.Value! == "azureImage");
         Assert.Contains(result.PromptPackage.ProviderParameters, kv => kv.Key == "azureSdkCallMade" && (bool)kv.Value! == false);
