@@ -105,6 +105,7 @@ See [FolderStructure.md](FolderStructure.md) for the reverse-engineered reposito
 ## Documentation Index
 
 - [ProjectVision.md](ProjectVision.md) — product purpose, goals, audience, AI-first principles, differentiators.
+- [ContentIntelligencePlatformV4Specification.md](ContentIntelligencePlatformV4Specification.md) — master V4 specification for the astronomy-first Content Intelligence Platform roadmap and current development handoff.
 - [Roadmap.md](Roadmap.md) — completed and planned RC milestones.
 - [CHANGELOG.md](CHANGELOG.md) — professional changelog for RC1 and RC2 areas.
 - [FolderStructure.md](FolderStructure.md) — reverse-engineered folder responsibilities.
