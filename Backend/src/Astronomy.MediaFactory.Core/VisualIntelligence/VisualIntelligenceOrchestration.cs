@@ -239,6 +239,14 @@ public static class VisualIntelligenceServiceCollectionExtensions
     public static IServiceCollection AddVisualIntelligenceOrchestration(this IServiceCollection services)
     {
         services.AddOptions<VisualIntelligenceOptions>();
+        services.AddScoped<IFamilyCreativeProfile, PlanetGroupingCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfile, PlanetPairingCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfile, MeteorShowerCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfile, NamedFullMoonCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfile, SolarEclipseCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfile, LunarEclipseCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfile, GenericAstronomyCreativeProfile>();
+        services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();
         services.AddScoped<IVisualIntelligenceOrchestrator, VisualIntelligenceOrchestrator>();
         return services;
