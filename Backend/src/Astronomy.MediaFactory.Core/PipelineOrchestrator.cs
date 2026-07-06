@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -54,6 +55,7 @@ public sealed class PipelineOrchestrator
     private readonly IAstronomyEventStore? _eventStore;
     private readonly IAIOptimizationPipelineService? _aiOptimizationPipelineService;
     private readonly ISafeAnalyticsExecutor? _safeAnalyticsExecutor;
+    private readonly IVisualIntelligenceOrchestrator? _visualIntelligenceOrchestrator;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -99,7 +101,8 @@ public sealed class PipelineOrchestrator
         IAstronomyEventStore? eventStore = null,
         ICinematicThumbnailService? cinematicThumbnailService = null,
         IAIOptimizationPipelineService? aiOptimizationPipelineService = null,
-        ISafeAnalyticsExecutor? safeAnalyticsExecutor = null)
+        ISafeAnalyticsExecutor? safeAnalyticsExecutor = null,
+        IVisualIntelligenceOrchestrator? visualIntelligenceOrchestrator = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -145,6 +148,7 @@ public sealed class PipelineOrchestrator
         _eventStore = eventStore;
         _aiOptimizationPipelineService = aiOptimizationPipelineService;
         _safeAnalyticsExecutor = safeAnalyticsExecutor;
+        _visualIntelligenceOrchestrator = visualIntelligenceOrchestrator;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
@@ -372,6 +376,7 @@ public sealed class PipelineOrchestrator
             }
             await WriteLocalizationContextAsync(context.Localization, outputDir, cancellationToken);
             await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
+            await ObserveVisualIntelligenceAsync(request, run, context, cancellationToken);
             if (_pipelineStageExecutor is not null)
             {
                 await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.SceneContextCompleted, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, OutputPath = GetExpectedOutputPath(PipelineStageNames.SceneContextCompleted, outputDir), DiagnosticPath = Path.Combine(outputDir, "scene-context.diagnostic.json") }, cancellationToken);
@@ -1221,6 +1226,35 @@ public sealed class PipelineOrchestrator
         }
     }
 
+
+
+    private async Task ObserveVisualIntelligenceAsync(RunPipelineRequest request, PipelineRun run, AstronomyContext context, CancellationToken cancellationToken)
+    {
+        if (_visualIntelligenceOrchestrator is null)
+            return;
+
+        try
+        {
+            await _visualIntelligenceOrchestrator.OrchestrateAsync(new VisualIntelligenceOrchestrationRequest
+            {
+                CorrelationId = run.Id.ToString("N"),
+                EventType = run.EventType ?? request.EventType ?? request.ContentType.ToString(),
+                EventName = run.EventTitle ?? request.EventTitle ?? context.Events.FirstOrDefault()?.ObjectName ?? string.Empty,
+                Language = context.Localization.ResolvedLanguage,
+                Platform = Platform.YouTubeLongForm,
+                AspectRatio = AspectRatio.Landscape16x9,
+                RequestedAssetType = "pipeline-observation",
+                Region = run.RegionId ?? request.RegionId ?? string.Empty,
+                Location = run.LocationName ?? request.LocationName ?? string.Empty,
+                PrimaryObjects = context.Events.Select(e => e.ObjectName).Where(name => !string.IsNullOrWhiteSpace(name)).Take(3).ToList(),
+                ObservationDateTime = new DateTimeOffset(request.Date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Visual Intelligence observation failed for pipeline run {PipelineRunId}; continuing Phase 1-18 behavior.", run.Id);
+        }
+    }
 
     private static string? ResolveRegionLanguage(string? regionId, string locationName, SchedulerOptions schedulerOptions)
     {
