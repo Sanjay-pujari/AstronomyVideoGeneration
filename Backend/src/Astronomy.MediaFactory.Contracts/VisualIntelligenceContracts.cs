@@ -12,6 +12,7 @@ public static class VisualIntelligenceContractVersions
     public const string PromptComposerVersion = "3.2E";
     public const string ProviderProfileVersion = "3.2E-azure-image2-v1";
     public const string GenericProviderProfileVersion = "3.3E-generic-provider-profile-v1";
+    public const string AzureImageProviderProfileVersion = "3.3G-azure-image-provider-profile-v1";
     public const string ProviderCapabilitiesVersion = "3.3E-provider-capabilities-v1";
     public const string QualityReportVersion = "3.2F";
 }
@@ -57,7 +58,7 @@ public enum PublicationDecisionStatus { [JsonStringEnumMemberName("unknown")] Un
 [JsonConverter(typeof(JsonStringEnumConverter<DiagnosticSeverity>))]
 public enum DiagnosticSeverity { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("info")] Info, [JsonStringEnumMemberName("warning")] Warning, [JsonStringEnumMemberName("error")] Error, [JsonStringEnumMemberName("blocking")] Blocking }
 [JsonConverter(typeof(JsonStringEnumConverter<ImageProviderType>))]
-public enum ImageProviderType { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("azureImage2")] AzureImage2, [JsonStringEnumMemberName("openAiImage")] OpenAiImage, [JsonStringEnumMemberName("localRenderer")] LocalRenderer, [JsonStringEnumMemberName("externalProvider")] ExternalProvider }
+public enum ImageProviderType { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("azureImage2")] AzureImage2 = 1, [JsonStringEnumMemberName("openAiImage")] OpenAiImage = 2, [JsonStringEnumMemberName("localRenderer")] LocalRenderer = 3, [JsonStringEnumMemberName("externalProvider")] ExternalProvider = 4, [JsonStringEnumMemberName("azureImage")] AzureImage = 5 }
 [JsonConverter(typeof(JsonStringEnumConverter<QualityCategory>))]
 public enum QualityCategory { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("creativeIntentMatch")] CreativeIntentMatch, [JsonStringEnumMemberName("astronomicalPlausibility")] AstronomicalPlausibility, [JsonStringEnumMemberName("brandCompliance")] BrandCompliance, [JsonStringEnumMemberName("textReadability")] TextReadability, [JsonStringEnumMemberName("platformSuitability")] PlatformSuitability, [JsonStringEnumMemberName("providerCompliance")] ProviderCompliance }
 [JsonConverter(typeof(JsonStringEnumConverter<VisualIntelligenceFeatureFlagName>))]
