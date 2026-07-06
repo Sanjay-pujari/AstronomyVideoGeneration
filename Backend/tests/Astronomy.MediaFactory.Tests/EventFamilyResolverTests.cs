@@ -1,37 +1,38 @@
 using Astronomy.MediaFactory.Core;
+using CoreEventFamily = Astronomy.MediaFactory.Core.EventFamily;
 
 namespace Astronomy.MediaFactory.Tests;
 
 public sealed class EventFamilyResolverTests
 {
     [Theory]
-    [InlineData("MeteorShower", EventFamily.Meteor)]
-    [InlineData("PLANET_CONJUNCTION", EventFamily.PlanetGrouping)]
-    [InlineData("PLANET_GROUPING", EventFamily.PlanetGrouping)]
-    [InlineData("BLUE_MOON", EventFamily.Moon)]
-    [InlineData("FullMoon", EventFamily.Moon)]
-    [InlineData("NewMoon", EventFamily.Moon)]
-    [InlineData("BlueMoon", EventFamily.Moon)]
-    [InlineData("Supermoon", EventFamily.Moon)]
-    [InlineData("Micromoon", EventFamily.Moon)]
-    [InlineData("MoonPhase", EventFamily.Moon)]
-    [InlineData("SolarEclipse", EventFamily.Eclipse)]
-    [InlineData("LunarEclipse", EventFamily.Eclipse)]
-    [InlineData("TotalSolarEclipse", EventFamily.Eclipse)]
-    [InlineData("PartialSolarEclipse", EventFamily.Eclipse)]
-    [InlineData("AnnularSolarEclipse", EventFamily.Eclipse)]
-    [InlineData("TotalLunarEclipse", EventFamily.Eclipse)]
-    [InlineData("PartialLunarEclipse", EventFamily.Eclipse)]
-    [InlineData("PenumbralLunarEclipse", EventFamily.Eclipse)]
-    [InlineData("LUNAR_ECLIPSE", EventFamily.Eclipse)]
-    [InlineData("COMET", EventFamily.SpecialEvent)]
-    [InlineData("Comet", EventFamily.SpecialEvent)]
-    [InlineData("DeepSkyObject", EventFamily.SpecialEvent)]
-    [InlineData("Deep Sky Object", EventFamily.SpecialEvent)]
-    [InlineData("Constellation", EventFamily.SpecialEvent)]
-    [InlineData("Occultation", EventFamily.SpecialEvent)]
-    [InlineData("unknown", EventFamily.Unknown)]
-    public void Resolve_MapsKnownEventTypesToExpectedFamily(string eventType, EventFamily expected)
+    [InlineData("MeteorShower", CoreEventFamily.Meteor)]
+    [InlineData("PLANET_CONJUNCTION", CoreEventFamily.PlanetGrouping)]
+    [InlineData("PLANET_GROUPING", CoreEventFamily.PlanetGrouping)]
+    [InlineData("BLUE_MOON", CoreEventFamily.Moon)]
+    [InlineData("FullMoon", CoreEventFamily.Moon)]
+    [InlineData("NewMoon", CoreEventFamily.Moon)]
+    [InlineData("BlueMoon", CoreEventFamily.Moon)]
+    [InlineData("Supermoon", CoreEventFamily.Moon)]
+    [InlineData("Micromoon", CoreEventFamily.Moon)]
+    [InlineData("MoonPhase", CoreEventFamily.Moon)]
+    [InlineData("SolarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("LunarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("TotalSolarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("PartialSolarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("AnnularSolarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("TotalLunarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("PartialLunarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("PenumbralLunarEclipse", CoreEventFamily.Eclipse)]
+    [InlineData("LUNAR_ECLIPSE", CoreEventFamily.Eclipse)]
+    [InlineData("COMET", CoreEventFamily.SpecialEvent)]
+    [InlineData("Comet", CoreEventFamily.SpecialEvent)]
+    [InlineData("DeepSkyObject", CoreEventFamily.SpecialEvent)]
+    [InlineData("Deep Sky Object", CoreEventFamily.SpecialEvent)]
+    [InlineData("Constellation", CoreEventFamily.SpecialEvent)]
+    [InlineData("Occultation", CoreEventFamily.SpecialEvent)]
+    [InlineData("unknown", CoreEventFamily.Unknown)]
+    public void Resolve_MapsKnownEventTypesToExpectedFamily(string eventType, CoreEventFamily expected)
     {
         var family = EventFamilyResolver.Resolve(eventType, contentCategoryCode: null, primaryObjects: [], secondaryObjects: []);
 
@@ -52,8 +53,8 @@ public sealed class EventFamilyResolverTests
         var family = EventFamilyResolver.Resolve(eventType, contentCategoryCode: null, primaryObjects: [], secondaryObjects: []);
         var profile = EventFamilyProfiles.Resolve(family, eventType);
 
-        Assert.Equal(EventFamily.SpecialEvent, family);
-        Assert.Equal(EventFamily.SpecialEvent, profile.Family);
+        Assert.Equal(CoreEventFamily.SpecialEvent, family);
+        Assert.Equal(CoreEventFamily.SpecialEvent, profile.Family);
         Assert.Equal(selectedProfile, profile.SelectedProfile);
         Assert.Contains(requiredVisualElement, profile.RequiredVisualElements, StringComparer.OrdinalIgnoreCase);
         Assert.Contains(requiredOverlayElement, profile.RequiredOverlayElements, StringComparer.OrdinalIgnoreCase);
@@ -71,8 +72,8 @@ public sealed class EventFamilyResolverTests
     [Fact]
     public void Resolve_SpecialEventNonOccultationForbidsPlanetGroupingSeparationLabels()
     {
-        var comet = EventFamilyProfiles.Resolve(EventFamily.SpecialEvent, "Comet");
-        var occultation = EventFamilyProfiles.Resolve(EventFamily.SpecialEvent, "Occultation");
+        var comet = EventFamilyProfiles.Resolve(CoreEventFamily.SpecialEvent, "Comet");
+        var occultation = EventFamilyProfiles.Resolve(CoreEventFamily.SpecialEvent, "Occultation");
 
         Assert.Contains("separation label", comet.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
         Assert.True(occultation.AllowsSeparationCue);
@@ -82,9 +83,9 @@ public sealed class EventFamilyResolverTests
     [Fact]
     public void Resolve_MoonProfileUsesMoonPhaseGuideThumbnailContract()
     {
-        var profile = EventFamilyProfiles.Resolve(EventFamily.Moon, "BLUE_MOON");
+        var profile = EventFamilyProfiles.Resolve(CoreEventFamily.Moon, "BLUE_MOON");
 
-        Assert.Equal(EventFamily.Moon, profile.Family);
+        Assert.Equal(CoreEventFamily.Moon, profile.Family);
         Assert.Equal("Moon", profile.ValidatorProfile);
         Assert.Equal("MoonPhaseGuideThumbnail", profile.ThumbnailCompositionType);
         Assert.Contains("meteor", profile.ForbiddenTerms, StringComparer.OrdinalIgnoreCase);
@@ -95,9 +96,9 @@ public sealed class EventFamilyResolverTests
     [Fact]
     public void Resolve_EclipseProfileUsesEclipseGuideThumbnailContract()
     {
-        var profile = EventFamilyProfiles.Resolve(EventFamily.Eclipse, "SolarEclipse");
+        var profile = EventFamilyProfiles.Resolve(CoreEventFamily.Eclipse, "SolarEclipse");
 
-        Assert.Equal(EventFamily.Eclipse, profile.Family);
+        Assert.Equal(CoreEventFamily.Eclipse, profile.Family);
         Assert.Equal("Eclipse", profile.ValidatorProfile);
         Assert.Equal("EclipseGuideThumbnail", profile.ThumbnailCompositionType);
         Assert.True(profile.AllowsGuideCard);
