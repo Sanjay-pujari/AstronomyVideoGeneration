@@ -32,14 +32,14 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
         if (profile is GenericAstronomyCreativeProfile && !diagnostics.Any(d => d.Code == "visual_director.unknown_family"))
             diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "visual_director.unknown_family", Message = "Unknown event family; generic astronomy documentary CDL used.", Source = nameof(VisualCreativeDirector) });
         var model = BuildModel(resolvedContext, profileResult);
-        var cdl = context.FeatureFlags.UseCDL ? BuildCdl(context, model) : null;
+        var cdl = context.FeatureFlags.UseCDL ? BuildCdl(resolvedContext, model) : null;
         if (cdl is not null)
         {
             diagnostics.Add(Info("visual_director.cdl_generated", "Creative Direction Language generated."));
             logger.LogInformation("VisualCreativeDirector CDL generated. CorrelationId={CorrelationId} DirectiveCount={DirectiveCount}", context.CorrelationId, cdl.Directives.Count);
         }
 
-        var contract = context.FeatureFlags.UseCreativeDirectionContract ? BuildContract(context, model, cdl) : null;
+        var contract = context.FeatureFlags.UseCreativeDirectionContract ? BuildContract(resolvedContext, model, cdl) : null;
         if (contract is not null)
         {
             diagnostics.Add(Info("visual_director.contract_generated", "CreativeDirectionContract generated."));
@@ -96,7 +96,8 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
     }
 
     private static BrandRules BrandRules() => new() { VisualTone = "premium astronomy documentary; scientific but emotional; cinematic; calm and trustworthy", StylePrinciples = ["not generic AI poster", "not horoscope/zodiac style", "mobile-first readability", "minimal clutter"], ColorPalette = new ColorPalette { Primary = ["deep space navy", "soft moon white"], Accent = ["muted gold", "cool cyan"], Avoid = ["neon rainbow", "astrology purple overload"] } };
-    private static PlanetRenderingRules RenderingRules(DirectionModel m) => new() { EventFamily = m.Family, Subjects = m.PrimaryObjects.Select(o => new PlanetRenderingSubjectRule { BodyName = o, BodyType = BodyType(o), RequiredShape = "perfectly circular disk when resolved", ColorBehavior = "naturalistic", SurfaceDetail = "realistic telescope/astrophotography", Illumination = "physically plausible where possible", ScalePolicy = "do not stretch or distort", ForbiddenArtifacts = ["fake glow", "cartoon surface", "oval planet", "melted rings"] }).ToList(), BackgroundRules = new Dictionary<string, string> { ["stars"] = "subtle and not noisy", ["constellationOverlays"] = "subtle when used" } };
+    private static PlanetRenderingRules RenderingRules(DirectionModel m) => new() { EventFamily = m.Family, Subjects = RenderingSubjects(m).Select(o => new PlanetRenderingSubjectRule { BodyName = o, BodyType = BodyType(o), RequiredShape = "perfectly circular disk when resolved", ColorBehavior = "naturalistic", SurfaceDetail = "realistic telescope/astrophotography", Illumination = "physically plausible where possible", ScalePolicy = "do not stretch or distort", ForbiddenArtifacts = ["fake glow", "cartoon surface", "oval planet", "melted rings"] }).ToList(), BackgroundRules = new Dictionary<string, string> { ["stars"] = "subtle and not noisy", ["constellationOverlays"] = "subtle when used" } };
+    private static List<string> RenderingSubjects(DirectionModel m) => NormalizeObjects(m.PrimaryObjects.Concat(m.SupportingObjects));
     private static TypographyRules TypographyRules() => new() { AllowedTextElements = ["event name", "date/time", "location", "viewing direction"], ForbiddenText = ["horoscope claims", "zodiac predictions", "clickbait clutter"], TitleRules = new Dictionary<string, object?> { ["mobileFirst"] = true }, LabelRules = new Dictionary<string, object?> { ["subtle"] = true } };
     private static ObservationCardRules ObservationRules() => new() { AllowedFields = ["date", "time", "location", "visibility"], VisualStyle = new Dictionary<string, object?> { ["treatment"] = "premium translucent lower-third" }, DataIntegrity = new Dictionary<string, object?> { ["noInventedObservationData"] = true } };
     private static NegativeConstraints NegativeRules() => new() { Scientific = ["no stretched or distorted planets", "no fake glow", "no cartoon planets", "no incorrect unsafe solar viewing cues"], Brand = ["not generic AI poster", "not horoscope/zodiac style"], Typography = ["no cluttered text", "no tiny unreadable labels"], Provider = ["no prompt generation in director"] };
@@ -104,7 +105,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
 
     private static Dictionary<string, object?> BuildCommonExtensions(VisualIntelligenceOrchestrationContext c, DirectionModel m)
     {
-        var extensions = new Dictionary<string, object?> { ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints };
+        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints };
         foreach (var item in m.ProfileExtensions) extensions[item.Key] = item.Value;
         return extensions;
     }

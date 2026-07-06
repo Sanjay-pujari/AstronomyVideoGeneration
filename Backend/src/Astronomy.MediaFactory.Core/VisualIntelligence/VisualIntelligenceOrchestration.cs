@@ -226,6 +226,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             logger.LogInformation("VisualCreativeDirector started. CorrelationId={CorrelationId}", context.CorrelationId);
             var direction = await director.CreateDirectionAsync(context with { Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
             diagnostics.AddRange(direction.Diagnostics);
+            var resolvedContext = context with { EventFamily = direction.CreativeDirectionContract?.EventFamily ?? ResolveFamilyFromCdl(direction.Cdl) ?? context.EventFamily, Diagnostics = diagnostics };
             PromptPackage? promptPackage = null;
             if (context.FeatureFlags.UsePromptComposerV2)
             {
@@ -241,13 +242,13 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             if (context.FeatureFlags.UseQualityScoring)
             {
                 var scorer = qualityScoringEngine ?? new CreativeQualityScoringEngine(options, Microsoft.Extensions.Logging.Abstractions.NullLogger<CreativeQualityScoringEngine>.Instance);
-                qualityReport = await scorer.ScoreAsync(new CreativeQualityScoringRequest { Context = context, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
+                qualityReport = await scorer.ScoreAsync(new CreativeQualityScoringRequest { Context = resolvedContext, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
                 diagnostics.AddRange(qualityReport.Diagnostics.Where(d => !diagnostics.Any(existing => existing.Code == d.Code && existing.Message == d.Message)));
             }
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
             logger.LogInformation("Visual Intelligence generated artifacts summary. CorrelationId={CorrelationId} Cdl={CdlGenerated} Contract={ContractGenerated} PromptPackage={PromptPackageGenerated} QualityReport={QualityReportGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null, promptPackage is not null, qualityReport is not null);
             diagnostics.Add(Info("visual_intelligence.observation_advisory_only", "Observation mode artifacts are advisory only; active prompts, Azure calls, and publication decisions are unchanged."));
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = resolvedContext, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -287,6 +288,13 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             Versions = new VisualIntelligenceVersionSnapshot(),
             Diagnostics = diagnostics
         };
+    }
+
+    private static ContractEventFamily? ResolveFamilyFromCdl(CDL? cdl)
+    {
+        if (cdl?.ExtensionFields.TryGetValue("eventFamily", out var value) != true || value is null)
+            return null;
+        return Enum.TryParse<ContractEventFamily>(value.ToString(), ignoreCase: true, out var family) ? family : null;
     }
 
     private ImageProviderType ResolveRequestedProvider(CreativeDirectionContract? contract)
@@ -366,7 +374,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         result.Context.CorrelationId,
         result.Context.ContentGenerationPlanId,
         result.Context.AstronomyEventIntelligenceId,
-        result.Context.EventFamily,
+        EventFamily = result.CreativeDirectionContract?.EventFamily ?? ResolveFamilyFromCdl(result.Cdl) ?? result.Context.EventFamily,
         result.Context.EventType,
         result.Context.Language,
         result.Context.Platform,
