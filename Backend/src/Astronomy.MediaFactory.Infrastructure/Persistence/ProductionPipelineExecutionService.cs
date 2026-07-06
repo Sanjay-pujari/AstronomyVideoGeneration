@@ -1935,7 +1935,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var heroRoot = context.ExecutionContext.HeroRoot!;
         var storyPath = Path.Combine(heroRoot, "hero-asset-story.json");
         var blueprintPath = Path.Combine(heroRoot, "hero-asset-blueprint.json");
-        var layoutValidationPath = Path.Combine(heroRoot, "hero-layout-validation.json");
+        var layoutValidationPath = ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroLayoutValidation);
         var heroPath = ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroFinal);
         var reviewPath = ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroReview);
 
@@ -1952,8 +1952,12 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"Hero generation failed contract validation: image file is empty: {NormalizePath(heroPath)}.");
 
         var compositionModelPath = Path.Combine(heroRoot, "hero-composition-model.json");
-        ValidateHeroForbiddenLeakage(context, [storyPath, blueprintPath, layoutValidationPath, compositionModelPath, reviewPath]);
-        ValidateHeroVisualStyle(compositionModelPath, blueprintPath, layoutValidationPath, enableStrictHeroOverlayValidation);
+        var forbiddenLeakagePaths = new List<string> { storyPath, blueprintPath, compositionModelPath };
+        if (outputArtifacts.ShouldWriteDiagnostics)
+            forbiddenLeakagePaths.AddRange([layoutValidationPath, reviewPath]);
+        ValidateHeroForbiddenLeakage(context, forbiddenLeakagePaths);
+        if (outputArtifacts.ShouldWriteDiagnostics)
+            ValidateHeroVisualStyle(compositionModelPath, blueprintPath, layoutValidationPath, enableStrictHeroOverlayValidation);
 
         outputs.AddRange(requiredFiles);
         return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -1961,27 +1965,16 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<string> BuildExpectedHeroValidationArtifacts(string heroRoot, OutputArtifactsOptions outputArtifacts)
     {
-        var artifacts = new List<string> { ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroFinal) };
-        if (outputArtifacts.ShouldWriteDiagnostics)
-        {
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroReview));
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroGenerationDiagnostics));
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.VisualPromptDiagnostics));
-        }
-        if (outputArtifacts.ShouldWriteComparison)
-        {
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroPromptComparison));
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroMigrationReport));
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroV3Prompt));
-            artifacts.Add(ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroV4Prompt));
-        }
-        return artifacts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return OutputArtifactRegistry.GetExpectedHeroValidationArtifacts(outputArtifacts)
+            .Select(artifactName => ResolveHeroArtifactPath(heroRoot, artifactName))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string ResolveHeroArtifactPath(string heroRoot, OutputArtifactName artifactName)
     {
         var outputRoot = Directory.GetParent(Path.GetFullPath(heroRoot))?.FullName ?? heroRoot;
-        return OutputArtifactRegistry.ResolveExistingPath(outputRoot, artifactName);
+        return OutputArtifactRegistry.ResolvePathFromManifestOrLegacy(outputRoot, artifactName);
     }
 
     private static void ValidateHeroVisualStyle(string compositionModelPath, string blueprintPath, string layoutValidationPath, bool enableStrictHeroOverlayValidation)
@@ -2005,30 +1998,31 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException("Hero generation failed cinematic style validation: " + string.Join("; ", layoutSummary.Errors));
         }
 
-        TraceHeroValidation($"Phase11HeroValidator OUTPUT validation passed from hero-layout-validation.json source of truth; summary='{layoutSummary.Summary}'");
+        TraceHeroValidation($"Phase11HeroValidator OUTPUT validation passed from {OutputArtifactName.HeroLayoutValidation} source of truth; summary='{layoutSummary.Summary}'");
     }
 
     private sealed record HeroLayoutValidationSummary(bool Passed, string Summary, IReadOnlyList<string> Errors);
 
     private static HeroLayoutValidationSummary SummarizeHeroLayoutValidation(string layoutValidationPath)
     {
-        TraceHeroValidation($"HeroLayoutValidator INPUT sourceOfTruth=hero-layout-validation.json; layoutValidationPath={layoutValidationPath}; exists={File.Exists(layoutValidationPath)}");
+        var layoutArtifactName = OutputArtifactName.HeroLayoutValidation.ToString();
+        TraceHeroValidation($"HeroLayoutValidator INPUT sourceOfTruth={layoutArtifactName}; layoutValidationPath={layoutValidationPath}; exists={File.Exists(layoutValidationPath)}");
         var errors = new List<string>();
         if (!File.Exists(layoutValidationPath))
         {
-            errors.Add($"hero-layout-validation.json is required at '{NormalizePath(layoutValidationPath)}'.");
-            return new HeroLayoutValidationSummary(false, "missing hero-layout-validation.json", errors);
+            errors.Add($"{layoutArtifactName} is required at '{NormalizePath(layoutValidationPath)}'.");
+            return new HeroLayoutValidationSummary(false, $"missing {layoutArtifactName}", errors);
         }
 
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutValidationPath));
         var root = doc.RootElement;
-        var heroOverlayDiagnosticsSource = "hero-layout-validation.json";
+        var heroOverlayDiagnosticsSource = layoutArtifactName;
         if (!TryGetHeroOverlayDiagnostics(root, out var heroOverlayDiagnostics))
         {
             if (TryGetCompatibleHeroOverlayDiagnostics(layoutValidationPath, out heroOverlayDiagnostics, out heroOverlayDiagnosticsSource))
-                TraceHeroValidation($"HeroLayoutValidator compatibility fallback using heroOverlayDiagnostics from {heroOverlayDiagnosticsSource} because hero-layout-validation.json is missing the canonical object.");
+                TraceHeroValidation($"HeroLayoutValidator compatibility fallback using heroOverlayDiagnostics from {heroOverlayDiagnosticsSource} because {layoutArtifactName} is missing the canonical object.");
             else
-                errors.Add("hero-layout-validation.json is missing heroOverlayDiagnostics.");
+                errors.Add($"{layoutArtifactName} is missing heroOverlayDiagnostics.");
         }
 
         var layoutIsValid = ReadNullableBool(root, "isValid");
@@ -2058,14 +2052,14 @@ public sealed partial class ProductionPipelineExecutionService(
             safeArea = ReadNullableBool(heroOverlayDiagnostics, "safeArea");
         }
 
-        if (layoutIsValid != true) errors.Add("hero-layout-validation.json reports isValid != true.");
-        if (!compositionReportsPass) errors.Add("hero-layout-validation.json compositionReports must all PASS with no issues or regeneration requirements.");
-        if (!objectVisibilityPass) errors.Add("hero-layout-validation.json reports missing or cropped hero objects.");
-        if (!generatedVariantsExist) errors.Add("hero-layout-validation.json reports no generated variants.");
-        if (heroTitleClipped == true || heroSubtitleClipped == true || heroTitleOverflowDetected == true) errors.Add("hero-layout-validation.json reports clipping or overflow.");
-        if (heroTextOverlapDetected == true || heroTitleSubtitleOverlap == true || heroTitleMetadataOverlap == true) errors.Add("hero-layout-validation.json reports text overlap.");
+        if (layoutIsValid != true) errors.Add($"{layoutArtifactName} reports isValid != true.");
+        if (!compositionReportsPass) errors.Add($"{layoutArtifactName} compositionReports must all PASS with no issues or regeneration requirements.");
+        if (!objectVisibilityPass) errors.Add($"{layoutArtifactName} reports missing or cropped hero objects.");
+        if (!generatedVariantsExist) errors.Add($"{layoutArtifactName} reports no generated variants.");
+        if (heroTitleClipped == true || heroSubtitleClipped == true || heroTitleOverflowDetected == true) errors.Add($"{layoutArtifactName} reports clipping or overflow.");
+        if (heroTextOverlapDetected == true || heroTitleSubtitleOverlap == true || heroTitleMetadataOverlap == true) errors.Add($"{layoutArtifactName} reports text overlap.");
         var anySafeAreaPassed = heroTextSafeAreaPassed == true || heroTitleSafeAreaPassed == true || safeArea == true;
-        if (!anySafeAreaPassed) errors.Add("hero-layout-validation.json reports no passing hero safe-area signal (heroTextSafeAreaPassed, heroTitleSafeAreaPassed, or safeArea).");
+        if (!anySafeAreaPassed) errors.Add($"{layoutArtifactName} reports no passing hero safe-area signal (heroTextSafeAreaPassed, heroTitleSafeAreaPassed, or safeArea).");
 
         var passed = errors.Count == 0;
         var summary = $"isValid={layoutIsValid}; compositionReportsPass={compositionReportsPass}; objectVisibilityPass={objectVisibilityPass}; generatedVariantsExist={generatedVariantsExist}; noClipping={heroTitleClipped != true && heroSubtitleClipped != true && heroTitleOverflowDetected != true}; noOverlap={heroTextOverlapDetected != true && heroTitleSubtitleOverlap != true && heroTitleMetadataOverlap != true}; heroTextSafeAreaPassed={heroTextSafeAreaPassed}; heroTitleSafeAreaPassed={heroTitleSafeAreaPassed}; safeArea={safeArea}; heroOverlayDiagnosticsSource={heroOverlayDiagnosticsSource}; passed={passed}";
@@ -2331,16 +2325,20 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool TryGetCompatibleHeroOverlayDiagnostics(string layoutValidationPath, out JsonElement heroOverlayDiagnostics, out string source)
     {
         var directory = Path.GetDirectoryName(layoutValidationPath) ?? string.Empty;
-        foreach (var fileName in new[] { "hero-generation-diagnostics.json", "hero-review.json" })
+        var fullDirectory = Path.GetFullPath(directory);
+        var outputRoot = string.Equals(Path.GetFileName(fullDirectory), "diagnostics", StringComparison.OrdinalIgnoreCase)
+            ? Directory.GetParent(Directory.GetParent(fullDirectory)?.FullName ?? fullDirectory)?.FullName ?? fullDirectory
+            : Directory.GetParent(fullDirectory)?.FullName ?? fullDirectory;
+        foreach (var artifactName in new[] { OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroReview })
         {
-            var candidatePath = Path.Combine(directory, fileName);
+            var candidatePath = OutputArtifactRegistry.ResolvePathFromManifestOrLegacy(outputRoot, artifactName);
             if (!File.Exists(candidatePath)) continue;
 
             using var doc = JsonDocument.Parse(File.ReadAllText(candidatePath));
             if (TryGetHeroOverlayDiagnostics(doc.RootElement, out var candidateDiagnostics))
             {
                 heroOverlayDiagnostics = candidateDiagnostics.Clone();
-                source = fileName;
+                source = artifactName.ToString();
                 return true;
             }
         }
@@ -2575,9 +2573,9 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         if (string.IsNullOrWhiteSpace(expectedValue)) return;
         if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
-            throw new InvalidOperationException($"Hero generation failed contract validation: hero-scene-manifest.json must reference the {label} in '{propertyName}'.");
+            throw new InvalidOperationException($"Hero generation failed contract validation: {OutputArtifactName.HeroSceneManifest} must reference the {label} in '{propertyName}'.");
         if (!string.Equals(property.GetString(), expectedValue, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"Hero generation failed contract validation: hero-scene-manifest.json {propertyName} value '{property.GetString()}' does not match expected {label} '{expectedValue}'.");
+            throw new InvalidOperationException($"Hero generation failed contract validation: {OutputArtifactName.HeroSceneManifest} {propertyName} value '{property.GetString()}' does not match expected {label} '{expectedValue}'.");
     }
 
     private static void ValidateHeroForbiddenLeakage(ProductionPhaseContext context, IReadOnlyList<string> paths)
@@ -13656,7 +13654,7 @@ public sealed partial class ProductionPipelineExecutionService(
             .ToArray();
         var canonicalHeroFinalExists = HeroFileExistsWithContent(heroOutputPath);
         var canonicalHeroFinalFileSize = GetHeroFileSize(heroOutputPath);
-        var layoutValidationPath = Path.Combine(heroRoot, "hero-layout-validation.json");
+        var layoutValidationPath = ResolveHeroArtifactPath(heroRoot, OutputArtifactName.HeroLayoutValidation);
         var renderedBlocks = ReadRenderedBlocks(layoutValidationPath);
         var rendererContract = ReadHeroContractDiagnosticValue(layoutValidationPath, "rendererContract");
         var heroContract = ContainsGuideHeroBlocks(renderedBlocks) ? "GuideHero" : FirstNonEmpty(ReadHeroContractDiagnosticValue(layoutValidationPath, "heroContract"), "GuideHero");

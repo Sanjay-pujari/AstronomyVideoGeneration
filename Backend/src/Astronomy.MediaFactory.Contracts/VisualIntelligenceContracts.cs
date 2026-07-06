@@ -41,13 +41,16 @@ public static class VisualIntelligenceFeatureFlags
 public enum OutputArtifactName
 {
     HeroReview,
+    HeroLayoutValidation,
     HeroGenerationDiagnostics,
+    HeroSceneManifest,
     VisualPromptDiagnostics,
     HeroPromptComparison,
     HeroMigrationReport,
     HeroV3Prompt,
     HeroV4Prompt,
-    HeroFinal
+    HeroFinal,
+    HeroArtifactManifest
 }
 
 public static class OutputArtifactRegistry
@@ -55,25 +58,31 @@ public static class OutputArtifactRegistry
     private static readonly IReadOnlyDictionary<OutputArtifactName, string> PrimaryRelativePaths = new Dictionary<OutputArtifactName, string>
     {
         [OutputArtifactName.HeroReview] = Path.Combine("hero", "diagnostics", "hero-review.json"),
+        [OutputArtifactName.HeroLayoutValidation] = Path.Combine("hero", "diagnostics", "hero-layout-validation.json"),
         [OutputArtifactName.HeroGenerationDiagnostics] = Path.Combine("hero", "diagnostics", "hero-generation-diagnostics.json"),
+        [OutputArtifactName.HeroSceneManifest] = Path.Combine("hero", "diagnostics", "hero-scene-manifest.json"),
         [OutputArtifactName.VisualPromptDiagnostics] = Path.Combine("hero", "diagnostics", "visual-prompt-diagnostics.json"),
         [OutputArtifactName.HeroPromptComparison] = Path.Combine("hero", "comparison", "hero-prompt-comparison.json"),
         [OutputArtifactName.HeroMigrationReport] = Path.Combine("hero", "comparison", "hero-migration-report.json"),
         [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "comparison", "hero-v3-prompt.txt"),
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "comparison", "hero-v4-prompt.txt"),
-        [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png")
+        [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
+        [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json")
     };
 
     private static readonly IReadOnlyDictionary<OutputArtifactName, string> LegacyRelativePaths = new Dictionary<OutputArtifactName, string>
     {
         [OutputArtifactName.HeroReview] = Path.Combine("hero", "hero-review.json"),
+        [OutputArtifactName.HeroLayoutValidation] = Path.Combine("hero", "hero-layout-validation.json"),
         [OutputArtifactName.HeroGenerationDiagnostics] = Path.Combine("hero", "hero-generation-diagnostics.json"),
+        [OutputArtifactName.HeroSceneManifest] = Path.Combine("hero", "hero-scene-manifest.json"),
         [OutputArtifactName.VisualPromptDiagnostics] = Path.Combine("hero", "visual-prompt-diagnostics.json"),
         [OutputArtifactName.HeroPromptComparison] = Path.Combine("hero", "hero-prompt-comparison.json"),
         [OutputArtifactName.HeroMigrationReport] = Path.Combine("hero", "hero-migration-report.json"),
         [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "hero-v3-prompt.txt"),
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "hero-v4-prompt.txt"),
-        [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png")
+        [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
+        [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json")
     };
 
     public static string GetRelativePath(OutputArtifactName artifactName) => PrimaryRelativePaths[artifactName];
@@ -93,6 +102,51 @@ public static class OutputArtifactRegistry
         var legacy = GetLegacyPath(outputRoot, artifactName);
         return File.Exists(legacy) ? legacy : primary;
     }
+
+    public static IReadOnlyList<OutputArtifactName> GetExpectedHeroValidationArtifacts(OutputArtifactsOptions options)
+    {
+        var artifacts = new List<OutputArtifactName> { OutputArtifactName.HeroFinal };
+        if (options.ShouldWriteDiagnostics)
+            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics]);
+        if (options.ShouldWriteComparison)
+            artifacts.AddRange([OutputArtifactName.HeroPromptComparison, OutputArtifactName.HeroMigrationReport, OutputArtifactName.HeroV3Prompt, OutputArtifactName.HeroV4Prompt]);
+        return artifacts;
+    }
+
+    public static HeroArtifactManifest CreateHeroArtifactManifest(string outputRoot, OutputArtifactsOptions options)
+    {
+        var artifacts = Enum.GetValues<OutputArtifactName>()
+            .Where(name => name != OutputArtifactName.HeroArtifactManifest)
+            .ToDictionary(name => name.ToString(), name => GetPath(outputRoot, name), StringComparer.OrdinalIgnoreCase);
+        return new HeroArtifactManifest("4.0D.2", options.Mode.ToString(), GetExpectedHeroValidationArtifacts(options).Select(name => name.ToString()).ToArray(), artifacts);
+    }
+
+    public static string GetManifestPath(string outputRoot) => GetPath(outputRoot, OutputArtifactName.HeroArtifactManifest);
+
+    public static bool TryReadHeroArtifactManifest(string outputRoot, out HeroArtifactManifest manifest)
+    {
+        var path = GetManifestPath(outputRoot);
+        if (File.Exists(path))
+        {
+            manifest = JsonSerializer.Deserialize<HeroArtifactManifest>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? HeroArtifactManifest.Empty;
+            return manifest.Artifacts.Count > 0;
+        }
+
+        manifest = HeroArtifactManifest.Empty;
+        return false;
+    }
+
+    public static string ResolvePathFromManifestOrLegacy(string outputRoot, OutputArtifactName artifactName)
+    {
+        if (TryReadHeroArtifactManifest(outputRoot, out var manifest) && manifest.Artifacts.TryGetValue(artifactName.ToString(), out var path) && !string.IsNullOrWhiteSpace(path))
+            return path;
+        return ResolveExistingPath(outputRoot, artifactName);
+    }
+}
+
+public sealed record HeroArtifactManifest(string Version, string OutputArtifactMode, IReadOnlyList<string> ExpectedArtifacts, IReadOnlyDictionary<string, string> Artifacts)
+{
+    public static HeroArtifactManifest Empty { get; } = new("4.0D.2", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 }
 
 public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }
