@@ -28,6 +28,7 @@ public static class VisualIntelligenceFeatureFlags
     public const string UseQualityScoring = nameof(UseQualityScoring);
     public const string UseQualityScoringBlocking = nameof(UseQualityScoringBlocking);
     public const string UseExperimentalRenderingRules = nameof(UseExperimentalRenderingRules);
+    public const string UseHeroPromptV4 = nameof(UseHeroPromptV4);
     public const string Enabled = nameof(Enabled);
     public const string WriteDiagnostics = nameof(WriteDiagnostics);
     public const string DiagnosticsOutputPath = nameof(DiagnosticsOutputPath);
@@ -51,6 +52,7 @@ public sealed class VisualIntelligenceOptions
     public bool UseQualityScoring { get; init; }
     public bool UseQualityScoringBlocking { get; init; }
     public bool UseExperimentalRenderingRules { get; init; }
+    public bool UseHeroPromptV4 { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<EventFamily>))]
@@ -92,7 +94,7 @@ public enum CreativeQualityCategory
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<VisualIntelligenceFeatureFlagName>))]
-public enum VisualIntelligenceFeatureFlagName { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("useVisualCreativeDirector")] UseVisualCreativeDirector, [JsonStringEnumMemberName("useCDL")] UseCDL, [JsonStringEnumMemberName("useCreativeDirectionContract")] UseCreativeDirectionContract, [JsonStringEnumMemberName("usePromptComposerV2")] UsePromptComposerV2, [JsonStringEnumMemberName("useProviderProfiles")] UseProviderProfiles, [JsonStringEnumMemberName("useQualityScoring")] UseQualityScoring, [JsonStringEnumMemberName("useQualityScoringBlocking")] UseQualityScoringBlocking, [JsonStringEnumMemberName("useExperimentalRenderingRules")] UseExperimentalRenderingRules }
+public enum VisualIntelligenceFeatureFlagName { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("useVisualCreativeDirector")] UseVisualCreativeDirector, [JsonStringEnumMemberName("useCDL")] UseCDL, [JsonStringEnumMemberName("useCreativeDirectionContract")] UseCreativeDirectionContract, [JsonStringEnumMemberName("usePromptComposerV2")] UsePromptComposerV2, [JsonStringEnumMemberName("useProviderProfiles")] UseProviderProfiles, [JsonStringEnumMemberName("useQualityScoring")] UseQualityScoring, [JsonStringEnumMemberName("useQualityScoringBlocking")] UseQualityScoringBlocking, [JsonStringEnumMemberName("useExperimentalRenderingRules")] UseExperimentalRenderingRules, [JsonStringEnumMemberName("useHeroPromptV4")] UseHeroPromptV4 }
 
 public sealed record CDL
 {

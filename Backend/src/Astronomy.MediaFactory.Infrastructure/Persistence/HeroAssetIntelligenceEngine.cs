@@ -15,6 +15,7 @@ using SixLabors.ImageSharp.Drawing.Processing;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Path = System.IO.Path;
@@ -39,7 +40,8 @@ public sealed class HeroAssetStoryGenerator(
     IHeroAssetSceneSelector sceneSelector,
     IHeroCompositionEngine compositionEngine,
     IOptions<ThumbnailFontOptions> fontOptions,
-    IRuntimeAssetPathResolver assetPathResolver) : IHeroAssetStoryGenerator
+    IRuntimeAssetPathResolver assetPathResolver,
+    IHeroPromptMigrationService? heroPromptMigrationService = null) : IHeroAssetStoryGenerator
 {
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
@@ -1439,6 +1441,7 @@ public sealed class HeroAssetStoryGenerator(
             variants = prompts.Select(p => new { p.Variant, p.FileName, p.Width, p.Height, p.Prompt })
         }, JsonOptions), cancellationToken);
         await WriteHeroVisualPromptDiagnosticsAsync(heroAssetsRoot, prompts, intelligence, context, cancellationToken);
+        await GenerateHeroPromptMigrationDiagnosticsAsync(heroAssetsRoot, prompts.FirstOrDefault().Prompt ?? string.Empty, intelligence, heroStory.Language, cancellationToken);
 
         var generatedFiles = new List<string> { NormalizePath(promptPath) };
         var variants = new List<(string Variant, string Prompt, int Width, int Height, string BackgroundPath, string ImagePath, AzureImage2GenerationResult Result, string Hash)>();
@@ -1487,6 +1490,62 @@ public sealed class HeroAssetStoryGenerator(
         return new HeroPhysicalWriteResult(generatedFiles, variants.Select(v => NormalizePath(v.ImagePath)).ToArray(), variants.Sum(v => GetHeroFileSize(v.ImagePath)), true, true, null, variants.ToDictionary(v => NormalizeHeroVariantName(v.Variant), v => GetHeroFileSize(v.ImagePath), StringComparer.OrdinalIgnoreCase));
     }
 
+
+    private async Task GenerateHeroPromptMigrationDiagnosticsAsync(string heroAssetsRoot, string legacyPrompt, ProductionEventIntelligence? intelligence, string language, CancellationToken cancellationToken)
+    {
+        if (heroPromptMigrationService is null)
+            return;
+
+        var objects = EventObjectContextBuilder.FromIntelligence(intelligence);
+        var contract = new CreativeDirectionContract
+        {
+            ContractId = $"hero-v4-observation-{Guid.NewGuid():N}",
+            SourceEventId = FirstNonEmpty(intelligence?.StrategyId, intelligence?.Title, "hero-event"),
+            EventFamily = ResolveHeroMigrationEventFamily(intelligence?.EventType, intelligence?.Title),
+            TargetPlatform = Platform.Hero,
+            AspectRatio = AspectRatio.Landscape16x9,
+            Language = language,
+            VisualIntent = new VisualIntent
+            {
+                PrimarySubject = FirstNonEmpty(objects.ObjectHeadlineText, intelligence?.Title, intelligence?.ShortTitle, "astronomy hero event"),
+                SecondarySubjects = objects.ObjectNames.ToList(),
+                NarrativeRole = "Hero observation-mode diagnostic prompt",
+                Mood = FirstNonEmpty(intelligence?.VisualTheme, "premium documentary astronomy"),
+                Composition = "cinematic hero composition with preserved deterministic overlay safe space",
+                CreativeStyle = CreativeStyle.PremiumDocumentary,
+                CompositionStyle = CompositionStyle.HeroSubject
+            },
+            BrandRules = new BrandRules { StylePrinciples = ["premium", "educational", "scientifically grounded"] },
+            PlanetRenderingRules = new PlanetRenderingRules
+            {
+                EventFamily = ResolveHeroMigrationEventFamily(intelligence?.EventType, intelligence?.Title),
+                Subjects = objects.ObjectNames.Select(name => new PlanetRenderingSubjectRule { BodyName = name, RequiredShape = "preserve circular geometry", ScalePolicy = "scientifically plausible hero emphasis", ForbiddenArtifacts = ["stretched oval planets", "fake labels", "UI panels"] }).ToList()
+            },
+            TypographyRules = new TypographyRules { AllowedTextElements = ["title", "subtitle", "compact footer metadata"], ForbiddenText = ["embedded background text", "watermark", "logo"] },
+            ObservationCardRules = new ObservationCardRules { CardUsage = "preserve existing deterministic overlay only", AllowedFields = ["date", "time", "direction", "visibility"] },
+            ProviderHints = new ProviderHints { PreferredProvider = ImageProviderType.AzureImage, PromptStyle = "hero-v4-observation" },
+            NegativeConstraints = new NegativeConstraints { Scientific = ["no fake astronomy geometry"], Brand = ["no clutter"], Typography = ["no generated text inside background"] }
+        };
+
+        await heroPromptMigrationService.GenerateAsync(new HeroPromptMigrationRequest
+        {
+            CreativeDirectionContract = contract,
+            LegacyPrompt = legacyPrompt,
+            HeroDirectory = heroAssetsRoot,
+            RequestedProvider = ImageProviderType.AzureImage
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static EventFamily ResolveHeroMigrationEventFamily(string? eventType, string? title)
+    {
+        var text = $"{eventType} {title}";
+        if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return EventFamily.MeteorShower;
+        if (text.Contains("solar", StringComparison.OrdinalIgnoreCase) || text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return EventFamily.SolarEvent;
+        if (text.Contains("lunar", StringComparison.OrdinalIgnoreCase) || text.Contains("moon", StringComparison.OrdinalIgnoreCase)) return EventFamily.LunarEvent;
+        if (text.Contains("comet", StringComparison.OrdinalIgnoreCase)) return EventFamily.Comet;
+        if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase) || text.Contains("alignment", StringComparison.OrdinalIgnoreCase)) return EventFamily.PlanetConjunction;
+        return EventFamily.Unknown;
+    }
 
     private static string StrengthenHeroVariantCompositionPrompt(string prompt, HeroVariantCompositionReportDto report)
     {
