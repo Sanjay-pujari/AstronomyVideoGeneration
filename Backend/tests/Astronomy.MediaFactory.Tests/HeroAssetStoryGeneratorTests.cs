@@ -959,6 +959,7 @@ public sealed class HeroAssetStoryGeneratorTests
             [title],
             ["Open on cinematic event"],
             [],
+            [],
             eventType,
             RequiredVisualObjects: [title],
             HeroCopyCandidates: [title.ToUpperInvariant()]);
@@ -1030,6 +1031,7 @@ public sealed class HeroAssetStoryGeneratorTests
             ["meteor streaks", "radiant hint", "dark sky", "low moon interference", "viewing window"],
             ["Open on meteor streaks", "Show radiant hint", "Close with viewing window"],
             [],
+            [],
             "MeteorShower",
             RequiredVisualObjects: ["meteor streaks", "radiant hint", "dark sky", "low moon interference", "viewing window"],
             HeroCopyCandidates: ["METEORS PEAK TONIGHT", "WATCH AFTER MIDNIGHT"]);
@@ -1055,6 +1057,7 @@ public sealed class HeroAssetStoryGeneratorTests
             ["Use certified solar glasses"],
             ["large corona", "ring silhouette", "dramatic sky glow"],
             ["Open on totality"],
+            [],
             [],
             "SolarEclipse",
             RequiredVisualObjects: ["large corona", "ring silhouette"],

@@ -360,7 +360,6 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         var saved = JsonSerializer.Deserialize<ThumbnailIntelligenceDto>(await File.ReadAllTextAsync(Path.Combine(BuildThumbnailAssetsRoot(workingDirectory), "thumbnail-intelligence.json")), JsonOptions);
         Assert.NotNull(saved);
         Assert.Equal("PlanetaryEvent", saved!.EventFamily);
-        Assert.Equal("JUPITER + VENUS", saved.Headline);
         Assert.Equal("JUPITER + VENUS", saved.ThumbnailCopy.PrimaryText);
         Assert.Equal(["Jupiter", "Venus"], saved.ObjectLabels);
         Assert.Equal(["1.63° APART"], saved.Callouts);
@@ -376,8 +375,8 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.DoesNotContain("tomorrow", guideText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("this evening", guideText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("coming soon", guideText, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("consolidated", saved.Headline, StringComparison.OrdinalIgnoreCase);
-        Assert.True(saved.Headline.Length <= 50);
+        Assert.DoesNotContain("consolidated", saved.ThumbnailCopy.PrimaryText, StringComparison.OrdinalIgnoreCase);
+        Assert.True(saved.ThumbnailCopy.PrimaryText.Length <= 50);
     }
 
 
@@ -427,7 +426,7 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Equal("पूर्व दिशा", saved.GuideCard.SkyGuideCue);
 
         var thumbnailMetadata = string.Join(" ",
-            saved.Headline,
+            saved.ThumbnailCopy.PrimaryText,
             saved.SelectedThumbnailHook,
             saved.ThumbnailCopy.PrimaryText,
             saved.ThumbnailCopy.SecondaryText,
