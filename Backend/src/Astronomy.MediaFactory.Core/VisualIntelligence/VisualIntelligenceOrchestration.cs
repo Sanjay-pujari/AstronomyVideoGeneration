@@ -55,10 +55,17 @@ public sealed record VisualIntelligenceOrchestrationRequest
     public string? CorrelationId { get; init; }
     public ContractEventFamily EventFamily { get; init; } = ContractEventFamily.Unknown;
     public string EventType { get; init; } = string.Empty;
+    public string EventName { get; init; } = string.Empty;
     public string Language { get; init; } = "en";
     public Platform Platform { get; init; } = Platform.Unknown;
     public AspectRatio AspectRatio { get; init; } = AspectRatio.Unknown;
     public string RequestedAssetType { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public string Location { get; init; } = string.Empty;
+    public List<string> PrimaryObjects { get; init; } = [];
+    public List<string> SupportingObjects { get; init; } = [];
+    public DateTimeOffset? ObservationDateTime { get; init; }
+    public string VisibilityGuidance { get; init; } = string.Empty;
 }
 
 public sealed record VisualIntelligenceOrchestrationContext
@@ -66,10 +73,17 @@ public sealed record VisualIntelligenceOrchestrationContext
     public string CorrelationId { get; init; } = string.Empty;
     public ContractEventFamily EventFamily { get; init; } = ContractEventFamily.Unknown;
     public string EventType { get; init; } = string.Empty;
+    public string EventName { get; init; } = string.Empty;
     public string Language { get; init; } = "en";
     public Platform Platform { get; init; } = Platform.Unknown;
     public AspectRatio AspectRatio { get; init; } = AspectRatio.Unknown;
     public string RequestedAssetType { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public string Location { get; init; } = string.Empty;
+    public List<string> PrimaryObjects { get; init; } = [];
+    public List<string> SupportingObjects { get; init; } = [];
+    public DateTimeOffset? ObservationDateTime { get; init; }
+    public string VisibilityGuidance { get; init; } = string.Empty;
     public VisualIntelligenceFlagSnapshot FeatureFlags { get; init; } = new();
     public VisualIntelligenceVersionSnapshot Versions { get; init; } = new();
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
@@ -169,8 +183,10 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
 
         try
         {
+            logger.LogInformation("VisualCreativeDirector started. CorrelationId={CorrelationId}", context.CorrelationId);
             var direction = await director.CreateDirectionAsync(context with { Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
             diagnostics.AddRange(direction.Diagnostics);
+            logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
             return Complete(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, Diagnostics = diagnostics });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -192,10 +208,17 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             CorrelationId = string.IsNullOrWhiteSpace(request.CorrelationId) ? Guid.NewGuid().ToString("N") : request.CorrelationId,
             EventFamily = request.EventFamily,
             EventType = request.EventType,
+            EventName = request.EventName,
             Language = string.IsNullOrWhiteSpace(request.Language) ? "en" : request.Language,
             Platform = request.Platform,
             AspectRatio = request.AspectRatio,
             RequestedAssetType = request.RequestedAssetType,
+            Region = request.Region,
+            Location = request.Location,
+            PrimaryObjects = request.PrimaryObjects,
+            SupportingObjects = request.SupportingObjects,
+            ObservationDateTime = request.ObservationDateTime,
+            VisibilityGuidance = request.VisibilityGuidance,
             FeatureFlags = flags,
             Versions = new VisualIntelligenceVersionSnapshot(),
             Diagnostics = diagnostics
@@ -216,7 +239,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
     public static IServiceCollection AddVisualIntelligenceOrchestration(this IServiceCollection services)
     {
         services.AddOptions<VisualIntelligenceOptions>();
-        services.AddScoped<IVisualCreativeDirector, StubVisualCreativeDirector>();
+        services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();
         services.AddScoped<IVisualIntelligenceOrchestrator, VisualIntelligenceOrchestrator>();
         return services;
     }

@@ -27,7 +27,7 @@ public sealed class VisualIntelligenceOrchestratorTests
     }
 
     [Fact]
-    public async Task Enabled_path_returns_placeholder_cdl_and_contract()
+    public async Task Enabled_path_returns_real_cdl_and_contract()
     {
         var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions
         {
@@ -44,7 +44,8 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.Equal("3.2D", result.Cdl!.CdlVersion);
         Assert.Equal("3.2G", result.CreativeDirectionContract!.ContractVersion);
         Assert.Equal(ContractEventFamily.PlanetConjunction, result.CreativeDirectionContract.EventFamily);
-        Assert.Contains(result.Diagnostics, d => d.Code == "visual_intelligence.stub");
+        Assert.Contains(result.Cdl!.Directives, d => d.Name == "creativeIntent");
+        Assert.Contains(result.Diagnostics, d => d.Code == "visual_director.cdl_generated");
     }
 
     [Fact]
@@ -105,7 +106,7 @@ public sealed class VisualIntelligenceOrchestratorTests
     }
 
     private static VisualIntelligenceOrchestrator CreateOrchestrator(VisualIntelligenceOptions options, IVisualCreativeDirector? director = null) =>
-        new(Options.Create(options), director ?? new StubVisualCreativeDirector(), NullLogger<VisualIntelligenceOrchestrator>.Instance);
+        new(Options.Create(options), director ?? new VisualCreativeDirector(NullLogger<VisualCreativeDirector>.Instance), NullLogger<VisualIntelligenceOrchestrator>.Instance);
 
     private static VisualIntelligenceOrchestrationRequest DefaultRequest() => new()
     {
