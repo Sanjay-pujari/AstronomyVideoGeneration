@@ -106,7 +106,19 @@ public sealed class VisualIntelligenceOrchestratorTests
     }
 
     private static VisualIntelligenceOrchestrator CreateOrchestrator(VisualIntelligenceOptions options, IVisualCreativeDirector? director = null) =>
-        new(Options.Create(options), director ?? new VisualCreativeDirector(NullLogger<VisualCreativeDirector>.Instance), NullLogger<VisualIntelligenceOrchestrator>.Instance);
+        new(Options.Create(options),
+            director ?? new VisualCreativeDirector(NullLogger<VisualCreativeDirector>.Instance),
+            CreatePromptComposer(options),
+            NullLogger<VisualIntelligenceOrchestrator>.Instance);
+
+    private static IPromptComposerV2 CreatePromptComposer(VisualIntelligenceOptions options) =>
+        new PromptComposerV2(
+            Options.Create(options),
+            new PromptSectionBuilder(),
+            new PromptOptimizer(),
+            new GenericProviderAdapter(),
+            new PromptPackageBuilder(),
+            new ImageProviderProfileRegistry([new GenericImageProviderProfile()]));
 
     private static VisualIntelligenceOrchestrationRequest DefaultRequest() => new()
     {
