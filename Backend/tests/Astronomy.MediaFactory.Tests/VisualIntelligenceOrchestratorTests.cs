@@ -4,6 +4,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -308,6 +309,71 @@ public sealed class VisualIntelligenceOrchestratorTests
     }
 
     [Fact]
+    public void Default_appsettings_keep_visual_intelligence_disabled()
+    {
+        var options = BindVisualIntelligenceOptions("appsettings.json");
+
+        Assert.False(options.Enabled);
+        Assert.False(options.WriteDiagnostics);
+        Assert.True(options.ObservationMode);
+        Assert.Equal(ImageProviderType.Unknown, options.DefaultProvider);
+        Assert.False(options.UseVisualCreativeDirector);
+        Assert.False(options.UseCDL);
+        Assert.False(options.UseCreativeDirectionContract);
+        Assert.False(options.UsePromptComposerV2);
+        Assert.False(options.UseProviderProfiles);
+        Assert.False(options.UseQualityScoring);
+        Assert.False(options.UseQualityScoringBlocking);
+        Assert.False(options.UseExperimentalRenderingRules);
+    }
+
+    [Fact]
+    public async Task Production_default_config_remains_no_op()
+    {
+        var options = BindVisualIntelligenceOptions("appsettings.json");
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(options);
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { RunOutputFolder = path });
+
+        Assert.Equal(VisualIntelligenceOrchestrationStatus.Disabled, result.Status);
+        Assert.Null(result.PromptPackage);
+        Assert.False(Directory.Exists(Path.Combine(path, "diagnostics", "visual-intelligence")));
+        Assert.Contains(result.Diagnostics, d => d.Code == "visual_intelligence.diagnostics_disabled");
+    }
+
+    [Fact]
+    public async Task Development_config_resolves_azure_image_provider_profile()
+    {
+        var options = BindVisualIntelligenceOptions("appsettings.Development.json");
+        var orchestrator = CreateOrchestrator(options, promptComposer: CreatePromptComposer(options, new ProviderAdapterResolver([new AzurePromptProviderAdapter(), new GenericProviderAdapter()])));
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        Assert.Equal(VisualIntelligenceOrchestrationStatus.Success, result.Status);
+        Assert.True(options.Enabled);
+        Assert.True(options.WriteDiagnostics);
+        Assert.True(options.UseProviderProfiles);
+        Assert.Equal(ImageProviderType.AzureImage, options.DefaultProvider);
+        Assert.NotNull(result.PromptPackage);
+        Assert.Equal(ImageProviderType.AzureImage, result.PromptPackage!.ProviderName);
+        Assert.Equal(VisualIntelligenceContractVersions.AzureImageProviderProfileVersion, result.PromptPackage.ProviderProfileVersion);
+    }
+
+    [Fact]
+    public async Task Development_provider_profiles_avoid_generic_fallback_warning()
+    {
+        var options = BindVisualIntelligenceOptions("appsettings.Development.json");
+        var orchestrator = CreateOrchestrator(options, promptComposer: CreatePromptComposer(options, new ProviderAdapterResolver([new AzurePromptProviderAdapter(), new GenericProviderAdapter()])));
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Code == "image_provider_profile.generic_fallback_used");
+        Assert.Contains(result.Diagnostics, d => d.Code == "image_provider_profile.azure_image.resolved");
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.used");
+    }
+
+    [Fact]
     public void Visual_intelligence_registration_is_additive_and_does_not_replace_pipeline_services()
     {
         var services = new ServiceCollection();
@@ -347,6 +413,24 @@ public sealed class VisualIntelligenceOrchestratorTests
     };
 
     private static JsonDocument ReadSummary(string path) => JsonDocument.Parse(File.ReadAllText(path));
+
+    private static VisualIntelligenceOptions BindVisualIntelligenceOptions(string fileName)
+    {
+        var apiPath = Path.Combine(FindRepositoryRoot().FullName, "Backend", "src", "Astronomy.MediaFactory.Api");
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(apiPath)
+            .AddJsonFile(fileName, optional: false)
+            .Build();
+        return configuration.GetSection(VisualIntelligenceOptions.SectionName).Get<VisualIntelligenceOptions>() ?? new VisualIntelligenceOptions();
+    }
+
+    private static DirectoryInfo FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Backend", "src", "Astronomy.MediaFactory.Api", "appsettings.json")))
+            directory = directory.Parent;
+        return directory ?? throw new DirectoryNotFoundException("Could not locate repository root.");
+    }
 
     private sealed class CountingProviderAdapter : IProviderAdapter
     {
