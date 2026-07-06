@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using ContractEventFamily = Astronomy.MediaFactory.Contracts.EventFamily;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,6 +8,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Core.VisualIntelligence;
 
+[JsonConverter(typeof(JsonStringEnumConverter<VisualIntelligenceOrchestrationStatus>))]
 public enum VisualIntelligenceOrchestrationStatus
 {
     Disabled = 0,
@@ -75,6 +77,7 @@ public sealed record VisualIntelligenceOrchestrationRequest
     public List<string> SupportingObjects { get; init; } = [];
     public DateTimeOffset? ObservationDateTime { get; init; }
     public string VisibilityGuidance { get; init; } = string.Empty;
+    public string? RunOutputFolder { get; init; }
 }
 
 public sealed record VisualIntelligenceOrchestrationContext
@@ -93,6 +96,7 @@ public sealed record VisualIntelligenceOrchestrationContext
     public List<string> SupportingObjects { get; init; } = [];
     public DateTimeOffset? ObservationDateTime { get; init; }
     public string VisibilityGuidance { get; init; } = string.Empty;
+    public string? RunOutputFolder { get; init; }
     public VisualIntelligenceFlagSnapshot FeatureFlags { get; init; } = new();
     public VisualIntelligenceVersionSnapshot Versions { get; init; } = new();
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
@@ -117,6 +121,9 @@ public sealed record VisualIntelligenceOrchestrationResult
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
     public bool FallbackApplied { get; init; }
     public string? FallbackReason { get; init; }
+    public DateTimeOffset StartedAtUtc { get; init; }
+    public DateTimeOffset CompletedAtUtc { get; init; }
+    public long DurationMs { get; init; }
 }
 
 public interface IVisualCreativeDirector
@@ -182,13 +189,14 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
 
     public async Task<VisualIntelligenceOrchestrationResult> OrchestrateAsync(VisualIntelligenceOrchestrationRequest request, CancellationToken cancellationToken = default)
     {
+        var startedAtUtc = DateTimeOffset.UtcNow;
         var diagnostics = new List<DiagnosticMessage>();
         var context = CreateContext(request, diagnostics);
         if (!options.Value.Enabled)
         {
             diagnostics.Add(Info("visual_intelligence.disabled", "Visual Intelligence is disabled; orchestration skipped."));
             logger.LogInformation("Visual Intelligence disabled. CorrelationId={CorrelationId}", context.CorrelationId);
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Disabled, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Disabled, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
 
         logger.LogInformation("Visual Intelligence observation started. CorrelationId={CorrelationId} EventFamily={EventFamily} Platform={Platform} ObservationMode={ObservationMode}", context.CorrelationId, context.EventFamily, context.Platform, options.Value.ObservationMode);
@@ -198,13 +206,13 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         {
             diagnostics.Add(Info("visual_intelligence.disabled", "VisualCreativeDirector feature flag is disabled; orchestration skipped."));
             logger.LogInformation("Visual Intelligence disabled. CorrelationId={CorrelationId}", context.CorrelationId);
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Disabled, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Disabled, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
 
         if (!context.FeatureFlags.UseCDL && !context.FeatureFlags.UseCreativeDirectionContract)
         {
             diagnostics.Add(Info("visual_intelligence.skipped", "No Visual Intelligence output contract flags are enabled; orchestration skipped."));
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Skipped, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Skipped, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
 
         try
@@ -233,13 +241,13 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
             logger.LogInformation("Visual Intelligence generated artifacts summary. CorrelationId={CorrelationId} Cdl={CdlGenerated} Contract={ContractGenerated} PromptPackage={PromptPackageGenerated} QualityReport={QualityReportGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null, promptPackage is not null, qualityReport is not null);
             diagnostics.Add(Info("visual_intelligence.observation_advisory_only", "Observation mode artifacts are advisory only; active prompts, Azure calls, and publication decisions are unchanged."));
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = context with { Diagnostics = diagnostics }, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Error, Code = "visual_intelligence.fallback", Message = "Visual Intelligence orchestration failed; safe fallback applied.", Source = nameof(VisualIntelligenceOrchestrator), Metadata = new Dictionary<string, object?> { ["exceptionType"] = ex.GetType().Name } });
             logger.LogWarning(ex, "Visual intelligence fallback applied. CorrelationId={CorrelationId}", context.CorrelationId);
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.FallbackApplied, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics, FallbackApplied = true, FallbackReason = ex.Message }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.FallbackApplied, Context = context with { Diagnostics = diagnostics }, Diagnostics = diagnostics, FallbackApplied = true, FallbackReason = ex.Message, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -265,6 +273,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             SupportingObjects = request.SupportingObjects,
             ObservationDateTime = request.ObservationDateTime,
             VisibilityGuidance = request.VisibilityGuidance,
+            RunOutputFolder = request.RunOutputFolder,
             FeatureFlags = flags,
             Versions = new VisualIntelligenceVersionSnapshot(),
             Diagnostics = diagnostics
@@ -282,11 +291,26 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
 
     private async Task<VisualIntelligenceOrchestrationResult> CompleteAsync(VisualIntelligenceOrchestrationResult result, CancellationToken cancellationToken)
     {
+        var completedAtUtc = DateTimeOffset.UtcNow;
+        result = result with
+        {
+            CompletedAtUtc = completedAtUtc,
+            DurationMs = result.StartedAtUtc == default ? 0 : Math.Max(0, (long)(completedAtUtc - result.StartedAtUtc).TotalMilliseconds)
+        };
+
         if (options.Value.WriteDiagnostics)
         {
-            var path = await WriteDiagnosticsAsync(result, cancellationToken).ConfigureAwait(false);
-            result.Diagnostics.Add(Info("visual_intelligence.diagnostics_written", $"Visual Intelligence diagnostics written to {path}."));
-            logger.LogInformation("Visual Intelligence diagnostics written. CorrelationId={CorrelationId} DiagnosticsPath={DiagnosticsPath}", result.Context.CorrelationId, path);
+            try
+            {
+                var path = await WriteDiagnosticsAsync(result, cancellationToken).ConfigureAwait(false);
+                result.Diagnostics.Add(Info("visual_intelligence.diagnostics_written", $"Visual Intelligence diagnostics written to {path}."));
+                logger.LogInformation("Visual Intelligence diagnostics written. CorrelationId={CorrelationId} DiagnosticsPath={DiagnosticsPath}", result.Context.CorrelationId, path);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                result.Diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "visual_intelligence.diagnostics_write_failed", Message = "Visual Intelligence diagnostics writing failed; pipeline execution continues.", Source = nameof(VisualIntelligenceOrchestrator), Metadata = new Dictionary<string, object?> { ["exceptionType"] = ex.GetType().Name } });
+                logger.LogWarning(ex, "Visual Intelligence diagnostics writing failed. CorrelationId={CorrelationId}", result.Context.CorrelationId);
+            }
         }
         else
         {
@@ -299,18 +323,80 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
 
     private async Task<string> WriteDiagnosticsAsync(VisualIntelligenceOrchestrationResult result, CancellationToken cancellationToken)
     {
-        var root = string.IsNullOrWhiteSpace(options.Value.DiagnosticsOutputPath)
-            ? Path.Combine(Path.GetTempPath(), "astronomy-media-factory", "visual-intelligence-diagnostics")
-            : options.Value.DiagnosticsOutputPath;
-        var folder = Path.Combine(root, Sanitize(result.Context.CorrelationId));
+        var folder = ResolveDiagnosticsFolder(result.Context, out var fallbackApplied, out var fallbackReason);
         Directory.CreateDirectory(folder);
-        var json = new JsonSerializerOptions { WriteIndented = true };
-        if (result.Cdl is not null) await File.WriteAllTextAsync(Path.Combine(folder, "cdl.json"), JsonSerializer.Serialize(result.Cdl, json), cancellationToken).ConfigureAwait(false);
-        if (result.CreativeDirectionContract is not null) await File.WriteAllTextAsync(Path.Combine(folder, "creative-direction-contract.json"), JsonSerializer.Serialize(result.CreativeDirectionContract, json), cancellationToken).ConfigureAwait(false);
-        if (result.PromptPackage is not null) await File.WriteAllTextAsync(Path.Combine(folder, "prompt-package.json"), JsonSerializer.Serialize(result.PromptPackage, json), cancellationToken).ConfigureAwait(false);
-        if (result.QualityReport is not null) await File.WriteAllTextAsync(Path.Combine(folder, "quality-report.json"), JsonSerializer.Serialize(result.QualityReport, json), cancellationToken).ConfigureAwait(false);
-        await File.WriteAllTextAsync(Path.Combine(folder, "orchestration-summary.json"), JsonSerializer.Serialize(new { result.Status, result.FallbackApplied, result.FallbackReason, result.Context.CorrelationId, result.Context.FeatureFlags, Artifacts = new { Cdl = result.Cdl is not null, CreativeDirectionContract = result.CreativeDirectionContract is not null, PromptPackage = result.PromptPackage is not null, QualityReport = result.QualityReport is not null }, Diagnostics = result.Diagnostics }, json), cancellationToken).ConfigureAwait(false);
+        var json = VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
+        var generatedArtifacts = new List<string>();
+        if (result.Cdl is not null) { await WriteJsonAsync(folder, "CDL.json", result.Cdl, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CDL.json"); }
+        if (result.CreativeDirectionContract is not null) { await WriteJsonAsync(folder, "CreativeDirectionContract.json", result.CreativeDirectionContract, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeDirectionContract.json"); }
+        if (result.PromptPackage is not null) { await WriteJsonAsync(folder, "PromptPackage.json", result.PromptPackage, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PromptPackage.json"); }
+        if (result.QualityReport is not null) { await WriteJsonAsync(folder, "QualityReport.json", result.QualityReport, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("QualityReport.json"); }
+        generatedArtifacts.Add("OrchestrationSummary.json");
+        await WriteJsonAsync(folder, "OrchestrationSummary.json", CreateSummary(result, folder, generatedArtifacts, fallbackApplied, fallbackReason), json, cancellationToken).ConfigureAwait(false);
         return folder;
+    }
+
+    private static Task WriteJsonAsync<T>(string folder, string fileName, T value, JsonSerializerOptions json, CancellationToken cancellationToken) =>
+        File.WriteAllTextAsync(Path.Combine(folder, fileName), JsonSerializer.Serialize(value, json), cancellationToken);
+
+    private string ResolveDiagnosticsFolder(VisualIntelligenceOrchestrationContext context, out bool fallbackApplied, out string? fallbackReason)
+    {
+        fallbackApplied = false;
+        fallbackReason = null;
+        if (!string.IsNullOrWhiteSpace(options.Value.DiagnosticsOutputPath))
+            return Path.Combine(options.Value.DiagnosticsOutputPath, Sanitize(context.CorrelationId));
+        if (!string.IsNullOrWhiteSpace(context.RunOutputFolder))
+            return Path.Combine(context.RunOutputFolder, "diagnostics", "visual-intelligence");
+        fallbackApplied = true;
+        fallbackReason = "runOutputFolder unavailable";
+        return Path.Combine(AppContext.BaseDirectory, "diagnostics", "visual-intelligence", Sanitize(context.CorrelationId));
+    }
+
+    private static object CreateSummary(VisualIntelligenceOrchestrationResult result, string diagnosticsOutputPath, IReadOnlyList<string> generatedArtifacts, bool diagnosticsPathFallbackApplied, string? diagnosticsPathFallbackReason) => new
+    {
+        result.Context.CorrelationId,
+        result.Context.EventFamily,
+        result.Context.EventType,
+        result.Context.Language,
+        result.Context.Platform,
+        result.Context.AspectRatio,
+        Provider = result.Context.FeatureFlags.DefaultProvider,
+        ObservationMode = result.Context.FeatureFlags.ObservationMode,
+        DiagnosticsOutputPath = diagnosticsOutputPath,
+        FeatureFlags = result.Context.FeatureFlags,
+        StageExecutionSummary = new
+        {
+            VisualCreativeDirector = result.Cdl is not null || result.CreativeDirectionContract is not null ? "Success" : result.Context.FeatureFlags.UseVisualCreativeDirector ? "Skipped" : "Disabled",
+            CDL = result.Cdl is not null ? "Success" : result.Context.FeatureFlags.UseCDL ? "Skipped" : "Disabled",
+            CreativeDirectionContract = result.CreativeDirectionContract is not null ? "Success" : result.Context.FeatureFlags.UseCreativeDirectionContract ? "Skipped" : "Disabled",
+            PromptComposerV2 = result.PromptPackage is not null ? "Success" : result.Context.FeatureFlags.UsePromptComposerV2 ? "Skipped" : "Disabled",
+            QualityScoring = result.QualityReport is not null ? "Success" : result.Context.FeatureFlags.UseQualityScoring ? "Skipped" : "Disabled"
+        },
+        GeneratedArtifacts = generatedArtifacts,
+        result.FallbackApplied,
+        result.FallbackReason,
+        DiagnosticsPathFallbackApplied = diagnosticsPathFallbackApplied,
+        DiagnosticsPathFallbackReason = diagnosticsPathFallbackReason,
+        DisabledFeatureFlags = GetDisabledFeatureFlags(result.Context.FeatureFlags),
+        Diagnostics = result.Diagnostics,
+        Warnings = result.Diagnostics.Where(d => d.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Error or DiagnosticSeverity.Blocking).ToList(),
+        result.StartedAtUtc,
+        result.CompletedAtUtc,
+        result.DurationMs
+    };
+
+    private static IReadOnlyList<string> GetDisabledFeatureFlags(VisualIntelligenceFlagSnapshot flags)
+    {
+        var disabled = new List<string>();
+        if (!flags.UseVisualCreativeDirector) disabled.Add(nameof(flags.UseVisualCreativeDirector));
+        if (!flags.UseCDL) disabled.Add(nameof(flags.UseCDL));
+        if (!flags.UseCreativeDirectionContract) disabled.Add(nameof(flags.UseCreativeDirectionContract));
+        if (!flags.UsePromptComposerV2) disabled.Add(nameof(flags.UsePromptComposerV2));
+        if (!flags.UseProviderProfiles) disabled.Add(nameof(flags.UseProviderProfiles));
+        if (!flags.UseQualityScoring) disabled.Add(nameof(flags.UseQualityScoring));
+        if (!flags.UseQualityScoringBlocking) disabled.Add(nameof(flags.UseQualityScoringBlocking));
+        if (!flags.UseExperimentalRenderingRules) disabled.Add(nameof(flags.UseExperimentalRenderingRules));
+        return disabled;
     }
 
     private static string Sanitize(string value) => string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
