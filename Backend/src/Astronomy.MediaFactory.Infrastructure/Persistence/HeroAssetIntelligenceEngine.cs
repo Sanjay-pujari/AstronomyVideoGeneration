@@ -42,7 +42,8 @@ public sealed class HeroAssetStoryGenerator(
     IOptions<ThumbnailFontOptions> fontOptions,
     IRuntimeAssetPathResolver assetPathResolver,
     IHeroPromptMigrationService? heroPromptMigrationService = null,
-    IOptions<OutputArtifactsOptions>? outputArtifactsOptions = null) : IHeroAssetStoryGenerator
+    IOptions<OutputArtifactsOptions>? outputArtifactsOptions = null,
+    IVisualIntelligenceOrchestrator? visualIntelligenceOrchestrator = null) : IHeroAssetStoryGenerator
 {
     private const string QuestionAnswerSetFileName = "question-answer-set.json";
     private const string EnrichedPlanFileName = "question-driven-scene-plan.enriched.json";
@@ -497,6 +498,7 @@ public sealed class HeroAssetStoryGenerator(
                 .ToArray();
             var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, request.ProductionContext?.ProductionEventIntelligence);
             await WriteHeroDiagnosticFileAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), warnings, generatedFiles, cancellationToken);
+            await EnsureHeroIntelligenceContractAsync(request, heroAssetsRoot, warnings, generatedFiles, cancellationToken);
             await WriteHeroArtifactManifestAsync(heroAssetsRoot, warnings, generatedFiles, cancellationToken);
         }
 
@@ -3467,6 +3469,112 @@ public sealed class HeroAssetStoryGenerator(
 
     private string BuildLayoutValidationOutputPath(string eventId, string regionId)
         => ResolveHeroArtifactPath(BuildHeroAssetsRoot(eventId, regionId), OutputArtifactName.HeroLayoutValidation);
+
+
+    private async Task EnsureHeroIntelligenceContractAsync(HeroAssetStoryGenerationRequest request, string heroAssetsRoot, List<string> warnings, List<string> generatedFiles, CancellationToken cancellationToken)
+    {
+        if (!OutputArtifacts.ShouldWriteDiagnostics)
+            return;
+
+        var outputRoot = Directory.GetParent(Path.GetFullPath(heroAssetsRoot))?.FullName ?? heroAssetsRoot;
+        var contractPath = OutputArtifactRegistry.GetPath(outputRoot, OutputArtifactName.HeroIntelligenceContract);
+        if (File.Exists(contractPath))
+        {
+            generatedFiles.Add(NormalizePath(contractPath));
+            return;
+        }
+
+        logger.LogInformation("HeroIntelligenceContract generation started");
+        try
+        {
+            if (visualIntelligenceOrchestrator is not null)
+            {
+                await visualIntelligenceOrchestrator.OrchestrateAsync(BuildHeroVisualIntelligenceRequest(request, outputRoot), cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!File.Exists(contractPath))
+            {
+                logger.LogInformation("HeroIntelligenceContract fallback used");
+                await WriteFallbackHeroIntelligenceContractAsync(request, outputRoot, contractPath, cancellationToken).ConfigureAwait(false);
+            }
+
+            generatedFiles.Add(NormalizePath(contractPath));
+            logger.LogInformation("HeroIntelligenceContract generated");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "HeroIntelligenceContract fallback used");
+            warnings.Add($"HeroIntelligenceContract fallback used: {ex.Message}");
+            try
+            {
+                await WriteFallbackHeroIntelligenceContractAsync(request, outputRoot, contractPath, cancellationToken).ConfigureAwait(false);
+                generatedFiles.Add(NormalizePath(contractPath));
+                logger.LogInformation("HeroIntelligenceContract generated");
+            }
+            catch (Exception writeEx) when (writeEx is not OperationCanceledException)
+            {
+                warnings.Add($"HeroIntelligenceContract write failed: {writeEx.Message}");
+                logger.LogWarning(writeEx, "HeroIntelligenceContract write failed");
+            }
+        }
+    }
+
+    private static VisualIntelligenceOrchestrationRequest BuildHeroVisualIntelligenceRequest(HeroAssetStoryGenerationRequest request, string outputRoot)
+    {
+        var context = request.ProductionContext;
+        var pipeline = request.PipelineRequest;
+        var intelligence = context?.ProductionEventIntelligence;
+        return new VisualIntelligenceOrchestrationRequest
+        {
+            CorrelationId = context?.ContentGenerationPlanId?.ToString("N") ?? request.EventId,
+            ContentGenerationPlanId = context?.ContentGenerationPlanId,
+            AstronomyEventIntelligenceId = context?.AstronomyEventIntelligenceId,
+            EventType = FirstNonEmpty(context?.EventType, pipeline?.EventType, intelligence?.EventType, request.EventId),
+            EventName = FirstNonEmpty(pipeline?.Title, intelligence?.Title, request.EventId),
+            Language = FirstNonEmpty(request.Language, context?.Language, pipeline?.Language, "en"),
+            Region = FirstNonEmpty(request.RegionId, context?.RegionId, pipeline?.RegionId),
+            Location = FirstNonEmpty(intelligence?.VisibilityRegion, pipeline?.VisibilityRegion),
+            PrimaryObjects = ((IEnumerable<string>?)pipeline?.PrimaryObjects ?? intelligence?.PrimaryObjects ?? Array.Empty<string>()).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            SupportingObjects = ((IEnumerable<string>?)pipeline?.SecondaryObjects ?? intelligence?.SecondaryObjects ?? Array.Empty<string>()).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            Platform = Platform.Hero,
+            AspectRatio = AspectRatio.Landscape16x9,
+            RequestedAssetType = "phase-11-hero-observation",
+            ObservationDateTime = pipeline?.PeakUtc ?? pipeline?.StartUtc ?? pipeline?.ScheduledUtc,
+            VisibilityGuidance = FirstNonEmpty(pipeline?.BestViewingWindowLocal, pipeline?.VisibilityRegion),
+            RunOutputFolder = outputRoot
+        };
+    }
+
+    private static async Task WriteFallbackHeroIntelligenceContractAsync(HeroAssetStoryGenerationRequest request, string outputRoot, string contractPath, CancellationToken cancellationToken)
+    {
+        var viRequest = BuildHeroVisualIntelligenceRequest(request, outputRoot);
+        var subject = FirstNonEmpty(viRequest.PrimaryObjects.FirstOrDefault(), viRequest.EventName, viRequest.EventType, "astronomy event");
+        var contract = new HeroIntelligenceContract
+        {
+            PlanId = viRequest.ContentGenerationPlanId?.ToString() ?? FirstNonEmpty(viRequest.CorrelationId, request.EventId),
+            EventType = viRequest.EventType,
+            EventFamily = viRequest.EventFamily.ToString(),
+            EditorialDecisionId = "fallback-editorial-decision",
+            VisualStoryId = "fallback-visual-story",
+            HeroCompositionId = "fallback-hero-composition",
+            HeroEditorialStrategyId = "fallback-hero-editorial-strategy",
+            ViewerQuestion = $"Why does {subject} matter for sky watchers?",
+            PrimaryStory = $"A safe diagnostic Hero V4 intelligence fallback for {subject}.",
+            ViewerTakeaway = "Required Hero V4 intelligence inputs were unavailable, so production Hero routing remains unchanged.",
+            EmotionalHook = "Diagnostic fallback only; no production prompt replacement.",
+            CompositionGoal = "Preserve production Hero routing and record missing V4 intelligence inputs for review.",
+            EditorialGoal = "Non-blocking diagnostic fallback contract.",
+            ViewerEmotion = "informed",
+            VisualRelationship = "unknown; fallback contract generated without complete V4 intelligence inputs",
+            PlatformVariantRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
+            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0, 0, 0, 0, null),
+            FallbackApplied = true,
+            MissingInputs = [nameof(EditorialDecision), nameof(VisualStory), "StoryCompositionDecision", nameof(ProductEditorialStrategy)],
+            Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."]
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(contractPath)!);
+        await File.WriteAllTextAsync(contractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken).ConfigureAwait(false);
+    }
 
     private static string BuildDiagnosticOutputPath(string heroAssetsRoot, string fileName)
         => Path.Combine(heroAssetsRoot, "diagnostics", fileName);
