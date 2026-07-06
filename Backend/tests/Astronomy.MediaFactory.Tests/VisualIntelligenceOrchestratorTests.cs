@@ -6,6 +6,7 @@ using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -135,11 +136,114 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         var folder = Path.Combine(path, "test-correlation");
         Assert.Equal(VisualIntelligenceOrchestrationStatus.Success, result.Status);
-        Assert.True(File.Exists(Path.Combine(folder, "cdl.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "creative-direction-contract.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "prompt-package.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "quality-report.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "orchestration-summary.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "CDL.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "CreativeDirectionContract.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "PromptPackage.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "QualityReport.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "OrchestrationSummary.json")));
+    }
+
+    [Fact]
+    public async Task Empty_diagnostics_path_resolves_to_run_output_folder()
+    {
+        var runOutputFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest() with { RunOutputFolder = runOutputFolder });
+
+        Assert.True(File.Exists(Path.Combine(runOutputFolder, "diagnostics", "visual-intelligence", "OrchestrationSummary.json")));
+    }
+
+    [Fact]
+    public async Task Empty_diagnostics_path_uses_app_context_fallback_without_run_output_folder()
+    {
+        var correlationId = $"fallback-{Guid.NewGuid():N}";
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest() with { CorrelationId = correlationId, RunOutputFolder = null });
+
+        var folder = Path.Combine(AppContext.BaseDirectory, "diagnostics", "visual-intelligence", correlationId);
+        var summary = ReadSummary(Path.Combine(folder, "OrchestrationSummary.json"));
+        Assert.True(summary.RootElement.GetProperty("diagnosticsPathFallbackApplied").GetBoolean());
+    }
+
+    [Fact]
+    public async Task All_feature_flags_false_writes_summary_only()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        var files = Directory.GetFiles(Path.Combine(path, "test-correlation")).Select(Path.GetFileName).OrderBy(name => name).ToArray();
+        Assert.Equal(["OrchestrationSummary.json"], files);
+        var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
+        Assert.Equal("Disabled", summary.RootElement.GetProperty("status").GetString());
+        Assert.Contains("UseVisualCreativeDirector", summary.RootElement.GetProperty("disabledFeatureFlags").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
+    public async Task Cdl_contract_stages_write_only_cdl_contract_and_summary()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        var files = Directory.GetFiles(Path.Combine(path, "test-correlation")).Select(Path.GetFileName).OrderBy(name => name).ToArray();
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "OrchestrationSummary.json"], files);
+    }
+
+    [Fact]
+    public async Task Prompt_composer_stage_additionally_writes_prompt_package()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, UsePromptComposerV2 = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        Assert.True(File.Exists(Path.Combine(path, "test-correlation", "PromptPackage.json")));
+        Assert.False(File.Exists(Path.Combine(path, "test-correlation", "QualityReport.json")));
+    }
+
+    [Fact]
+    public async Task Quality_scoring_stage_additionally_writes_quality_report()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, UsePromptComposerV2 = true, UseQualityScoring = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        Assert.True(File.Exists(Path.Combine(path, "test-correlation", "QualityReport.json")));
+    }
+
+    [Fact]
+    public async Task Diagnostics_write_failure_does_not_fail_orchestrator()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        await File.WriteAllTextAsync(path, "not a directory");
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true });
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        Assert.Equal(VisualIntelligenceOrchestrationStatus.Success, result.Status);
+        Assert.Contains(result.Diagnostics, d => d.Code == "visual_intelligence.diagnostics_write_failed");
+    }
+
+    [Fact]
+    public async Task Summary_contains_generated_artifacts_timestamps_and_duration()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, UsePromptComposerV2 = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest());
+
+        var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
+        var artifacts = summary.RootElement.GetProperty("generatedArtifacts").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "PromptPackage.json", "OrchestrationSummary.json"], artifacts);
+        Assert.NotEqual(default, summary.RootElement.GetProperty("startedAtUtc").GetDateTimeOffset());
+        Assert.NotEqual(default, summary.RootElement.GetProperty("completedAtUtc").GetDateTimeOffset());
+        Assert.True(summary.RootElement.GetProperty("durationMs").GetInt64() >= 0);
     }
 
     [Fact]
@@ -228,6 +332,8 @@ public sealed class VisualIntelligenceOrchestratorTests
         AspectRatio = AspectRatio.Landscape16x9,
         RequestedAssetType = "thumbnail"
     };
+
+    private static JsonDocument ReadSummary(string path) => JsonDocument.Parse(File.ReadAllText(path));
 
     private sealed class CountingProviderAdapter : IProviderAdapter
     {

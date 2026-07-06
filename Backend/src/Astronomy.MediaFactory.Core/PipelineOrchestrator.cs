@@ -1247,7 +1247,8 @@ public sealed class PipelineOrchestrator
                 Region = run.RegionId ?? request.RegionId ?? string.Empty,
                 Location = run.LocationName ?? request.LocationName ?? string.Empty,
                 PrimaryObjects = context.Events.Select(e => e.ObjectName).Where(name => !string.IsNullOrWhiteSpace(name)).Take(3).ToList(),
-                ObservationDateTime = new DateTimeOffset(request.Date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)
+                ObservationDateTime = new DateTimeOffset(request.Date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero),
+                RunOutputFolder = run.OutputFolder
             }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
