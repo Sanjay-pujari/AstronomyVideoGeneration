@@ -9,18 +9,23 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
     private readonly ILogger<VisualCreativeDirector> logger;
     private readonly IFamilyCreativeProfileResolver profileResolver;
     private readonly IEditorialCompositionDirector editorialDirector;
+    private readonly ICreativeKnowledgeLibrary knowledgeLibrary;
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger)
         : this(logger, CreateDefaultResolver()) { }
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver)
-        : this(logger, profileResolver, new EditorialCompositionDirector()) { }
+        : this(logger, profileResolver, new EditorialCompositionDirector(), new CreativeKnowledgeLibrary()) { }
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver, IEditorialCompositionDirector editorialDirector)
+        : this(logger, profileResolver, editorialDirector, new CreativeKnowledgeLibrary()) { }
+
+    public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver, IEditorialCompositionDirector editorialDirector, ICreativeKnowledgeLibrary knowledgeLibrary)
     {
         this.logger = logger;
         this.profileResolver = profileResolver;
         this.editorialDirector = editorialDirector;
+        this.knowledgeLibrary = knowledgeLibrary;
     }
 
     public Task<VisualCreativeDirectorResult> CreateDirectionAsync(VisualIntelligenceOrchestrationContext context, CancellationToken cancellationToken = default)
@@ -36,9 +41,10 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
         diagnostics.AddRange(profileResult.Diagnostics);
         if (profile is GenericAstronomyCreativeProfile && !diagnostics.Any(d => d.Code == "visual_director.unknown_family"))
             diagnostics.Add(new DiagnosticMessage { Severity = DiagnosticSeverity.Warning, Code = "visual_director.unknown_family", Message = "Unknown event family; generic astronomy documentary CDL used.", Source = nameof(VisualCreativeDirector) });
-        var editorial = editorialDirector.Decide(resolvedContext, profileResult);
+        var knowledge = knowledgeLibrary.Resolve(resolvedContext, profileResult, diagnostics);
+        var editorial = editorialDirector.Decide(resolvedContext, profileResult, knowledge);
         diagnostics.Add(Info("visual_director.editorial_composition_applied", $"Editorial composition template selected: {editorial.Template.Name}."));
-        var model = BuildModel(resolvedContext, profileResult, editorial);
+        var model = BuildModel(resolvedContext, profileResult, editorial, knowledge);
         var cdl = context.FeatureFlags.UseCDL ? BuildCdl(resolvedContext, model) : null;
         if (cdl is not null)
         {
@@ -56,11 +62,11 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
         return Task.FromResult(new VisualCreativeDirectorResult { Cdl = cdl, CreativeDirectionContract = contract, Diagnostics = diagnostics });
     }
 
-    private static DirectionModel BuildModel(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, EditorialCompositionDecision editorial)
+    private static DirectionModel BuildModel(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, EditorialCompositionDecision editorial, CreativeKnowledge knowledge)
     {
         var aspect = context.AspectRatio == AspectRatio.Unknown ? DefaultAspectRatio(context.Platform) : context.AspectRatio;
         var platform = context.Platform == Platform.Unknown ? Platform.YouTubeThumbnail : context.Platform;
-        return new DirectionModel(profile.EventFamily, profile.PrimaryObjects.ToList(), profile.SupportingObjects.ToList(), profile.Intent, profile.Hero, profile.SupportingText, profile.Hierarchy, profile.CompositionStyle, profile.SubjectTreatment, profile.CdlDirectives.ToList(), profile.ContractExtensions, profile.NegativeConstraints, profile.QualityTargets, editorial) with { Platform = platform, AspectRatio = aspect };
+        return new DirectionModel(profile.EventFamily, profile.PrimaryObjects.ToList(), profile.SupportingObjects.ToList(), profile.Intent, profile.Hero, profile.SupportingText, profile.Hierarchy, profile.CompositionStyle, profile.SubjectTreatment, profile.CdlDirectives.ToList(), profile.ContractExtensions, profile.NegativeConstraints, profile.QualityTargets, editorial, knowledge) with { Platform = platform, AspectRatio = aspect };
     }
 
     private static CDL BuildCdl(VisualIntelligenceOrchestrationContext c, DirectionModel m) => new()
@@ -114,7 +120,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
 
     private static Dictionary<string, object?> BuildCommonExtensions(VisualIntelligenceOrchestrationContext c, DirectionModel m)
     {
-        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints, ["editorialComposition"] = m.Editorial, ["compositionTemplateUsed"] = m.Editorial.Template.Name, ["relationshipScore"] = m.Editorial.RelationshipScore, ["documentaryScore"] = m.Editorial.DocumentaryScore, ["astronomyScore"] = m.Editorial.AstronomyScore, ["visualHierarchyScore"] = m.Editorial.VisualHierarchyScore, ["storytellingNotes"] = m.Editorial.StorytellingNotes, ["recommendations"] = m.Editorial.Recommendations };
+        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints, ["editorialComposition"] = m.Editorial, ["creativeKnowledge"] = m.Knowledge, ["creativeKnowledgeFamily"] = m.Knowledge.Family.ToString(), ["viewerQuestion"] = m.Knowledge.ViewerQuestion, ["storyGoal"] = m.Knowledge.StoryGoal, ["compositionTemplateUsed"] = m.Editorial.Template.Name, ["relationshipScore"] = m.Editorial.RelationshipScore, ["documentaryScore"] = m.Editorial.DocumentaryScore, ["astronomyScore"] = m.Editorial.AstronomyScore, ["visualHierarchyScore"] = m.Editorial.VisualHierarchyScore, ["storytellingNotes"] = m.Editorial.StorytellingNotes, ["recommendations"] = m.Editorial.Recommendations };
         foreach (var item in m.ProfileExtensions) extensions[item.Key] = item.Value;
         return extensions;
     }
@@ -128,7 +134,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
     private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
     private static DiagnosticMessage Info(string code, string message) => new() { Severity = DiagnosticSeverity.Info, Code = code, Message = message, Source = nameof(VisualCreativeDirector) };
 
-    private sealed record DirectionModel(ContractEventFamily Family, List<string> PrimaryObjects, List<string> SupportingObjects, string Intent, string Hero, string SupportingText, string Hierarchy, CompositionStyle CompositionStyle, string SubjectTreatment, List<CdlDirective> ProfileDirectives, Dictionary<string, object?> ProfileExtensions, NegativeConstraints NegativeConstraints, QualityTargets QualityTargets, EditorialCompositionDecision Editorial)
+    private sealed record DirectionModel(ContractEventFamily Family, List<string> PrimaryObjects, List<string> SupportingObjects, string Intent, string Hero, string SupportingText, string Hierarchy, CompositionStyle CompositionStyle, string SubjectTreatment, List<CdlDirective> ProfileDirectives, Dictionary<string, object?> ProfileExtensions, NegativeConstraints NegativeConstraints, QualityTargets QualityTargets, EditorialCompositionDecision Editorial, CreativeKnowledge Knowledge)
     {
         public Platform Platform { get; init; }
         public AspectRatio AspectRatio { get; init; }

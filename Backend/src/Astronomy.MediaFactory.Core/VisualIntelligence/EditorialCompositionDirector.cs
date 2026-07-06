@@ -31,7 +31,7 @@ public sealed record EditorialCompositionDecision
 
 public interface IEditorialCompositionDirector
 {
-    EditorialCompositionDecision Decide(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile);
+    EditorialCompositionDecision Decide(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, CreativeKnowledge? knowledge = null);
 }
 
 public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
@@ -76,7 +76,7 @@ public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
         OverlaySafeArea = "Protect title and lower-third safe areas with smooth low-detail background."
     };
 
-    public EditorialCompositionDecision Decide(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile)
+    public EditorialCompositionDecision Decide(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, CreativeKnowledge? knowledge = null)
     {
         var isPairing = profile.EventFamily is ContractEventFamily.PlanetConjunction or ContractEventFamily.PlanetOpposition && Normalize(profile.PrimaryObjects.Concat(profile.SupportingObjects)).Count <= 2;
         var text = $"{context.EventType} {context.EventName} {context.VisibilityGuidance} {context.Location} {context.Region}".ToLowerInvariant();
@@ -88,21 +88,21 @@ public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
         return new EditorialCompositionDecision
         {
             Template = template,
-            VisualBalance = isPairing ? "Balanced visual prominence for the planet relationship; avoid one dominant planet with a tiny secondary point." : "Single clear astronomy subject with supporting context held back.",
-            StorytellingEmphasis = isPairing ? $"The conjunction is the hero: {relationship} should feel visually connected as one observable sky moment." : profile.Intent,
+            VisualBalance = knowledge?.VisualBalance ?? (isPairing ? "Balanced visual prominence for the planet relationship; avoid one dominant planet with a tiny secondary point." : "Single clear astronomy subject with supporting context held back."),
+            StorytellingEmphasis = knowledge is not null && isPairing ? $"{knowledge.StoryGoal} Relationship: {relationship}." : knowledge?.StoryGoal ?? (isPairing ? $"The conjunction is the hero: {relationship} should feel visually connected as one observable sky moment." : profile.Intent),
             VisualHierarchy = "Story first, then relationship, then beauty, then scale.",
-            DocumentaryComposition = contextChoice,
+            DocumentaryComposition = knowledge is null ? contextChoice : $"{contextChoice} {knowledge.DocumentaryGuidance}",
             EnvironmentalContext = contextChoice,
             RelationshipScore = isPairing ? .94 : .78,
             DocumentaryScore = contextChoice.Contains("No foreground", StringComparison.OrdinalIgnoreCase) ? .82 : .9,
             AstronomyScore = isPairing ? .92 : .88,
             VisualHierarchyScore = .93,
-            StorytellingNotes = isPairing
+            StorytellingNotes = knowledge?.EditorialNotes ?? (isPairing
                 ? ["Treat the conjunction itself as the hero, not Jupiter alone.", "Planets should feel paired through placement, brightness, and separation.", "Preserve circular planetary geometry and plausible relative appearance."]
-                : ["Use documentary context only when it clarifies the observable event."],
-            Recommendations = isPairing
+                : ["Use documentary context only when it clarifies the observable event."]),
+            Recommendations = knowledge?.AvoidPatterns.Select(p => $"Avoid {p}.").ToList() ?? (isPairing
                 ? ["Target balanced prominence between Jupiter and Venus when both are present.", "Keep foreground silhouettes optional and minimal.", "Avoid clutter, fake glow, stretched planets, and technical prompt language."]
-                : ["Keep the composition editorial and uncluttered."]
+                : ["Keep the composition editorial and uncluttered."])
         };
     }
 

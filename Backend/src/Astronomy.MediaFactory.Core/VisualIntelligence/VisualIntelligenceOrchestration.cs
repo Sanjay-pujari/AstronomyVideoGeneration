@@ -477,6 +477,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (result.CreativeDirectionContract is not null) { await WriteJsonAsync(folder, "CreativeDirectionContract.json", result.CreativeDirectionContract, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeDirectionContract.json"); }
         if (result.PromptPackage is not null) { await WriteJsonAsync(folder, "PromptPackage.json", result.PromptPackage, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PromptPackage.json"); }
         if (result.QualityReport is not null) { await WriteJsonAsync(folder, "QualityReport.json", result.QualityReport, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("QualityReport.json"); }
+        var knowledgeReview = CreateCreativeKnowledgeReview(result);
+        if (knowledgeReview is not null) { await WriteJsonAsync(folder, "CreativeKnowledgeReview.json", knowledgeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeKnowledgeReview.json"); }
         var creativeReview = CreateHeroCreativeReview(result);
         if (creativeReview is not null) { await WriteJsonAsync(folder, "HeroCreativeReview.json", creativeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("HeroCreativeReview.json"); }
         generatedArtifacts.Add("OrchestrationSummary.json");
@@ -498,6 +500,20 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         fallbackApplied = true;
         fallbackReason = "runOutputFolder unavailable";
         return Path.Combine(AppContext.BaseDirectory, "diagnostics", "visual-intelligence", Sanitize(context.CorrelationId));
+    }
+
+    private static object? CreateCreativeKnowledgeReview(VisualIntelligenceOrchestrationResult result)
+    {
+        if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("creativeKnowledge", out var value) != true || value is not CreativeKnowledge knowledge)
+            return null;
+        return new
+        {
+            knowledgeUsed = knowledge.Family.ToString(),
+            storyGoal = knowledge.StoryGoal,
+            viewerQuestion = knowledge.ViewerQuestion,
+            compositionStrategy = knowledge.CompositionStrategy,
+            editorialNotes = knowledge.EditorialNotes
+        };
     }
 
     private static object? CreateHeroCreativeReview(VisualIntelligenceOrchestrationResult result)
@@ -600,6 +616,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IPromptPackageBuilder, PromptPackageBuilder>();
         services.AddScoped<IPromptComposerV2, PromptComposerV2>();
         services.AddScoped<IHeroPromptMigrationService, HeroPromptMigrationService>();
+        services.AddSingleton<ICreativeKnowledgeLibrary, CreativeKnowledgeLibrary>();
         services.AddScoped<IEditorialCompositionDirector, EditorialCompositionDirector>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
