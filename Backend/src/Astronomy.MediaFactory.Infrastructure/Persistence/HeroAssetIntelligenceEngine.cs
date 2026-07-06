@@ -3569,7 +3569,7 @@ public sealed class HeroAssetStoryGenerator(
             PlatformVariantRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
             ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0, 0, 0, 0, null),
             FallbackApplied = true,
-            MissingInputs = [nameof(EditorialDecision), nameof(VisualStory), "StoryCompositionDecision", nameof(ProductEditorialStrategy)],
+            MissingInputs = [nameof(EditorialDecision), nameof(VisualStory), "StoryCompositionDecision", nameof(ProductEditorialStrategyResult)],
             Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."]
         };
         Directory.CreateDirectory(Path.GetDirectoryName(contractPath)!);
