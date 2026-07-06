@@ -1406,7 +1406,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
-    private static ContentPlanBatchGenerationService CreateService(MediaFactoryDbContext db, ThrowingLegacyPipeline legacy, CapturingProductionExecutionService production)
+    private static ContentPlanBatchGenerationService CreateService(MediaFactoryDbContext db, ThrowingLegacyPipeline legacy, IContentPlanProductionExecutionService production)
         => new(
             db,
             legacy,
