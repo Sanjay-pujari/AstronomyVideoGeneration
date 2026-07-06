@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -12,7 +13,9 @@ public sealed class ContentPlanProductionExecutionService(
     IContentPlanProductionRequestMapper mapper,
     IProductionPipelineExecutionService productionPipeline,
     IOptions<RenderingOptions> renderingOptions,
-    ILogger<ContentPlanProductionExecutionService> logger) : IContentPlanProductionExecutionService
+    ILogger<ContentPlanProductionExecutionService> logger,
+    IOptions<VisualIntelligenceOptions>? visualIntelligenceOptions = null,
+    IVisualIntelligenceOrchestrator? visualIntelligenceOrchestrator = null) : IContentPlanProductionExecutionService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ProductionSteps =
@@ -72,6 +75,7 @@ public sealed class ContentPlanProductionExecutionService(
             var outputPreparation = PrepareOutputRoot(outputRoot, request, startPhaseNo, endPhaseNo);
             Directory.CreateDirectory(outputRoot);
             await WritePlanInputAsync(outputRoot, plan, intelligence, productionRequest, cancellationToken);
+            await ObserveVisualIntelligenceAsync(plan, intelligence, productionRequest, outputRoot, cancellationToken);
 
             execution = new ContentPipelineExecution
             {
@@ -217,6 +221,53 @@ public sealed class ContentPlanProductionExecutionService(
         => request.StartPhaseNo == 12
             && request.EndPhaseNo == 12
             && IsRequestedOutput(productionRequest, "Thumbnail");
+
+    private async Task ObserveVisualIntelligenceAsync(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("VISUAL_INTELLIGENCE_TOUCHPOINT_ENTERED PlanId={ContentGenerationPlanId} AstronomyEventIntelligenceId={AstronomyEventIntelligenceId}", plan.Id, intelligence.Id);
+        var enabled = visualIntelligenceOptions?.Value.Enabled == true;
+        var writeDiagnostics = visualIntelligenceOptions?.Value.WriteDiagnostics == true;
+        logger.LogInformation("VISUAL_INTELLIGENCE_ENABLED_STATE Enabled={Enabled} WriteDiagnostics={WriteDiagnostics}", enabled, writeDiagnostics);
+        logger.LogInformation("VISUAL_INTELLIGENCE_OUTPUT_FOLDER_RESOLVED PlanId={ContentGenerationPlanId} OutputFolder={OutputFolder}", plan.Id, outputRoot);
+        var diagnosticsPath = Path.Combine(outputRoot, "diagnostics", "visual-intelligence");
+        logger.LogInformation("VISUAL_INTELLIGENCE_DIAGNOSTICS_PATH_RESOLVED PlanId={ContentGenerationPlanId} DiagnosticsPath={DiagnosticsPath}", plan.Id, diagnosticsPath);
+
+        if (!enabled || visualIntelligenceOrchestrator is null)
+        {
+            logger.LogInformation("VISUAL_INTELLIGENCE_ORCHESTRATION_SKIPPED PlanId={ContentGenerationPlanId} Enabled={Enabled} OrchestratorRegistered={OrchestratorRegistered}", plan.Id, enabled, visualIntelligenceOrchestrator is not null);
+            return;
+        }
+
+        try
+        {
+            logger.LogInformation("VISUAL_INTELLIGENCE_ORCHESTRATION_STARTED PlanId={ContentGenerationPlanId} AstronomyEventIntelligenceId={AstronomyEventIntelligenceId}", plan.Id, intelligence.Id);
+            var result = await visualIntelligenceOrchestrator.OrchestrateAsync(new VisualIntelligenceOrchestrationRequest
+            {
+                CorrelationId = plan.Id.ToString("N"),
+                ContentGenerationPlanId = plan.Id,
+                AstronomyEventIntelligenceId = intelligence.Id,
+                EventType = productionRequest.EventType,
+                EventName = productionRequest.Title,
+                Language = productionRequest.Language,
+                Region = productionRequest.RegionId,
+                Location = intelligence.LocationName ?? productionRequest.VisibilityRegion ?? string.Empty,
+                PrimaryObjects = productionRequest.PrimaryObjects.Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                SupportingObjects = productionRequest.SecondaryObjects.Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                Platform = Platform.YouTubeLongForm,
+                AspectRatio = AspectRatio.Landscape16x9,
+                RequestedAssetType = "batch-production-observation",
+                ObservationDateTime = productionRequest.PeakUtc ?? productionRequest.StartUtc ?? productionRequest.ScheduledUtc,
+                VisibilityGuidance = productionRequest.BestViewingWindowLocal ?? productionRequest.VisibilityRegion ?? string.Empty,
+                RunOutputFolder = outputRoot,
+                RequestedProvider = visualIntelligenceOptions?.Value.DefaultProvider ?? ImageProviderType.Unknown
+            }, cancellationToken).ConfigureAwait(false);
+            logger.LogInformation("VISUAL_INTELLIGENCE_ARTIFACTS_WRITTEN PlanId={ContentGenerationPlanId} Status={Status} DiagnosticsPath={DiagnosticsPath}", plan.Id, result.Status, diagnosticsPath);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "VISUAL_INTELLIGENCE_ORCHESTRATION_FAILED_NON_BLOCKING PlanId={ContentGenerationPlanId}; continuing production pipeline.", plan.Id);
+        }
+    }
 
     private static bool IsThumbnailV9Success(IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> generatedFiles, IReadOnlyList<int> executedPhaseNumbers)
     {
