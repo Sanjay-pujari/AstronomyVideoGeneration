@@ -82,6 +82,51 @@ public sealed class GenericImageProviderProfile : IImageProviderProfile
     public IReadOnlyList<DiagnosticMessage> Diagnostics { get; init; } = [new() { Severity = DiagnosticSeverity.Info, Code = "image_provider_profile.generic", Message = "Generic image provider profile loaded.", Source = nameof(GenericImageProviderProfile) }];
 }
 
+public sealed class AzureImageProviderProfile : IImageProviderProfile
+{
+    public string ProviderName { get; init; } = "AzureImage";
+    public ImageProviderType ProviderType { get; init; } = ImageProviderType.AzureImage;
+    public string ProviderProfileVersion { get; init; } = VisualIntelligenceContractVersions.AzureImageProviderProfileVersion;
+    public ImageProviderCapabilities Capabilities { get; init; } = new()
+    {
+        SupportsNegativePrompt = false,
+        SupportsStructuredInput = false,
+        SupportsJsonInput = false,
+        SupportsTypography = true,
+        SupportsImageReferences = false,
+        SupportsMasking = false,
+        SupportsSeed = false,
+        SupportsAspectRatio = true,
+        SupportsQualityOptions = false,
+        SupportsTransparentBackground = false,
+        SupportsImageEditing = false,
+        SupportsMultipleImages = false,
+        SupportsStylePresets = false,
+        SupportsSafetyOptions = false,
+        SupportedAspectRatios = ["16:9"],
+        SupportedOutputFormats = ["png"],
+        ProviderMetadata = new Dictionary<string, object?>
+        {
+            ["plainTextPromptSupported"] = true,
+            ["noAzureSdkCalls"] = true,
+            ["activeImageGenerationUnchanged"] = true,
+            ["currentIntegrationRequestShape"] = "prompt+n+size"
+        }
+    };
+    public string DefaultPromptStrategy { get; init; } = "azurePlainText";
+    public IReadOnlyList<string> ProviderNotes { get; init; } =
+    [
+        "Azure Image PromptComposerV2 profile only; does not call Azure or generate images.",
+        "Current Azure Image2 integration sends prompt, n=1, and size, so unsupported capabilities remain disabled conservatively.",
+        "Negative constraints must be inlined unless a future Azure integration exposes a separate negative prompt field."
+    ];
+    public IReadOnlyList<DiagnosticMessage> Diagnostics { get; init; } =
+    [
+        new() { Severity = DiagnosticSeverity.Info, Code = "image_provider_profile.azure_image.loaded", Message = "Azure Image provider profile loaded without enabling Azure calls.", Source = nameof(AzureImageProviderProfile) },
+        new() { Severity = DiagnosticSeverity.Info, Code = "image_provider_profile.azure_image.capabilities_conservative", Message = "Azure Image capabilities are conservative and based on existing prompt+n+size integration behavior.", Source = nameof(AzureImageProviderProfile) }
+    ];
+}
+
 public sealed class ImageProviderProfileRegistry : IImageProviderProfileRegistry
 {
     private readonly Dictionary<ImageProviderType, IImageProviderProfile> byType = [];
@@ -116,7 +161,14 @@ public sealed class ImageProviderProfileRegistry : IImageProviderProfileRegistry
         return Missing(providerName ?? string.Empty, throwIfUnknown);
     }
 
-    private static ImageProviderProfileResolution Resolved(IImageProviderProfile profile, string requested) => new() { Profile = profile, Diagnostics = [Diag(DiagnosticSeverity.Info, "image_provider_profile.resolved", $"Image provider profile resolved for '{requested}'.", profile.ProviderName)] };
+    private static ImageProviderProfileResolution Resolved(IImageProviderProfile profile, string requested)
+    {
+        var diagnostics = new List<DiagnosticMessage> { Diag(DiagnosticSeverity.Info, "image_provider_profile.resolved", $"Image provider profile resolved for '{requested}'.", profile.ProviderName) };
+        diagnostics.AddRange(profile.Diagnostics);
+        if (profile.ProviderType == ImageProviderType.AzureImage)
+            diagnostics.Add(Diag(DiagnosticSeverity.Info, "image_provider_profile.azure_image.resolved", "Azure Image provider profile resolved.", profile.ProviderName));
+        return new ImageProviderProfileResolution { Profile = profile, Diagnostics = diagnostics };
+    }
 
     private ImageProviderProfileResolution Missing(string requested, bool throwIfUnknown)
     {

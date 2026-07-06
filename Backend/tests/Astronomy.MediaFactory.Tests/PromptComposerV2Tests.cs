@@ -73,6 +73,69 @@ public sealed class PromptComposerV2Tests
     }
 
     [Fact]
+    public void AzureProviderAdapter_preserves_sections_and_inlines_negative_constraints()
+    {
+        var sections = new PromptSections
+        {
+            Sections = new Dictionary<string, List<string>>
+            {
+                ["sceneSummary"] = ["premium astronomy scene"],
+                ["heroSubject"] = ["Jupiter and Venus"],
+                ["supportingSubjects"] = ["moonlit horizon"],
+                ["composition"] = ["rule of thirds"],
+                ["astronomicalRendering"] = ["Jupiter remains circular"],
+                ["brandStyle"] = ["Drashyam", "premiumDocumentary"],
+                ["typography"] = ["minimalEssentialTextOnly"],
+                ["observationCard"] = ["lowerThirdSafeZone"],
+                ["qualityTargets"] = ["observation", "overall threshold: 0.82"],
+                ["negativeConstraints"] = ["no fake glow", "no distorted planets"]
+            }
+        };
+
+        var result = new AzurePromptProviderAdapter().Adapt(sections, new AzureImageProviderProfile());
+
+        Assert.Contains("Scene summary: premium astronomy scene", result.Prompt);
+        Assert.Contains("Hero subject: Jupiter and Venus", result.Prompt);
+        Assert.Contains("Supporting subjects: moonlit horizon", result.Prompt);
+        Assert.Contains("Composition: rule of thirds", result.Prompt);
+        Assert.Contains("Astronomical rendering rules: Jupiter remains circular", result.Prompt);
+        Assert.Contains("Brand style: Drashyam; premiumDocumentary", result.Prompt);
+        Assert.Contains("Observation card: lowerThirdSafeZone", result.Prompt);
+        Assert.Contains("Quality targets: observation; overall threshold: 0.82", result.Prompt);
+        Assert.Contains("Avoid / do not include: no fake glow; no distorted planets", result.Prompt);
+        Assert.Equal(string.Empty, result.NegativePrompt);
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.used");
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.negative_prompt_not_supported");
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.constraints_inlined");
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.prompt_length_optimized");
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.formatting_applied");
+    }
+
+    [Fact]
+    public async Task PromptComposer_can_produce_AzureImage_prompt_package_without_provider_call()
+    {
+        var direction = await CreateDirectionAsync();
+        var composer = CreateAzureComposer(usePromptComposer: true);
+
+        var result = await composer.ComposeAsync(direction.Cdl, direction.CreativeDirectionContract, ImageProviderType.AzureImage);
+
+        Assert.Equal(VisualIntelligenceOrchestrationStatus.Success, result.Status);
+        Assert.NotNull(result.PromptPackage);
+        Assert.Equal(ImageProviderType.AzureImage, result.PromptPackage!.ProviderName);
+        Assert.Equal(VisualIntelligenceContractVersions.AzureImageProviderProfileVersion, result.PromptPackage.ProviderProfileVersion);
+        Assert.Contains("Hero subject:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Astronomical rendering rules:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Brand style:", result.PromptPackage.PositivePrompt);
+        Assert.Contains("Avoid / do not include:", result.PromptPackage.PositivePrompt);
+        Assert.Equal(string.Empty, result.PromptPackage.NegativePrompt);
+        Assert.Contains(result.PromptPackage.ProviderParameters, kv => kv.Key == "adapter" && (string)kv.Value! == "azureImage");
+        Assert.Contains(result.PromptPackage.ProviderParameters, kv => kv.Key == "azureSdkCallMade" && (bool)kv.Value! == false);
+        Assert.Contains(result.PromptPackage.ProviderParameters, kv => kv.Key == "imageGenerationCallMade" && (bool)kv.Value! == false);
+        Assert.Contains(result.Diagnostics, d => d.Code == "prompt_composer_v2.provider_profile_resolved");
+        Assert.Contains(result.Diagnostics, d => d.Code == "provider_adapter.azure_image.used");
+    }
+
+    [Fact]
     public async Task Unknown_provider_falls_back_to_generic_profile()
     {
         var direction = await CreateDirectionAsync();
@@ -125,6 +188,13 @@ public sealed class PromptComposerV2Tests
     {
         var registry = new ImageProviderProfileRegistry([new GenericImageProviderProfile()]);
         return new PromptComposerV2(Options.Create(new VisualIntelligenceOptions { UsePromptComposerV2 = usePromptComposer }), new PromptSectionBuilder(), new PromptOptimizer(), new GenericProviderAdapter(), new PromptPackageBuilder(), registry);
+    }
+
+    private static IPromptComposerV2 CreateAzureComposer(bool usePromptComposer)
+    {
+        var registry = new ImageProviderProfileRegistry([new GenericImageProviderProfile(), new AzureImageProviderProfile()]);
+        var adapter = new ProviderAdapterResolver([new AzurePromptProviderAdapter(), new GenericProviderAdapter()]);
+        return new PromptComposerV2(Options.Create(new VisualIntelligenceOptions { UsePromptComposerV2 = usePromptComposer }), new PromptSectionBuilder(), new PromptOptimizer(), adapter, new PromptPackageBuilder(), registry);
     }
 
     private static Task<VisualCreativeDirectorResult> CreateDirectionAsync() => new VisualCreativeDirector(Microsoft.Extensions.Logging.Abstractions.NullLogger<VisualCreativeDirector>.Instance).CreateDirectionAsync(new VisualIntelligenceOrchestrationContext

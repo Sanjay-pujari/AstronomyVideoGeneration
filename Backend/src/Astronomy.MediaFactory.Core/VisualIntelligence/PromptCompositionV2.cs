@@ -21,7 +21,7 @@ public sealed record PromptComposerV2Result
 
 public interface IPromptSectionBuilder { PromptSections Build(CDL? cdl, CreativeDirectionContract? contract); }
 public interface IPromptOptimizer { PromptSections Optimize(PromptSections sections, IImageProviderProfile profile); }
-public interface IProviderAdapter { ProviderPrompt Adapt(PromptSections sections, IImageProviderProfile profile); }
+public interface IProviderAdapter { bool CanAdapt(IImageProviderProfile profile) => true; ProviderPrompt Adapt(PromptSections sections, IImageProviderProfile profile); }
 public interface IPromptPackageBuilder { PromptPackage Build(ProviderPrompt prompt, PromptSections sections, CreativeDirectionContract? contract, IImageProviderProfile profile, IEnumerable<DiagnosticMessage> diagnostics); }
 public interface IPromptComposerV2 { Task<PromptComposerV2Result> ComposeAsync(CDL? cdl, CreativeDirectionContract? contract, ImageProviderType requestedProvider = ImageProviderType.Unknown, CancellationToken cancellationToken = default); }
 
@@ -98,6 +98,8 @@ public sealed class PromptOptimizer : IPromptOptimizer
 
 public sealed class GenericProviderAdapter : IProviderAdapter
 {
+    public bool CanAdapt(IImageProviderProfile profile) => true;
+
     public ProviderPrompt Adapt(PromptSections sections, IImageProviderProfile profile)
     {
         var diagnostics = new List<DiagnosticMessage> { new() { Severity = DiagnosticSeverity.Info, Code = "provider_adapter.generic_used", Message = "Generic provider adapter used.", Source = nameof(GenericProviderAdapter) } };
@@ -111,6 +113,78 @@ public sealed class GenericProviderAdapter : IProviderAdapter
         }
         return new ProviderPrompt { Prompt = sb.ToString().Trim(), NegativePrompt = negative, ProviderMetadata = new Dictionary<string, object?> { ["adapter"] = "generic", ["provider"] = profile.ProviderName }, Diagnostics = diagnostics };
     }
+}
+
+public sealed class AzurePromptProviderAdapter : IProviderAdapter
+{
+    private static readonly string[] AzureOrder = ["sceneSummary", "heroSubject", "supportingSubjects", "composition", "framing", "astronomicalRendering", "brandStyle", "typography", "observationCard", "qualityTargets", "outputExpectations"];
+
+    public bool CanAdapt(IImageProviderProfile profile) => profile.ProviderType == ImageProviderType.AzureImage || string.Equals(profile.ProviderName, "AzureImage", StringComparison.OrdinalIgnoreCase);
+
+    public ProviderPrompt Adapt(PromptSections sections, IImageProviderProfile profile)
+    {
+        var diagnostics = new List<DiagnosticMessage>
+        {
+            Diag(DiagnosticSeverity.Info, "provider_adapter.azure_image.used", "Azure Image provider adapter used.", nameof(AzurePromptProviderAdapter)),
+            Diag(DiagnosticSeverity.Info, profile.Capabilities.SupportsNegativePrompt ? "provider_adapter.azure_image.negative_prompt_supported" : "provider_adapter.azure_image.negative_prompt_not_supported", profile.Capabilities.SupportsNegativePrompt ? "Azure Image profile supports negativePrompt." : "Azure Image profile does not support negativePrompt; constraints will be preserved inline.", nameof(AzurePromptProviderAdapter))
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Azure Image prompt: concise premium astronomy visual.");
+        foreach (var key in AzureOrder)
+        {
+            if (sections.Sections.TryGetValue(key, out var values) && values.Count > 0)
+                sb.AppendLine($"{Title(key)}: {string.Join("; ", values)}.");
+        }
+
+        var negative = string.Empty;
+        if (sections.Sections.TryGetValue("negativeConstraints", out var neg) && neg.Count > 0)
+        {
+            if (profile.Capabilities.SupportsNegativePrompt)
+            {
+                negative = string.Join("; ", neg);
+            }
+            else
+            {
+                sb.AppendLine($"Avoid / do not include: {string.Join("; ", neg)}.");
+                diagnostics.Add(ImageProviderProfileRegistry.CapabilityUnavailable("negativePrompt", profile.ProviderName));
+                diagnostics.Add(Diag(DiagnosticSeverity.Warning, "provider_adapter.azure_image.constraints_inlined", "Negative constraints were inlined because Azure Image negativePrompt is unsupported.", nameof(AzurePromptProviderAdapter)));
+            }
+        }
+
+        var prompt = sb.ToString().Trim();
+        diagnostics.Add(Diag(DiagnosticSeverity.Info, "provider_adapter.azure_image.prompt_length_optimized", $"Azure Image prompt length optimized to {prompt.Length} characters.", nameof(AzurePromptProviderAdapter)));
+        diagnostics.Add(Diag(DiagnosticSeverity.Info, "provider_adapter.azure_image.formatting_applied", "Azure-specific plain text formatting applied without provider SDK request objects.", nameof(AzurePromptProviderAdapter)));
+
+        return new ProviderPrompt
+        {
+            Prompt = prompt,
+            NegativePrompt = negative,
+            ProviderMetadata = new Dictionary<string, object?> { ["adapter"] = "azureImage", ["provider"] = profile.ProviderName, ["azureSdkCallMade"] = false, ["imageGenerationCallMade"] = false },
+            Diagnostics = diagnostics
+        };
+    }
+
+    private static string Title(string key) => key switch
+    {
+        "sceneSummary" => "Scene summary",
+        "heroSubject" => "Hero subject",
+        "supportingSubjects" => "Supporting subjects",
+        "astronomicalRendering" => "Astronomical rendering rules",
+        "brandStyle" => "Brand style",
+        "qualityTargets" => "Quality targets",
+        "observationCard" => "Observation card",
+        _ => char.ToUpperInvariant(key[0]) + key[1..]
+    };
+    private static DiagnosticMessage Diag(DiagnosticSeverity severity, string code, string message, string source) => new() { Severity = severity, Code = code, Message = message, Source = source };
+}
+
+public sealed class ProviderAdapterResolver : IProviderAdapter
+{
+    private readonly IReadOnlyList<IProviderAdapter> adapters;
+    public ProviderAdapterResolver(IEnumerable<IProviderAdapter> adapters) => this.adapters = adapters.Where(a => a is not ProviderAdapterResolver).ToList();
+    public bool CanAdapt(IImageProviderProfile profile) => true;
+    public ProviderPrompt Adapt(PromptSections sections, IImageProviderProfile profile) => (adapters.FirstOrDefault(a => a.CanAdapt(profile)) ?? new GenericProviderAdapter()).Adapt(sections, profile);
 }
 
 public sealed class PromptPackageBuilder : IPromptPackageBuilder

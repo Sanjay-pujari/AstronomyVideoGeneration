@@ -28,6 +28,31 @@ public sealed class ImageProviderProfileRegistryTests
     }
 
     [Fact]
+    public void AzureImageProviderProfile_CapabilitiesSerializeCorrectly()
+    {
+        var profile = new AzureImageProviderProfile();
+
+        Assert.Equal("AzureImage", profile.ProviderName);
+        Assert.Equal(ImageProviderType.AzureImage, profile.ProviderType);
+        Assert.Equal(VisualIntelligenceContractVersions.AzureImageProviderProfileVersion, profile.ProviderProfileVersion);
+        Assert.False(profile.Capabilities.SupportsNegativePrompt);
+        Assert.False(profile.Capabilities.SupportsStructuredInput);
+        Assert.False(profile.Capabilities.SupportsJsonInput);
+        Assert.True(profile.Capabilities.SupportsTypography);
+        Assert.True(profile.Capabilities.SupportsAspectRatio);
+        Assert.False(profile.Capabilities.SupportsQualityOptions);
+        Assert.False(profile.Capabilities.SupportsMultipleImages);
+
+        var json = JsonSerializer.Serialize(profile.Capabilities, VisualIntelligenceJson.CreateSerializerOptions());
+        var roundTrip = JsonSerializer.Deserialize<ImageProviderCapabilities>(json, VisualIntelligenceJson.CreateSerializerOptions());
+
+        Assert.NotNull(roundTrip);
+        Assert.True(roundTrip!.SupportsAspectRatio);
+        Assert.Contains("16:9", roundTrip.SupportedAspectRatios);
+        Assert.Equal(VisualIntelligenceContractVersions.ProviderCapabilitiesVersion, roundTrip.CapabilitiesVersion);
+    }
+
+    [Fact]
     public void Resolver_ReturnsRegisteredProfile_ByTypeAndName()
     {
         var registered = new TestImageProviderProfile();
@@ -41,6 +66,18 @@ public sealed class ImageProviderProfileRegistryTests
         Assert.Contains(byType.Diagnostics, d => d.Code == "image_provider_profile.resolved");
         Assert.False(byName.FallbackUsed);
         Assert.Same(registered, byName.Profile);
+    }
+
+    [Fact]
+    public void Resolver_ReturnsAzureImageProfile_ByType()
+    {
+        var registry = new ImageProviderProfileRegistry([new GenericImageProviderProfile(), new AzureImageProviderProfile()]);
+
+        var result = registry.Resolve(ImageProviderType.AzureImage);
+
+        Assert.False(result.FallbackUsed);
+        Assert.IsType<AzureImageProviderProfile>(result.Profile);
+        Assert.Contains(result.Diagnostics, d => d.Code == "image_provider_profile.resolved");
     }
 
     [Fact]
@@ -101,10 +138,10 @@ public sealed class ImageProviderProfileRegistryTests
 
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IImageProviderProfileRegistry>();
-        var result = registry.Resolve("unregistered-provider");
+        var result = registry.Resolve(ImageProviderType.AzureImage);
 
-        Assert.True(result.FallbackUsed);
-        Assert.IsType<GenericImageProviderProfile>(result.Profile);
+        Assert.False(result.FallbackUsed);
+        Assert.IsType<AzureImageProviderProfile>(result.Profile);
     }
 
     private sealed class TestImageProviderProfile : IImageProviderProfile

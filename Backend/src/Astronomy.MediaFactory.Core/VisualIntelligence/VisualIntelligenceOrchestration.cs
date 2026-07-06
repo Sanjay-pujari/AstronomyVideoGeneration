@@ -262,10 +262,13 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IFamilyCreativeProfile, LunarEclipseCreativeProfile>();
         services.AddScoped<IFamilyCreativeProfile, GenericAstronomyCreativeProfile>();
         services.AddSingleton<IImageProviderProfile, GenericImageProviderProfile>();
+        services.AddSingleton<IImageProviderProfile, AzureImageProviderProfile>();
         services.AddSingleton<IImageProviderProfileRegistry, ImageProviderProfileRegistry>();
         services.AddScoped<IPromptSectionBuilder, PromptSectionBuilder>();
         services.AddScoped<IPromptOptimizer, PromptOptimizer>();
-        services.AddScoped<IProviderAdapter, GenericProviderAdapter>();
+        services.AddScoped<GenericProviderAdapter>();
+        services.AddScoped<AzurePromptProviderAdapter>();
+        services.AddScoped<IProviderAdapter>(sp => new ProviderAdapterResolver([sp.GetRequiredService<AzurePromptProviderAdapter>(), sp.GetRequiredService<GenericProviderAdapter>()]));
         services.AddScoped<IPromptPackageBuilder, PromptPackageBuilder>();
         services.AddScoped<IPromptComposerV2, PromptComposerV2>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
