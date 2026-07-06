@@ -2320,7 +2320,7 @@ public sealed class HeroAssetStoryGenerator(
         var renderedCtaText = rendered.RenderedCtaText;
         var titleFitPassed = !string.IsNullOrWhiteSpace(heroTitle) && !heroTitle.EndsWith(",", StringComparison.Ordinal) && heroTitle.Length <= 40 && !string.IsNullOrWhiteSpace(heroSubtitle);
         var planetGroupingApplied = IsPlanetGroupingHeroFamily(eventFamily);
-        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath) ?? ResolveWorkingDirectoryRoot());
+        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath) ?? "./media-output");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
