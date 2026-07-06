@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -1059,7 +1060,7 @@ public sealed class ContentPlanBatchGenerationServiceTests
             var service = new ContentPlanProductionExecutionService(
                 db,
                 new ContentPlanProductionRequestMapper(),
-                new SuccessfulProductionPipelineExecutionService(),
+                new CompleteProductionPipelineExecutionService(),
                 Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
                 NullLogger<ContentPlanProductionExecutionService>.Instance);
 
@@ -1078,6 +1079,116 @@ public sealed class ContentPlanBatchGenerationServiceTests
             Assert.False(response.DependencyExpansionApplied);
             Assert.True(File.Exists(questionAnswerSetPath));
             Assert.DoesNotContain(response.DeletedOutputFolders!, path => path.EndsWith("question-engine", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GenerateFromPlansAsync_ProductionPipeline_InvokesVisualIntelligenceAndWritesDiagnosticsUnderPlanOutput()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db);
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-visual-intelligence-enabled-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var legacy = new ThrowingLegacyPipeline();
+            var visualIntelligence = new CapturingVisualIntelligenceOrchestrator(writeDiagnostics: true);
+            var production = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new CompleteProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance,
+                Options.Create(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true, DefaultProvider = ImageProviderType.AzureImage }),
+                visualIntelligence);
+            var service = CreateService(db, legacy, production);
+
+            var response = await service.GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(
+                Year: 2026,
+                RegionId: "IN-RJ-UDAIPUR",
+                Language: "en",
+                MaxPlans: 1,
+                OnlyHighPriority: true,
+                DryRun: false,
+                UseProductionPipeline: true,
+                OverwriteExisting: true), CancellationToken.None);
+
+            var diagnosticsRoot = Path.Combine(BuildGeminidsOutputRoot(workingDirectory), "diagnostics", "visual-intelligence");
+            Assert.True(response.Success);
+            Assert.Equal(1, visualIntelligence.CallCount);
+            Assert.NotNull(visualIntelligence.LastRequest);
+            Assert.Equal(GeminidsPlanId, visualIntelligence.LastRequest!.ContentGenerationPlanId);
+            Assert.Equal("MeteorShower", visualIntelligence.LastRequest.EventType);
+            Assert.Equal("en", visualIntelligence.LastRequest.Language);
+            Assert.Equal("IN-RJ-UDAIPUR", visualIntelligence.LastRequest.Region);
+            Assert.Equal(Platform.YouTubeLongForm, visualIntelligence.LastRequest.Platform);
+            Assert.Equal(AspectRatio.Landscape16x9, visualIntelligence.LastRequest.AspectRatio);
+            Assert.Equal(ImageProviderType.AzureImage, visualIntelligence.LastRequest.RequestedProvider);
+            Assert.Equal(BuildGeminidsOutputRoot(workingDirectory), visualIntelligence.LastRequest.RunOutputFolder);
+            Assert.True(File.Exists(Path.Combine(diagnosticsRoot, "OrchestrationSummary.json")));
+            Assert.True(File.Exists(Path.Combine(diagnosticsRoot, "CDL.json")));
+            Assert.True(File.Exists(Path.Combine(diagnosticsRoot, "CreativeDirectionContract.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteContentPlanWithProductionPipelineAsync_VisualIntelligenceDisabled_IsNoOp()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db);
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-visual-intelligence-disabled-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var visualIntelligence = new CapturingVisualIntelligenceOrchestrator(writeDiagnostics: true);
+            var service = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new CompleteProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance,
+                Options.Create(new VisualIntelligenceOptions { Enabled = false, WriteDiagnostics = true }),
+                visualIntelligence);
+
+            var response = await service.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(GeminidsPlanId, DryRun: false, OverwriteExisting: true), CancellationToken.None);
+
+            Assert.True(response.Success);
+            Assert.Equal(0, visualIntelligence.CallCount);
+            Assert.False(Directory.Exists(Path.Combine(BuildGeminidsOutputRoot(workingDirectory), "diagnostics", "visual-intelligence")));
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory)) Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteContentPlanWithProductionPipelineAsync_VisualIntelligenceFailure_IsNonBlocking()
+    {
+        await using var db = CreateDb();
+        SeedGeminidsPlan(db);
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "astro-visual-intelligence-failure-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var service = new ContentPlanProductionExecutionService(
+                db,
+                new ContentPlanProductionRequestMapper(),
+                new CompleteProductionPipelineExecutionService(),
+                Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+                NullLogger<ContentPlanProductionExecutionService>.Instance,
+                Options.Create(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, UseVisualCreativeDirector = true }),
+                new ThrowingVisualIntelligenceOrchestrator());
+
+            var response = await service.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(GeminidsPlanId, DryRun: false, OverwriteExisting: true), CancellationToken.None);
+
+            Assert.True(response.Success);
+            Assert.Empty(response.Errors);
         }
         finally
         {
@@ -1589,6 +1700,51 @@ public sealed class ContentPlanBatchGenerationServiceTests
         }
     }
 
+    private sealed class CompleteProductionPipelineExecutionService : IProductionPipelineExecutionService
+    {
+        public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
+        {
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new ProductionPipelineExecutionResult(
+                Success: true,
+                DryRun: false,
+                QuestionEngineCompleted: File.Exists(Path.Combine(request.OutputRoot, "question-engine", "question-answer-set.json")),
+                ShortScenesGenerated: true,
+                LongScenesGenerated: true,
+                HeroGenerated: true,
+                ThumbnailsGenerated: true,
+                ShortNarrationGenerated: true,
+                LongNarrationGenerated: true,
+                ShortTtsGenerated: true,
+                LongTtsGenerated: true,
+                ShortVideoGenerated: true,
+                LongVideoGenerated: true,
+                FinalShortVideoPath: Path.Combine(request.OutputRoot, "video-assembly", "short", "final-video-short.mp4"),
+                FinalLongVideoPath: Path.Combine(request.OutputRoot, "video-assembly", "long", "final-video-long.mp4"),
+                GeneratedFiles: [],
+                Warnings: [],
+                Errors: [],
+                PhaseResults:
+                [
+                    new ProductionPhaseResult(
+                        20,
+                        "Phase 20",
+                        ProductionPhaseStatus.Succeeded,
+                        now,
+                        now,
+                        0,
+                        [],
+                        [],
+                        null,
+                        [],
+                        [],
+                        false)
+                ],
+                StartPhaseNo: request.StartPhaseNo,
+                EndPhaseNo: request.EndPhaseNo));
+        }
+    }
+
     private sealed class SuccessfulProductionPipelineExecutionService : IProductionPipelineExecutionService
     {
         public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
@@ -1619,6 +1775,61 @@ public sealed class ContentPlanBatchGenerationServiceTests
     {
         public Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken)
             => throw new InvalidOperationException("Dry-run range expansion should not execute the production pipeline.");
+    }
+
+    private sealed class CapturingVisualIntelligenceOrchestrator(bool writeDiagnostics) : IVisualIntelligenceOrchestrator
+    {
+        public int CallCount { get; private set; }
+        public VisualIntelligenceOrchestrationRequest? LastRequest { get; private set; }
+
+        public async Task<VisualIntelligenceOrchestrationResult> OrchestrateAsync(VisualIntelligenceOrchestrationRequest request, CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            LastRequest = request;
+            var context = new VisualIntelligenceOrchestrationContext
+            {
+                CorrelationId = request.CorrelationId ?? Guid.NewGuid().ToString("N"),
+                ContentGenerationPlanId = request.ContentGenerationPlanId,
+                AstronomyEventIntelligenceId = request.AstronomyEventIntelligenceId,
+                EventType = request.EventType,
+                EventName = request.EventName,
+                Language = request.Language,
+                Platform = request.Platform,
+                AspectRatio = request.AspectRatio,
+                Region = request.Region,
+                PrimaryObjects = request.PrimaryObjects,
+                SupportingObjects = request.SupportingObjects,
+                RunOutputFolder = request.RunOutputFolder,
+                RequestedProvider = request.RequestedProvider,
+                FeatureFlags = new VisualIntelligenceFlagSnapshot { Enabled = true, WriteDiagnostics = writeDiagnostics, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true }
+            };
+            var cdl = new CDL { DocumentId = $"cdl-{context.CorrelationId}" };
+            var contract = new CreativeDirectionContract { ContractId = $"cdc-{context.CorrelationId}", Cdl = cdl, TargetPlatform = request.Platform, AspectRatio = request.AspectRatio, Language = request.Language };
+            if (writeDiagnostics && !string.IsNullOrWhiteSpace(request.RunOutputFolder))
+            {
+                var diagnosticsRoot = Path.Combine(request.RunOutputFolder, "diagnostics", "visual-intelligence");
+                Directory.CreateDirectory(diagnosticsRoot);
+                await File.WriteAllTextAsync(Path.Combine(diagnosticsRoot, "OrchestrationSummary.json"), "{}", cancellationToken);
+                await File.WriteAllTextAsync(Path.Combine(diagnosticsRoot, "CDL.json"), "{}", cancellationToken);
+                await File.WriteAllTextAsync(Path.Combine(diagnosticsRoot, "CreativeDirectionContract.json"), "{}", cancellationToken);
+            }
+
+            return new VisualIntelligenceOrchestrationResult
+            {
+                Status = VisualIntelligenceOrchestrationStatus.Success,
+                Context = context,
+                Cdl = cdl,
+                CreativeDirectionContract = contract,
+                StartedAtUtc = DateTimeOffset.UtcNow,
+                CompletedAtUtc = DateTimeOffset.UtcNow
+            };
+        }
+    }
+
+    private sealed class ThrowingVisualIntelligenceOrchestrator : IVisualIntelligenceOrchestrator
+    {
+        public Task<VisualIntelligenceOrchestrationResult> OrchestrateAsync(VisualIntelligenceOrchestrationRequest request, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Visual Intelligence test failure.");
     }
 
     private sealed class ThrowingLegacyPipeline : IAstronomyAssetPlanningService, IAstronomyAssetProductionJobService, IVisualAssetGenerationService, ISceneRenderer

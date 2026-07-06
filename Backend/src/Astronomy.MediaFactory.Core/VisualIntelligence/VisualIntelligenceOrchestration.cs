@@ -64,6 +64,8 @@ public sealed record VisualIntelligenceVersionSnapshot
 public sealed record VisualIntelligenceOrchestrationRequest
 {
     public string? CorrelationId { get; init; }
+    public Guid? ContentGenerationPlanId { get; init; }
+    public Guid? AstronomyEventIntelligenceId { get; init; }
     public ContractEventFamily EventFamily { get; init; } = ContractEventFamily.Unknown;
     public string EventType { get; init; } = string.Empty;
     public string EventName { get; init; } = string.Empty;
@@ -78,11 +80,14 @@ public sealed record VisualIntelligenceOrchestrationRequest
     public DateTimeOffset? ObservationDateTime { get; init; }
     public string VisibilityGuidance { get; init; } = string.Empty;
     public string? RunOutputFolder { get; init; }
+    public ImageProviderType RequestedProvider { get; init; } = ImageProviderType.Unknown;
 }
 
 public sealed record VisualIntelligenceOrchestrationContext
 {
     public string CorrelationId { get; init; } = string.Empty;
+    public Guid? ContentGenerationPlanId { get; init; }
+    public Guid? AstronomyEventIntelligenceId { get; init; }
     public ContractEventFamily EventFamily { get; init; } = ContractEventFamily.Unknown;
     public string EventType { get; init; } = string.Empty;
     public string EventName { get; init; } = string.Empty;
@@ -97,6 +102,7 @@ public sealed record VisualIntelligenceOrchestrationContext
     public DateTimeOffset? ObservationDateTime { get; init; }
     public string VisibilityGuidance { get; init; } = string.Empty;
     public string? RunOutputFolder { get; init; }
+    public ImageProviderType RequestedProvider { get; init; } = ImageProviderType.Unknown;
     public VisualIntelligenceFlagSnapshot FeatureFlags { get; init; } = new();
     public VisualIntelligenceVersionSnapshot Versions { get; init; } = new();
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
@@ -260,6 +266,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         return new VisualIntelligenceOrchestrationContext
         {
             CorrelationId = string.IsNullOrWhiteSpace(request.CorrelationId) ? Guid.NewGuid().ToString("N") : request.CorrelationId,
+            ContentGenerationPlanId = request.ContentGenerationPlanId,
+            AstronomyEventIntelligenceId = request.AstronomyEventIntelligenceId,
             EventFamily = request.EventFamily,
             EventType = request.EventType,
             EventName = request.EventName,
@@ -274,6 +282,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             ObservationDateTime = request.ObservationDateTime,
             VisibilityGuidance = request.VisibilityGuidance,
             RunOutputFolder = request.RunOutputFolder,
+            RequestedProvider = request.RequestedProvider,
             FeatureFlags = flags,
             Versions = new VisualIntelligenceVersionSnapshot(),
             Diagnostics = diagnostics
@@ -355,12 +364,14 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     private static object CreateSummary(VisualIntelligenceOrchestrationResult result, string diagnosticsOutputPath, IReadOnlyList<string> generatedArtifacts, bool diagnosticsPathFallbackApplied, string? diagnosticsPathFallbackReason) => new
     {
         result.Context.CorrelationId,
+        result.Context.ContentGenerationPlanId,
+        result.Context.AstronomyEventIntelligenceId,
         result.Context.EventFamily,
         result.Context.EventType,
         result.Context.Language,
         result.Context.Platform,
         result.Context.AspectRatio,
-        Provider = result.Context.FeatureFlags.DefaultProvider,
+        Provider = result.Context.RequestedProvider == ImageProviderType.Unknown ? result.Context.FeatureFlags.DefaultProvider : result.Context.RequestedProvider,
         ObservationMode = result.Context.FeatureFlags.ObservationMode,
         DiagnosticsOutputPath = diagnosticsOutputPath,
         FeatureFlags = result.Context.FeatureFlags,
