@@ -98,6 +98,51 @@ public sealed class VisualCreativeDirectorTests
         Assert.Contains(result.Diagnostics, d => d.Code == "visual_director.unknown_family" && d.Severity == DiagnosticSeverity.Warning);
     }
 
+
+    [Fact]
+    public void CreativeKnowledgeLibrary_retrieves_planet_pairing_knowledge()
+    {
+        var knowledge = new CreativeKnowledgeLibrary().Get(CreativeKnowledgeFamily.PlanetPairing);
+
+        Assert.Equal(CreativeKnowledgeFamily.PlanetPairing, knowledge.Family);
+        Assert.Contains("relationship", knowledge.StoryGoal, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("largest-object-wins", knowledge.AvoidPatterns);
+        Assert.True(knowledge.Domains.ContainsKey(CreativeKnowledgeDomain.ViewerPsychology));
+    }
+
+    [Fact]
+    public void CreativeKnowledgeLibrary_resolves_family_from_context()
+    {
+        var knowledge = new CreativeKnowledgeLibrary().Resolve(new VisualIntelligenceOrchestrationContext
+        {
+            EventFamily = ContractEventFamily.MeteorShower,
+            EventType = "perseid meteor shower"
+        });
+
+        Assert.Equal(CreativeKnowledgeFamily.MeteorShower, knowledge.Family);
+        Assert.Contains("radiant", knowledge.StoryGoal, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CreativeKnowledgeLibrary_falls_back_to_generic_knowledge()
+    {
+        var diagnostics = new List<DiagnosticMessage>();
+        var knowledge = new CreativeKnowledgeLibrary().Resolve(new VisualIntelligenceOrchestrationContext { EventFamily = ContractEventFamily.Unknown }, diagnostics: diagnostics);
+
+        Assert.Equal(CreativeKnowledgeFamily.GenericAstronomy, knowledge.Family);
+        Assert.Contains(diagnostics, d => d.Code == "creative_knowledge.fallback" && d.Severity == DiagnosticSeverity.Warning);
+    }
+
+    [Fact]
+    public async Task VisualCreativeDirector_includes_creative_knowledge_in_contract_extensions()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        Assert.Equal("PlanetPairing", result.CreativeDirectionContract!.ExtensionFields["creativeKnowledgeFamily"]);
+        Assert.Contains("What makes", result.CreativeDirectionContract.ExtensionFields["viewerQuestion"]!.ToString());
+        Assert.Contains(result.Diagnostics, d => d.Code == "creative_knowledge.resolved");
+    }
+
     [Fact]
     public async Task Json_serialization_remains_valid()
     {
