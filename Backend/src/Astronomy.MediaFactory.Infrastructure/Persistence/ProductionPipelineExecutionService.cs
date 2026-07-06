@@ -14103,6 +14103,7 @@ public sealed partial class ProductionPipelineExecutionService(
         CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroReview, copied);
         CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroGenerationDiagnostics, copied);
         CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.VisualPromptDiagnostics, copied);
+        CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroIntelligenceContract, copied);
         CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroPromptComparison, copied);
         CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroMigrationReport, copied);
         CopyHeroArtifact(eventRoot, outputRoot, OutputArtifactName.HeroV3Prompt, copied);

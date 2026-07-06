@@ -204,6 +204,26 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.True(contract.RootElement.TryGetProperty("confidenceSummary", out _));
     }
 
+
+    [Fact]
+    public async Task Hero_platform_writes_fallback_contract_when_v4_inputs_are_missing()
+    {
+        var runOutputFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = false });
+
+        var result = await orchestrator.OrchestrateAsync(DefaultRequest() with { Platform = Platform.Hero, RequestedAssetType = "hero", RunOutputFolder = runOutputFolder });
+
+        Assert.NotNull(result.HeroIntelligenceContract);
+        Assert.True(result.HeroIntelligenceContract!.FallbackApplied);
+        Assert.Contains(nameof(CreativeDirectionContract), result.HeroIntelligenceContract.MissingInputs);
+        var path = Path.Combine(runOutputFolder, "hero", "diagnostics", "HeroIntelligenceContract.json");
+        Assert.True(File.Exists(path));
+        using var contract = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+        Assert.True(contract.RootElement.GetProperty("fallbackApplied").GetBoolean());
+        Assert.Contains(nameof(CreativeDirectionContract), contract.RootElement.GetProperty("missingInputs").EnumerateArray().Select(e => e.GetString()));
+        Assert.NotEmpty(contract.RootElement.GetProperty("warnings").EnumerateArray());
+    }
+
     [Fact]
     public async Task Non_hero_platform_does_not_change_thumbnail_gallery_or_scene_diagnostics()
     {

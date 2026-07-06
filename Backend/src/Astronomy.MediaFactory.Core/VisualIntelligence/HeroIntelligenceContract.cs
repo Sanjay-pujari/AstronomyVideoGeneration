@@ -20,6 +20,9 @@ public sealed record HeroIntelligenceContract
     public required IReadOnlyDictionary<string, string> PlatformVariantRecommendations { get; init; }
     public required HeroIntelligenceConfidenceSummary ConfidenceSummary { get; init; }
     public CreativeKnowledgeReviewSummary? CreativeKnowledgeReview { get; init; }
+    public bool FallbackApplied { get; init; }
+    public IReadOnlyList<string> MissingInputs { get; init; } = [];
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 public sealed record HeroIntelligenceConfidenceSummary(double EditorialDecisionConfidence, double VisualStoryConfidence, double HeroCompositionConfidence, double HeroEditorialStrategyConfidence, double? QualityScore);
