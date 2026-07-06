@@ -16,6 +16,7 @@ public sealed record HeroPromptMigrationRequest
     public string LegacyPrompt { get; init; } = string.Empty;
     public string HeroDirectory { get; init; } = string.Empty;
     public ImageProviderType RequestedProvider { get; init; } = ImageProviderType.AzureImage;
+    public HeroIntelligenceContract? HeroIntelligenceContract { get; init; }
 }
 
 public sealed record HeroPromptMigrationResult
@@ -57,7 +58,9 @@ public sealed class HeroPromptMigrationService(
         ArgumentNullException.ThrowIfNull(request.CreativeDirectionContract);
         var contract = request.CreativeDirectionContract with { TargetPlatform = Platform.Hero, AspectRatio = request.CreativeDirectionContract.AspectRatio == AspectRatio.Unknown ? AspectRatio.Landscape16x9 : request.CreativeDirectionContract.AspectRatio };
         var promptResult = await promptComposer.ComposeAsync(contract.Cdl, contract, request.RequestedProvider, cancellationToken).ConfigureAwait(false);
-        var v4Prompt = promptResult.PromptPackage?.PositivePrompt;
+        var v4Prompt = request.HeroIntelligenceContract is not null
+            ? ComposeIntelligencePrompt(request.HeroIntelligenceContract, contract)
+            : promptResult.PromptPackage?.PositivePrompt;
         if (string.IsNullOrWhiteSpace(v4Prompt))
             v4Prompt = ComposeFallbackHeroPrompt(contract);
 
@@ -85,6 +88,7 @@ public sealed class HeroPromptMigrationService(
                 productionHeroUnchanged = !options.Value.UseHeroPromptV4,
                 generatedAtUtc = DateTimeOffset.UtcNow,
                 contractId = contract.ContractId,
+                heroIntelligenceContract = request.HeroIntelligenceContract,
                 promptComposerStatus = promptResult.Status.ToString(),
                 comparison,
                 diagnostics = promptResult.Diagnostics
@@ -145,6 +149,26 @@ public sealed class HeroPromptMigrationService(
         var digits = new string(message.Where(char.IsDigit).ToArray());
         return int.TryParse(digits, out var value) ? value : 0;
     }
+
+    private static string ComposeIntelligencePrompt(HeroIntelligenceContract c, CreativeDirectionContract contract)
+    {
+        var platform = c.PlatformVariantRecommendations.TryGetValue("landscape", out var landscape) ? landscape : string.Join(" ", c.PlatformVariantRecommendations.Values);
+        var parts = new[]
+        {
+            $"Create a premium documentary astronomy hero image for {FirstNonEmpty(contract.VisualIntent.PrimarySubject, c.PrimaryStory)}.",
+            $"Open with the human question: {c.ViewerQuestion}",
+            $"Story: {c.PrimaryStory} Viewer takeaway: {c.ViewerTakeaway}",
+            $"Emotional hook: {c.EmotionalHook}. Viewer emotion: {c.ViewerEmotion}.",
+            $"Composition goal: {c.CompositionGoal}. Visual relationship: {c.VisualRelationship}",
+            $"Editorial goal: {c.EditorialGoal}. Platform guidance: {platform}",
+            "For conjunctions, make the relationship between objects the subject before individual size or spectacle.",
+            "Use a natural, platform-native documentary tone with restrained premium lighting and clean negative space.",
+            "No generated text, labels, logos, UI, watermarks, empty overlays, or science-fiction decoration."
+        };
+        return string.Join(" ", parts.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim().Trim(';')));
+    }
+
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
 
     private static string ComposeFallbackHeroPrompt(CreativeDirectionContract contract)
         => $"Hero V4 observation prompt for {contract.VisualIntent.PrimarySubject}. Preserve astronomy constraints, planet rendering constraints, Drashyam brand constraints, typography readability, and observation card guidance. Composition: {contract.VisualIntent.Composition}. Mood: {contract.VisualIntent.Mood}.";

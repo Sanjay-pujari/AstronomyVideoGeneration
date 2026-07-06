@@ -138,6 +138,7 @@ public sealed record VisualIntelligenceOrchestrationResult
     public VisualStory? VisualStory { get; init; }
     public PromptPackage? PromptPackage { get; init; }
     public QualityReport? QualityReport { get; init; }
+    public HeroIntelligenceContract? HeroIntelligenceContract { get; init; }
     public List<DiagnosticMessage> Diagnostics { get; init; } = [];
     public bool FallbackApplied { get; init; }
     public string? FallbackReason { get; init; }
@@ -261,10 +262,16 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
                 qualityReport = await scorer.ScoreAsync(new CreativeQualityScoringRequest { Context = resolvedContext, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, PromptPackage = promptPackage, Diagnostics = diagnostics }, cancellationToken).ConfigureAwait(false);
                 diagnostics.AddRange(qualityReport.Diagnostics.Where(d => !diagnostics.Any(existing => existing.Code == d.Code && existing.Message == d.Message)));
             }
+            var heroIntelligenceContract = CreateHeroIntelligenceContract(resolvedContext, direction.EditorialDecision, direction.VisualStory, direction.CreativeDirectionContract, qualityReport);
+            if (heroIntelligenceContract is not null)
+            {
+                promptPackage = promptPackage is null ? null : promptPackage with { PositivePrompt = ComposeHeroV4IntelligencePrompt(heroIntelligenceContract, direction.CreativeDirectionContract) };
+                diagnostics.Add(Info("hero_intelligence_contract.created", "Hero Intelligence Contract created for observation-mode Hero V4."));
+            }
             logger.LogInformation("VisualCreativeDirector completed. CorrelationId={CorrelationId} CdlGenerated={CdlGenerated} ContractGenerated={ContractGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null);
             logger.LogInformation("Visual Intelligence generated artifacts summary. CorrelationId={CorrelationId} Cdl={CdlGenerated} Contract={ContractGenerated} PromptPackage={PromptPackageGenerated} QualityReport={QualityReportGenerated}", context.CorrelationId, direction.Cdl is not null, direction.CreativeDirectionContract is not null, promptPackage is not null, qualityReport is not null);
             diagnostics.Add(Info("visual_intelligence.observation_advisory_only", "Observation mode artifacts are advisory only; active prompts, Azure calls, and publication decisions are unchanged."));
-            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = resolvedContext, EditorialDecision = direction.EditorialDecision, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, VisualStory = direction.VisualStory, PromptPackage = promptPackage, QualityReport = qualityReport, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
+            return await CompleteAsync(new VisualIntelligenceOrchestrationResult { Status = VisualIntelligenceOrchestrationStatus.Success, Context = resolvedContext, EditorialDecision = direction.EditorialDecision, Cdl = direction.Cdl, CreativeDirectionContract = direction.CreativeDirectionContract, VisualStory = direction.VisualStory, PromptPackage = promptPackage, QualityReport = qualityReport, HeroIntelligenceContract = heroIntelligenceContract, Diagnostics = diagnostics, StartedAtUtc = startedAtUtc }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -482,6 +489,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (result.EditorialDecision is not null) { await WriteJsonAsync(folder, "EditorialDecision.json", result.EditorialDecision, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("EditorialDecision.json"); }
         if (result.VisualStory is not null) { await WriteJsonAsync(folder, "VisualStory.json", result.VisualStory, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("VisualStory.json"); }
         if (result.PromptPackage is not null) { await WriteJsonAsync(folder, "PromptPackage.json", result.PromptPackage, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PromptPackage.json"); }
+        if (result.HeroIntelligenceContract is not null) { await WriteJsonAsync(folder, "HeroIntelligenceContract.json", result.HeroIntelligenceContract, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("HeroIntelligenceContract.json"); await TryWriteRunHeroIntelligenceContractAsync(result, json, cancellationToken).ConfigureAwait(false); }
         if (result.QualityReport is not null) { await WriteJsonAsync(folder, "QualityReport.json", result.QualityReport, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("QualityReport.json"); }
         var knowledgeReview = CreateCreativeKnowledgeReview(result);
         if (knowledgeReview is not null) { await WriteJsonAsync(folder, "CreativeKnowledgeReview.json", knowledgeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("CreativeKnowledgeReview.json"); }
@@ -494,6 +502,66 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         generatedArtifacts.Add("OrchestrationSummary.json");
         await WriteJsonAsync(folder, "OrchestrationSummary.json", CreateSummary(result, folder, generatedArtifacts, fallbackApplied, fallbackReason), json, cancellationToken).ConfigureAwait(false);
         return folder;
+    }
+
+    private static HeroIntelligenceContract? CreateHeroIntelligenceContract(VisualIntelligenceOrchestrationContext context, EditorialDecision? editorialDecision, VisualStory? story, CreativeDirectionContract? contract, QualityReport? qualityReport)
+    {
+        if (context.Platform != Platform.Hero || editorialDecision is null || story is null) return null;
+        var compositionResult = new StoryCompositionEngine().Compose(story);
+        var composition = compositionResult.HeroComposition.Decision;
+        var strategy = new ProductEditorialStrategyEngine().Create(story, compositionResult).HeroEditorialStrategy.Strategy;
+        var knowledgeReview = contract?.ExtensionFields.TryGetValue("creativeKnowledge", out var value) == true && value is CreativeKnowledge knowledge
+            ? new CreativeKnowledgeReviewSummary(knowledge.Family.ToString(), knowledge.StoryGoal, knowledge.ViewerQuestion, knowledge.CompositionStrategy, knowledge.EditorialNotes)
+            : null;
+        return new HeroIntelligenceContract
+        {
+            PlanId = context.ContentGenerationPlanId?.ToString() ?? context.CorrelationId,
+            EventType = context.EventType,
+            EventFamily = context.EventFamily.ToString(),
+            EditorialDecisionId = editorialDecision.StoryId,
+            VisualStoryId = story.StoryId,
+            HeroCompositionId = composition.CompositionId,
+            HeroEditorialStrategyId = strategy.StrategyId,
+            ViewerQuestion = story.ViewerQuestion,
+            PrimaryStory = story.PrimaryStory,
+            ViewerTakeaway = story.ViewerTakeaway,
+            EmotionalHook = story.EmotionalHook,
+            CompositionGoal = composition.CompositionGoal,
+            EditorialGoal = strategy.EditorialGoal,
+            ViewerEmotion = strategy.ViewerEmotion,
+            VisualRelationship = story.VisualRelationship,
+            PlatformVariantRecommendations = story.RecommendedPlatformVariations.ToDictionary(k => k.Key, v => v.Value.Recommendation),
+            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(editorialDecision.Confidence, story.StoryConfidence, composition.Confidence, strategy.Confidence, qualityReport?.OverallScore),
+            CreativeKnowledgeReview = knowledgeReview
+        };
+    }
+
+    private static string ComposeHeroV4IntelligencePrompt(HeroIntelligenceContract c, CreativeDirectionContract? contract)
+    {
+        var platform = c.PlatformVariantRecommendations.TryGetValue("landscape", out var landscape) ? landscape : string.Join(" ", c.PlatformVariantRecommendations.Values);
+        var subject = contract?.VisualIntent.PrimarySubject;
+        var parts = new[]
+        {
+            $"Create a premium documentary astronomy hero image for {FirstNonEmpty(subject, c.PrimaryStory)}.",
+            $"Lead with the viewer question: {c.ViewerQuestion}",
+            $"Tell this story: {c.PrimaryStory} The viewer should take away: {c.ViewerTakeaway}",
+            $"Emotional hook: {c.EmotionalHook} Desired viewer emotion: {c.ViewerEmotion}.",
+            $"Composition goal: {c.CompositionGoal}. Visual relationship: {c.VisualRelationship}",
+            $"Editorial goal: {c.EditorialGoal}. Platform guidance: {platform}",
+            "Use relationship-first framing for conjunctions, a natural sky documentary tone, restrained premium lighting, and platform-native negative space.",
+            "Do not add generated text, labels, logos, UI, watermarks, or decorative science-fiction elements."
+        };
+        return string.Join(" ", parts.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim().Trim(';')));
+    }
+
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
+
+    private async Task TryWriteRunHeroIntelligenceContractAsync(VisualIntelligenceOrchestrationResult result, JsonSerializerOptions json, CancellationToken cancellationToken)
+    {
+        if (result.Context.Platform != Platform.Hero || string.IsNullOrWhiteSpace(result.Context.RunOutputFolder) || result.HeroIntelligenceContract is null) return;
+        var folder = Path.Combine(result.Context.RunOutputFolder, "hero", "diagnostics");
+        Directory.CreateDirectory(folder);
+        await WriteJsonAsync(folder, "HeroIntelligenceContract.json", result.HeroIntelligenceContract, json, cancellationToken).ConfigureAwait(false);
     }
 
     private static Task WriteJsonAsync<T>(string folder, string fileName, T value, JsonSerializerOptions json, CancellationToken cancellationToken) =>

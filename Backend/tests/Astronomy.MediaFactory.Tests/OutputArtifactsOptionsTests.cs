@@ -53,6 +53,7 @@ public sealed class OutputArtifactRegistryTests : IDisposable
         Assert.Equal(Path.Combine("hero", "comparison", "hero-migration-report.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroMigrationReport));
         Assert.Equal(Path.Combine("hero", "comparison", "hero-v3-prompt.txt"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroV3Prompt));
         Assert.Equal(Path.Combine("hero", "comparison", "hero-v4-prompt.txt"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroV4Prompt));
+        Assert.Equal(Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroIntelligenceContract));
         Assert.Equal(Path.Combine("hero", "hero-final.png"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroFinal));
         Assert.Equal(Path.Combine("hero", "HeroArtifactManifest.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.HeroArtifactManifest));
     }
@@ -86,8 +87,10 @@ public sealed class OutputArtifactRegistryTests : IDisposable
         var manifest = OutputArtifactRegistry.CreateHeroArtifactManifest(root, new OutputArtifactsOptions { Mode = OutputArtifactMode.Debug });
 
         Assert.Contains(OutputArtifactName.HeroLayoutValidation.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.HeroIntelligenceContract.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroLayoutValidation), manifest.Artifacts[OutputArtifactName.HeroLayoutValidation.ToString()]);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroSceneManifest), manifest.Artifacts[OutputArtifactName.HeroSceneManifest.ToString()]);
+        Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroIntelligenceContract), manifest.Artifacts[OutputArtifactName.HeroIntelligenceContract.ToString()]);
     }
 
     [Fact]
