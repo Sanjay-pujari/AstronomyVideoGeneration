@@ -25,7 +25,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Equal(story.PrimaryStory, contract.PrimaryStory);
         Assert.Equal("Teach visually.", contract.EditorialSequence.Objective);
         Assert.Equal(5, contract.EditorialSequence.Steps.Count);
-        Assert.Equal("4.5A", contract.Versions["galleryIntelligenceAlignment"]);
+        Assert.Equal("4.5B", contract.Versions["galleryIntelligenceAlignment"]);
     }
 
     [Fact]
@@ -59,6 +59,66 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         Assert.Equal(["Hook", "Discovery", "Explanation", "Observation", "Takeaway"], contract.EditorialSequence.Steps.Select(step => step.Role).ToArray());
         Assert.All(contract.EditorialSequence.Steps, step => Assert.False(string.IsNullOrWhiteSpace(step.SourceEmphasis)));
+    }
+
+
+    [Fact]
+    public void EditorialSequence_Defines_Five_EditorialPages_With_Required_Default_Progression()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+
+        var contract = engine.Create(story, composition, strategy);
+
+        Assert.Equal(5, contract.EditorialSequence.PageDefinitions.Count);
+        Assert.Equal([1, 2, 3, 4, 5], contract.EditorialSequence.PageDefinitions.Select(page => page.PageNumber).ToArray());
+        Assert.Equal(["Hook", "Discovery", "Explanation", "Observation", "Takeaway"], contract.EditorialSequence.PageDefinitions.Select(page => page.PageRole).ToArray());
+        Assert.All(contract.EditorialSequence.PageDefinitions, page =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(page.PageGoal));
+            Assert.False(string.IsNullOrWhiteSpace(page.ViewerQuestion));
+            Assert.False(string.IsNullOrWhiteSpace(page.KeyLearning));
+            Assert.False(string.IsNullOrWhiteSpace(page.RecommendedVisualFocus));
+            Assert.False(string.IsNullOrWhiteSpace(page.RecommendedInformationDensity));
+            Assert.False(string.IsNullOrWhiteSpace(page.RecommendedComposition));
+            Assert.InRange(page.Confidence, 0, 1);
+        });
+    }
+
+    [Fact]
+    public void EditorialSequence_PlanetPairing_Uses_Astronomy_Teaching_Sequence()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+
+        var sequence = engine.Create(story, composition, strategy).EditorialSequence;
+
+        Assert.Contains("Two bright planets appear unusually close.", sequence.PageDefinitions[0].KeyLearning);
+        Assert.Contains("Jupiter and Venus", sequence.PageDefinitions[1].KeyLearning);
+        Assert.Contains("Conjunctions occur", sequence.PageDefinitions[2].KeyLearning);
+        Assert.Contains("Observe", sequence.PageDefinitions[3].KeyLearning);
+        Assert.Contains("viewpoint", sequence.PageDefinitions[4].KeyLearning);
+    }
+
+    [Fact]
+    public void EditorialSequence_Serializes_PageDefinitions_And_Diagnostic_Sections()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+        var jsonOptions = Contracts.VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(engine.Create(story, composition, strategy).EditorialSequence, jsonOptions);
+
+        Assert.Contains("\"pageDefinitions\"", json);
+        Assert.Contains("\"pageNumber\"", json);
+        Assert.Contains("\"pageRole\"", json);
+        Assert.Contains("\"learningObjectives\"", json);
+        Assert.Contains("\"viewerJourney\"", json);
+        Assert.Contains("\"storyProgression\"", json);
+        Assert.Contains("\"editorialRecommendations\"", json);
     }
 
     [Fact]
