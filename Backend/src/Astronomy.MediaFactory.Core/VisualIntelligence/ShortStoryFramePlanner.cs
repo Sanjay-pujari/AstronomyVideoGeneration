@@ -81,13 +81,17 @@ public sealed record ShortStoryFrameCompositionModel
 
 public sealed record ShortStoryFrameComparisonReport
 {
-    public required int FrameCount { get; init; }
-    public required int GeneratedV4FrameCount { get; init; }
-    public required bool ProductionUnchanged { get; init; }
+    public required int ExpectedFrameCount { get; init; }
+    public required int GeneratedFrameCount { get; init; }
+    public int FrameCount => ExpectedFrameCount;
+    public int GeneratedV4FrameCount => GeneratedFrameCount;
+    public bool ProductionUnchanged => ProductionSceneAssetsUnchanged;
     public required string AspectRatio { get; init; }
     public required string Provider { get; init; }
+    public required bool ProductionSceneAssetsUnchanged { get; init; }
     public string Recommendation { get; init; } = "ManualReviewRequired";
     public required IReadOnlyList<string> Warnings { get; init; }
+    public required IReadOnlyList<string> FailedFrames { get; init; }
 }
 public interface IShortStoryFramePlanner
 {
@@ -109,9 +113,9 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         this.logger = logger ?? NullLogger<ShortStoryFramePlanner>.Instance;
     }
 
-    public const string Version = "4.7G";
+    public const string Version = "4.7H";
     public const string PortraitAspectRatio = "9:16";
-    private const string PromptProvider = "AzureOpenAIImage";
+    internal const string PromptProvider = "AzureOpenAIImage";
 
     private static readonly NarrativeBeatRole[] RequiredShortBeatOrder =
     [
@@ -212,60 +216,50 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         if (!options.UseStoryFrameV4Comparison) return null;
 
         var plan = Plan(timeline, platform);
-        var comparison = Path.Combine(outputFolder, "short-story-frames", "comparison");
+        var root = Path.Combine(outputFolder, "short-story-frames");
+        var diagnostics = Path.Combine(root, "diagnostics");
+        var comparison = Path.Combine(root, "comparison");
+        Directory.CreateDirectory(diagnostics);
         Directory.CreateDirectory(comparison);
+
+        var visualReview = BuildVisualReview(plan);
         var packages = BuildPromptPackages(plan);
-        var warnings = new List<string>();
-        var generated = 0;
-        logger.LogInformation("V4 story-frame comparison started");
+        var result = await new StoryFrameGenerator().GenerateShortAsync(plan, packages, outputFolder, imageGenerator, cancellationToken).ConfigureAwait(false);
 
-        foreach (var package in packages)
-        {
-            var path = Path.Combine(comparison, $"frame{package.FrameNumber:00}-{Slug(package.BeatRole)}-v4.png");
-            try
-            {
-                if (imageGenerator is null || !imageGenerator.IsConfigured)
-                    throw new InvalidOperationException("V4 story-frame comparison image generator is not configured.");
-                var result = await imageGenerator.GenerateAsync(new AICinematicAssetRequest(
-                    $"short-story-frame-v4-{package.FrameNumber:00}",
-                    plan.PlanId,
-                    "StoryFrameComparison",
-                    "V4Comparison",
-                    $"frame{package.FrameNumber:00}-{Slug(package.BeatRole)}-v4",
-                    "ExperimentalComparisonOnly",
-                    "Manual review",
-                    "Still",
-                    "V4 experimental story-frame comparison only",
-                    package.PositivePrompt,
-                    package.NegativePrompt + ", production replacement, video assembly change",
-                    1024,
-                    1792,
-                    path), cancellationToken).ConfigureAwait(false);
-                if (string.Equals(result.GenerationStatus, "Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(result.ImagePath ?? path))
-                    generated++;
-                else
-                    warnings.Add($"Frame {package.FrameNumber} did not produce a comparison image.");
-                logger.LogInformation("V4 frame generated. FrameNumber={FrameNumber} Path={Path}", package.FrameNumber, path);
-            }
-            catch (Exception ex)
-            {
-                warnings.Add($"Frame {package.FrameNumber} failed non-blocking: {ex.GetType().Name}");
-                logger.LogWarning(ex, "Non-blocking failure if any V4 frame fails. FrameNumber={FrameNumber}", package.FrameNumber);
-            }
-        }
-
-        logger.LogInformation("production scene assets unchanged");
         var report = new ShortStoryFrameComparisonReport
         {
-            FrameCount = plan.FrameCount,
-            GeneratedV4FrameCount = generated,
-            ProductionUnchanged = true,
-            AspectRatio = plan.AspectRatio,
-            Provider = PromptProvider,
-            Warnings = warnings
+            ExpectedFrameCount = result.ExpectedFrameCount,
+            GeneratedFrameCount = result.GeneratedFrameCount,
+            AspectRatio = result.AspectRatio,
+            Provider = result.Provider,
+            ProductionSceneAssetsUnchanged = result.ProductionSceneAssetsUnchanged,
+            Warnings = result.Warnings,
+            FailedFrames = result.FailedFrames
         };
-        await File.WriteAllTextAsync(Path.Combine(comparison, "ShortStoryFrameComparison.json"), JsonSerializer.Serialize(report, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true)), cancellationToken).ConfigureAwait(false);
-        logger.LogInformation("comparison completed");
+        var jsonOptions = VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFrameVisualReview.json"), JsonSerializer.Serialize(visualReview, jsonOptions), cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(Path.Combine(comparison, "ShortStoryFrameComparison.json"), JsonSerializer.Serialize(report, jsonOptions), cancellationToken).ConfigureAwait(false);
+        var manifest = new ShortStoryFrameArtifactManifest
+        {
+            PlanId = plan.PlanId,
+            StoryId = plan.StoryId,
+            TimelineId = plan.TimelineId,
+            ArtifactRoot = root,
+            Directories = ["diagnostics/", "comparison/"],
+            Diagnostics = ["diagnostics/ShortStoryFrameVisualReview.json", "diagnostics/StoryFrameGeneratorDiagnostics.json"],
+            ComparisonArtifacts = ["comparison/ShortStoryFrameComparison.json"],
+            Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["VisualReview"] = "diagnostics/ShortStoryFrameVisualReview.json",
+                ["ComparisonReport"] = "comparison/ShortStoryFrameComparison.json",
+                ["FrameImages"] = "./"
+            },
+            ImagesGenerated = report.GeneratedFrameCount > 0,
+            RenderingStatus = "V4 comparison images only; production scene-assets-v3 and video rendering inputs unchanged.",
+            Versions = plan.Versions
+        };
+        await File.WriteAllTextAsync(Path.Combine(root, "ShortStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, jsonOptions), cancellationToken).ConfigureAwait(false);
+        logger.LogInformation("V4 short story-frame comparison completed; production scene assets unchanged.");
         return report;
     }
 
@@ -278,7 +272,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
             ViewerQuestion = frame.ViewerQuestion,
             ViewerEmotion = frame.ViewerEmotion,
             ExpectedVisualIntent = frame.RecommendedVisualTreatment,
-            GeneratedFramePath = Path.Combine("comparison", $"frame{frame.FrameNumber:00}-{Slug(frame.BeatRole)}-v4.png"),
+            GeneratedFramePath = $"frame{frame.FrameNumber:00}-{Slug(frame.BeatRole)}.png",
             VisualContinuityNotes = "Advisory review placeholder: validate short-form visual continuity, beat-to-beat subject continuity, lighting continuity, and narrative handoff manually; no CV/image analysis has been run.",
             PlatformCompositionNotes = $"Advisory review placeholder: validate native 9:16 vertical safe areas, overlay clearance, and platform-native composition manually. Planned composition: {frame.RecommendedComposition}",
             Risks = ["No image analysis/CV has been run.", "Generated comparison frame may be missing or may have failed non-blocking.", "Manual astronomy and typography review is required before production use."],
@@ -330,7 +324,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         Status = "Story frame prompt packages generated for future comparison only; scene rendering prompts and Azure routing remain unchanged."
     };
 
-    private static IReadOnlyList<StoryFramePromptPackage> BuildPromptPackages(ShortStoryFramePlan plan) =>
+    internal static IReadOnlyList<StoryFramePromptPackage> BuildPromptPackages(ShortStoryFramePlan plan) =>
         plan.FrameDefinitions.Select(frame => new StoryFramePromptPackage
         {
             PackageId = $"{plan.PlanId}_frame{frame.FrameNumber:00}_{frame.BeatRole}_prompt".ToLowerInvariant(),
@@ -373,7 +367,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
 
     private static string PromptFileName(int frameNumber, NarrativeBeatRole beatRole) => $"frame{frameNumber:00}-{Slug(beatRole)}-prompt.json";
 
-    private static string Slug(NarrativeBeatRole beatRole) => beatRole switch
+    internal static string Slug(NarrativeBeatRole beatRole) => beatRole switch
     {
         NarrativeBeatRole.CallToAction => "call-to-action",
         _ => beatRole.ToString().ToLowerInvariant()
