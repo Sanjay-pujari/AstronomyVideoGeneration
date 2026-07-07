@@ -102,6 +102,9 @@ public static class EditorialProductContractDiagnostics
     [
         nameof(GalleryIntelligenceContract.EditorialSequence),
         nameof(GalleryIntelligenceContract.LearningObjectives),
+        nameof(GalleryIntelligenceContract.EditorialRoles),
+        nameof(GalleryIntelligenceContract.ViewerJourney),
+        nameof(GalleryIntelligenceContract.StoryQuestions),
         nameof(GalleryIntelligenceContract.PageDefinitions)
     ];
 

@@ -64,6 +64,9 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         var contract = engine.Create(story, composition, strategy);
 
         Assert.Equal(["Hook", "Recognition", "Explanation", "Observation", "Memory"], contract.EditorialSequence.Steps.Select(step => step.Role).ToArray());
+        Assert.Equal(contract.EditorialSequence.PageDefinitions.Select(page => page.PageRole).ToArray(), contract.EditorialRoles);
+        Assert.Equal(contract.EditorialSequence.ViewerJourney, contract.ViewerJourney);
+        Assert.Equal(contract.EditorialSequence.PageDefinitions.Select(page => page.ViewerQuestion).ToArray(), contract.StoryQuestions);
         Assert.All(contract.EditorialSequence.Steps, step => Assert.False(string.IsNullOrWhiteSpace(step.SourceEmphasis)));
     }
 
@@ -215,13 +218,15 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         await engine.WriteDiagnosticsAsync(story, composition, strategy, folder);
 
         var reviewJson = await File.ReadAllTextAsync(Path.Combine(folder, "GalleryEducationalStorytellingReview.json"));
+        Assert.Contains("\"pageRoles\"", reviewJson);
         Assert.Contains("\"editorialRoles\"", reviewJson);
         Assert.Contains("\"viewerQuestions\"", reviewJson);
-        Assert.Contains("\"knowledgeProgression\"", reviewJson);
+        Assert.Contains("\"knowledgeTransfer\"", reviewJson);
+        Assert.Contains("\"storyProgression\"", reviewJson);
         Assert.Contains("\"learningContinuity\"", reviewJson);
         Assert.Contains("\"memoryReinforcement\"", reviewJson);
         Assert.Contains("\"storyQuality\"", reviewJson);
-        Assert.Contains("\"recommendations\"", reviewJson);
+        Assert.Contains("\"creativeRecommendations\"", reviewJson);
         Assert.Contains("\"generatesPrompts\": false", reviewJson);
         Assert.Contains("\"changesProductionGallery\": false", reviewJson);
 
@@ -239,7 +244,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         var pages = engine.Create(story, composition, strategy).EditorialSequence.PageDefinitions;
 
-        Assert.Equal(["What am I seeing?", "Which objects are these?", "Why is this happening?", "How do I observe it?", "What should I remember?"], pages.Select(page => page.ViewerQuestion).ToArray());
+        Assert.Equal(["What am I looking at?", "Which celestial objects are these?", "Why does this happen?", "How can I observe it?", "What should I remember?"], pages.Select(page => page.ViewerQuestion).ToArray());
         Assert.Equal(pages.Count, pages.Select(page => page.KeyLearning).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
