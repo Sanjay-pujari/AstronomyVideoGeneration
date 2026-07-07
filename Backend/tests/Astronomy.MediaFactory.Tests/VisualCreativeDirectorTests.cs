@@ -71,6 +71,28 @@ public sealed class VisualCreativeDirectorTests
         Assert.Equal("PlanetPairing_CloseApproach", result.CreativeDirectionContract!.ExtensionFields["compositionTemplateUsed"]);
     }
 
+
+    [Fact]
+    public async Task DocumentaryAtmosphereDirector_recommends_authentic_twilight_sky_and_environment()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"]));
+
+        var review = Assert.IsType<DocumentaryAtmosphereReview>(result.CreativeDirectionContract!.ExtensionFields["documentaryAtmosphereReview"]);
+        Assert.False(review.GeneratesPrompts);
+        Assert.Contains("civil or nautical twilight", review.TwilightAuthenticity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("physically plausible atmospheric scattering", review.TwilightAuthenticity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("clean sky", review.SkyRealism, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("subtle stars", review.SkyRealism, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("only if it helps", review.EnvironmentQuality, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("fantasy orange explosions", review.AvoidPatterns);
+        Assert.Contains("random HDR", review.AvoidPatterns);
+        Assert.True(review.DocumentaryScore >= .9);
+        Assert.True(review.ScientificAtmosphereScore >= .9);
+        Assert.Equal("hero-documentary-atmosphere", review.BenchmarkPreparation.BenchmarkFamily);
+        Assert.False(review.BenchmarkPreparation.RunnerImplemented);
+        AssertDirectiveContains(result.Cdl!, "atmosphere", "realistic evening gradient");
+    }
+
     [Fact]
     public async Task PlanetGrouping_creates_multi_object_hierarchy()
     {
