@@ -56,6 +56,7 @@ public enum OutputArtifactName
     GalleryEditorialSequence,
     GalleryReview,
     GalleryInformationDensityReview,
+    GalleryNarrativeFlowReview,
     GalleryArtifactManifest
 }
 
@@ -79,6 +80,7 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.GalleryEditorialSequence] = Path.Combine("gallery", "diagnostics", "GalleryEditorialSequence.json"),
         [OutputArtifactName.GalleryReview] = Path.Combine("gallery", "diagnostics", "GalleryReview.json"),
         [OutputArtifactName.GalleryInformationDensityReview] = Path.Combine("gallery", "diagnostics", "GalleryInformationDensityReview.json"),
+        [OutputArtifactName.GalleryNarrativeFlowReview] = Path.Combine("gallery", "diagnostics", "GalleryNarrativeFlowReview.json"),
         [OutputArtifactName.GalleryArtifactManifest] = Path.Combine("gallery", "GalleryArtifactManifest.json")
     };
 
@@ -100,6 +102,7 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.GalleryEditorialSequence] = Path.Combine("gallery", "diagnostics", "GalleryEditorialSequence.json"),
         [OutputArtifactName.GalleryReview] = Path.Combine("gallery", "diagnostics", "GalleryReview.json"),
         [OutputArtifactName.GalleryInformationDensityReview] = Path.Combine("gallery", "diagnostics", "GalleryInformationDensityReview.json"),
+        [OutputArtifactName.GalleryNarrativeFlowReview] = Path.Combine("gallery", "diagnostics", "GalleryNarrativeFlowReview.json"),
         [OutputArtifactName.GalleryArtifactManifest] = Path.Combine("gallery", "GalleryArtifactManifest.json")
     };
 
@@ -147,10 +150,11 @@ public static class OutputArtifactRegistry
                 OutputArtifactName.GalleryIntelligenceContract,
                 OutputArtifactName.GalleryEditorialSequence,
                 OutputArtifactName.GalleryReview,
-                OutputArtifactName.GalleryInformationDensityReview
+                OutputArtifactName.GalleryInformationDensityReview,
+                OutputArtifactName.GalleryNarrativeFlowReview
             }
             .ToDictionary(name => name.ToString(), name => GetPath(outputRoot, name), StringComparer.OrdinalIgnoreCase);
-        return new GalleryArtifactManifest("4.5C", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
+        return new GalleryArtifactManifest("4.5D", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
     }
 
     public static string GetManifestPath(string outputRoot) => GetPath(outputRoot, OutputArtifactName.HeroArtifactManifest);
@@ -183,7 +187,7 @@ public sealed record HeroArtifactManifest(string Version, string OutputArtifactM
 
 public sealed record GalleryArtifactManifest(string Version, string OutputArtifactMode, IReadOnlyList<string> ExpectedArtifacts, IReadOnlyDictionary<string, string> Artifacts)
 {
-    public static GalleryArtifactManifest Empty { get; } = new("4.5C", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    public static GalleryArtifactManifest Empty { get; } = new("4.5D", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 }
 
 public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }

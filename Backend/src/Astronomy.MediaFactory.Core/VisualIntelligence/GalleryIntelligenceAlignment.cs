@@ -12,6 +12,7 @@ public sealed record GalleryIntelligenceContract
     public required string PrimaryStory { get; init; }
     public required IReadOnlyList<string> StoryProgression { get; init; }
     public required GalleryEditorialSequence EditorialSequence { get; init; }
+    public required GalleryNarrativeFlow NarrativeFlow { get; init; }
     public required IReadOnlyList<string> LearningObjectives { get; init; }
     public required string DocumentaryTone { get; init; }
     public required string RecommendedComposition { get; init; }
@@ -30,6 +31,7 @@ public sealed record GalleryEditorialSequence
     public IReadOnlyList<string> StoryProgression { get; init; } = [];
     public IReadOnlyDictionary<string, string> EditorialRecommendations { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyList<GalleryPageInformationDensity> InformationDensity { get; init; } = [];
+    public GalleryNarrativeFlow? NarrativeFlow { get; init; }
 
     // Backwards-compatible alias for V4.5A diagnostics. Rendering does not consume this contract.
     public IReadOnlyList<GalleryEditorialSequenceStep> Steps => PageDefinitions
@@ -68,6 +70,113 @@ public sealed record GalleryPageInformationDensity
     public required string ViewerLoad { get; init; }
     public required string EducationalGuidance { get; init; }
     public IReadOnlyList<string> Recommendations { get; init; } = [];
+}
+
+public sealed record GalleryNarrativeFlow
+{
+    public required string FlowId { get; init; }
+    public required string GalleryEditorialSequenceId { get; init; }
+    public required IReadOnlyList<NarrativeFlowStage> Stages { get; init; }
+    public required IReadOnlyList<string> EmotionalProgression { get; init; }
+    public required IReadOnlyList<string> LearningProgression { get; init; }
+    public required IReadOnlyList<string> CognitiveProgression { get; init; }
+    public required IReadOnlyList<string> EditorialPacing { get; init; }
+    public required bool GeneratesPrompts { get; init; }
+    public required bool ChangesProductionGallery { get; init; }
+}
+
+public sealed record NarrativeFlowStage
+{
+    public required int Order { get; init; }
+    public required string Stage { get; init; }
+    public required string EmotionalState { get; init; }
+    public required string LearningState { get; init; }
+    public required string CognitiveState { get; init; }
+    public required string EditorialPacing { get; init; }
+    public required string ContinuityBridge { get; init; }
+}
+
+public sealed record GalleryNarrativeFlowReview
+{
+    public required string GalleryId { get; init; }
+    public required string Version { get; init; }
+    public required IReadOnlyList<string> EmotionalJourney { get; init; }
+    public required IReadOnlyList<string> LearningJourney { get; init; }
+    public required IReadOnlyList<string> ViewerProgression { get; init; }
+    public required IReadOnlyList<string> StoryContinuity { get; init; }
+    public required IReadOnlyList<string> EducationalFlow { get; init; }
+    public required IReadOnlyList<string> Recommendations { get; init; }
+    public required bool GeneratesPrompts { get; init; }
+    public required bool ChangesProductionGallery { get; init; }
+}
+
+public sealed class NarrativeFlowDirector
+{
+    private static readonly string[] RequiredStages = ["Hook", "Wonder", "Discovery", "Curiosity", "Explanation", "Understanding", "Observation", "Practical application", "Takeaway", "Memory"];
+    private static readonly string[] RequiredEmotions = ["Wonder", "Curiosity", "Understanding", "Observation", "Memory"];
+
+    public GalleryNarrativeFlow CreateFlow(string galleryId, GalleryEditorialSequence sequence)
+    {
+        var stages = RequiredStages.Select((stage, index) => BuildStage(index + 1, stage, sequence)).ToArray();
+        return new GalleryNarrativeFlow
+        {
+            FlowId = $"narrative_flow_{galleryId}".ToLowerInvariant(),
+            GalleryEditorialSequenceId = sequence.SequenceId,
+            Stages = stages,
+            EmotionalProgression = RequiredEmotions,
+            LearningProgression = stages.Select(stage => stage.LearningState).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            CognitiveProgression = stages.Select(stage => stage.CognitiveState).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            EditorialPacing = stages.Select(stage => stage.EditorialPacing).ToArray(),
+            GeneratesPrompts = false,
+            ChangesProductionGallery = false
+        };
+    }
+
+    public GalleryNarrativeFlowReview Review(string galleryId, GalleryNarrativeFlow flow)
+    {
+        return new GalleryNarrativeFlowReview
+        {
+            GalleryId = galleryId,
+            Version = GalleryIntelligenceAlignmentEngine.Version,
+            EmotionalJourney = flow.EmotionalProgression,
+            LearningJourney = flow.LearningProgression,
+            ViewerProgression = flow.Stages.Select(stage => $"{stage.Stage}: {stage.EmotionalState} / {stage.CognitiveState}").ToArray(),
+            StoryContinuity = flow.Stages.Select(stage => stage.ContinuityBridge).ToArray(),
+            EducationalFlow = flow.Stages.Select(stage => $"{stage.Stage}: {stage.LearningState}").ToArray(),
+            Recommendations = [
+                "Preserve the Wonder → Curiosity → Understanding → Observation → Memory arc across future Gallery rendering.",
+                "Use narrative flow as editorial metadata only; do not generate or replace prompts.",
+                "Keep practical observation after explanation so action follows understanding."
+            ],
+            GeneratesPrompts = false,
+            ChangesProductionGallery = false
+        };
+    }
+
+    private static NarrativeFlowStage BuildStage(int order, string stage, GalleryEditorialSequence sequence) => new()
+    {
+        Order = order,
+        Stage = stage,
+        EmotionalState = stage switch { "Hook" or "Wonder" => "Wonder", "Discovery" or "Curiosity" => "Curiosity", "Explanation" or "Understanding" => "Understanding", "Observation" or "Practical application" => "Observation", _ => "Memory" },
+        LearningState = stage switch { "Hook" => "Recognize why the event matters visually.", "Wonder" => "Feel invited to continue.", "Discovery" => "Identify what is being seen.", "Curiosity" => "Ask how the visual relationship works.", "Explanation" => "Learn the core astronomy idea.", "Understanding" => "Connect the explanation to the viewer question.", "Observation" => "Translate learning into skywatching guidance.", "Practical application" => "Know when, where, and how to look.", "Takeaway" => "Retain the main meaning.", _ => "Remember the event as a coherent story." },
+        CognitiveState = stage switch { "Hook" or "Wonder" => "Attention", "Discovery" => "Orientation", "Curiosity" => "Question formation", "Explanation" => "Causal reasoning", "Understanding" => "Comprehension", "Observation" => "Planning", "Practical application" => "Action readiness", _ => "Recall" },
+        EditorialPacing = stage switch { "Hook" or "Wonder" => "Fast and visual", "Discovery" or "Curiosity" => "Light and inviting", "Explanation" or "Understanding" => "Measured teaching", "Observation" or "Practical application" => "Practical and clear", _ => "Calm and memorable" },
+        ContinuityBridge = BuildBridge(stage, sequence)
+    };
+
+    private static string BuildBridge(string stage, GalleryEditorialSequence sequence) => stage switch
+    {
+        "Hook" => $"Enter through {sequence.PageDefinitions.FirstOrDefault()?.PageRole ?? "the opening page"} before explanation.",
+        "Wonder" => "Convert visual attention into a reason to keep reading.",
+        "Discovery" => "Name the subject after the viewer is emotionally engaged.",
+        "Curiosity" => "Raise the next natural question before teaching the cause.",
+        "Explanation" => "Answer curiosity with one focused astronomy idea.",
+        "Understanding" => "Let the viewer restate the idea in practical terms.",
+        "Observation" => "Move from meaning to how the viewer can observe it.",
+        "Practical application" => "Make viewing guidance actionable without adding a new lesson.",
+        "Takeaway" => "Compress the sequence into a single memorable conclusion.",
+        _ => "Leave the viewer with a durable memory of the event."
+    };
 }
 
 public sealed record GalleryInformationDensityReview
@@ -224,8 +333,9 @@ public interface IGalleryIntelligenceAlignmentEngine
 
 public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAlignmentEngine
 {
-    public const string Version = "4.5C";
+    public const string Version = "4.5D";
     private readonly InformationDensityDirector informationDensityDirector = new();
+    private readonly NarrativeFlowDirector narrativeFlowDirector = new();
 
     public GalleryIntelligenceContract Create(VisualStory story, StoryCompositionResult composition, ProductEditorialStrategyResult strategy)
     {
@@ -233,7 +343,8 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
         var galleryStrategy = strategy.GalleryEditorialStrategy.Strategy;
         var sequence = BuildSequence(story, galleryStrategy);
         var densityReview = informationDensityDirector.Review($"gallery_{story.StoryId}".ToLowerInvariant(), sequence.PageDefinitions);
-        sequence = sequence with { InformationDensity = densityReview.PageDensity };
+        var narrativeFlow = narrativeFlowDirector.CreateFlow($"gallery_{story.StoryId}".ToLowerInvariant(), sequence);
+        sequence = sequence with { InformationDensity = densityReview.PageDensity, NarrativeFlow = narrativeFlow };
 
         return new GalleryIntelligenceContract
         {
@@ -245,6 +356,7 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
             PrimaryStory = story.PrimaryStory,
             StoryProgression = story.StoryArc.Count > 0 ? story.StoryArc : ["Discovery", "Understanding", "Observation", "Takeaway"],
             EditorialSequence = sequence,
+            NarrativeFlow = narrativeFlow,
             LearningObjectives = sequence.LearningObjectives,
             DocumentaryTone = story.DocumentaryTone,
             RecommendedComposition = galleryComposition.RecommendedHierarchy,
@@ -281,6 +393,7 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryEditorialSequence.json"), JsonSerializer.Serialize(contract.EditorialSequence, json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryReview.json"), JsonSerializer.Serialize(review, json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryInformationDensityReview.json"), JsonSerializer.Serialize(informationDensityDirector.Review(contract.GalleryId, contract.EditorialSequence.PageDefinitions), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryNarrativeFlowReview.json"), JsonSerializer.Serialize(narrativeFlowDirector.Review(contract.GalleryId, contract.NarrativeFlow), json), cancellationToken);
         return review;
     }
 
