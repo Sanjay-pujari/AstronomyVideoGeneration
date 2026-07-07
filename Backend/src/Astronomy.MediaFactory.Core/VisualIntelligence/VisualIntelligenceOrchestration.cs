@@ -905,6 +905,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IStoryCompositionEngine, StoryCompositionEngine>();
         services.AddScoped<IProductEditorialStrategyEngine, ProductEditorialStrategyEngine>();
         services.AddScoped<INarrativeCompositionEngine, NarrativeCompositionEngine>();
+        services.AddScoped<ILongStoryFramePlanner, LongStoryFramePlanner>();
         services.AddScoped<IEditorialCompositionDirector, EditorialCompositionDirector>();
         services.AddScoped<IDocumentaryAtmosphereDirector, DocumentaryAtmosphereDirector>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
