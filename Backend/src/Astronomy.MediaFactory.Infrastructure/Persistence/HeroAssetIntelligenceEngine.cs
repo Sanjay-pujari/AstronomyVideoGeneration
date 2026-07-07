@@ -3551,13 +3551,15 @@ public sealed class HeroAssetStoryGenerator(
         var subject = FirstNonEmpty(viRequest.PrimaryObjects.FirstOrDefault(), viRequest.EventName, viRequest.EventType, "astronomy event");
         var contract = new HeroIntelligenceContract
         {
+            ProductId = $"hero_{FirstNonEmpty(viRequest.CorrelationId, request.EventId)}".ToLowerInvariant(),
+            StoryId = "fallback-story",
             PlanId = viRequest.ContentGenerationPlanId?.ToString() ?? FirstNonEmpty(viRequest.CorrelationId, request.EventId),
             EventType = viRequest.EventType,
             EventFamily = viRequest.EventFamily.ToString(),
             EditorialDecisionId = "fallback-editorial-decision",
             VisualStoryId = "fallback-visual-story",
-            HeroCompositionId = "fallback-hero-composition",
-            HeroEditorialStrategyId = "fallback-hero-editorial-strategy",
+            CompositionId = "fallback-hero-composition",
+            EditorialStrategyId = "fallback-hero-editorial-strategy",
             ViewerQuestion = $"Why does {subject} matter for sky watchers?",
             PrimaryStory = $"A safe diagnostic Hero V4 intelligence fallback for {subject}.",
             ViewerTakeaway = "Required Hero V4 intelligence inputs were unavailable, so production Hero routing remains unchanged.",
@@ -3566,14 +3568,22 @@ public sealed class HeroAssetStoryGenerator(
             EditorialGoal = "Non-blocking diagnostic fallback contract.",
             ViewerEmotion = "informed",
             VisualRelationship = "unknown; fallback contract generated without complete V4 intelligence inputs",
-            PlatformVariantRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
+            DocumentaryTone = "diagnostic",
+            RecommendedComposition = "Use existing production Hero composition.",
+            RecommendedTypography = "Use existing Hero typography system; architecture-only contract.",
+            RecommendedInformationDensity = "Low",
+            RecommendedVisualBalance = "Preserve existing visual balance.",
+            PlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
             ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0, 0, 0, 0, null),
             FallbackApplied = true,
             MissingInputs = [nameof(EditorialDecision), nameof(VisualStory), "StoryCompositionDecision", nameof(ProductEditorialStrategyResult)],
-            Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."]
+            Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."],
+            CreativeConfidence = 0,
+            Versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["editorialProductContract"] = "4.5D" }
         };
         Directory.CreateDirectory(Path.GetDirectoryName(contractPath)!);
         await File.WriteAllTextAsync(contractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(contractPath)!, "EditorialProductReview.json"), JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), JsonOptions), cancellationToken).ConfigureAwait(false);
     }
 
     private static string BuildDiagnosticOutputPath(string heroAssetsRoot, string fileName)

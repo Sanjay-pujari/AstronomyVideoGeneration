@@ -130,13 +130,15 @@ public sealed class HeroPromptMigrationServiceTests
 
     private static HeroIntelligenceContract IntelligenceContract() => new()
     {
+        ProductId = "hero-story-1",
+        StoryId = "story-1",
         PlanId = "plan-1",
         EventType = "planet-conjunction",
         EventFamily = "PlanetConjunction",
         EditorialDecisionId = "story-1",
         VisualStoryId = "story-1",
-        HeroCompositionId = "composition-hero",
-        HeroEditorialStrategyId = "editorial-hero",
+        CompositionId = "composition-hero",
+        EditorialStrategyId = "editorial-hero",
         ViewerQuestion = "Why do Jupiter and Venus look so close tonight?",
         PrimaryStory = "Jupiter and Venus form an apparent close pairing in the evening sky.",
         ViewerTakeaway = "The planets look close from Earth but are not physically close.",
@@ -145,8 +147,15 @@ public sealed class HeroPromptMigrationServiceTests
         EditorialGoal = "Stop scrolling.",
         ViewerEmotion = "Wonder.",
         VisualRelationship = "The apparent closeness is the subject; neither planet dominates.",
-        PlatformVariantRecommendations = new Dictionary<string, string> { ["landscape"] = "Use shared negative space around both planets." },
-        ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0.9, 0.9, 0.9, 0.9, null)
+        DocumentaryTone = "documentary",
+        RecommendedComposition = "Balanced planets communicating their relationship.",
+        RecommendedTypography = "Existing Hero typography.",
+        RecommendedInformationDensity = "Low",
+        RecommendedVisualBalance = "Shared negative space.",
+        PlatformRecommendations = new Dictionary<string, string> { ["landscape"] = "Use shared negative space around both planets." },
+        ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0.9, 0.9, 0.9, 0.9, null),
+        CreativeConfidence = 0.9,
+        Versions = new Dictionary<string, string> { ["editorialProductContract"] = "4.5D" }
     };
 
     private static CreativeDirectionContract Contract() => new()
