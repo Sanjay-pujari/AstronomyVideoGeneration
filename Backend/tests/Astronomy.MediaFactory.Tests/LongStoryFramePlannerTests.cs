@@ -59,6 +59,9 @@ public sealed class LongStoryFramePlannerTests
         Assert.Contains("production rendering replacement", manifest.RenderingStatus);
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePlan.json")));
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFrameReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePromptReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "frame-prompts", "frame01-hook-prompt.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "frame-prompts", "frame09-call-to-action-prompt.json")));
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "FrameGenerationDiagnostics.json")));
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "VisualPromptDiagnostics.json")));
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "LongStoryFrameArtifactManifest.json")));
@@ -74,7 +77,30 @@ public sealed class LongStoryFramePlannerTests
         var json = await File.ReadAllTextAsync(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePlan.json"));
         var reparsed = JsonSerializer.Deserialize<LongStoryFramePlan>(json, VisualIntelligenceJson.CreateSerializerOptions());
         Assert.Equal(plan.PlanId, reparsed!.PlanId);
-        Assert.Equal("4.7D", reparsed.Versions["longStoryFrames"]);
+        Assert.Equal("4.7E", reparsed.Versions["longStoryFrames"]);
+
+        var promptFiles = Directory.GetFiles(Path.Combine(folder, "long-story-frames", "diagnostics", "frame-prompts"), "*-prompt.json");
+        Assert.Equal(9, promptFiles.Length);
+        foreach (var promptFile in promptFiles)
+        {
+            var package = JsonSerializer.Deserialize<StoryFramePromptPackage>(await File.ReadAllTextAsync(promptFile), VisualIntelligenceJson.CreateSerializerOptions())!;
+            Assert.Equal("16:9", package.AspectRatio);
+            Assert.Equal("AzureOpenAIImage", package.Provider);
+            Assert.Contains("Native 16:9 landscape", package.PositivePrompt);
+            Assert.Contains("astronomy accuracy", package.PositivePrompt);
+            Assert.Contains("deterministic overlay safe space", package.PositivePrompt);
+            Assert.DoesNotContain("crop", package.PositivePrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("crop", package.NegativePrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Do not generate embedded text", package.TypographyInstructions);
+            Assert.Contains("No generated embedded text", package.PositivePrompt);
+            Assert.Equal(JsonValueKind.False, Assert.IsType<JsonElement>(package.Diagnostics["azureCallsMade"]).ValueKind);
+        }
+
+        var promptReviewJson = await File.ReadAllTextAsync(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePromptReview.json"));
+        var promptReview = JsonSerializer.Deserialize<StoryFramePromptReview>(promptReviewJson, VisualIntelligenceJson.CreateSerializerOptions())!;
+        Assert.Equal(9, promptReview.PromptCount);
+        Assert.True(promptReview.NoCroppingConfirmed);
+        Assert.True(promptReview.EmbeddedTextProhibited);
     }
 
     [Fact]
