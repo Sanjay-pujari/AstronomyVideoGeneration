@@ -57,9 +57,21 @@ public sealed record LongStoryFrameArtifactManifest
     public required IReadOnlyList<string> Directories { get; init; }
     public required IReadOnlyList<string> Diagnostics { get; init; }
     public required IReadOnlyList<string> ComparisonArtifacts { get; init; }
+    public required IReadOnlyDictionary<string, string> Artifacts { get; init; }
     public required bool ImagesGenerated { get; init; }
     public required string RenderingStatus { get; init; }
     public required IReadOnlyDictionary<string, string> Versions { get; init; }
+}
+
+public sealed record LongStoryFrameCompositionModel
+{
+    public required string PlanId { get; init; }
+    public required string TimelineId { get; init; }
+    public required string AspectRatio { get; init; }
+    public required string CompositionPhilosophy { get; init; }
+    public required IReadOnlyList<string> SafeAreaRules { get; init; }
+    public required IReadOnlyList<string> ProductionConstraints { get; init; }
+    public required IReadOnlyDictionary<int, string> FrameCompositions { get; init; }
 }
 
 public interface ILongStoryFramePlanner
@@ -70,7 +82,7 @@ public interface ILongStoryFramePlanner
 
 public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
 {
-    public const string Version = "4.7B";
+    public const string Version = "4.7D";
     public const string LandscapeAspectRatio = "16:9";
 
     private static readonly NarrativeBeatRole[] RequiredLongBeatOrder =
@@ -122,6 +134,7 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
         Directory.CreateDirectory(comparison);
 
         var review = BuildReview(plan);
+        var compositionModel = BuildCompositionModel(plan);
         var manifest = new LongStoryFrameArtifactManifest
         {
             PlanId = plan.PlanId,
@@ -129,8 +142,17 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
             TimelineId = plan.TimelineId,
             ArtifactRoot = root,
             Directories = ["diagnostics/", "comparison/"],
-            Diagnostics = ["diagnostics/LongStoryFramePlan.json", "diagnostics/LongStoryFrameReview.json"],
-            ComparisonArtifacts = [],
+            Diagnostics = ["diagnostics/LongStoryFramePlan.json", "diagnostics/LongStoryFrameReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
+            ComparisonArtifacts = ["comparison/"],
+            Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["StoryFramePlan"] = "story-frame-plan.json",
+                ["CompositionModel"] = "composition-model.json",
+                ["FrameReview"] = "diagnostics/LongStoryFrameReview.json",
+                ["FrameGenerationDiagnostics"] = "diagnostics/FrameGenerationDiagnostics.json",
+                ["VisualPromptDiagnostics"] = "diagnostics/VisualPromptDiagnostics.json",
+                ["ComparisonArtifacts"] = "comparison/"
+            },
             ImagesGenerated = false,
             RenderingStatus = "Foundation only; native 16:9 frame generation planned, no production rendering replacement active.",
             Versions = plan.Versions
@@ -139,9 +161,43 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
         var options = VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "LongStoryFramePlan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "LongStoryFrameReview.json"), JsonSerializer.Serialize(review, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "FrameGenerationDiagnostics.json"), JsonSerializer.Serialize(CreateFrameGenerationDiagnostics(plan), options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualPromptDiagnostics.json"), JsonSerializer.Serialize(CreateVisualPromptDiagnostics(plan), options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "LongStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
         return (plan, review, manifest);
     }
+
+    private static object CreateFrameGenerationDiagnostics(LongStoryFramePlan plan) => new
+    {
+        plan.PlanId,
+        plan.TimelineId,
+        ImagesGenerated = false,
+        AzureCallsMade = false,
+        ProductionSceneRenderingReplaced = false,
+        Status = "Artifact alignment only; no native story frame image generation has run."
+    };
+
+    private static object CreateVisualPromptDiagnostics(LongStoryFramePlan plan) => new
+    {
+        plan.PlanId,
+        plan.TimelineId,
+        PromptReplacementApplied = false,
+        VisualPromptsGenerated = false,
+        Status = "Artifact alignment only; story frame prompt generation remains unchanged."
+    };
+
+    private static LongStoryFrameCompositionModel BuildCompositionModel(LongStoryFramePlan plan) => new()
+    {
+        PlanId = plan.PlanId,
+        TimelineId = plan.TimelineId,
+        AspectRatio = plan.AspectRatio,
+        CompositionPhilosophy = "Native 16:9 long-form documentary frames aligned with Hero and Gallery artifact diagnostics without replacing scene rendering.",
+        SafeAreaRules = ["Keep primary astronomy subject inside the central 80% width and 78% height; reserve lower-third and edge margins for platform UI and captions."],
+        ProductionConstraints = ["Artifact alignment only.", "No image generation changes.", "No Azure changes.", "No prompt replacement.", "No production scene rendering replacement."],
+        FrameCompositions = plan.FrameDefinitions.ToDictionary(frame => frame.FrameNumber, frame => frame.RecommendedComposition)
+    };
 
     private static LongStoryFrameDefinition BuildFrameDefinition(NarrativeBeat beat, int frameNumber) => new()
     {

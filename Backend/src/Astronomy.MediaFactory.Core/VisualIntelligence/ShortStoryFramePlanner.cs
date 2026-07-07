@@ -57,9 +57,21 @@ public sealed record ShortStoryFrameArtifactManifest
     public required IReadOnlyList<string> Directories { get; init; }
     public required IReadOnlyList<string> Diagnostics { get; init; }
     public required IReadOnlyList<string> ComparisonArtifacts { get; init; }
+    public required IReadOnlyDictionary<string, string> Artifacts { get; init; }
     public required bool ImagesGenerated { get; init; }
     public required string RenderingStatus { get; init; }
     public required IReadOnlyDictionary<string, string> Versions { get; init; }
+}
+
+public sealed record ShortStoryFrameCompositionModel
+{
+    public required string PlanId { get; init; }
+    public required string TimelineId { get; init; }
+    public required string AspectRatio { get; init; }
+    public required string CompositionPhilosophy { get; init; }
+    public required IReadOnlyList<string> SafeAreaRules { get; init; }
+    public required IReadOnlyList<string> ProductionConstraints { get; init; }
+    public required IReadOnlyDictionary<int, string> FrameCompositions { get; init; }
 }
 
 public interface IShortStoryFramePlanner
@@ -70,7 +82,7 @@ public interface IShortStoryFramePlanner
 
 public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
 {
-    public const string Version = "4.7C";
+    public const string Version = "4.7D";
     public const string PortraitAspectRatio = "9:16";
 
     private static readonly NarrativeBeatRole[] RequiredShortBeatOrder =
@@ -118,6 +130,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         Directory.CreateDirectory(comparison);
 
         var review = BuildReview(plan);
+        var compositionModel = BuildCompositionModel(plan);
         var manifest = new ShortStoryFrameArtifactManifest
         {
             PlanId = plan.PlanId,
@@ -125,8 +138,17 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
             TimelineId = plan.TimelineId,
             ArtifactRoot = root,
             Directories = ["diagnostics/", "comparison/"],
-            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json"],
-            ComparisonArtifacts = [],
+            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
+            ComparisonArtifacts = ["comparison/"],
+            Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["StoryFramePlan"] = "story-frame-plan.json",
+                ["CompositionModel"] = "composition-model.json",
+                ["FrameReview"] = "diagnostics/ShortStoryFrameReview.json",
+                ["FrameGenerationDiagnostics"] = "diagnostics/FrameGenerationDiagnostics.json",
+                ["VisualPromptDiagnostics"] = "diagnostics/VisualPromptDiagnostics.json",
+                ["ComparisonArtifacts"] = "comparison/"
+            },
             ImagesGenerated = false,
             RenderingStatus = "Foundation only; native 9:16 short-form frame generation planned, no production rendering replacement active, no Azure routing changes active.",
             Versions = plan.Versions
@@ -135,9 +157,43 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         var options = VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFramePlan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFrameReview.json"), JsonSerializer.Serialize(review, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "FrameGenerationDiagnostics.json"), JsonSerializer.Serialize(CreateFrameGenerationDiagnostics(plan), options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualPromptDiagnostics.json"), JsonSerializer.Serialize(CreateVisualPromptDiagnostics(plan), options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "ShortStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
         return (plan, review, manifest);
     }
+
+    private static object CreateFrameGenerationDiagnostics(ShortStoryFramePlan plan) => new
+    {
+        plan.PlanId,
+        plan.TimelineId,
+        ImagesGenerated = false,
+        AzureCallsMade = false,
+        ProductionSceneRenderingReplaced = false,
+        Status = "Artifact alignment only; no native story frame image generation has run."
+    };
+
+    private static object CreateVisualPromptDiagnostics(ShortStoryFramePlan plan) => new
+    {
+        plan.PlanId,
+        plan.TimelineId,
+        PromptReplacementApplied = false,
+        VisualPromptsGenerated = false,
+        Status = "Artifact alignment only; story frame prompt generation remains unchanged."
+    };
+
+    private static ShortStoryFrameCompositionModel BuildCompositionModel(ShortStoryFramePlan plan) => new()
+    {
+        PlanId = plan.PlanId,
+        TimelineId = plan.TimelineId,
+        AspectRatio = plan.AspectRatio,
+        CompositionPhilosophy = "Native 9:16 short-form frames aligned with Hero and Gallery artifact diagnostics without replacing scene rendering or Azure routing.",
+        SafeAreaRules = ["Keep primary astronomy subject in the central vertical column; reserve top 12%, bottom 18%, and right-edge UI margin for platform chrome, captions, and engagement controls."],
+        ProductionConstraints = ["Artifact alignment only.", "No image generation changes.", "No Azure changes.", "No prompt replacement.", "No production scene rendering replacement."],
+        FrameCompositions = plan.FrameDefinitions.ToDictionary(frame => frame.FrameNumber, frame => frame.RecommendedComposition)
+    };
 
     private static ShortStoryFrameDefinition BuildFrameDefinition(NarrativeBeat beat, int frameNumber) => new()
     {

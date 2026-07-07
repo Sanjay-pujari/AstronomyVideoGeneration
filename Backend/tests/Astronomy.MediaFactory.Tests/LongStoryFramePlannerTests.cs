@@ -59,12 +59,22 @@ public sealed class LongStoryFramePlannerTests
         Assert.Contains("production rendering replacement", manifest.RenderingStatus);
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePlan.json")));
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFrameReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "FrameGenerationDiagnostics.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "VisualPromptDiagnostics.json")));
         Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "LongStoryFrameArtifactManifest.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "story-frame-plan.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "composition-model.json")));
+        Assert.Equal("story-frame-plan.json", manifest.Artifacts["StoryFramePlan"]);
+        Assert.Equal("composition-model.json", manifest.Artifacts["CompositionModel"]);
+        Assert.Equal("diagnostics/LongStoryFrameReview.json", manifest.Artifacts["FrameReview"]);
+        Assert.Equal("diagnostics/FrameGenerationDiagnostics.json", manifest.Artifacts["FrameGenerationDiagnostics"]);
+        Assert.Equal("diagnostics/VisualPromptDiagnostics.json", manifest.Artifacts["VisualPromptDiagnostics"]);
+        Assert.Equal("comparison/", manifest.Artifacts["ComparisonArtifacts"]);
 
         var json = await File.ReadAllTextAsync(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePlan.json"));
         var reparsed = JsonSerializer.Deserialize<LongStoryFramePlan>(json, VisualIntelligenceJson.CreateSerializerOptions());
         Assert.Equal(plan.PlanId, reparsed!.PlanId);
-        Assert.Equal("4.7B", reparsed.Versions["longStoryFrames"]);
+        Assert.Equal("4.7D", reparsed.Versions["longStoryFrames"]);
     }
 
     [Fact]
