@@ -23,7 +23,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Equal(composition.GalleryComposition.Decision.CompositionId, contract.StoryCompositionId);
         Assert.Equal(strategy.GalleryEditorialStrategy.Strategy.StrategyId, contract.GalleryEditorialStrategyId);
         Assert.Equal(story.PrimaryStory, contract.PrimaryStory);
-        Assert.Equal("Teach visually.", contract.EditorialSequence.Objective);
+        Assert.Equal("Teach visually through one question per page.", contract.EditorialSequence.Objective);
         Assert.Equal(5, contract.EditorialSequence.Steps.Count);
         Assert.Equal("4.6A", contract.Versions["galleryIntelligenceAlignment"]);
         Assert.Equal(["Wonder", "Curiosity", "Understanding", "Observation", "Memory"], contract.NarrativeFlow.EmotionalProgression);
@@ -238,7 +238,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         var pages = engine.Create(story, composition, strategy).EditorialSequence.PageDefinitions;
 
-        Assert.Equal(["What happened?", "What am I actually looking at?", "Why did it happen?", "How can I observe it?", "Why should I remember it?"], pages.Select(page => page.ViewerQuestion).ToArray());
+        Assert.Equal(["What am I seeing?", "Which objects are these?", "Why is this happening?", "How do I observe it?", "What should I remember?"], pages.Select(page => page.ViewerQuestion).ToArray());
         Assert.Equal(pages.Count, pages.Select(page => page.KeyLearning).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
