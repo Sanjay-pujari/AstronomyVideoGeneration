@@ -113,7 +113,7 @@ public sealed record GalleryNarrativeFlowReview
 
 public sealed class NarrativeFlowDirector
 {
-    private static readonly string[] RequiredStages = ["Hook", "Wonder", "Discovery", "Curiosity", "Explanation", "Understanding", "Observation", "Practical application", "Takeaway", "Memory"];
+    private static readonly string[] RequiredStages = ["Hook", "Wonder", "Recognition", "Curiosity", "Explanation", "Understanding", "Observation", "Practical application", "Memory", "Reinforcement"];
     private static readonly string[] RequiredEmotions = ["Wonder", "Curiosity", "Understanding", "Observation", "Memory"];
 
     public GalleryNarrativeFlow CreateFlow(string galleryId, GalleryEditorialSequence sequence)
@@ -158,10 +158,10 @@ public sealed class NarrativeFlowDirector
     {
         Order = order,
         Stage = stage,
-        EmotionalState = stage switch { "Hook" or "Wonder" => "Wonder", "Discovery" or "Curiosity" => "Curiosity", "Explanation" or "Understanding" => "Understanding", "Observation" or "Practical application" => "Observation", _ => "Memory" },
-        LearningState = stage switch { "Hook" => "Recognize why the event matters visually.", "Wonder" => "Feel invited to continue.", "Discovery" => "Identify what is being seen.", "Curiosity" => "Ask how the visual relationship works.", "Explanation" => "Learn the core astronomy idea.", "Understanding" => "Connect the explanation to the viewer question.", "Observation" => "Translate learning into skywatching guidance.", "Practical application" => "Know when, where, and how to look.", "Takeaway" => "Retain the main meaning.", _ => "Remember the event as a coherent story." },
-        CognitiveState = stage switch { "Hook" or "Wonder" => "Attention", "Discovery" => "Orientation", "Curiosity" => "Question formation", "Explanation" => "Causal reasoning", "Understanding" => "Comprehension", "Observation" => "Planning", "Practical application" => "Action readiness", _ => "Recall" },
-        EditorialPacing = stage switch { "Hook" or "Wonder" => "Fast and visual", "Discovery" or "Curiosity" => "Light and inviting", "Explanation" or "Understanding" => "Measured teaching", "Observation" or "Practical application" => "Practical and clear", _ => "Calm and memorable" },
+        EmotionalState = stage switch { "Hook" or "Wonder" => "Wonder", "Recognition" or "Curiosity" => "Curiosity", "Explanation" or "Understanding" => "Understanding", "Observation" or "Practical application" => "Observation", _ => "Memory" },
+        LearningState = stage switch { "Hook" => "Recognize why the event matters visually.", "Wonder" => "Feel invited to continue.", "Recognition" => "Identify what is being seen.", "Curiosity" => "Ask how the visual relationship works.", "Explanation" => "Learn the core astronomy idea.", "Understanding" => "Connect the explanation to the viewer question.", "Observation" => "Translate learning into skywatching guidance.", "Practical application" => "Know when, where, and how to look.", "Memory" => "Retain the main meaning.", _ => "Remember the event as a coherent story." },
+        CognitiveState = stage switch { "Hook" or "Wonder" => "Attention", "Recognition" => "Orientation", "Curiosity" => "Question formation", "Explanation" => "Causal reasoning", "Understanding" => "Comprehension", "Observation" => "Planning", "Practical application" => "Action readiness", _ => "Recall" },
+        EditorialPacing = stage switch { "Hook" or "Wonder" => "Fast and visual", "Recognition" or "Curiosity" => "Light and inviting", "Explanation" or "Understanding" => "Measured teaching", "Observation" or "Practical application" => "Practical and clear", _ => "Calm and memorable" },
         ContinuityBridge = BuildBridge(stage, sequence)
     };
 
@@ -169,13 +169,13 @@ public sealed class NarrativeFlowDirector
     {
         "Hook" => $"Enter through {sequence.PageDefinitions.FirstOrDefault()?.PageRole ?? "the opening page"} before explanation.",
         "Wonder" => "Convert visual attention into a reason to keep reading.",
-        "Discovery" => "Name the subject after the viewer is emotionally engaged.",
+        "Recognition" => "Name the subject after the viewer is emotionally engaged.",
         "Curiosity" => "Raise the next natural question before teaching the cause.",
         "Explanation" => "Answer curiosity with one focused astronomy idea.",
         "Understanding" => "Let the viewer restate the idea in practical terms.",
         "Observation" => "Move from meaning to how the viewer can observe it.",
         "Practical application" => "Make viewing guidance actionable without adding a new lesson.",
-        "Takeaway" => "Compress the sequence into a single memorable conclusion.",
+        "Memory" => "Compress the sequence into a single memorable conclusion.",
         _ => "Leave the viewer with a durable memory of the event."
     };
 }
@@ -244,30 +244,30 @@ public sealed class InformationDensityDirector
     private static string DefaultDensity(string role) => role switch
     {
         "Hook" => "Very Low",
-        "Discovery" => "Low",
+        "Recognition" => "Low",
         "Explanation" => "Medium",
         "Observation" => "Medium",
-        "Takeaway" => "Low",
+        "Memory" => "Low",
         _ => "Low"
     };
 
     private static string VisualWeightFor(string role) => role switch
     {
         "Hook" => "Very High",
-        "Discovery" => "High",
+        "Recognition" => "High",
         "Explanation" => "Balanced",
         "Observation" => "Balanced",
-        "Takeaway" => "High",
+        "Memory" => "High",
         _ => "High"
     };
 
     private static string TextWeightFor(string role) => role switch
     {
         "Hook" => "Very Low",
-        "Discovery" => "Low",
+        "Recognition" => "Low",
         "Explanation" => "Medium",
         "Observation" => "Medium",
-        "Takeaway" => "Low",
+        "Memory" => "Low",
         _ => "Low"
     };
 
@@ -292,7 +292,7 @@ public sealed class InformationDensityDirector
         "Hook" => "Visual first.",
         "Explanation" => "Balanced visual + information.",
         "Observation" => "Practical guidance.",
-        "Takeaway" => "Memorable ending.",
+        "Memory" => "Memorable ending.",
         _ => "Light educational bridge."
     };
 
@@ -301,7 +301,7 @@ public sealed class InformationDensityDirector
         "Hook" => ["Keep text sparse.", "Let the visual create curiosity."],
         "Explanation" => ["Teach one concept.", "Balance visual evidence with concise information."],
         "Observation" => ["Prioritize actionable viewing guidance.", "Avoid adding a second science lesson."],
-        "Takeaway" => ["Return to a clean visual.", "Make the final idea easy to remember."],
+        "Memory" => ["Return to a clean visual.", "Make the final idea easy to remember."],
         _ => ["Keep the page easy to scan."]
     };
 }
@@ -326,6 +326,109 @@ public sealed record GalleryReview
     public IReadOnlyList<string> Diagnostics { get; init; } = [];
 }
 
+
+public sealed record GalleryEducationalStorytellingReview
+{
+    public required string GalleryId { get; init; }
+    public required string Version { get; init; }
+    public required IReadOnlyList<string> EditorialRoles { get; init; }
+    public required IReadOnlyList<string> ViewerQuestions { get; init; }
+    public required IReadOnlyList<string> KnowledgeProgression { get; init; }
+    public required IReadOnlyList<string> LearningContinuity { get; init; }
+    public required IReadOnlyList<string> MemoryReinforcement { get; init; }
+    public required IReadOnlyDictionary<string, string> StoryQuality { get; init; }
+    public required IReadOnlyList<string> Recommendations { get; init; }
+    public required bool GeneratesPrompts { get; init; }
+    public required bool ChangesProductionGallery { get; init; }
+}
+
+public sealed record GalleryBenchmarkMetadata
+{
+    public required string BenchmarkId { get; init; }
+    public required string Version { get; init; }
+    public required string AssetType { get; init; }
+    public required IReadOnlyList<string> EditorialRoles { get; init; }
+    public required IReadOnlyList<string> EvaluationQuestions { get; init; }
+    public required IReadOnlyDictionary<string, string> QualityDimensions { get; init; }
+    public required bool RunnerImplemented { get; init; }
+}
+
+public sealed class EducationalStorytellingDirector
+{
+    private static readonly string[] DefaultRoles = ["Hook", "Recognition", "Explanation", "Observation", "Memory"];
+
+    public GalleryEditorialSequence CreateSequence(VisualStory story, EditorialStrategy strategy)
+    {
+        var isPlanetPairing = ContainsAny(story.StoryId + story.StoryTitle + story.PrimaryStory, "PlanetPairing", "Venus", "Jupiter", "conjunction", "close approach");
+        var confidence = Math.Clamp(story.StoryConfidence, 0, 1);
+        var pages = isPlanetPairing ? BuildPlanetPairingPages(story, strategy, confidence) : BuildDefaultPages(story, strategy, confidence);
+        return new GalleryEditorialSequence
+        {
+            SequenceId = $"gallery_sequence_{story.StoryId}".ToLowerInvariant(),
+            Objective = "Teach visually through one question per page.",
+            PageDefinitions = pages,
+            LearningObjectives = BuildLearningObjectives(story, strategy),
+            ViewerJourney = pages.Select(page => $"{page.PageRole}: viewer asks '{page.ViewerQuestion}' and learns one idea: '{page.KeyLearning}'").ToArray(),
+            StoryProgression = pages.Select(page => page.PageRole).ToArray(),
+            EditorialRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["architectureOnly"] = "Diagnostics-only contract; production Gallery routing, rendering, Azure usage, and prompts are unchanged.",
+                ["knowledgeTransfer"] = "Each page answers exactly one viewer question and avoids repeated concepts.",
+                ["editorialRoles"] = string.Join(" → ", DefaultRoles),
+                ["futureReuse"] = "Role sequence is reusable for Story Frames and future domains."
+            }
+        };
+    }
+
+    public GalleryEducationalStorytellingReview Review(GalleryIntelligenceContract contract)
+    {
+        var pages = contract.EditorialSequence.PageDefinitions.OrderBy(page => page.PageNumber).ToArray();
+        return new GalleryEducationalStorytellingReview
+        {
+            GalleryId = contract.GalleryId,
+            Version = GalleryIntelligenceAlignmentEngine.Version,
+            EditorialRoles = pages.Select(page => page.PageRole).ToArray(),
+            ViewerQuestions = pages.Select(page => page.ViewerQuestion).ToArray(),
+            KnowledgeProgression = pages.Select(page => $"{page.PageRole}: {page.KeyLearning}").ToArray(),
+            LearningContinuity = pages.Zip(pages.Skip(1), (a, b) => $"{a.PageRole} → {b.PageRole}: {Bridge(a.PageRole, b.PageRole)}").ToArray(),
+            MemoryReinforcement = [pages.LastOrDefault()?.KeyLearning ?? contract.ViewerTakeaway, contract.ViewerTakeaway],
+            StoryQuality = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["educationalPacing"] = "Curiosity before identity, identity before cause, cause before practical observation, observation before memory.",
+                ["conceptSequencing"] = "One viewer question and one learning unit per page.",
+                ["curiosityProgression"] = "The sequence answers what happened, what is visible, why it happened, how to observe it, and why to remember it.",
+                ["productionSafety"] = "Creative diagnostics only; no production Gallery changes."
+            },
+            Recommendations = ["Keep page text focused on exactly one concept.", "Avoid repeating the same learning on adjacent pages.", "Use the Memory page to compress the event into a durable takeaway."],
+            GeneratesPrompts = false,
+            ChangesProductionGallery = false
+        };
+    }
+
+    public GalleryBenchmarkMetadata CreateBenchmarkMetadata(GalleryIntelligenceContract contract) => new()
+    {
+        BenchmarkId = $"gallery_educational_storytelling_{contract.StoryId}".ToLowerInvariant(),
+        Version = GalleryIntelligenceAlignmentEngine.Version,
+        AssetType = "Gallery",
+        EditorialRoles = DefaultRoles,
+        EvaluationQuestions = ["Does each page answer exactly one viewer question?", "Does the order teach without large information jumps?", "Does the final page reinforce one memorable takeaway?", "Does the metadata avoid prompt, routing, Azure, and rendering changes?"],
+        QualityDimensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["editorialRoleOrdering"] = "Hook → Recognition → Explanation → Observation → Memory",
+            ["viewerQuestionProgression"] = "What happened? → What am I looking at? → Why did it happen? → How can I observe it? → Why remember it?",
+            ["knowledgeTransfer"] = "Single concept per page with no repeated concepts.",
+            ["memoryReinforcement"] = "Final page leaves one durable takeaway."
+        },
+        RunnerImplemented = false
+    };
+
+    private static string Bridge(string from, string to) => $"{from} prepares the viewer for {to} without adding a second concept.";
+    private static bool ContainsAny(string value, params string[] terms) => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+    private static IReadOnlyList<string> BuildLearningObjectives(VisualStory story, EditorialStrategy strategy) => [$"Answer: {story.ViewerQuestion}", $"Explain: {strategy.RecommendedScienceEmphasis}", $"Observe: {strategy.RecommendedObservationEmphasis}", $"Remember: {story.ViewerTakeaway}"];
+    private static IReadOnlyList<EditorialPage> BuildPlanetPairingPages(VisualStory story, EditorialStrategy strategy, double confidence) => [GalleryIntelligenceAlignmentEngine.Page(1, "Hook", "Generate curiosity.", "What happened?", "Two bright planets appear unusually close.", "The apparent gap between the two bright planets.", "Very Low", "Wide sky view with both planets sharing negative space.", ["Visual first.", "Do not explain everything on page 1."], confidence), GalleryIntelligenceAlignmentEngine.Page(2, "Recognition", "Identify the important objects.", "What am I actually looking at?", "Identify Jupiter and Venus as the important visible objects.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple."], confidence), GalleryIntelligenceAlignmentEngine.Page(3, "Explanation", "Explain the science.", "Why did it happen?", "Conjunctions occur when planets line up from our viewpoint on Earth.", "Earth-view geometry and apparent alignment.", "Medium", "Relationship-first composition that supports a simple cause-and-effect explanation.", [strategy.RecommendedScienceEmphasis], confidence), GalleryIntelligenceAlignmentEngine.Page(4, "Observation", "Teach practical viewing.", "How can I observe it?", "Observe from the recommended local direction and time window.", "Horizon, direction, and viewing window.", "Medium", "Observation-guide layout with clear sky context.", [strategy.RecommendedObservationEmphasis], confidence), GalleryIntelligenceAlignmentEngine.Page(5, "Memory", "Leave one memorable takeaway.", "Why should I remember it?", "Planet pairings are viewpoint events: the planets look close even while separated by vast distances.", "A memorable final view of the planetary pair.", "Low", "Clean closing frame with the pair and generous negative space.", [story.ViewerTakeaway], confidence)];
+    private static IReadOnlyList<EditorialPage> BuildDefaultPages(VisualStory story, EditorialStrategy strategy, double confidence) => [GalleryIntelligenceAlignmentEngine.Page(1, "Hook", "Generate curiosity.", "What happened?", story.PrimaryStory, story.PrimaryVisualSubject, "Very Low", story.RecommendedComposition, ["Hook first; explanation later."], confidence), GalleryIntelligenceAlignmentEngine.Page(2, "Recognition", "Identify the important objects.", "What am I actually looking at?", story.PrimaryVisualSubject, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence), GalleryIntelligenceAlignmentEngine.Page(3, "Explanation", "Explain the science.", "Why did it happen?", strategy.RecommendedScienceEmphasis, story.VisualRelationship, "Medium", story.RecommendedComposition, ["Teach one idea on this page."], confidence), GalleryIntelligenceAlignmentEngine.Page(4, "Observation", "Teach practical viewing.", "How can I observe it?", strategy.RecommendedObservationEmphasis, story.EnvironmentRecommendation, "Medium", story.RecommendedComposition, ["Favor practical observing clarity."], confidence), GalleryIntelligenceAlignmentEngine.Page(5, "Memory", "Leave one memorable takeaway.", "Why should I remember it?", story.ViewerTakeaway, story.PrimaryVisualSubject, "Low", story.RecommendedComposition, ["Close with a memorable learning outcome."], confidence)];
+}
+
 public interface IGalleryIntelligenceAlignmentEngine
 {
     GalleryIntelligenceContract Create(VisualStory story, StoryCompositionResult composition, ProductEditorialStrategyResult strategy);
@@ -334,15 +437,16 @@ public interface IGalleryIntelligenceAlignmentEngine
 
 public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAlignmentEngine
 {
-    public const string Version = "4.5D";
+    public const string Version = "4.6A";
     private readonly InformationDensityDirector informationDensityDirector = new();
     private readonly NarrativeFlowDirector narrativeFlowDirector = new();
+    private readonly EducationalStorytellingDirector educationalStorytellingDirector = new();
 
     public GalleryIntelligenceContract Create(VisualStory story, StoryCompositionResult composition, ProductEditorialStrategyResult strategy)
     {
         var galleryComposition = composition.GalleryComposition.Decision;
         var galleryStrategy = strategy.GalleryEditorialStrategy.Strategy;
-        var sequence = BuildSequence(story, galleryStrategy);
+        var sequence = educationalStorytellingDirector.CreateSequence(story, galleryStrategy);
         var densityReview = informationDensityDirector.Review($"gallery_{story.StoryId}".ToLowerInvariant(), sequence.PageDefinitions);
         var narrativeFlow = narrativeFlowDirector.CreateFlow($"gallery_{story.StoryId}".ToLowerInvariant(), sequence);
         sequence = sequence with { InformationDensity = densityReview.PageDensity, NarrativeFlow = narrativeFlow };
@@ -404,11 +508,13 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryReview.json"), JsonSerializer.Serialize(review, json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryInformationDensityReview.json"), JsonSerializer.Serialize(informationDensityDirector.Review(contract.GalleryId, contract.EditorialSequence.PageDefinitions), json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryNarrativeFlowReview.json"), JsonSerializer.Serialize(narrativeFlowDirector.Review(contract.GalleryId, contract.NarrativeFlow), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryEducationalStorytellingReview.json"), JsonSerializer.Serialize(educationalStorytellingDirector.Review(contract), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryBenchmarkMetadata.json"), JsonSerializer.Serialize(educationalStorytellingDirector.CreateBenchmarkMetadata(contract), json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "EditorialProductReview.json"), JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), json), cancellationToken);
         return review;
     }
 
-    private static GalleryEditorialSequence BuildSequence(VisualStory story, EditorialStrategy strategy)
+    private static GalleryEditorialSequence BuildLegacySequence(VisualStory story, EditorialStrategy strategy)
     {
         var isPlanetPairing = ContainsAny(story.StoryId + story.StoryTitle + story.PrimaryStory, "PlanetPairing", "Venus", "Jupiter", "conjunction", "close approach");
         var confidence = Math.Clamp(story.StoryConfidence, 0, 1);
@@ -437,22 +543,22 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
     private static IReadOnlyList<EditorialPage> BuildPlanetPairingPages(VisualStory story, EditorialStrategy strategy, double confidence) =>
     [
         Page(1, "Hook", "Create curiosity with the unusual closeness of two bright planets.", "Why are two bright planets so close tonight?", "Two bright planets appear unusually close.", "The apparent gap between the two bright planets.", "Very Low", "Wide sky view with both planets sharing negative space.", ["Visual first.", "Do not explain everything on page 1.", "Use the closeness as the narrative hook."], confidence),
-        Page(2, "Discovery", "Identify the objects so the viewer knows what they are seeing.", "Which planets are they?", "Identify Jupiter and Venus.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple.", "Avoid making either planet dominate the story."], confidence),
+        Page(2, "Recognition", "Identify the objects so the viewer knows what they are seeing.", "Which planets are they?", "Identify Jupiter and Venus.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple.", "Avoid making either planet dominate the story."], confidence),
         Page(3, "Explanation", "Explain the astronomy behind the apparent pairing.", "Are Jupiter and Venus actually close in space?", "Conjunctions occur when planets line up from our viewpoint on Earth.", "Earth-view geometry and apparent alignment.", "Medium", "Relationship-first composition that supports a simple cause-and-effect explanation.", [strategy.RecommendedScienceEmphasis, "Explain apparent closeness without replacing prompts."], confidence),
         Page(4, "Observation", "Turn the learning into practical viewing guidance.", "Where and when should I look?", "Observe from the recommended local direction and time window.", "Horizon, direction, and viewing window.", "Medium", "Observation-guide layout with clear sky context and room for existing overlay systems.", ["Practical guidance.", strategy.RecommendedObservationEmphasis, "Diagnostics only; no production overlay changes."], confidence),
-        Page(5, "Takeaway", "Close with a memorable reminder that reinforces the learning.", "What should I remember?", "Planet pairings are viewpoint events: the planets look close even while separated by vast distances.", "A memorable final view of the planetary pair.", "Low", "Clean closing frame with the pair and generous negative space.", ["Memorable ending.", story.ViewerTakeaway, "End with an interesting fact or reminder."], confidence)
+        Page(5, "Memory", "Close with a memorable reminder that reinforces the learning.", "What should I remember?", "Planet pairings are viewpoint events: the planets look close even while separated by vast distances.", "A memorable final view of the planetary pair.", "Low", "Clean closing frame with the pair and generous negative space.", ["Memorable ending.", story.ViewerTakeaway, "End with an interesting fact or reminder."], confidence)
     ];
 
     private static IReadOnlyList<EditorialPage> BuildDefaultPages(VisualStory story, EditorialStrategy strategy, double confidence) =>
     [
         Page(1, "Hook", "Open with the viewer question and visual reason to continue learning.", story.ViewerQuestion, story.PrimaryStory, story.PrimaryVisualSubject, "Very Low", story.RecommendedComposition, ["Visual first.", "Hook first; explanation later."], confidence),
-        Page(2, "Discovery", "Name what the viewer is seeing without inventing a new story.", "What am I seeing?", story.PrimaryStory, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence),
+        Page(2, "Recognition", "Name what the viewer is seeing without inventing a new story.", "What am I seeing?", story.PrimaryStory, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence),
         Page(3, "Explanation", "Explain the visual relationship from the shared Visual Story Model.", "Why does it happen?", strategy.RecommendedScienceEmphasis, story.VisualRelationship, "Medium", story.RecommendedComposition, ["Balanced visual + information.", "Teach one idea on this page."], confidence),
         Page(4, "Observation", "Translate the story into observation guidance.", "How can I observe it?", strategy.RecommendedObservationEmphasis, story.EnvironmentRecommendation, "Medium", story.RecommendedComposition, ["Practical guidance.", "Favor practical observing clarity."], confidence),
-        Page(5, "Takeaway", "End with the learning result the viewer should remember.", "What should I remember?", story.ViewerTakeaway, story.PrimaryVisualSubject, "Low", story.RecommendedComposition, ["Memorable ending.", "Close with a memorable learning outcome."], confidence)
+        Page(5, "Memory", "End with the learning result the viewer should remember.", "What should I remember?", story.ViewerTakeaway, story.PrimaryVisualSubject, "Low", story.RecommendedComposition, ["Memorable ending.", "Close with a memorable learning outcome."], confidence)
     ];
 
-    private static EditorialPage Page(int number, string role, string goal, string question, string learning, string focus, string density, string composition, IReadOnlyList<string> notes, double confidence) => new()
+    internal static EditorialPage Page(int number, string role, string goal, string question, string learning, string focus, string density, string composition, IReadOnlyList<string> notes, double confidence) => new()
     {
         PageNumber = number,
         PageRole = role,

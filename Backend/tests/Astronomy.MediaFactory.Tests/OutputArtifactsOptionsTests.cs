@@ -61,6 +61,8 @@ public sealed class OutputArtifactRegistryTests : IDisposable
         Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryReview.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryReview));
         Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryInformationDensityReview.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryInformationDensityReview));
         Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryNarrativeFlowReview.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryNarrativeFlowReview));
+        Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryEducationalStorytellingReview.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryEducationalStorytellingReview));
+        Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryBenchmarkMetadata.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryBenchmarkMetadata));
         Assert.Equal(Path.Combine("gallery", "GalleryArtifactManifest.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryArtifactManifest));
     }
 
