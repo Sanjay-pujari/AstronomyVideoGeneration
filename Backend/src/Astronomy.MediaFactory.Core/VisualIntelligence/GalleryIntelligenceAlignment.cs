@@ -1,24 +1,24 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core.VisualIntelligence;
 
-public sealed record GalleryIntelligenceContract
+public sealed record GalleryIntelligenceContract : EditorialProductContract
 {
-    public required string GalleryId { get; init; }
-    public required string VisualStoryId { get; init; }
-    public required string StoryCompositionId { get; init; }
-    public required string GalleryEditorialStrategyId { get; init; }
-    public required string ViewerQuestion { get; init; }
-    public required string PrimaryStory { get; init; }
+    [JsonIgnore]
+    public string GalleryId => ProductId;
+    [JsonIgnore]
+    public string StoryCompositionId => CompositionId;
+    [JsonIgnore]
+    public string GalleryEditorialStrategyId => EditorialStrategyId;
     public required IReadOnlyList<string> StoryProgression { get; init; }
     public required GalleryEditorialSequence EditorialSequence { get; init; }
     public required GalleryNarrativeFlow NarrativeFlow { get; init; }
     public required IReadOnlyList<string> LearningObjectives { get; init; }
-    public required string DocumentaryTone { get; init; }
-    public required string RecommendedComposition { get; init; }
-    public required string RecommendedPlatform { get; init; }
-    public required double Confidence { get; init; }
-    public required IReadOnlyDictionary<string, string> Versions { get; init; }
+    [JsonIgnore]
+    public string RecommendedPlatform => PlatformRecommendations.TryGetValue("gallery", out var platform) ? platform : string.Empty;
+    [JsonIgnore]
+    public double Confidence => CreativeConfidence;
 }
 
 public sealed record GalleryEditorialSequence
@@ -348,20 +348,28 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
 
         return new GalleryIntelligenceContract
         {
-            GalleryId = $"gallery_{story.StoryId}".ToLowerInvariant(),
+            ProductId = $"gallery_{story.StoryId}".ToLowerInvariant(),
+            StoryId = story.StoryId,
+            EditorialDecisionId = story.StoryId,
             VisualStoryId = story.StoryId,
-            StoryCompositionId = galleryComposition.CompositionId,
-            GalleryEditorialStrategyId = galleryStrategy.StrategyId,
+            CompositionId = galleryComposition.CompositionId,
+            EditorialStrategyId = galleryStrategy.StrategyId,
             ViewerQuestion = story.ViewerQuestion,
             PrimaryStory = story.PrimaryStory,
+            ViewerTakeaway = story.ViewerTakeaway,
+            EditorialGoal = galleryStrategy.EditorialGoal,
+            ViewerEmotion = galleryStrategy.ViewerEmotion,
             StoryProgression = story.StoryArc.Count > 0 ? story.StoryArc : ["Discovery", "Understanding", "Observation", "Takeaway"],
             EditorialSequence = sequence,
             NarrativeFlow = narrativeFlow,
             LearningObjectives = sequence.LearningObjectives,
             DocumentaryTone = story.DocumentaryTone,
             RecommendedComposition = galleryComposition.RecommendedHierarchy,
-            RecommendedPlatform = galleryComposition.Platform.ToString(),
-            Confidence = Math.Clamp(new[] { story.StoryConfidence, galleryComposition.Confidence, galleryStrategy.Confidence }.Average(), 0, 1),
+            RecommendedTypography = "Use existing Gallery typography system; architecture-only contract.",
+            RecommendedInformationDensity = "Progressive",
+            RecommendedVisualBalance = story.RecommendedNegativeSpace,
+            PlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["gallery"] = galleryComposition.Platform.ToString() },
+            CreativeConfidence = Math.Clamp(new[] { story.StoryConfidence, galleryComposition.Confidence, galleryStrategy.Confidence }.Average(), 0, 1),
             Versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["galleryIntelligenceAlignment"] = Version,
@@ -394,6 +402,7 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryReview.json"), JsonSerializer.Serialize(review, json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryInformationDensityReview.json"), JsonSerializer.Serialize(informationDensityDirector.Review(contract.GalleryId, contract.EditorialSequence.PageDefinitions), json), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryNarrativeFlowReview.json"), JsonSerializer.Serialize(narrativeFlowDirector.Review(contract.GalleryId, contract.NarrativeFlow), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputFolder, "EditorialProductReview.json"), JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), json), cancellationToken);
         return review;
     }
 
