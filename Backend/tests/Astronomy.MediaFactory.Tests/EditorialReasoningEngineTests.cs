@@ -118,8 +118,14 @@ public sealed class EditorialReasoningEngineTests
         var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(path, "relationship-review", "PlanetRelationshipReview.json")));
         Assert.True(review.RootElement.GetProperty("relationshipScore").GetDouble() >= .95);
         Assert.True(review.RootElement.GetProperty("visualBalanceScore").GetDouble() >= .9);
-        Assert.Contains("relationship-first", review.RootElement.GetProperty("planetProminenceAssessment").GetString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("dominant giant planet", review.RootElement.GetProperty("creativeNotes")[1].GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("visual partnership", review.RootElement.GetProperty("planetProminenceAssessment").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Relationship > Balance > Wonder > Scale", review.RootElement.GetProperty("relationshipClarity").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("shared visual center", review.RootElement.GetProperty("visualBalance").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("conjunction is the hero", review.RootElement.GetProperty("storyCommunication").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("twilight", review.RootElement.GetProperty("documentaryAuthenticity").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("line-of-sight", review.RootElement.GetProperty("scientificPlausibility").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("huge primary", review.RootElement.GetProperty("creativeNotes")[1].GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("metadata-only", review.RootElement.GetProperty("benchmarkPreparation")[4].GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("representative-bright-planet-conjunction", review.RootElement.GetProperty("benchmark").GetProperty("benchmarkScenarioId").GetString());
     }
 

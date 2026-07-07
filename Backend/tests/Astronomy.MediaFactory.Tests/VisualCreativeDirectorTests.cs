@@ -50,8 +50,15 @@ public sealed class VisualCreativeDirectorTests
         var review = Assert.IsType<PlanetRelationshipReview>(result.CreativeDirectionContract!.ExtensionFields["planetRelationshipReview"]);
         Assert.True(review.RelationshipScore >= .95);
         Assert.True(review.VisualBalanceScore >= .9);
-        Assert.Contains("relationship-first", review.PlanetProminenceAssessment, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("avoid a dominant giant planet", string.Join(" ", review.CreativeNotes), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("visual partnership", review.PlanetProminenceAssessment, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Relationship > Balance > Wonder > Scale", review.RelationshipClarity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("shared visual center", review.VisualBalance, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("conjunction is the hero", review.StoryCommunication, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("twilight", review.DocumentaryAuthenticity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("line-of-sight", review.ScientificPlausibility, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("huge primary", string.Join(" ", review.CreativeNotes), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("relationship", string.Join(" ", review.CreativeRecommendations), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("runnerStatus=metadata-only", review.BenchmarkPreparation);
         Assert.Contains("negative space", review.CompositionRecommendation, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -159,7 +166,9 @@ public sealed class VisualCreativeDirectorTests
 
         Assert.Equal(CreativeKnowledgeFamily.PlanetPairing, knowledge.Family);
         Assert.Contains("relationship", knowledge.StoryGoal, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("largest-object-wins", knowledge.AvoidPatterns);
+        Assert.Contains("largest-object-wins staging", knowledge.AvoidPatterns);
+        Assert.Contains("huge primary with tiny secondary planet", knowledge.AvoidPatterns);
+        Assert.Contains("Relationship > Balance > Wonder > Scale", knowledge.CompositionStrategy, StringComparison.OrdinalIgnoreCase);
         Assert.True(knowledge.Domains.ContainsKey(CreativeKnowledgeDomain.ViewerPsychology));
     }
 
