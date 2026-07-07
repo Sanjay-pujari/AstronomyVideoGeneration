@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -42,7 +43,11 @@ public sealed partial class ProductionPipelineExecutionService(
     IOptions<SubtitleTtsOptions>? subtitleTtsOptions = null,
     INarrationV31Composer? narrationV31Composer = null,
     INarrationGenerationService? narrationGenerationService = null,
-    IOptions<OutputArtifactsOptions>? outputArtifactsOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IOptions<OutputArtifactsOptions>? outputArtifactsOptions = null,
+    IOptions<VisualIntelligenceOptions>? visualIntelligenceOptions = null,
+    INarrativeCompositionEngine? narrativeCompositionEngine = null,
+    ILongStoryFramePlanner? longStoryFramePlanner = null,
+    IShortStoryFramePlanner? shortStoryFramePlanner = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -792,7 +797,14 @@ public sealed partial class ProductionPipelineExecutionService(
             var files = response.GeneratedFiles.ToList();
             if (generateShort) ValidateSceneAssetsV3Format(context.OutputRoot, "short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count);
             if (generateLong) ValidateSceneAssetsV3Format(context.OutputRoot, "long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count);
-            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, files), cancellationToken);
+
+            var storyFrameResult = await TryGenerateStoryFrameV4ComparisonAsync(context, phaseNo, generateShort, generateLong, cancellationToken).ConfigureAwait(false);
+            files.AddRange(storyFrameResult.GeneratedFiles);
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
+            {
+                PopulateSceneAssetsFormatDiagnostics(d, context.OutputRoot, format, expectedCount, files);
+                PopulateStoryFrameV4Diagnostics(d, context.OutputRoot, storyFrameResult);
+            }, cancellationToken);
             return files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
         catch (Exception ex)
@@ -817,6 +829,131 @@ public sealed partial class ProductionPipelineExecutionService(
             throw;
         }
     }
+
+    private async Task<StoryFrameV4ComparisonExecutionResult> TryGenerateStoryFrameV4ComparisonAsync(ProductionPhaseContext context, int phaseNo, bool generateShort, bool generateLong, CancellationToken cancellationToken)
+    {
+        var requested = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true;
+        var result = new StoryFrameV4ComparisonExecutionResult(
+            Requested: requested,
+            Executed: false,
+            LongStoryFramesRoot: NormalizePath(Path.Combine(context.OutputRoot, "long-story-frames")),
+            ShortStoryFramesRoot: NormalizePath(Path.Combine(context.OutputRoot, "short-story-frames")),
+            LongStoryFrameCount: CountStoryFrameImages(Path.Combine(context.OutputRoot, "long-story-frames")),
+            ShortStoryFrameCount: CountStoryFrameImages(Path.Combine(context.OutputRoot, "short-story-frames")),
+            Warnings: [],
+            Errors: [],
+            GeneratedFiles: []);
+
+        if (!requested)
+            return result;
+
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var files = new List<string>();
+        var executed = false;
+        try
+        {
+            var story = BuildStoryFrameVisualStory(context);
+            var engine = narrativeCompositionEngine ?? new NarrativeCompositionEngine();
+            if (generateShort)
+            {
+                var shortTimeline = engine.ComposeShort(story);
+                var shortPlanner = shortStoryFramePlanner ?? new ShortStoryFramePlanner(visualIntelligenceOptions);
+                await shortPlanner.GenerateV4ComparisonAsync(shortTimeline, context.OutputRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
+                executed = true;
+            }
+
+            if (generateLong)
+            {
+                var longTimeline = engine.ComposeLong(story);
+                var longPlanner = longStoryFramePlanner ?? new LongStoryFramePlanner(visualIntelligenceOptions);
+                await longPlanner.GenerateV4ComparisonAsync(longTimeline, context.OutputRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
+                executed = true;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException or ArgumentException or UnauthorizedAccessException)
+        {
+            errors.Add($"StoryFrame V4 comparison failed non-blocking in phase {phaseNo}: {ex.GetType().Name}: {ex.Message}");
+            warnings.Add("StoryFrame V4 comparison generation failed non-blocking; scene-assets-v3 production output remains authoritative.");
+            logger.LogWarning(ex, "StoryFrame V4 comparison failed non-blocking after SceneAssetsV3 generation. PhaseNo={PhaseNo}", phaseNo);
+        }
+
+        var longRoot = Path.Combine(context.OutputRoot, "long-story-frames");
+        var shortRoot = Path.Combine(context.OutputRoot, "short-story-frames");
+        if (generateLong) files.AddRange(ListFilesIfExists(longRoot));
+        if (generateShort) files.AddRange(ListFilesIfExists(shortRoot));
+        return new StoryFrameV4ComparisonExecutionResult(requested, executed, NormalizePath(longRoot), NormalizePath(shortRoot), CountStoryFrameImages(longRoot), CountStoryFrameImages(shortRoot), warnings, errors, files);
+    }
+
+    private static VisualStory BuildStoryFrameVisualStory(ProductionPhaseContext context)
+    {
+        var intelligence = context.ProductionEventIntelligence;
+        var primaryObjects = intelligence.PrimaryObjects?.Where(o => !string.IsNullOrWhiteSpace(o)).ToArray() ?? [];
+        var secondaryObjects = intelligence.SecondaryObjects?.Where(o => !string.IsNullOrWhiteSpace(o)).ToArray() ?? [];
+        var motifs = intelligence.VisualMotifs?.Where(m => !string.IsNullOrWhiteSpace(m)).ToArray() ?? [];
+        var instructions = intelligence.ViewerInstructions?.Where(i => !string.IsNullOrWhiteSpace(i)).ToArray() ?? [];
+        var storyTheme = FirstNonEmpty(intelligence.StoryTheme, intelligence.ScientificContext, intelligence.Title, "Astronomy story");
+        var primarySubject = primaryObjects.Concat(intelligence.RequiredVisualObjects ?? []).FirstOrDefault(o => !string.IsNullOrWhiteSpace(o)) ?? FirstNonEmpty(intelligence.ShortTitle, intelligence.Title, "Observable sky event");
+        return new VisualStory
+        {
+            StoryId = SanitizeFileName(FirstNonEmpty(context.EventId, intelligence.ShortTitle, intelligence.Title, "story")),
+            StoryTitle = FirstNonEmpty(intelligence.Title, intelligence.ShortTitle, "Astronomy story"),
+            ViewerQuestion = FirstNonEmpty(storyTheme, $"What should viewers know about {primarySubject}?"),
+            PrimaryStory = FirstNonEmpty(intelligence.ScientificContext, storyTheme),
+            ViewerTakeaway = FirstNonEmpty(instructions.FirstOrDefault(), intelligence.PreferredViewingWindow, storyTheme),
+            EmotionalHook = FirstNonEmpty(intelligence.VisualTheme, "Wonder"),
+            StoryArc = (intelligence.LongSceneArc ?? intelligence.ShortSceneArc ?? []).Where(s => !string.IsNullOrWhiteSpace(s)).DefaultIfEmpty("Discovery, understanding, observation, memory, action").ToArray(),
+            EditorialPriority = (intelligence.SceneStrategy ?? []).Where(s => !string.IsNullOrWhiteSpace(s)).DefaultIfEmpty("Comparison-only story-frame visual review").ToArray(),
+            PrimaryVisualSubject = primarySubject,
+            SecondaryVisualSubjects = secondaryObjects.Length > 0 ? secondaryObjects : ["Supporting astronomy context"],
+            VisualRelationship = FirstNonEmpty(intelligence.VisualTheme, intelligence.SkyGuideTheme, "Scientifically plausible astronomy relationship"),
+            RecommendedComposition = motifs.FirstOrDefault() ?? "Documentary astronomy composition with clear subject hierarchy",
+            RecommendedViewerFocus = primarySubject,
+            DocumentaryTone = FirstNonEmpty(intelligence.NarrationTheme, "Premium documentary"),
+            EnvironmentRecommendation = FirstNonEmpty(intelligence.SkyDirectionHint, intelligence.VisibilityRegion, "Realistic night-sky observing context"),
+            LightingRecommendation = FirstNonEmpty(intelligence.ViewingQuality, intelligence.MoonInterference, "Natural astronomy lighting"),
+            RecommendedNegativeSpace = "Reserve safe negative space for captions and manual review overlays.",
+            RecommendedOverlayZones = ["outer edges", "lower third"],
+            RecommendedPlatformVariations = new Dictionary<string, VisualStoryPlatformVariation>
+            {
+                ["landscape"] = new() { Name = "Landscape", Recommendation = "Native 16:9 long-form documentary frame.", Emphasis = ["manual comparison only"] },
+                ["portrait"] = new() { Name = "Portrait", Recommendation = "Native 9:16 short-form story frame.", Emphasis = ["manual comparison only"] }
+            },
+            StoryConfidence = .85,
+            CreativeKnowledgeVersion = "ProductionEventIntelligence",
+            EditorialReasoningVersion = "PipelineV4.7I",
+            ExtensionFields = new Dictionary<string, object?> { ["eventType"] = intelligence.EventType, ["comparisonOnly"] = true, ["productionSceneAssetsUnchanged"] = true }
+        };
+    }
+
+    private static int CountStoryFrameImages(string root)
+        => Directory.Exists(root) ? Directory.EnumerateFiles(root, "frame*.png", SearchOption.TopDirectoryOnly).Count() : 0;
+
+    private StoryFrameV4ComparisonExecutionResult BuildCurrentStoryFrameV4Diagnostics(ProductionPhaseContext context)
+    {
+        var requested = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true;
+        var longRoot = Path.Combine(context.OutputRoot, "long-story-frames");
+        var shortRoot = Path.Combine(context.OutputRoot, "short-story-frames");
+        return new StoryFrameV4ComparisonExecutionResult(requested, Directory.Exists(longRoot) || Directory.Exists(shortRoot), NormalizePath(longRoot), NormalizePath(shortRoot), CountStoryFrameImages(longRoot), CountStoryFrameImages(shortRoot), [], [], []);
+    }
+
+    private static void PopulateStoryFrameV4Diagnostics(JsonObject d, string outputRoot, StoryFrameV4ComparisonExecutionResult result)
+    {
+        d["useStoryFrameV4Comparison"] = result.Requested;
+        d["storyFrameV4ComparisonRequested"] = result.Requested;
+        d["storyFrameV4ComparisonExecuted"] = result.Executed;
+        d["longStoryFramesRoot"] = result.LongStoryFramesRoot;
+        d["shortStoryFramesRoot"] = result.ShortStoryFramesRoot;
+        d["longStoryFrameCount"] = result.LongStoryFrameCount;
+        d["shortStoryFrameCount"] = result.ShortStoryFrameCount;
+        d["storyFrameV4Warnings"] = JsonSerializer.SerializeToNode(result.Warnings, JsonOptions);
+        d["storyFrameV4Errors"] = JsonSerializer.SerializeToNode(result.Errors, JsonOptions);
+        d["productionSceneAssetsUnchanged"] = true;
+        d["longStoryFrameComparisonReport"] = NormalizePath(Path.Combine(outputRoot, "long-story-frames", "comparison", "LongStoryFrameComparison.json"));
+        d["shortStoryFrameComparisonReport"] = NormalizePath(Path.Combine(outputRoot, "short-story-frames", "comparison", "ShortStoryFrameComparison.json"));
+    }
+
+    private sealed record StoryFrameV4ComparisonExecutionResult(bool Requested, bool Executed, string LongStoryFramesRoot, string ShortStoryFramesRoot, int LongStoryFrameCount, int ShortStoryFrameCount, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<string> GeneratedFiles);
 
     private static IReadOnlyList<string> ValidateSceneAssetsV3(ProductionPhaseContext context)
     {
@@ -844,7 +981,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 d["actualLongRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3", "long"));
             }, cancellationToken);
             var files = ValidateSceneAssetsV3(context);
-            await UpdateSceneAssetsHookDiagnosticsAsync(context, 10, d => PopulateSceneAssetsValidationDiagnostics(d, context.OutputRoot, validationPassed: true), cancellationToken);
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, 10, d =>
+            {
+                PopulateSceneAssetsValidationDiagnostics(d, context.OutputRoot, validationPassed: true);
+                PopulateStoryFrameV4Diagnostics(d, context.OutputRoot, BuildCurrentStoryFrameV4Diagnostics(context));
+            }, cancellationToken);
             return files;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or JsonException)
@@ -852,6 +993,7 @@ public sealed partial class ProductionPipelineExecutionService(
             await UpdateSceneAssetsHookDiagnosticsAsync(context, 10, d =>
             {
                 PopulateSceneAssetsValidationDiagnostics(d, context.OutputRoot, validationPassed: false);
+                PopulateStoryFrameV4Diagnostics(d, context.OutputRoot, BuildCurrentStoryFrameV4Diagnostics(context));
                 d["exceptionType"] = ex.GetType().Name;
                 d["exceptionMessage"] = ex.Message;
             }, cancellationToken);
@@ -12630,13 +12772,13 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string SceneAssetsHookDiagnosticsPath(ProductionPhaseContext context, int phaseNo)
         => Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-scene-hook-diagnostics.json");
 
-    private static async Task WriteSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, JsonObject diagnostics, CancellationToken cancellationToken)
+    private async Task WriteSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, JsonObject diagnostics, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(context.ExecutionContext.ValidationRoot!);
         await File.WriteAllTextAsync(SceneAssetsHookDiagnosticsPath(context, diagnostics["phaseNo"]!.GetValue<int>()), diagnostics.ToJsonString(JsonOptions), cancellationToken);
     }
 
-    private static async Task UpdateSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, int phaseNo, Action<JsonObject> update, CancellationToken cancellationToken)
+    private async Task UpdateSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, int phaseNo, Action<JsonObject> update, CancellationToken cancellationToken)
     {
         var path = SceneAssetsHookDiagnosticsPath(context, phaseNo);
         var diagnostics = File.Exists(path)
@@ -12646,7 +12788,7 @@ public sealed partial class ProductionPipelineExecutionService(
         await WriteSceneAssetsHookDiagnosticsAsync(context, diagnostics, cancellationToken);
     }
 
-    private static JsonObject BuildSceneAssetsHookDiagnostics(ProductionPhaseContext context, int phaseNo, string phaseName, string format, bool beforeExecution)
+    private JsonObject BuildSceneAssetsHookDiagnostics(ProductionPhaseContext context, int phaseNo, string phaseName, string format, bool beforeExecution)
     {
         var v3Root = Path.Combine(context.OutputRoot, "scene-assets-v3", format);
         var v2Root = Path.Combine(context.OutputRoot, "question-engine", "scene-approval-v3", "scene-assets", format);
@@ -12671,6 +12813,16 @@ public sealed partial class ProductionPipelineExecutionService(
             ["questionEngineRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "question-engine")),
             ["planRoot"] = NormalizePath(context.OutputRoot),
             ["fontDiagnostics"] = BuildSceneAssetsFontDiagnosticsJson(),
+            ["useStoryFrameV4Comparison"] = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true,
+            ["storyFrameV4ComparisonRequested"] = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true,
+            ["storyFrameV4ComparisonExecuted"] = false,
+            ["longStoryFramesRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "long-story-frames")),
+            ["shortStoryFramesRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "short-story-frames")),
+            ["longStoryFrameCount"] = CountStoryFrameImages(Path.Combine(context.OutputRoot, "long-story-frames")),
+            ["shortStoryFrameCount"] = CountStoryFrameImages(Path.Combine(context.OutputRoot, "short-story-frames")),
+            ["storyFrameV4Warnings"] = new JsonArray(),
+            ["storyFrameV4Errors"] = new JsonArray(),
+            ["productionSceneAssetsUnchanged"] = true,
             ["preExistingV3Files"] = JsonSerializer.SerializeToNode(ListFilesIfExists(v3Root), JsonOptions),
             ["preExistingV2Files"] = JsonSerializer.SerializeToNode(ListFilesIfExists(v2Root), JsonOptions),
             ["errorBeforeGenerator"] = "",
@@ -12681,7 +12833,7 @@ public sealed partial class ProductionPipelineExecutionService(
         static bool sceneAssetsV3ServiceAvailable(ProductionPhaseContext _) => true;
     }
 
-    private static JsonObject BuildSceneAssetsValidationHookDiagnostics(ProductionPhaseContext context, bool beforeExecution)
+    private JsonObject BuildSceneAssetsValidationHookDiagnostics(ProductionPhaseContext context, bool beforeExecution)
         => new()
         {
             ["phaseNo"] = 10,
@@ -12710,6 +12862,16 @@ public sealed partial class ProductionPipelineExecutionService(
             ["legacyShortImageCount"] = 0,
             ["legacyLongImageCount"] = 0,
             ["missingFiles"] = new JsonArray(),
+            ["useStoryFrameV4Comparison"] = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true,
+            ["storyFrameV4ComparisonRequested"] = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true,
+            ["storyFrameV4ComparisonExecuted"] = Directory.Exists(Path.Combine(context.OutputRoot, "long-story-frames")) || Directory.Exists(Path.Combine(context.OutputRoot, "short-story-frames")),
+            ["longStoryFramesRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "long-story-frames")),
+            ["shortStoryFramesRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "short-story-frames")),
+            ["longStoryFrameCount"] = CountStoryFrameImages(Path.Combine(context.OutputRoot, "long-story-frames")),
+            ["shortStoryFrameCount"] = CountStoryFrameImages(Path.Combine(context.OutputRoot, "short-story-frames")),
+            ["storyFrameV4Warnings"] = new JsonArray(),
+            ["storyFrameV4Errors"] = new JsonArray(),
+            ["productionSceneAssetsUnchanged"] = true,
             ["validationPassed"] = false,
             ["exceptionType"] = "",
             ["exceptionMessage"] = ""
@@ -12783,7 +12945,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) : null;
     }
 
-    private static SceneAssetsV3PhaseDiagnostics BuildSceneAssetsV3PhaseDiagnostics(ProductionPhaseContext context, int phaseNo)
+    private SceneAssetsV3PhaseDiagnostics BuildSceneAssetsV3PhaseDiagnostics(ProductionPhaseContext context, int phaseNo)
     {
         var root = Path.Combine(context.OutputRoot, "scene-assets-v3");
         var shortRoot = Path.Combine(root, "short");
@@ -12796,10 +12958,12 @@ public sealed partial class ProductionPipelineExecutionService(
             longDiag.SceneCount == 9 && longDiag.VisualTimelinePath.Length > 0 && longDiag.SceneManifestPath.Length > 0 && longDiag.SceneReviewPath.Length > 0 && longDiag.AccurateSkyGuidePresent,
             shortDiag.SceneCount, longDiag.SceneCount, BuildSceneAssetsV3Missing(shortRoot, "short"), BuildSceneAssetsV3Missing(longRoot, "long"), shortDiag.AccurateSkyGuidePresent, longDiag.AccurateSkyGuidePresent, false, false,
             BuildSceneAssetsV3Missing(shortRoot, "short").Count == 0 && BuildSceneAssetsV3Missing(longRoot, "long").Count == 0 && shortDiag.SceneCount == 5 && longDiag.SceneCount == 9 && shortDiag.AccurateSkyGuidePresent && longDiag.AccurateSkyGuidePresent) : null;
+        var storyFrame = BuildCurrentStoryFrameV4Diagnostics(context);
         return new SceneAssetsV3PhaseDiagnostics("V3", true, NormalizePath(root), NormalizePath(shortRoot), NormalizePath(longRoot), phaseNo is 8 or 9, false,
             relevant?.VisualTimelinePath.Length > 0 || phaseNo == 10, relevant?.SceneManifestPath.Length > 0 || phaseNo == 10, relevant?.SceneReviewPath.Length > 0 || phaseNo == 10,
             new[] { "CinematicStoryScene", "ExplainerScene", "AccurateSkyGuideScene", "ViewingTipsScene", "FinalReminderScene" },
-            (relevant ?? shortDiag).AccurateSkyGuidePresent, (relevant ?? shortDiag).AllScenesHaveNarrationBeat, false, false, new[] { 8, 9, 10 }, phaseNo == 8 ? shortDiag : null, phaseNo == 9 ? longDiag : null, validation);
+            (relevant ?? shortDiag).AccurateSkyGuidePresent, (relevant ?? shortDiag).AllScenesHaveNarrationBeat, false, false, new[] { 8, 9, 10 }, phaseNo == 8 ? shortDiag : null, phaseNo == 9 ? longDiag : null, validation,
+            storyFrame.Requested, storyFrame.Requested, storyFrame.Executed, storyFrame.LongStoryFramesRoot, storyFrame.ShortStoryFramesRoot, storyFrame.LongStoryFrameCount, storyFrame.ShortStoryFrameCount, storyFrame.Warnings, storyFrame.Errors, true);
     }
 
     private static SceneAssetsV3FormatDiagnostics BuildSceneAssetsV3FormatDiagnostics(string root, string format, int expected)
@@ -12828,7 +12992,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return expected.Select(f => Path.Combine(root, f)).Where(p => !File.Exists(p)).Select(NormalizePath).ToArray();
     }
 
-    private sealed record SceneAssetsV3PhaseDiagnostics(string SceneAssetsVersion, bool SceneAssetsV3Enabled, string SceneAssetsRoot, string ShortSceneAssetsRoot, string LongSceneAssetsRoot, bool V3GeneratorCalled, bool LegacyV2GeneratorCalled, bool VisualTimelineGenerated, bool SceneManifestGenerated, bool SceneReviewGenerated, IReadOnlyList<string> RenderModesUsed, bool AccurateSkyGuidePresent, bool AllScenesHaveNarrationBeat, bool DuplicateHashDetected, bool RepeatedBackgroundDetected, IReadOnlyList<int> ExecutedPhaseNumbers, SceneAssetsV3FormatDiagnostics? Phase8SceneAssetsV3Diagnostics, SceneAssetsV3FormatDiagnostics? Phase9SceneAssetsV3Diagnostics, SceneAssetsV3ValidationDiagnostics? Phase10SceneAssetsV3Validation);
+    private sealed record SceneAssetsV3PhaseDiagnostics(string SceneAssetsVersion, bool SceneAssetsV3Enabled, string SceneAssetsRoot, string ShortSceneAssetsRoot, string LongSceneAssetsRoot, bool V3GeneratorCalled, bool LegacyV2GeneratorCalled, bool VisualTimelineGenerated, bool SceneManifestGenerated, bool SceneReviewGenerated, IReadOnlyList<string> RenderModesUsed, bool AccurateSkyGuidePresent, bool AllScenesHaveNarrationBeat, bool DuplicateHashDetected, bool RepeatedBackgroundDetected, IReadOnlyList<int> ExecutedPhaseNumbers, SceneAssetsV3FormatDiagnostics? Phase8SceneAssetsV3Diagnostics, SceneAssetsV3FormatDiagnostics? Phase9SceneAssetsV3Diagnostics, SceneAssetsV3ValidationDiagnostics? Phase10SceneAssetsV3Validation, bool UseStoryFrameV4Comparison, bool StoryFrameV4ComparisonRequested, bool StoryFrameV4ComparisonExecuted, string LongStoryFramesRoot, string ShortStoryFramesRoot, int LongStoryFrameCount, int ShortStoryFrameCount, IReadOnlyList<string> StoryFrameV4Warnings, IReadOnlyList<string> StoryFrameV4Errors, bool ProductionSceneAssetsUnchanged);
     private sealed record SceneAssetsV3FormatDiagnostics(string Format, int SceneCount, int ExpectedSceneCount, string VisualTimelinePath, string SceneManifestPath, string SceneReviewPath, IReadOnlyList<string> ImagePaths, IReadOnlyList<string> RenderModesUsed, bool AccurateSkyGuidePresent, bool AllScenesHaveNarrationBeat, int AzureCallsCount, bool ProviderCalled, bool ProviderSucceeded, IReadOnlyList<string> ExpectedSceneIds, IReadOnlyList<string> ActualSceneIds, IReadOnlyList<string> MissingSceneIds, IReadOnlyList<string> ExtraSceneIds, IReadOnlyList<string> ExpectedSceneAssetPaths, IReadOnlyList<string> ActualSceneAssetPaths, string SceneContractSource);
     private sealed record SceneAssetsV3ValidationDiagnostics(bool ShortValidated, bool LongValidated, int ShortSceneCount, int LongSceneCount, IReadOnlyList<string> ShortMissingFiles, IReadOnlyList<string> LongMissingFiles, bool AccurateSkyGuidePresentInShort, bool AccurateSkyGuidePresentInLong, bool DuplicateHashDetected, bool RepeatedBackgroundDetected, bool ValidationPassed);
 
