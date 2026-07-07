@@ -392,6 +392,9 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             var atmosphereReview = CreateDocumentaryAtmosphereReview(result);
             if (atmosphereReview is not null)
                 await WriteJsonAsync(folder, "DocumentaryAtmosphereReview.json", atmosphereReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
+            var humanContextReview = CreateHumanContextReview(result);
+            if (humanContextReview is not null)
+                await WriteJsonAsync(folder, "HumanContextReview.json", humanContextReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -520,6 +523,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (planetRelationshipReview is not null) { await WriteJsonAsync(folder, "PlanetRelationshipReview.json", planetRelationshipReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PlanetRelationshipReview.json"); }
         var atmosphereReview = CreateDocumentaryAtmosphereReview(result);
         if (atmosphereReview is not null) { await WriteJsonAsync(folder, "DocumentaryAtmosphereReview.json", atmosphereReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("DocumentaryAtmosphereReview.json"); }
+        var humanContextReview = CreateHumanContextReview(result);
+        if (humanContextReview is not null) { await WriteJsonAsync(folder, "HumanContextReview.json", humanContextReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("HumanContextReview.json"); }
         generatedArtifacts.Add("OrchestrationSummary.json");
         await WriteJsonAsync(folder, "OrchestrationSummary.json", CreateSummary(result, folder, generatedArtifacts, fallbackApplied, fallbackReason), json, cancellationToken).ConfigureAwait(false);
         return folder;
@@ -708,6 +713,21 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
     private static DocumentaryAtmosphereReview? CreateDocumentaryAtmosphereReview(VisualIntelligenceOrchestrationResult result)
     {
         if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("documentaryAtmosphereReview", out var value) != true || value is not DocumentaryAtmosphereReview review)
+            return null;
+        return review with
+        {
+            BenchmarkPreparation = review.BenchmarkPreparation with
+            {
+                CandidateTags = result.Context.BenchmarkTags.Count > 0
+                    ? review.BenchmarkPreparation.CandidateTags.Concat(result.Context.BenchmarkTags).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                    : review.BenchmarkPreparation.CandidateTags
+            }
+        };
+    }
+
+    private static HumanContextReview? CreateHumanContextReview(VisualIntelligenceOrchestrationResult result)
+    {
+        if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("humanContextReview", out var value) != true || value is not HumanContextReview review)
             return null;
         return review with
         {

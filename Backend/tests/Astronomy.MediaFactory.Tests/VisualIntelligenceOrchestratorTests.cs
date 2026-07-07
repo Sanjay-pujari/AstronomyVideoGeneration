@@ -306,7 +306,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         await orchestrator.OrchestrateAsync(DefaultRequest());
 
         var files = Directory.GetFiles(Path.Combine(path, "test-correlation")).Select(Path.GetFileName).OrderBy(name => name).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "CreativeKnowledgeReview.json", "DocumentaryAtmosphereReview.json", "EditorialDecision.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json", "VisualStory.json", "VisualStoryReview.json"], files);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "CreativeKnowledgeReview.json", "DocumentaryAtmosphereReview.json", "EditorialDecision.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "HumanContextReview.json", "OrchestrationSummary.json", "VisualStory.json", "VisualStoryReview.json"], files);
     }
 
     [Fact]
@@ -370,7 +370,7 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
         var artifacts = summary.RootElement.GetProperty("generatedArtifacts").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "EditorialDecision.json", "VisualStory.json", "PromptPackage.json", "CreativeKnowledgeReview.json", "VisualStoryReview.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "DocumentaryAtmosphereReview.json", "OrchestrationSummary.json"], artifacts);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "EditorialDecision.json", "VisualStory.json", "PromptPackage.json", "CreativeKnowledgeReview.json", "VisualStoryReview.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "DocumentaryAtmosphereReview.json", "HumanContextReview.json", "OrchestrationSummary.json"], artifacts);
         Assert.NotEqual(default, summary.RootElement.GetProperty("startedAtUtc").GetDateTimeOffset());
         Assert.NotEqual(default, summary.RootElement.GetProperty("completedAtUtc").GetDateTimeOffset());
         Assert.True(summary.RootElement.GetProperty("durationMs").GetInt64() >= 0);
