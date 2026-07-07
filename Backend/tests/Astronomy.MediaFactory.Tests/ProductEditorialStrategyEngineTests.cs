@@ -20,7 +20,7 @@ public sealed class ProductEditorialStrategyEngineTests
         Assert.Equal("Wonder.", result.HeroEditorialStrategy.Strategy.ViewerEmotion);
         Assert.Equal("Increase CTR.", result.ThumbnailEditorialStrategy.Strategy.EditorialGoal);
         Assert.Equal("Curiosity.", result.ThumbnailEditorialStrategy.Strategy.ViewerEmotion);
-        Assert.Equal("Teach.", result.GalleryEditorialStrategy.Strategy.EditorialGoal);
+        Assert.Equal("Teach visually.", result.GalleryEditorialStrategy.Strategy.EditorialGoal);
         Assert.Equal("Discovery.", result.GalleryEditorialStrategy.Strategy.ViewerEmotion);
         Assert.Equal("Explain.", result.LongStoryEditorialStrategy.Strategy.EditorialGoal);
         Assert.Equal("Understanding.", result.LongStoryEditorialStrategy.Strategy.ViewerEmotion);
