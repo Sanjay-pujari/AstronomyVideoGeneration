@@ -50,6 +50,7 @@ public enum OutputArtifactName
     HeroV3Prompt,
     HeroV4Prompt,
     HeroIntelligenceContract,
+    EditorialProductReview,
     HeroFinal,
     HeroArtifactManifest,
     GalleryIntelligenceContract,
@@ -74,6 +75,7 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "comparison", "hero-v3-prompt.txt"),
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "comparison", "hero-v4-prompt.txt"),
         [OutputArtifactName.HeroIntelligenceContract] = Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"),
+        [OutputArtifactName.EditorialProductReview] = Path.Combine("hero", "diagnostics", "EditorialProductReview.json"),
         [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
         [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json"),
         [OutputArtifactName.GalleryIntelligenceContract] = Path.Combine("gallery", "diagnostics", "GalleryIntelligenceContract.json"),
@@ -96,6 +98,7 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.HeroV3Prompt] = Path.Combine("hero", "hero-v3-prompt.txt"),
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "hero-v4-prompt.txt"),
         [OutputArtifactName.HeroIntelligenceContract] = Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"),
+        [OutputArtifactName.EditorialProductReview] = Path.Combine("hero", "diagnostics", "EditorialProductReview.json"),
         [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
         [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json"),
         [OutputArtifactName.GalleryIntelligenceContract] = Path.Combine("gallery", "diagnostics", "GalleryIntelligenceContract.json"),
@@ -128,7 +131,7 @@ public static class OutputArtifactRegistry
     {
         var artifacts = new List<OutputArtifactName> { OutputArtifactName.HeroFinal };
         if (options.ShouldWriteDiagnostics)
-            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics, OutputArtifactName.HeroIntelligenceContract]);
+            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics, OutputArtifactName.HeroIntelligenceContract, OutputArtifactName.EditorialProductReview]);
         if (options.ShouldWriteComparison)
             artifacts.AddRange([OutputArtifactName.HeroPromptComparison, OutputArtifactName.HeroMigrationReport, OutputArtifactName.HeroV3Prompt, OutputArtifactName.HeroV4Prompt]);
         return artifacts;
@@ -137,7 +140,7 @@ public static class OutputArtifactRegistry
     public static HeroArtifactManifest CreateHeroArtifactManifest(string outputRoot, OutputArtifactsOptions options)
     {
         var artifacts = Enum.GetValues<OutputArtifactName>()
-            .Where(name => name.ToString().StartsWith("Hero", StringComparison.Ordinal) || name == OutputArtifactName.VisualPromptDiagnostics)
+            .Where(name => name.ToString().StartsWith("Hero", StringComparison.Ordinal) || name == OutputArtifactName.VisualPromptDiagnostics || name == OutputArtifactName.EditorialProductReview)
             .Where(name => name != OutputArtifactName.HeroArtifactManifest)
             .ToDictionary(name => name.ToString(), name => GetPath(outputRoot, name), StringComparer.OrdinalIgnoreCase);
         return new HeroArtifactManifest("4.0D.2", options.Mode.ToString(), GetExpectedHeroValidationArtifacts(options).Select(name => name.ToString()).ToArray(), artifacts);
@@ -148,12 +151,18 @@ public static class OutputArtifactRegistry
         var artifacts = new[]
             {
                 OutputArtifactName.GalleryIntelligenceContract,
+                OutputArtifactName.EditorialProductReview,
                 OutputArtifactName.GalleryEditorialSequence,
                 OutputArtifactName.GalleryReview,
                 OutputArtifactName.GalleryInformationDensityReview,
                 OutputArtifactName.GalleryNarrativeFlowReview
             }
-            .ToDictionary(name => name.ToString(), name => GetPath(outputRoot, name), StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(
+                name => name.ToString(),
+                name => name == OutputArtifactName.EditorialProductReview
+                    ? Path.Combine(outputRoot, "gallery", "diagnostics", "EditorialProductReview.json")
+                    : GetPath(outputRoot, name),
+                StringComparer.OrdinalIgnoreCase);
         return new GalleryArtifactManifest("4.5D", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
     }
 

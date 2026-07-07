@@ -208,11 +208,13 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         var manifest = OutputArtifactRegistry.CreateGalleryArtifactManifest(root, new OutputArtifactsOptions { Mode = OutputArtifactMode.Debug });
 
         Assert.Contains(OutputArtifactName.GalleryIntelligenceContract.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.EditorialProductReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryEditorialSequence.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryInformationDensityReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryNarrativeFlowReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.GalleryIntelligenceContract), manifest.Artifacts[OutputArtifactName.GalleryIntelligenceContract.ToString()]);
+        Assert.Equal(Path.Combine(root, "gallery", "diagnostics", "EditorialProductReview.json"), manifest.Artifacts[OutputArtifactName.EditorialProductReview.ToString()]);
     }
 
     [Fact]

@@ -94,9 +94,11 @@ public sealed class OutputArtifactRegistryTests : IDisposable
 
         Assert.Contains(OutputArtifactName.HeroLayoutValidation.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.HeroIntelligenceContract.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.EditorialProductReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroLayoutValidation), manifest.Artifacts[OutputArtifactName.HeroLayoutValidation.ToString()]);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroSceneManifest), manifest.Artifacts[OutputArtifactName.HeroSceneManifest.ToString()]);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.HeroIntelligenceContract), manifest.Artifacts[OutputArtifactName.HeroIntelligenceContract.ToString()]);
+        Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.EditorialProductReview), manifest.Artifacts[OutputArtifactName.EditorialProductReview.ToString()]);
     }
 
     [Fact]
