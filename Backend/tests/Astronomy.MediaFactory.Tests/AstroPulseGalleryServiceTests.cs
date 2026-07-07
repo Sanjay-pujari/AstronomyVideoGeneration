@@ -186,9 +186,52 @@ public sealed class AstroPulseGalleryServiceTests
         Assert.Equal(expectedTitle, contract.LocalizedTitle);
         Assert.Contains(expectedMars, contract.LocalizedPrimaryObjects);
         Assert.Contains(expectedJupiter, contract.LocalizedPrimaryObjects);
-        Assert.Contains("Mars reddish-orange", promptText);
-        Assert.Contains("Jupiter bright cream/white", promptText);
+        Assert.DoesNotContain("Mars reddish-orange", promptText);
+        Assert.Contains("recognizable real planet treatment", promptText);
+        Assert.Contains("Jupiter with visible realistic cloud bands", promptText);
         Assert.DoesNotContain("meteor", promptText, StringComparison.OrdinalIgnoreCase);
+    }
+
+
+    [Fact]
+    public void GalleryV3_JupiterVenusPrompts_RemoveMarsAndRequireRecognizablePlanetTreatment()
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("PlanetGrouping", "Jupiter and Venus Conjunction", "story", "visual", "2026-06-07T11:30:00Z", "2026-06-07T17:00:00+05:30", "East", "en", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("PlanetGrouping", "Jupiter and Venus Conjunction", ["Jupiter", "Venus"], [], [], []), [], "Jupiter and Venus Conjunction", "PlanetGrouping");
+
+        var contract = AstroPulseGalleryService.ResolveGalleryContentContractForTesting(context);
+        var topics = AstroPulseGalleryService.BuildTopics(contract);
+        var promptText = string.Join(" ", topics.Select(t => t.AzureImage2Prompt));
+        var diagnosticsJson = System.Text.Json.JsonSerializer.Serialize(AstroPulseGalleryService.BuildPhase13ValidationContractForTesting(context, AstroPulseGalleryAspect.Landscape));
+
+        Assert.Equal("PlanetConjunction", contract.EventFamily);
+        Assert.DoesNotContain("Mars", promptText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Mars reddish-orange", promptText);
+        Assert.Contains("Jupiter with visible realistic cloud bands", promptText);
+        Assert.Contains("Venus as a bright naturally illuminated disk/object", promptText);
+        Assert.Contains("real celestial object treatment", promptText);
+        Assert.Contains("not just tiny dots", promptText);
+        Assert.Contains("\"realCelestialObjectTreatmentApplied\":true", diagnosticsJson);
+        Assert.Contains("\"jupiterCloudBandsRequired\":true", diagnosticsJson);
+        Assert.Contains("\"venusNaturalIlluminationRequired\":true", diagnosticsJson);
+        Assert.Contains("\"tinyDotOnlyRejected\":true", diagnosticsJson);
+        Assert.Contains("\"incorrectObjectHintsRemoved\":true", diagnosticsJson);
+    }
+
+    [Fact]
+    public void GalleryV3_JupiterVenusHookAndRecognition_RejectTinyDotOnlyPrompts()
+    {
+        var context = new AstroPulseGalleryService.GalleryContext("PlanetConjunction", "Jupiter and Venus Conjunction", "story", "visual", "2026-06-07T11:30:00Z", "2026-06-07T17:00:00+05:30", "East", "en", "en", "Asia/Kolkata", EventObjectContextBuilder.FromJsonValues("PlanetConjunction", "Jupiter and Venus Conjunction", ["Jupiter", "Venus"], [], [], []), [], "Jupiter and Venus Conjunction", "PlanetConjunction");
+
+        var topics = AstroPulseGalleryService.BuildTopics(context);
+        var hook = Assert.Single(topics.Where(t => t.Number == 1));
+        var recognition = Assert.Single(topics.Where(t => t.Number == 5));
+
+        Assert.Contains("Hook: strong Jupiter + Venus relationship visual", hook.AzureImage2Prompt);
+        Assert.Contains("Recognition: clearly identify Jupiter and Venus visually", recognition.AzureImage2Prompt);
+        Assert.Contains("not just tiny dots", hook.AzureImage2Prompt);
+        Assert.Contains("not just tiny dots", recognition.AzureImage2Prompt);
+        Assert.Contains("No embedded text", hook.AzureImage2Prompt);
+        Assert.Contains("No labels", recognition.AzureImage2Prompt);
     }
 
     [Fact]
