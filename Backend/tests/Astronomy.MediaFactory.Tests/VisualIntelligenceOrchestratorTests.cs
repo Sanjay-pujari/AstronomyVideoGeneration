@@ -146,6 +146,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.True(File.Exists(Path.Combine(folder, "VisualStory.json")));
         Assert.True(File.Exists(Path.Combine(folder, "VisualStoryReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "EditorialReasoningReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "DocumentaryAtmosphereReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "OrchestrationSummary.json")));
     }
 
@@ -183,6 +184,25 @@ public sealed class VisualIntelligenceOrchestratorTests
         Assert.Equal("4.1A", review.RootElement.GetProperty("creativeKnowledgeSource").GetString());
     }
 
+
+
+    [Fact]
+    public async Task Diagnostics_writing_creates_documentary_atmosphere_review()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var orchestrator = CreateOrchestrator(new VisualIntelligenceOptions { Enabled = true, WriteDiagnostics = true, DiagnosticsOutputPath = path, UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true });
+
+        await orchestrator.OrchestrateAsync(DefaultRequest() with { BenchmarkTags = ["manual-benchmark"] });
+
+        var review = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(path, "test-correlation", "DocumentaryAtmosphereReview.json")));
+        Assert.Contains("civil or nautical twilight", review.RootElement.GetProperty("twilightAuthenticity").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("clean sky", review.RootElement.GetProperty("skyRealism").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("only if", review.RootElement.GetProperty("environmentQuality").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(review.RootElement.GetProperty("documentaryScore").GetDouble() >= .9);
+        Assert.True(review.RootElement.GetProperty("scientificAtmosphereScore").GetDouble() >= .9);
+        Assert.Contains("manual-benchmark", review.RootElement.GetProperty("benchmarkPreparation").GetProperty("candidateTags").EnumerateArray().Select(e => e.GetString()));
+        Assert.Contains("fantasy nebulae", review.RootElement.GetProperty("avoidPatterns").EnumerateArray().Select(e => e.GetString()));
+    }
 
     [Fact]
     public async Task Hero_platform_writes_hero_intelligence_contract_to_run_diagnostics()
@@ -286,7 +306,7 @@ public sealed class VisualIntelligenceOrchestratorTests
         await orchestrator.OrchestrateAsync(DefaultRequest());
 
         var files = Directory.GetFiles(Path.Combine(path, "test-correlation")).Select(Path.GetFileName).OrderBy(name => name).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "CreativeKnowledgeReview.json", "EditorialDecision.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json", "VisualStory.json", "VisualStoryReview.json"], files);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "CreativeKnowledgeReview.json", "DocumentaryAtmosphereReview.json", "EditorialDecision.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json", "VisualStory.json", "VisualStoryReview.json"], files);
     }
 
     [Fact]
@@ -350,7 +370,7 @@ public sealed class VisualIntelligenceOrchestratorTests
 
         var summary = ReadSummary(Path.Combine(path, "test-correlation", "OrchestrationSummary.json"));
         var artifacts = summary.RootElement.GetProperty("generatedArtifacts").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "EditorialDecision.json", "VisualStory.json", "PromptPackage.json", "CreativeKnowledgeReview.json", "VisualStoryReview.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "OrchestrationSummary.json"], artifacts);
+        Assert.Equal(["CDL.json", "CreativeDirectionContract.json", "EditorialDecision.json", "VisualStory.json", "PromptPackage.json", "CreativeKnowledgeReview.json", "VisualStoryReview.json", "EditorialReasoningReview.json", "HeroCreativeReview.json", "DocumentaryAtmosphereReview.json", "OrchestrationSummary.json"], artifacts);
         Assert.NotEqual(default, summary.RootElement.GetProperty("startedAtUtc").GetDateTimeOffset());
         Assert.NotEqual(default, summary.RootElement.GetProperty("completedAtUtc").GetDateTimeOffset());
         Assert.True(summary.RootElement.GetProperty("durationMs").GetInt64() >= 0);

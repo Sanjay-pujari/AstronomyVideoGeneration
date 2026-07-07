@@ -389,6 +389,9 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             var relationshipReview = CreatePlanetRelationshipReview(result);
             if (relationshipReview is not null)
                 await WriteJsonAsync(folder, "PlanetRelationshipReview.json", relationshipReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
+            var atmosphereReview = CreateDocumentaryAtmosphereReview(result);
+            if (atmosphereReview is not null)
+                await WriteJsonAsync(folder, "DocumentaryAtmosphereReview.json", atmosphereReview, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -515,6 +518,8 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (creativeReview is not null) { await WriteJsonAsync(folder, "HeroCreativeReview.json", creativeReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("HeroCreativeReview.json"); }
         var planetRelationshipReview = CreatePlanetRelationshipReview(result);
         if (planetRelationshipReview is not null) { await WriteJsonAsync(folder, "PlanetRelationshipReview.json", planetRelationshipReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("PlanetRelationshipReview.json"); }
+        var atmosphereReview = CreateDocumentaryAtmosphereReview(result);
+        if (atmosphereReview is not null) { await WriteJsonAsync(folder, "DocumentaryAtmosphereReview.json", atmosphereReview, json, cancellationToken).ConfigureAwait(false); generatedArtifacts.Add("DocumentaryAtmosphereReview.json"); }
         generatedArtifacts.Add("OrchestrationSummary.json");
         await WriteJsonAsync(folder, "OrchestrationSummary.json", CreateSummary(result, folder, generatedArtifacts, fallbackApplied, fallbackReason), json, cancellationToken).ConfigureAwait(false);
         return folder;
@@ -699,6 +704,22 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         };
     }
 
+
+    private static DocumentaryAtmosphereReview? CreateDocumentaryAtmosphereReview(VisualIntelligenceOrchestrationResult result)
+    {
+        if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("documentaryAtmosphereReview", out var value) != true || value is not DocumentaryAtmosphereReview review)
+            return null;
+        return review with
+        {
+            BenchmarkPreparation = review.BenchmarkPreparation with
+            {
+                CandidateTags = result.Context.BenchmarkTags.Count > 0
+                    ? review.BenchmarkPreparation.CandidateTags.Concat(result.Context.BenchmarkTags).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                    : review.BenchmarkPreparation.CandidateTags
+            }
+        };
+    }
+
     private static object? CreatePlanetRelationshipReview(VisualIntelligenceOrchestrationResult result)
     {
         if (result.CreativeDirectionContract?.ExtensionFields.TryGetValue("planetRelationshipReview", out var value) != true || value is not PlanetRelationshipReview review)
@@ -830,6 +851,7 @@ public static class VisualIntelligenceServiceCollectionExtensions
         services.AddScoped<IStoryCompositionEngine, StoryCompositionEngine>();
         services.AddScoped<IProductEditorialStrategyEngine, ProductEditorialStrategyEngine>();
         services.AddScoped<IEditorialCompositionDirector, EditorialCompositionDirector>();
+        services.AddScoped<IDocumentaryAtmosphereDirector, DocumentaryAtmosphereDirector>();
         services.AddScoped<ICreativeQualityScoringEngine, CreativeQualityScoringEngine>();
         services.AddScoped<IFamilyCreativeProfileResolver, FamilyCreativeProfileResolver>();
         services.AddScoped<IVisualCreativeDirector, VisualCreativeDirector>();

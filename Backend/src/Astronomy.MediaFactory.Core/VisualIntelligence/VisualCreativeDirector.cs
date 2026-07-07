@@ -12,22 +12,27 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
     private readonly ICreativeKnowledgeLibrary knowledgeLibrary;
     private readonly IEditorialReasoningEngine editorialReasoningEngine;
     private readonly IVisualStoryModel visualStoryModel = new VisualStoryModel();
+    private readonly IDocumentaryAtmosphereDirector atmosphereDirector;
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger)
         : this(logger, CreateDefaultResolver()) { }
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver)
-        : this(logger, profileResolver, new EditorialCompositionDirector(), new CreativeKnowledgeLibrary()) { }
+        : this(logger, profileResolver, new EditorialCompositionDirector(), new CreativeKnowledgeLibrary(), new DocumentaryAtmosphereDirector()) { }
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver, IEditorialCompositionDirector editorialDirector)
-        : this(logger, profileResolver, editorialDirector, new CreativeKnowledgeLibrary()) { }
+        : this(logger, profileResolver, editorialDirector, new CreativeKnowledgeLibrary(), new DocumentaryAtmosphereDirector()) { }
 
     public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver, IEditorialCompositionDirector editorialDirector, ICreativeKnowledgeLibrary knowledgeLibrary)
+        : this(logger, profileResolver, editorialDirector, knowledgeLibrary, new DocumentaryAtmosphereDirector()) { }
+
+    public VisualCreativeDirector(ILogger<VisualCreativeDirector> logger, IFamilyCreativeProfileResolver profileResolver, IEditorialCompositionDirector editorialDirector, ICreativeKnowledgeLibrary knowledgeLibrary, IDocumentaryAtmosphereDirector atmosphereDirector)
     {
         this.logger = logger;
         this.profileResolver = profileResolver;
         this.editorialDirector = editorialDirector;
         this.knowledgeLibrary = knowledgeLibrary;
+        this.atmosphereDirector = atmosphereDirector;
         editorialReasoningEngine = new EditorialReasoningEngine(knowledgeLibrary);
     }
 
@@ -49,7 +54,9 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
         var visualStory = visualStoryModel.Create(resolvedContext, editorialDecision, knowledge, diagnostics);
         var editorial = editorialDirector.Decide(resolvedContext, profileResult, knowledge);
         diagnostics.Add(Info("visual_director.editorial_composition_applied", $"Editorial composition template selected: {editorial.Template.Name}."));
-        var model = BuildModel(resolvedContext, profileResult, editorial, knowledge, editorialDecision);
+        var atmosphere = atmosphereDirector.Review(resolvedContext, knowledge, editorial);
+        diagnostics.Add(Info("documentary_atmosphere.review_created", "Documentary atmosphere creative refinement generated."));
+        var model = BuildModel(resolvedContext, profileResult, editorial, knowledge, editorialDecision, atmosphere);
         var cdl = context.FeatureFlags.UseCDL ? BuildCdl(resolvedContext, model) : null;
         if (cdl is not null)
         {
@@ -67,11 +74,11 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
         return Task.FromResult(new VisualCreativeDirectorResult { EditorialDecision = editorialDecision, VisualStory = visualStory, Cdl = cdl, CreativeDirectionContract = contract, Diagnostics = diagnostics });
     }
 
-    private static DirectionModel BuildModel(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, EditorialCompositionDecision editorial, CreativeKnowledge knowledge, EditorialDecision editorialDecision)
+    private static DirectionModel BuildModel(VisualIntelligenceOrchestrationContext context, FamilyCreativeProfileResult profile, EditorialCompositionDecision editorial, CreativeKnowledge knowledge, EditorialDecision editorialDecision, DocumentaryAtmosphereReview atmosphere)
     {
         var aspect = context.AspectRatio == AspectRatio.Unknown ? DefaultAspectRatio(context.Platform) : context.AspectRatio;
         var platform = context.Platform == Platform.Unknown ? Platform.YouTubeThumbnail : context.Platform;
-        return new DirectionModel(profile.EventFamily, profile.PrimaryObjects.ToList(), profile.SupportingObjects.ToList(), profile.Intent, profile.Hero, profile.SupportingText, profile.Hierarchy, profile.CompositionStyle, profile.SubjectTreatment, profile.CdlDirectives.ToList(), profile.ContractExtensions, profile.NegativeConstraints, profile.QualityTargets, editorial, knowledge, editorialDecision) with { Platform = platform, AspectRatio = aspect };
+        return new DirectionModel(profile.EventFamily, profile.PrimaryObjects.ToList(), profile.SupportingObjects.ToList(), profile.Intent, profile.Hero, profile.SupportingText, profile.Hierarchy, profile.CompositionStyle, profile.SubjectTreatment, profile.CdlDirectives.ToList(), profile.ContractExtensions, profile.NegativeConstraints, profile.QualityTargets, editorial, knowledge, editorialDecision, atmosphere) with { Platform = platform, AspectRatio = aspect };
     }
 
     private static CDL BuildCdl(VisualIntelligenceOrchestrationContext c, DirectionModel m) => new()
@@ -85,7 +92,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
             D("lighting", "cinematic low-noise astrophotography lighting; physically plausible illumination where possible", 80),
             D("storytellingEmphasis", m.Editorial.StorytellingEmphasis, 96),
             D("documentaryContext", m.Editorial.DocumentaryComposition, 82),
-            D("atmosphere", "calm, trustworthy, scientific but emotional; premium astronomy documentary", 75),
+            D("atmosphere", $"calm, trustworthy, scientific but emotional; premium astronomy documentary; {m.Atmosphere.TwilightAuthenticity} {m.Atmosphere.SkyRealism} {m.Atmosphere.EnvironmentQuality}", 75),
             D("typography", "minimal essential text, high contrast, mobile-first readability, no clutter", 75),
             D("observationCard", BuildObservationCard(c), 70), D("labels", "short factual labels only when helpful; subtle constellation overlays if used", 65),
             D("astronomicalRendering", "planets and moons perfectly circular; realistic telescope/astrophotography treatment; no stretched bodies; no fake glow; no cartoon planets; correct illumination where possible", 100),
@@ -125,7 +132,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
 
     private static Dictionary<string, object?> BuildCommonExtensions(VisualIntelligenceOrchestrationContext c, DirectionModel m)
     {
-        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints, ["editorialComposition"] = m.Editorial, ["creativeKnowledge"] = m.Knowledge, ["creativeKnowledgeFamily"] = m.Knowledge.Family.ToString(), ["editorialDecision"] = m.EditorialDecision, ["visualStory"] = BuildVisualStoryExtension(m), ["viewerQuestion"] = m.Knowledge.ViewerQuestion, ["storyGoal"] = m.Knowledge.StoryGoal, ["compositionTemplateUsed"] = m.Editorial.Template.Name, ["relationshipScore"] = m.Editorial.RelationshipScore, ["documentaryScore"] = m.Editorial.DocumentaryScore, ["astronomyScore"] = m.Editorial.AstronomyScore, ["visualHierarchyScore"] = m.Editorial.VisualHierarchyScore, ["storytellingNotes"] = m.Editorial.StorytellingNotes, ["recommendations"] = m.Editorial.Recommendations };
+        var extensions = new Dictionary<string, object?> { ["eventFamily"] = m.Family.ToString(), ["eventType"] = c.EventType, ["eventName"] = c.EventName, ["region"] = c.Region, ["location"] = c.Location, ["observationDateTime"] = c.ObservationDateTime, ["visibilityGuidance"] = c.VisibilityGuidance, ["creativeStyle"] = CreativeStyle.PremiumDocumentary.ToString(), ["compositionStyle"] = m.CompositionStyle.ToString(), ["subjectTreatment"] = m.SubjectTreatment, ["typographyStyle"] = "premium minimal mobile-first", ["observationCardStyle"] = "lower-third safe-zone when useful", ["negativeRules"] = m.NegativeConstraints, ["editorialComposition"] = m.Editorial, ["creativeKnowledge"] = m.Knowledge, ["creativeKnowledgeFamily"] = m.Knowledge.Family.ToString(), ["editorialDecision"] = m.EditorialDecision, ["visualStory"] = BuildVisualStoryExtension(m), ["viewerQuestion"] = m.Knowledge.ViewerQuestion, ["storyGoal"] = m.Knowledge.StoryGoal, ["compositionTemplateUsed"] = m.Editorial.Template.Name, ["relationshipScore"] = m.Editorial.RelationshipScore, ["documentaryScore"] = m.Editorial.DocumentaryScore, ["astronomyScore"] = m.Editorial.AstronomyScore, ["visualHierarchyScore"] = m.Editorial.VisualHierarchyScore, ["storytellingNotes"] = m.Editorial.StorytellingNotes, ["recommendations"] = m.Editorial.Recommendations, ["documentaryAtmosphereReview"] = m.Atmosphere, ["atmosphereBenchmarkPreparation"] = m.Atmosphere.BenchmarkPreparation };
         if (m.Editorial.PlanetRelationshipReview is not null)
             extensions["planetRelationshipReview"] = m.Editorial.PlanetRelationshipReview;
         foreach (var item in m.ProfileExtensions) extensions[item.Key] = item.Value;
@@ -142,7 +149,7 @@ public sealed class VisualCreativeDirector : IVisualCreativeDirector
     private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
     private static DiagnosticMessage Info(string code, string message) => new() { Severity = DiagnosticSeverity.Info, Code = code, Message = message, Source = nameof(VisualCreativeDirector) };
 
-    private sealed record DirectionModel(ContractEventFamily Family, List<string> PrimaryObjects, List<string> SupportingObjects, string Intent, string Hero, string SupportingText, string Hierarchy, CompositionStyle CompositionStyle, string SubjectTreatment, List<CdlDirective> ProfileDirectives, Dictionary<string, object?> ProfileExtensions, NegativeConstraints NegativeConstraints, QualityTargets QualityTargets, EditorialCompositionDecision Editorial, CreativeKnowledge Knowledge, EditorialDecision EditorialDecision)
+    private sealed record DirectionModel(ContractEventFamily Family, List<string> PrimaryObjects, List<string> SupportingObjects, string Intent, string Hero, string SupportingText, string Hierarchy, CompositionStyle CompositionStyle, string SubjectTreatment, List<CdlDirective> ProfileDirectives, Dictionary<string, object?> ProfileExtensions, NegativeConstraints NegativeConstraints, QualityTargets QualityTargets, EditorialCompositionDecision Editorial, CreativeKnowledge Knowledge, EditorialDecision EditorialDecision, DocumentaryAtmosphereReview Atmosphere)
     {
         public Platform Platform { get; init; }
         public AspectRatio AspectRatio { get; init; }
