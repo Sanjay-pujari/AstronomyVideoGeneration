@@ -25,7 +25,8 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Equal(story.PrimaryStory, contract.PrimaryStory);
         Assert.Equal("Teach visually.", contract.EditorialSequence.Objective);
         Assert.Equal(5, contract.EditorialSequence.Steps.Count);
-        Assert.Equal("4.5C", contract.Versions["galleryIntelligenceAlignment"]);
+        Assert.Equal("4.5D", contract.Versions["galleryIntelligenceAlignment"]);
+        Assert.Equal(["Wonder", "Curiosity", "Understanding", "Observation", "Memory"], contract.NarrativeFlow.EmotionalProgression);
     }
 
     [Fact]
@@ -47,6 +48,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.True(File.Exists(Path.Combine(folder, "GalleryEditorialSequence.json")));
         Assert.True(File.Exists(Path.Combine(folder, "GalleryReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "GalleryInformationDensityReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "GalleryNarrativeFlowReview.json")));
     }
 
     [Fact]
@@ -159,6 +161,43 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains("\"storyProgression\"", json);
         Assert.Contains("\"editorialRecommendations\"", json);
         Assert.Contains("\"informationDensity\"", json);
+        Assert.Contains("\"narrativeFlow\"", json);
+    }
+
+    [Fact]
+    public void NarrativeFlowDirector_Defines_Required_Editorial_Journey()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+
+        var flow = engine.Create(story, composition, strategy).NarrativeFlow;
+
+        Assert.Equal(["Hook", "Wonder", "Discovery", "Curiosity", "Explanation", "Understanding", "Observation", "Practical application", "Takeaway", "Memory"], flow.Stages.Select(stage => stage.Stage).ToArray());
+        Assert.Equal(["Wonder", "Curiosity", "Understanding", "Observation", "Memory"], flow.EmotionalProgression);
+        Assert.False(flow.GeneratesPrompts);
+        Assert.False(flow.ChangesProductionGallery);
+    }
+
+    [Fact]
+    public async Task NarrativeFlowDiagnostics_Include_Required_Review_Sections()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+        var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"));
+
+        await engine.WriteDiagnosticsAsync(story, composition, strategy, folder);
+
+        var json = await File.ReadAllTextAsync(Path.Combine(folder, "GalleryNarrativeFlowReview.json"));
+        Assert.Contains("\"emotionalJourney\"", json);
+        Assert.Contains("\"learningJourney\"", json);
+        Assert.Contains("\"viewerProgression\"", json);
+        Assert.Contains("\"storyContinuity\"", json);
+        Assert.Contains("\"educationalFlow\"", json);
+        Assert.Contains("\"recommendations\"", json);
+        Assert.Contains("\"generatesPrompts\": false", json);
+        Assert.Contains("\"changesProductionGallery\": false", json);
     }
 
     [Fact]
@@ -172,6 +211,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains(OutputArtifactName.GalleryEditorialSequence.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryInformationDensityReview.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryNarrativeFlowReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.GalleryIntelligenceContract), manifest.Artifacts[OutputArtifactName.GalleryIntelligenceContract.ToString()]);
     }
 
