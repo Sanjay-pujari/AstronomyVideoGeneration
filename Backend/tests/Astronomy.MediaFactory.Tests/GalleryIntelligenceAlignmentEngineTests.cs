@@ -44,13 +44,14 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.True(review.ConsumesProductEditorialStrategy);
         Assert.False(review.GeneratesPrompts);
         Assert.False(review.ChangesProductionRouting);
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryIntelligenceContract.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryEditorialSequence.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryReview.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryInformationDensityReview.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryNarrativeFlowReview.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryEducationalStorytellingReview.json")));
-        Assert.True(File.Exists(Path.Combine(folder, "GalleryBenchmarkMetadata.json")));
+        var diagnostics = Path.Combine(folder, "diagnostics");
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryIntelligenceContract.json")));
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryEditorialSequence.json")));
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryReview.json")));
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryInformationDensityReview.json")));
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryNarrativeFlowReview.json")));
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryEducationalStorytellingReview.json")));
+        Assert.True(File.Exists(Path.Combine(diagnostics, "GalleryBenchmarkMetadata.json")));
     }
 
     [Fact]
@@ -257,6 +258,9 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains(OutputArtifactName.GalleryNarrativeFlowReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryEducationalStorytellingReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryBenchmarkMetadata.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryGenerationDiagnostics.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryPage01Hook.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryPage05Memory.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.GalleryIntelligenceContract), manifest.Artifacts[OutputArtifactName.GalleryIntelligenceContract.ToString()]);
         Assert.Equal(Path.Combine(root, "gallery", "diagnostics", "EditorialProductReview.json"), manifest.Artifacts[OutputArtifactName.EditorialProductReview.ToString()]);
     }
