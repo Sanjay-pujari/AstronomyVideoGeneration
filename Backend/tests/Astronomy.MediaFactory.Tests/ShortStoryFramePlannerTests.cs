@@ -59,12 +59,22 @@ public sealed class ShortStoryFramePlannerTests
         Assert.True(Directory.Exists(Path.Combine(folder, "short-story-frames", "comparison")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePlan.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFrameReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "FrameGenerationDiagnostics.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "VisualPromptDiagnostics.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "ShortStoryFrameArtifactManifest.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "story-frame-plan.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "composition-model.json")));
+        Assert.Equal("story-frame-plan.json", manifest.Artifacts["StoryFramePlan"]);
+        Assert.Equal("composition-model.json", manifest.Artifacts["CompositionModel"]);
+        Assert.Equal("diagnostics/ShortStoryFrameReview.json", manifest.Artifacts["FrameReview"]);
+        Assert.Equal("diagnostics/FrameGenerationDiagnostics.json", manifest.Artifacts["FrameGenerationDiagnostics"]);
+        Assert.Equal("diagnostics/VisualPromptDiagnostics.json", manifest.Artifacts["VisualPromptDiagnostics"]);
+        Assert.Equal("comparison/", manifest.Artifacts["ComparisonArtifacts"]);
 
         var json = await File.ReadAllTextAsync(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePlan.json"));
         var reparsed = JsonSerializer.Deserialize<ShortStoryFramePlan>(json, VisualIntelligenceJson.CreateSerializerOptions());
         Assert.Equal(plan.PlanId, reparsed!.PlanId);
-        Assert.Equal("4.7C", reparsed.Versions["shortStoryFrames"]);
+        Assert.Equal("4.7D", reparsed.Versions["shortStoryFrames"]);
     }
 
     [Fact]
