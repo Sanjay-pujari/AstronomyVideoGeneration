@@ -93,6 +93,27 @@ public sealed class VisualCreativeDirectorTests
         AssertDirectiveContains(result.Cdl!, "atmosphere", "realistic evening gradient");
     }
 
+
+    [Fact]
+    public async Task HumanContextDirector_recommends_subtle_context_scale_and_observation_realism()
+    {
+        var result = await Create(Request("planet-pairing", primary: ["Jupiter"], supporting: ["Venus"], location: "observatory mountain ridge"));
+
+        var review = Assert.IsType<HumanContextReview>(result.CreativeDirectionContract!.ExtensionFields["humanContextReview"]);
+        Assert.False(review.GeneratesPrompts);
+        Assert.Contains("observatory silhouette", review.RecommendedContextCues);
+        Assert.Contains("mountain ridge", review.RecommendedContextCues);
+        Assert.Contains("communicate scale", review.ScaleCommunication, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("never compete", review.ScaleCommunication, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("believable observation locations", review.ObservationRealism, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("clean horizons", review.ObservationRealism, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("documentary photographer", review.StorySupport, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("crowded cities", review.AvoidPatterns);
+        Assert.Equal("hero-human-context", review.BenchmarkPreparation.BenchmarkFamily);
+        Assert.False(review.BenchmarkPreparation.RunnerImplemented);
+        AssertDirectiveContains(result.Cdl!, "humanContext", "I could go outside tonight and observe this");
+    }
+
     [Fact]
     public async Task PlanetGrouping_creates_multi_object_hierarchy()
     {
@@ -248,12 +269,14 @@ public sealed class VisualCreativeDirectorTests
             Platform = request.Platform,
             AspectRatio = request.AspectRatio,
             RequestedAssetType = request.RequestedAssetType,
+            Location = request.Location,
+            Region = request.Region,
             PrimaryObjects = request.PrimaryObjects,
             SupportingObjects = request.SupportingObjects,
             FeatureFlags = new VisualIntelligenceFlagSnapshot { UseVisualCreativeDirector = true, UseCDL = true, UseCreativeDirectionContract = true }
         });
 
-    private static VisualIntelligenceOrchestrationRequest Request(string eventType, ContractEventFamily family = ContractEventFamily.PlanetConjunction, string eventName = "", List<string>? primary = null, List<string>? supporting = null) => new()
+    private static VisualIntelligenceOrchestrationRequest Request(string eventType, ContractEventFamily family = ContractEventFamily.PlanetConjunction, string eventName = "", List<string>? primary = null, List<string>? supporting = null, string location = "") => new()
     {
         CorrelationId = "director-test",
         EventFamily = family,
@@ -263,6 +286,7 @@ public sealed class VisualCreativeDirectorTests
         Platform = Platform.YouTubeThumbnail,
         AspectRatio = AspectRatio.Landscape16x9,
         RequestedAssetType = "thumbnail",
+        Location = location,
         PrimaryObjects = primary ?? [],
         SupportingObjects = supporting ?? []
     };
