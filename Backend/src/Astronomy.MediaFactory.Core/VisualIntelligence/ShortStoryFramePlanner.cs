@@ -109,7 +109,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         this.logger = logger ?? NullLogger<ShortStoryFramePlanner>.Instance;
     }
 
-    public const string Version = "4.7E";
+    public const string Version = "4.7G";
     public const string PortraitAspectRatio = "9:16";
     private const string PromptProvider = "AzureOpenAIImage";
 
@@ -163,6 +163,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         var compositionModel = BuildCompositionModel(plan);
         var promptPackages = BuildPromptPackages(plan);
         var promptReview = BuildPromptReview(plan, promptPackages);
+        var visualReview = BuildVisualReview(plan);
         var manifest = new ShortStoryFrameArtifactManifest
         {
             PlanId = plan.PlanId,
@@ -170,7 +171,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
             TimelineId = plan.TimelineId,
             ArtifactRoot = root,
             Directories = ["diagnostics/", "diagnostics/frame-prompts/", "comparison/"],
-            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/ShortStoryFramePromptReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
+            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/ShortStoryFramePromptReview.json", "diagnostics/ShortStoryFrameVisualReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
             ComparisonArtifacts = ["comparison/"],
             Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -178,6 +179,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
                 ["CompositionModel"] = "composition-model.json",
                 ["FrameReview"] = "diagnostics/ShortStoryFrameReview.json",
                 ["FramePromptReview"] = "diagnostics/ShortStoryFramePromptReview.json",
+                ["VisualReview"] = "diagnostics/ShortStoryFrameVisualReview.json",
                 ["FramePromptPackages"] = "diagnostics/frame-prompts/",
                 ["FrameGenerationDiagnostics"] = "diagnostics/FrameGenerationDiagnostics.json",
                 ["VisualPromptDiagnostics"] = "diagnostics/VisualPromptDiagnostics.json",
@@ -192,6 +194,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFramePlan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFrameReview.json"), JsonSerializer.Serialize(review, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFramePromptReview.json"), JsonSerializer.Serialize(promptReview, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFrameVisualReview.json"), JsonSerializer.Serialize(visualReview, options), cancellationToken);
         foreach (var package in promptPackages)
             await File.WriteAllTextAsync(Path.Combine(framePrompts, PromptFileName(package.FrameNumber, package.BeatRole)), JsonSerializer.Serialize(package, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "FrameGenerationDiagnostics.json"), JsonSerializer.Serialize(CreateFrameGenerationDiagnostics(plan), options), cancellationToken);
@@ -264,6 +267,48 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         await File.WriteAllTextAsync(Path.Combine(comparison, "ShortStoryFrameComparison.json"), JsonSerializer.Serialize(report, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true)), cancellationToken).ConfigureAwait(false);
         logger.LogInformation("comparison completed");
         return report;
+    }
+
+    private static StoryFrameVisualReview BuildVisualReview(ShortStoryFramePlan plan)
+    {
+        var frames = plan.FrameDefinitions.Select(frame => new StoryFrameVisualReviewFrame
+        {
+            FrameNumber = frame.FrameNumber,
+            BeatRole = frame.BeatRole,
+            ViewerQuestion = frame.ViewerQuestion,
+            ViewerEmotion = frame.ViewerEmotion,
+            ExpectedVisualIntent = frame.RecommendedVisualTreatment,
+            GeneratedFramePath = Path.Combine("comparison", $"frame{frame.FrameNumber:00}-{Slug(frame.BeatRole)}-v4.png"),
+            VisualContinuityNotes = "Advisory review placeholder: validate short-form visual continuity, beat-to-beat subject continuity, lighting continuity, and narrative handoff manually; no CV/image analysis has been run.",
+            PlatformCompositionNotes = $"Advisory review placeholder: validate native 9:16 vertical safe areas, overlay clearance, and platform-native composition manually. Planned composition: {frame.RecommendedComposition}",
+            Risks = ["No image analysis/CV has been run.", "Generated comparison frame may be missing or may have failed non-blocking.", "Manual astronomy and typography review is required before production use."],
+            Recommendation = "ManualReviewRequired"
+        }).ToArray();
+
+        var versions = new Dictionary<string, string>(plan.Versions) { ["shortStoryFrameVisualReview"] = Version };
+        return new StoryFrameVisualReview
+        {
+            ReviewId = $"{plan.PlanId}_visual_review",
+            PlanId = plan.PlanId,
+            FramePlanId = plan.PlanId,
+            StoryId = plan.StoryId,
+            AspectRatio = plan.AspectRatio,
+            Platform = plan.Platform.ToString(),
+            FrameCount = plan.FrameCount,
+            ReviewedFrames = frames,
+            StoryContinuityScore = 0,
+            PlatformNativeScore = 0,
+            DocumentaryScore = 0,
+            EducationalProgressionScore = 0,
+            VisualConsistencyScore = 0,
+            TypographySafetyScore = 0,
+            AstronomyAccuracyScore = 0,
+            OverallScore = 0,
+            Recommendation = "Native short-form story-frame visual review is advisory only; manual review required before production adoption.",
+            Warnings = ["Diagnostics only; scores are unset because no image analysis/CV is available yet.", "Production scene assets, video rendering, and Azure routing are unchanged.", "Comparison image generation failures remain non-blocking."],
+            CriticalIssues = [],
+            Versions = versions
+        };
     }
 
     private static object CreateFrameGenerationDiagnostics(ShortStoryFramePlan plan) => new

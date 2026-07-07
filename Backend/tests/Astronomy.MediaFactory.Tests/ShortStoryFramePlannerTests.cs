@@ -60,6 +60,7 @@ public sealed class ShortStoryFramePlannerTests
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePlan.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFrameReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePromptReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFrameVisualReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "frame-prompts", "frame01-hook-prompt.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "frame-prompts", "frame05-call-to-action-prompt.json")));
         Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "FrameGenerationDiagnostics.json")));
@@ -70,6 +71,7 @@ public sealed class ShortStoryFramePlannerTests
         Assert.Equal("story-frame-plan.json", manifest.Artifacts["StoryFramePlan"]);
         Assert.Equal("composition-model.json", manifest.Artifacts["CompositionModel"]);
         Assert.Equal("diagnostics/ShortStoryFrameReview.json", manifest.Artifacts["FrameReview"]);
+        Assert.Equal("diagnostics/ShortStoryFrameVisualReview.json", manifest.Artifacts["VisualReview"]);
         Assert.Equal("diagnostics/FrameGenerationDiagnostics.json", manifest.Artifacts["FrameGenerationDiagnostics"]);
         Assert.Equal("diagnostics/VisualPromptDiagnostics.json", manifest.Artifacts["VisualPromptDiagnostics"]);
         Assert.Equal("comparison/", manifest.Artifacts["ComparisonArtifacts"]);
@@ -77,7 +79,7 @@ public sealed class ShortStoryFramePlannerTests
         var json = await File.ReadAllTextAsync(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePlan.json"));
         var reparsed = JsonSerializer.Deserialize<ShortStoryFramePlan>(json, VisualIntelligenceJson.CreateSerializerOptions());
         Assert.Equal(plan.PlanId, reparsed!.PlanId);
-        Assert.Equal("4.7E", reparsed.Versions["shortStoryFrames"]);
+        Assert.Equal("4.7G", reparsed.Versions["shortStoryFrames"]);
 
         var promptFiles = Directory.GetFiles(Path.Combine(folder, "short-story-frames", "diagnostics", "frame-prompts"), "*-prompt.json");
         Assert.Equal(5, promptFiles.Length);
@@ -97,6 +99,16 @@ public sealed class ShortStoryFramePlannerTests
             Assert.Contains("No generated embedded text", package.PositivePrompt);
             Assert.Equal(JsonValueKind.False, Assert.IsType<JsonElement>(package.Diagnostics["azureCallsMade"]).ValueKind);
         }
+
+
+        var visualReviewJson = await File.ReadAllTextAsync(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFrameVisualReview.json"));
+        var visualReview = JsonSerializer.Deserialize<StoryFrameVisualReview>(visualReviewJson, VisualIntelligenceJson.CreateSerializerOptions())!;
+        Assert.Equal(plan.PlanId, visualReview.PlanId);
+        Assert.Equal(plan.FrameCount, visualReview.FrameCount);
+        Assert.Equal(plan.FrameCount, visualReview.ReviewedFrames.Count);
+        Assert.Contains("advisory", visualReview.Recommendation, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("ManualReviewRequired", visualReview.ReviewedFrames[0].Recommendation);
+        Assert.Contains("Production scene assets", visualReview.Warnings[1]);
 
         var promptReviewJson = await File.ReadAllTextAsync(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePromptReview.json"));
         var promptReview = JsonSerializer.Deserialize<StoryFramePromptReview>(promptReviewJson, VisualIntelligenceJson.CreateSerializerOptions())!;
