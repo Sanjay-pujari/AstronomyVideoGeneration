@@ -51,7 +51,11 @@ public enum OutputArtifactName
     HeroV4Prompt,
     HeroIntelligenceContract,
     HeroFinal,
-    HeroArtifactManifest
+    HeroArtifactManifest,
+    GalleryIntelligenceContract,
+    GalleryEditorialSequence,
+    GalleryReview,
+    GalleryArtifactManifest
 }
 
 public static class OutputArtifactRegistry
@@ -69,7 +73,11 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "comparison", "hero-v4-prompt.txt"),
         [OutputArtifactName.HeroIntelligenceContract] = Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"),
         [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
-        [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json")
+        [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json"),
+        [OutputArtifactName.GalleryIntelligenceContract] = Path.Combine("gallery", "diagnostics", "GalleryIntelligenceContract.json"),
+        [OutputArtifactName.GalleryEditorialSequence] = Path.Combine("gallery", "diagnostics", "GalleryEditorialSequence.json"),
+        [OutputArtifactName.GalleryReview] = Path.Combine("gallery", "diagnostics", "GalleryReview.json"),
+        [OutputArtifactName.GalleryArtifactManifest] = Path.Combine("gallery", "GalleryArtifactManifest.json")
     };
 
     private static readonly IReadOnlyDictionary<OutputArtifactName, string> LegacyRelativePaths = new Dictionary<OutputArtifactName, string>
@@ -85,7 +93,11 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.HeroV4Prompt] = Path.Combine("hero", "hero-v4-prompt.txt"),
         [OutputArtifactName.HeroIntelligenceContract] = Path.Combine("hero", "diagnostics", "HeroIntelligenceContract.json"),
         [OutputArtifactName.HeroFinal] = Path.Combine("hero", "hero-final.png"),
-        [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json")
+        [OutputArtifactName.HeroArtifactManifest] = Path.Combine("hero", "HeroArtifactManifest.json"),
+        [OutputArtifactName.GalleryIntelligenceContract] = Path.Combine("gallery", "diagnostics", "GalleryIntelligenceContract.json"),
+        [OutputArtifactName.GalleryEditorialSequence] = Path.Combine("gallery", "diagnostics", "GalleryEditorialSequence.json"),
+        [OutputArtifactName.GalleryReview] = Path.Combine("gallery", "diagnostics", "GalleryReview.json"),
+        [OutputArtifactName.GalleryArtifactManifest] = Path.Combine("gallery", "GalleryArtifactManifest.json")
     };
 
     public static string GetRelativePath(OutputArtifactName artifactName) => PrimaryRelativePaths[artifactName];
@@ -119,9 +131,22 @@ public static class OutputArtifactRegistry
     public static HeroArtifactManifest CreateHeroArtifactManifest(string outputRoot, OutputArtifactsOptions options)
     {
         var artifacts = Enum.GetValues<OutputArtifactName>()
+            .Where(name => name.ToString().StartsWith("Hero", StringComparison.Ordinal) || name == OutputArtifactName.VisualPromptDiagnostics)
             .Where(name => name != OutputArtifactName.HeroArtifactManifest)
             .ToDictionary(name => name.ToString(), name => GetPath(outputRoot, name), StringComparer.OrdinalIgnoreCase);
         return new HeroArtifactManifest("4.0D.2", options.Mode.ToString(), GetExpectedHeroValidationArtifacts(options).Select(name => name.ToString()).ToArray(), artifacts);
+    }
+
+    public static GalleryArtifactManifest CreateGalleryArtifactManifest(string outputRoot, OutputArtifactsOptions options)
+    {
+        var artifacts = new[]
+            {
+                OutputArtifactName.GalleryIntelligenceContract,
+                OutputArtifactName.GalleryEditorialSequence,
+                OutputArtifactName.GalleryReview
+            }
+            .ToDictionary(name => name.ToString(), name => GetPath(outputRoot, name), StringComparer.OrdinalIgnoreCase);
+        return new GalleryArtifactManifest("4.5A", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
     }
 
     public static string GetManifestPath(string outputRoot) => GetPath(outputRoot, OutputArtifactName.HeroArtifactManifest);
@@ -150,6 +175,11 @@ public static class OutputArtifactRegistry
 public sealed record HeroArtifactManifest(string Version, string OutputArtifactMode, IReadOnlyList<string> ExpectedArtifacts, IReadOnlyDictionary<string, string> Artifacts)
 {
     public static HeroArtifactManifest Empty { get; } = new("4.0D.2", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+}
+
+public sealed record GalleryArtifactManifest(string Version, string OutputArtifactMode, IReadOnlyList<string> ExpectedArtifacts, IReadOnlyDictionary<string, string> Artifacts)
+{
+    public static GalleryArtifactManifest Empty { get; } = new("4.5A", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 }
 
 public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }
