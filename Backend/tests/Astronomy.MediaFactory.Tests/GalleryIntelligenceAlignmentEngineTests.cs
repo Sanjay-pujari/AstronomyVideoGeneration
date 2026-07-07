@@ -25,7 +25,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Equal(story.PrimaryStory, contract.PrimaryStory);
         Assert.Equal("Teach visually.", contract.EditorialSequence.Objective);
         Assert.Equal(5, contract.EditorialSequence.Steps.Count);
-        Assert.Equal("4.5D", contract.Versions["galleryIntelligenceAlignment"]);
+        Assert.Equal("4.6A", contract.Versions["galleryIntelligenceAlignment"]);
         Assert.Equal(["Wonder", "Curiosity", "Understanding", "Observation", "Memory"], contract.NarrativeFlow.EmotionalProgression);
     }
 
@@ -49,6 +49,8 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.True(File.Exists(Path.Combine(folder, "GalleryReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "GalleryInformationDensityReview.json")));
         Assert.True(File.Exists(Path.Combine(folder, "GalleryNarrativeFlowReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "GalleryEducationalStorytellingReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "GalleryBenchmarkMetadata.json")));
     }
 
     [Fact]
@@ -60,7 +62,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         var contract = engine.Create(story, composition, strategy);
 
-        Assert.Equal(["Hook", "Discovery", "Explanation", "Observation", "Takeaway"], contract.EditorialSequence.Steps.Select(step => step.Role).ToArray());
+        Assert.Equal(["Hook", "Recognition", "Explanation", "Observation", "Memory"], contract.EditorialSequence.Steps.Select(step => step.Role).ToArray());
         Assert.All(contract.EditorialSequence.Steps, step => Assert.False(string.IsNullOrWhiteSpace(step.SourceEmphasis)));
     }
 
@@ -76,7 +78,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         Assert.Equal(5, contract.EditorialSequence.PageDefinitions.Count);
         Assert.Equal([1, 2, 3, 4, 5], contract.EditorialSequence.PageDefinitions.Select(page => page.PageNumber).ToArray());
-        Assert.Equal(["Hook", "Discovery", "Explanation", "Observation", "Takeaway"], contract.EditorialSequence.PageDefinitions.Select(page => page.PageRole).ToArray());
+        Assert.Equal(["Hook", "Recognition", "Explanation", "Observation", "Memory"], contract.EditorialSequence.PageDefinitions.Select(page => page.PageRole).ToArray());
         Assert.All(contract.EditorialSequence.PageDefinitions, page =>
         {
             Assert.False(string.IsNullOrWhiteSpace(page.PageGoal));
@@ -98,7 +100,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         var sequence = engine.Create(story, composition, strategy).EditorialSequence;
 
-        Assert.Equal(["Hook", "Discovery", "Explanation", "Observation", "Takeaway"], sequence.InformationDensity.Select(page => page.PageRole).ToArray());
+        Assert.Equal(["Hook", "Recognition", "Explanation", "Observation", "Memory"], sequence.InformationDensity.Select(page => page.PageRole).ToArray());
         Assert.Equal(["Very Low", "Low", "Medium", "Medium", "Low"], sequence.InformationDensity.Select(page => page.PageDensity).ToArray());
         Assert.Equal("Very High", sequence.InformationDensity[0].VisualWeight);
         Assert.Equal("Balanced visual + information.", sequence.InformationDensity[2].EducationalGuidance);
@@ -173,7 +175,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
 
         var flow = engine.Create(story, composition, strategy).NarrativeFlow;
 
-        Assert.Equal(["Hook", "Wonder", "Discovery", "Curiosity", "Explanation", "Understanding", "Observation", "Practical application", "Takeaway", "Memory"], flow.Stages.Select(stage => stage.Stage).ToArray());
+        Assert.Equal(["Hook", "Wonder", "Recognition", "Curiosity", "Explanation", "Understanding", "Observation", "Practical application", "Memory", "Reinforcement"], flow.Stages.Select(stage => stage.Stage).ToArray());
         Assert.Equal(["Wonder", "Curiosity", "Understanding", "Observation", "Memory"], flow.EmotionalProgression);
         Assert.False(flow.GeneratesPrompts);
         Assert.False(flow.ChangesProductionGallery);
@@ -200,6 +202,46 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains("\"changesProductionGallery\": false", json);
     }
 
+
+    [Fact]
+    public async Task EducationalStorytellingDiagnostics_Include_Required_Review_And_Benchmark_Metadata()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+        var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"));
+
+        await engine.WriteDiagnosticsAsync(story, composition, strategy, folder);
+
+        var reviewJson = await File.ReadAllTextAsync(Path.Combine(folder, "GalleryEducationalStorytellingReview.json"));
+        Assert.Contains("\"editorialRoles\"", reviewJson);
+        Assert.Contains("\"viewerQuestions\"", reviewJson);
+        Assert.Contains("\"knowledgeProgression\"", reviewJson);
+        Assert.Contains("\"learningContinuity\"", reviewJson);
+        Assert.Contains("\"memoryReinforcement\"", reviewJson);
+        Assert.Contains("\"storyQuality\"", reviewJson);
+        Assert.Contains("\"recommendations\"", reviewJson);
+        Assert.Contains("\"generatesPrompts\": false", reviewJson);
+        Assert.Contains("\"changesProductionGallery\": false", reviewJson);
+
+        var benchmarkJson = await File.ReadAllTextAsync(Path.Combine(folder, "GalleryBenchmarkMetadata.json"));
+        Assert.Contains("\"runnerImplemented\": false", benchmarkJson);
+        Assert.Contains("editorialRoleOrdering", benchmarkJson);
+    }
+
+    [Fact]
+    public void EducationalStorytellingDirector_Answers_One_Viewer_Question_Per_Page()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+
+        var pages = engine.Create(story, composition, strategy).EditorialSequence.PageDefinitions;
+
+        Assert.Equal(["What happened?", "What am I actually looking at?", "Why did it happen?", "How can I observe it?", "Why should I remember it?"], pages.Select(page => page.ViewerQuestion).ToArray());
+        Assert.Equal(pages.Count, pages.Select(page => page.KeyLearning).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
     [Fact]
     public void GalleryArtifactManifest_Registers_New_Diagnostics()
     {
@@ -213,6 +255,8 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains(OutputArtifactName.GalleryReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryInformationDensityReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryNarrativeFlowReview.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryEducationalStorytellingReview.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryBenchmarkMetadata.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.GalleryIntelligenceContract), manifest.Artifacts[OutputArtifactName.GalleryIntelligenceContract.ToString()]);
         Assert.Equal(Path.Combine(root, "gallery", "diagnostics", "EditorialProductReview.json"), manifest.Artifacts[OutputArtifactName.EditorialProductReview.ToString()]);
     }
