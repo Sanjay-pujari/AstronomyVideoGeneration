@@ -1773,7 +1773,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
         var result = await galleryEngine.GenerateGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Landscape, cancellationToken);
-        var observationGuidePath = Path.Combine(galleryRoot, "observation-guide-v2.json");
+        var observationGuidePath = Path.Combine(context.OutputRoot, "observation-guide", "observation-guide-v2.json");
         var outputs = result.ImagePaths
             .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath, result.ValidationPath, observationGuidePath])
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1824,8 +1824,12 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ValidateGalleryContract(IReadOnlyList<string> outputs, string manifestPath, string reviewPath)
     {
         var galleryImages = outputs
-            .Where(path => Regex.IsMatch(Path.GetFileName(path), @"^gallery-\d{2}\.png$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            .Where(path => Regex.IsMatch(Path.GetFileName(path), @"^page\d{2}-[a-z-]+\.png$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             .ToArray();
+        if (galleryImages.Length == 0)
+            galleryImages = outputs
+                .Where(path => Regex.IsMatch(Path.GetFileName(path), @"^gallery-\d{2}\.png$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                .ToArray();
         var errors = new List<string>();
         if (galleryImages.Length != 6)
             errors.Add($"exactly 6 gallery images are required; actual={galleryImages.Length}.");
@@ -1835,14 +1839,21 @@ public sealed partial class ProductionPipelineExecutionService(
                 errors.Add($"gallery image is missing: {NormalizePath(path)}.");
         }
         if (!File.Exists(manifestPath))
-            errors.Add($"gallery-manifest.json is required at '{NormalizePath(manifestPath)}'.");
+            errors.Add($"GalleryArtifactManifest.json is required at '{NormalizePath(manifestPath)}'.");
         if (!File.Exists(reviewPath))
-            errors.Add($"gallery-review.json is required at '{NormalizePath(reviewPath)}'.");
-        var diagnosticsPath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "gallery-generation-diagnostics.json");
-        var validationPath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "phase-13-validation.json");
+            errors.Add($"GalleryReview.json is required at '{NormalizePath(reviewPath)}'.");
+        var galleryRoot = Path.GetDirectoryName(manifestPath)!;
+        var diagnosticsPath = Path.Combine(galleryRoot, "diagnostics", "GalleryGenerationDiagnostics.json");
         if (!File.Exists(diagnosticsPath))
-            errors.Add($"gallery-generation-diagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
-        var observationGuidePath = Path.Combine(Path.GetDirectoryName(manifestPath)!, "observation-guide-v2.json");
+            diagnosticsPath = Path.Combine(galleryRoot, "gallery-generation-diagnostics.json");
+        var validationPath = Path.Combine(galleryRoot, "diagnostics", "phase-13-validation.json");
+        if (!File.Exists(validationPath))
+            validationPath = Path.Combine(galleryRoot, "phase-13-validation.json");
+        if (!File.Exists(diagnosticsPath))
+            errors.Add($"GalleryGenerationDiagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
+        var observationGuidePath = Path.Combine(Path.GetDirectoryName(galleryRoot)!, "observation-guide", "observation-guide-v2.json");
+        if (!File.Exists(observationGuidePath))
+            observationGuidePath = Path.Combine(galleryRoot, "observation-guide-v2.json");
         if (!File.Exists(validationPath))
             errors.Add($"phase-13-validation.json is required at '{NormalizePath(validationPath)}'.");
         else
@@ -13688,13 +13699,20 @@ public sealed partial class ProductionPipelineExecutionService(
     private static Phase13GalleryGuideDiagnostics BuildPhase13GalleryGuideDiagnostics(ProductionPhaseContext context)
     {
         var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
-        var galleryOutputPaths = Enumerable.Range(1, 6).Select(i => NormalizePath(Path.Combine(galleryRoot, $"gallery-{i:00}.png"))).ToArray();
-        var guidePath = NormalizePath(Path.Combine(galleryRoot, "observation-guide-v2.json"));
+        var galleryOutputPaths = new[] { "page01-hook.png", "page02-recognition.png", "page03-explanation.png", "page04-observation.png", "page05-memory.png", "page06-checklist.png" }
+            .Select(fileName => NormalizePath(Path.Combine(galleryRoot, fileName)))
+            .ToArray();
+        var legacyGalleryOutputPaths = Enumerable.Range(1, 6).Select(i => NormalizePath(Path.Combine(galleryRoot, $"gallery-{i:00}.png"))).ToArray();
+        if (galleryOutputPaths.Any(path => !File.Exists(path)) && legacyGalleryOutputPaths.All(File.Exists))
+            galleryOutputPaths = legacyGalleryOutputPaths;
+        var guidePath = NormalizePath(Path.Combine(context.OutputRoot, "observation-guide", "observation-guide-v2.json"));
+        var legacyGuidePath = NormalizePath(Path.Combine(galleryRoot, "observation-guide-v2.json"));
         if (galleryOutputPaths.Any(path => !File.Exists(path)))
             throw new InvalidOperationException("Gallery V3 validation failed: generated file metadata is missing for one or more gallery images.");
-        if (!File.Exists(guidePath))
+        var resolvedGuidePath = File.Exists(guidePath) ? guidePath : legacyGuidePath;
+        if (!File.Exists(resolvedGuidePath))
             throw new InvalidOperationException($"ObservationGuide V2 validation failed: generated guide metadata is missing at '{guidePath}'.");
-        return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, guidePath, true, true, true, true, false, true, true, "How To Observe", true);
+        return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, resolvedGuidePath, true, true, true, true, false, true, true, "How To Observe", true);
     }
 
     private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, IReadOnlyDictionary<string, bool> GeneratedVariantFileExists, IReadOnlyDictionary<string, long> GeneratedVariantFileSizes, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, long CanonicalHeroFinalFileSize, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent, string HeroContract, string ValidatorContract, string RendererContract, string ValidationProfileUsed, IReadOnlyList<string> RenderedBlocks, IReadOnlyList<string> ForbiddenBlocks, bool ContractMismatch, string FailureBranchName);

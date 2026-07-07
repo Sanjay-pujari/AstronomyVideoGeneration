@@ -60,6 +60,19 @@ public enum OutputArtifactName
     GalleryNarrativeFlowReview,
     GalleryEducationalStorytellingReview,
     GalleryBenchmarkMetadata,
+    GalleryGenerationDiagnostics,
+    GalleryVisualPromptDiagnostics,
+    GalleryComparison,
+    GalleryAssetBlueprint,
+    GalleryAssetStory,
+    GalleryCompositionModel,
+    GalleryPrompt,
+    GalleryPage01Hook,
+    GalleryPage02Recognition,
+    GalleryPage03Explanation,
+    GalleryPage04Observation,
+    GalleryPage05Memory,
+    GalleryPage06Checklist,
     GalleryArtifactManifest
 }
 
@@ -87,6 +100,19 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.GalleryNarrativeFlowReview] = Path.Combine("gallery", "diagnostics", "GalleryNarrativeFlowReview.json"),
         [OutputArtifactName.GalleryEducationalStorytellingReview] = Path.Combine("gallery", "diagnostics", "GalleryEducationalStorytellingReview.json"),
         [OutputArtifactName.GalleryBenchmarkMetadata] = Path.Combine("gallery", "diagnostics", "GalleryBenchmarkMetadata.json"),
+        [OutputArtifactName.GalleryGenerationDiagnostics] = Path.Combine("gallery", "diagnostics", "GalleryGenerationDiagnostics.json"),
+        [OutputArtifactName.GalleryVisualPromptDiagnostics] = Path.Combine("gallery", "diagnostics", "VisualPromptDiagnostics.json"),
+        [OutputArtifactName.GalleryComparison] = Path.Combine("gallery", "comparison", "gallery-comparison.json"),
+        [OutputArtifactName.GalleryAssetBlueprint] = Path.Combine("gallery", "asset-blueprint.json"),
+        [OutputArtifactName.GalleryAssetStory] = Path.Combine("gallery", "asset-story.json"),
+        [OutputArtifactName.GalleryCompositionModel] = Path.Combine("gallery", "composition-model.json"),
+        [OutputArtifactName.GalleryPrompt] = Path.Combine("gallery", "gallery-prompt.json"),
+        [OutputArtifactName.GalleryPage01Hook] = Path.Combine("gallery", "page01-hook.png"),
+        [OutputArtifactName.GalleryPage02Recognition] = Path.Combine("gallery", "page02-recognition.png"),
+        [OutputArtifactName.GalleryPage03Explanation] = Path.Combine("gallery", "page03-explanation.png"),
+        [OutputArtifactName.GalleryPage04Observation] = Path.Combine("gallery", "page04-observation.png"),
+        [OutputArtifactName.GalleryPage05Memory] = Path.Combine("gallery", "page05-memory.png"),
+        [OutputArtifactName.GalleryPage06Checklist] = Path.Combine("gallery", "page06-checklist.png"),
         [OutputArtifactName.GalleryArtifactManifest] = Path.Combine("gallery", "GalleryArtifactManifest.json")
     };
 
@@ -112,6 +138,19 @@ public static class OutputArtifactRegistry
         [OutputArtifactName.GalleryNarrativeFlowReview] = Path.Combine("gallery", "diagnostics", "GalleryNarrativeFlowReview.json"),
         [OutputArtifactName.GalleryEducationalStorytellingReview] = Path.Combine("gallery", "diagnostics", "GalleryEducationalStorytellingReview.json"),
         [OutputArtifactName.GalleryBenchmarkMetadata] = Path.Combine("gallery", "diagnostics", "GalleryBenchmarkMetadata.json"),
+        [OutputArtifactName.GalleryGenerationDiagnostics] = Path.Combine("gallery", "gallery-generation-diagnostics.json"),
+        [OutputArtifactName.GalleryVisualPromptDiagnostics] = Path.Combine("gallery", "visual-prompt-diagnostics.json"),
+        [OutputArtifactName.GalleryComparison] = Path.Combine("gallery", "gallery-comparison.json"),
+        [OutputArtifactName.GalleryAssetBlueprint] = Path.Combine("gallery", "asset-blueprint.json"),
+        [OutputArtifactName.GalleryAssetStory] = Path.Combine("gallery", "asset-story.json"),
+        [OutputArtifactName.GalleryCompositionModel] = Path.Combine("gallery", "composition-model.json"),
+        [OutputArtifactName.GalleryPrompt] = Path.Combine("gallery", "gallery-content-contract.json"),
+        [OutputArtifactName.GalleryPage01Hook] = Path.Combine("gallery", "gallery-01.png"),
+        [OutputArtifactName.GalleryPage02Recognition] = Path.Combine("gallery", "gallery-02.png"),
+        [OutputArtifactName.GalleryPage03Explanation] = Path.Combine("gallery", "gallery-03.png"),
+        [OutputArtifactName.GalleryPage04Observation] = Path.Combine("gallery", "gallery-04.png"),
+        [OutputArtifactName.GalleryPage05Memory] = Path.Combine("gallery", "gallery-05.png"),
+        [OutputArtifactName.GalleryPage06Checklist] = Path.Combine("gallery", "gallery-06.png"),
         [OutputArtifactName.GalleryArtifactManifest] = Path.Combine("gallery", "GalleryArtifactManifest.json")
     };
 
@@ -163,7 +202,20 @@ public static class OutputArtifactRegistry
                 OutputArtifactName.GalleryInformationDensityReview,
                 OutputArtifactName.GalleryNarrativeFlowReview,
                 OutputArtifactName.GalleryEducationalStorytellingReview,
-                OutputArtifactName.GalleryBenchmarkMetadata
+                OutputArtifactName.GalleryBenchmarkMetadata,
+                OutputArtifactName.GalleryGenerationDiagnostics,
+                OutputArtifactName.GalleryVisualPromptDiagnostics,
+                OutputArtifactName.GalleryComparison,
+                OutputArtifactName.GalleryAssetBlueprint,
+                OutputArtifactName.GalleryAssetStory,
+                OutputArtifactName.GalleryCompositionModel,
+                OutputArtifactName.GalleryPrompt,
+                OutputArtifactName.GalleryPage01Hook,
+                OutputArtifactName.GalleryPage02Recognition,
+                OutputArtifactName.GalleryPage03Explanation,
+                OutputArtifactName.GalleryPage04Observation,
+                OutputArtifactName.GalleryPage05Memory,
+                OutputArtifactName.GalleryPage06Checklist
             }
             .ToDictionary(
                 name => name.ToString(),
@@ -171,10 +223,12 @@ public static class OutputArtifactRegistry
                     ? Path.Combine(outputRoot, "gallery", "diagnostics", "EditorialProductReview.json")
                     : GetPath(outputRoot, name),
                 StringComparer.OrdinalIgnoreCase);
-        return new GalleryArtifactManifest("4.6A", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
+        return new GalleryArtifactManifest("4.5E", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
     }
 
     public static string GetManifestPath(string outputRoot) => GetPath(outputRoot, OutputArtifactName.HeroArtifactManifest);
+
+    public static string GetGalleryManifestPath(string outputRoot) => GetPath(outputRoot, OutputArtifactName.GalleryArtifactManifest);
 
     public static bool TryReadHeroArtifactManifest(string outputRoot, out HeroArtifactManifest manifest)
     {
@@ -189,8 +243,23 @@ public static class OutputArtifactRegistry
         return false;
     }
 
+    public static bool TryReadGalleryArtifactManifest(string outputRoot, out GalleryArtifactManifest manifest)
+    {
+        var path = GetGalleryManifestPath(outputRoot);
+        if (File.Exists(path))
+        {
+            manifest = JsonSerializer.Deserialize<GalleryArtifactManifest>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? GalleryArtifactManifest.Empty;
+            return manifest.Artifacts.Count > 0;
+        }
+
+        manifest = GalleryArtifactManifest.Empty;
+        return false;
+    }
+
     public static string ResolvePathFromManifestOrLegacy(string outputRoot, OutputArtifactName artifactName)
     {
+        if (artifactName.ToString().StartsWith("Gallery", StringComparison.Ordinal) && TryReadGalleryArtifactManifest(outputRoot, out var galleryManifest) && galleryManifest.Artifacts.TryGetValue(artifactName.ToString(), out var galleryPath) && !string.IsNullOrWhiteSpace(galleryPath))
+            return Path.IsPathRooted(galleryPath) ? galleryPath : Path.Combine(outputRoot, "gallery", galleryPath);
         if (TryReadHeroArtifactManifest(outputRoot, out var manifest) && manifest.Artifacts.TryGetValue(artifactName.ToString(), out var path) && !string.IsNullOrWhiteSpace(path))
             return path;
         return ResolveExistingPath(outputRoot, artifactName);
@@ -204,7 +273,7 @@ public sealed record HeroArtifactManifest(string Version, string OutputArtifactM
 
 public sealed record GalleryArtifactManifest(string Version, string OutputArtifactMode, IReadOnlyList<string> ExpectedArtifacts, IReadOnlyDictionary<string, string> Artifacts)
 {
-    public static GalleryArtifactManifest Empty { get; } = new("4.6A", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    public static GalleryArtifactManifest Empty { get; } = new("4.5E", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 }
 
 public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }

@@ -501,16 +501,19 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
             Diagnostics = ["No image generation changes.", "No prompt changes.", "No production Gallery routing changes."]
         };
 
-        Directory.CreateDirectory(outputFolder);
+        var diagnosticsFolder = Path.GetFileName(outputFolder).Equals("diagnostics", StringComparison.OrdinalIgnoreCase)
+            ? outputFolder
+            : Path.Combine(outputFolder, "diagnostics");
+        Directory.CreateDirectory(diagnosticsFolder);
         var json = Astronomy.MediaFactory.Contracts.VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryIntelligenceContract.json"), JsonSerializer.Serialize(contract, json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryEditorialSequence.json"), JsonSerializer.Serialize(contract.EditorialSequence, json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryReview.json"), JsonSerializer.Serialize(review, json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryInformationDensityReview.json"), JsonSerializer.Serialize(informationDensityDirector.Review(contract.GalleryId, contract.EditorialSequence.PageDefinitions), json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryNarrativeFlowReview.json"), JsonSerializer.Serialize(narrativeFlowDirector.Review(contract.GalleryId, contract.NarrativeFlow), json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryEducationalStorytellingReview.json"), JsonSerializer.Serialize(educationalStorytellingDirector.Review(contract), json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "GalleryBenchmarkMetadata.json"), JsonSerializer.Serialize(educationalStorytellingDirector.CreateBenchmarkMetadata(contract), json), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputFolder, "EditorialProductReview.json"), JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryIntelligenceContract.json"), JsonSerializer.Serialize(contract, json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryEditorialSequence.json"), JsonSerializer.Serialize(contract.EditorialSequence, json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryReview.json"), JsonSerializer.Serialize(review, json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryInformationDensityReview.json"), JsonSerializer.Serialize(informationDensityDirector.Review(contract.GalleryId, contract.EditorialSequence.PageDefinitions), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryNarrativeFlowReview.json"), JsonSerializer.Serialize(narrativeFlowDirector.Review(contract.GalleryId, contract.NarrativeFlow), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryEducationalStorytellingReview.json"), JsonSerializer.Serialize(educationalStorytellingDirector.Review(contract), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "GalleryBenchmarkMetadata.json"), JsonSerializer.Serialize(educationalStorytellingDirector.CreateBenchmarkMetadata(contract), json), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsFolder, "EditorialProductReview.json"), JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), json), cancellationToken);
         return review;
     }
 

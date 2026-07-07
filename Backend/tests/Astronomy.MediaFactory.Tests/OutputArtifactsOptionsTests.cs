@@ -63,6 +63,15 @@ public sealed class OutputArtifactRegistryTests : IDisposable
         Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryNarrativeFlowReview.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryNarrativeFlowReview));
         Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryEducationalStorytellingReview.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryEducationalStorytellingReview));
         Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryBenchmarkMetadata.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryBenchmarkMetadata));
+        Assert.Equal(Path.Combine("gallery", "diagnostics", "GalleryGenerationDiagnostics.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryGenerationDiagnostics));
+        Assert.Equal(Path.Combine("gallery", "diagnostics", "VisualPromptDiagnostics.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryVisualPromptDiagnostics));
+        Assert.Equal(Path.Combine("gallery", "comparison", "gallery-comparison.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryComparison));
+        Assert.Equal(Path.Combine("gallery", "asset-blueprint.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryAssetBlueprint));
+        Assert.Equal(Path.Combine("gallery", "asset-story.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryAssetStory));
+        Assert.Equal(Path.Combine("gallery", "composition-model.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryCompositionModel));
+        Assert.Equal(Path.Combine("gallery", "gallery-prompt.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryPrompt));
+        Assert.Equal(Path.Combine("gallery", "page01-hook.png"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryPage01Hook));
+        Assert.Equal(Path.Combine("gallery", "page05-memory.png"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryPage05Memory));
         Assert.Equal(Path.Combine("gallery", "GalleryArtifactManifest.json"), OutputArtifactRegistry.GetRelativePath(OutputArtifactName.GalleryArtifactManifest));
     }
 
