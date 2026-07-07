@@ -1,5 +1,9 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Core.VisualIntelligence;
 
@@ -74,14 +78,37 @@ public sealed record ShortStoryFrameCompositionModel
     public required IReadOnlyDictionary<int, string> FrameCompositions { get; init; }
 }
 
+
+public sealed record ShortStoryFrameComparisonReport
+{
+    public required int FrameCount { get; init; }
+    public required int GeneratedV4FrameCount { get; init; }
+    public required bool ProductionUnchanged { get; init; }
+    public required string AspectRatio { get; init; }
+    public required string Provider { get; init; }
+    public string Recommendation { get; init; } = "ManualReviewRequired";
+    public required IReadOnlyList<string> Warnings { get; init; }
+}
 public interface IShortStoryFramePlanner
 {
     ShortStoryFramePlan Plan(NarrativeTimeline timeline, ShortStoryFramePlatform platform = ShortStoryFramePlatform.YouTubeShorts);
     Task<(ShortStoryFramePlan Plan, ShortStoryFrameReview Review, ShortStoryFrameArtifactManifest Manifest)> WriteArtifactsAsync(NarrativeTimeline timeline, string outputFolder, ShortStoryFramePlatform platform = ShortStoryFramePlatform.YouTubeShorts, CancellationToken cancellationToken = default);
+    Task<ShortStoryFrameComparisonReport?> GenerateV4ComparisonAsync(NarrativeTimeline timeline, string outputFolder, ShortStoryFramePlatform platform = ShortStoryFramePlatform.YouTubeShorts, CancellationToken cancellationToken = default);
 }
 
 public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
 {
+    private readonly VisualIntelligenceOptions options;
+    private readonly IAICinematicImageGenerator? imageGenerator;
+    private readonly ILogger<ShortStoryFramePlanner> logger;
+
+    public ShortStoryFramePlanner(IOptions<VisualIntelligenceOptions>? options = null, IAICinematicImageGenerator? imageGenerator = null, ILogger<ShortStoryFramePlanner>? logger = null)
+    {
+        this.options = options?.Value ?? new VisualIntelligenceOptions();
+        this.imageGenerator = imageGenerator;
+        this.logger = logger ?? NullLogger<ShortStoryFramePlanner>.Instance;
+    }
+
     public const string Version = "4.7E";
     public const string PortraitAspectRatio = "9:16";
     private const string PromptProvider = "AzureOpenAIImage";
@@ -172,7 +199,71 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "ShortStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
+        await GenerateV4ComparisonAsync(timeline, outputFolder, platform, cancellationToken).ConfigureAwait(false);
         return (plan, review, manifest);
+    }
+
+
+    public async Task<ShortStoryFrameComparisonReport?> GenerateV4ComparisonAsync(NarrativeTimeline timeline, string outputFolder, ShortStoryFramePlatform platform = ShortStoryFramePlatform.YouTubeShorts, CancellationToken cancellationToken = default)
+    {
+        if (!options.UseStoryFrameV4Comparison) return null;
+
+        var plan = Plan(timeline, platform);
+        var comparison = Path.Combine(outputFolder, "short-story-frames", "comparison");
+        Directory.CreateDirectory(comparison);
+        var packages = BuildPromptPackages(plan);
+        var warnings = new List<string>();
+        var generated = 0;
+        logger.LogInformation("V4 story-frame comparison started");
+
+        foreach (var package in packages)
+        {
+            var path = Path.Combine(comparison, $"frame{package.FrameNumber:00}-{Slug(package.BeatRole)}-v4.png");
+            try
+            {
+                if (imageGenerator is null || !imageGenerator.IsConfigured)
+                    throw new InvalidOperationException("V4 story-frame comparison image generator is not configured.");
+                var result = await imageGenerator.GenerateAsync(new AICinematicAssetRequest(
+                    $"short-story-frame-v4-{package.FrameNumber:00}",
+                    plan.PlanId,
+                    "StoryFrameComparison",
+                    "V4Comparison",
+                    $"frame{package.FrameNumber:00}-{Slug(package.BeatRole)}-v4",
+                    "ExperimentalComparisonOnly",
+                    "Manual review",
+                    "Still",
+                    "V4 experimental story-frame comparison only",
+                    package.PositivePrompt,
+                    package.NegativePrompt + ", production replacement, video assembly change",
+                    1024,
+                    1792,
+                    path), cancellationToken).ConfigureAwait(false);
+                if (string.Equals(result.GenerationStatus, "Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(result.ImagePath ?? path))
+                    generated++;
+                else
+                    warnings.Add($"Frame {package.FrameNumber} did not produce a comparison image.");
+                logger.LogInformation("V4 frame generated. FrameNumber={FrameNumber} Path={Path}", package.FrameNumber, path);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Frame {package.FrameNumber} failed non-blocking: {ex.GetType().Name}");
+                logger.LogWarning(ex, "Non-blocking failure if any V4 frame fails. FrameNumber={FrameNumber}", package.FrameNumber);
+            }
+        }
+
+        logger.LogInformation("production scene assets unchanged");
+        var report = new ShortStoryFrameComparisonReport
+        {
+            FrameCount = plan.FrameCount,
+            GeneratedV4FrameCount = generated,
+            ProductionUnchanged = true,
+            AspectRatio = plan.AspectRatio,
+            Provider = PromptProvider,
+            Warnings = warnings
+        };
+        await File.WriteAllTextAsync(Path.Combine(comparison, "ShortStoryFrameComparison.json"), JsonSerializer.Serialize(report, VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true)), cancellationToken).ConfigureAwait(false);
+        logger.LogInformation("comparison completed");
+        return report;
     }
 
     private static object CreateFrameGenerationDiagnostics(ShortStoryFramePlan plan) => new
