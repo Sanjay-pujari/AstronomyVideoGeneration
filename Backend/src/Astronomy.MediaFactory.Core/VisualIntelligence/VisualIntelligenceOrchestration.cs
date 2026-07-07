@@ -36,6 +36,7 @@ public sealed record VisualIntelligenceFlagSnapshot
     public bool UseExperimentalRenderingRules { get; init; }
     public bool UseHeroPromptV4 { get; init; }
     public bool UseHeroImageV4Comparison { get; init; }
+    public bool UseStoryFrameV4Comparison { get; init; }
     public bool Enabled { get; init; }
     public bool WriteDiagnostics { get; init; }
     public bool ObservationMode { get; init; } = true;
@@ -53,6 +54,7 @@ public sealed record VisualIntelligenceFlagSnapshot
         UseExperimentalRenderingRules = options.UseExperimentalRenderingRules,
         UseHeroPromptV4 = options.UseHeroPromptV4,
         UseHeroImageV4Comparison = options.UseHeroImageV4Comparison,
+        UseStoryFrameV4Comparison = options.UseStoryFrameV4Comparison,
         Enabled = options.Enabled,
         WriteDiagnostics = options.WriteDiagnostics,
         ObservationMode = options.ObservationMode,
@@ -868,6 +870,7 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         if (!flags.UseExperimentalRenderingRules) disabled.Add(nameof(flags.UseExperimentalRenderingRules));
         if (!flags.UseHeroPromptV4) disabled.Add(nameof(flags.UseHeroPromptV4));
         if (!flags.UseHeroImageV4Comparison) disabled.Add(nameof(flags.UseHeroImageV4Comparison));
+        if (!flags.UseStoryFrameV4Comparison) disabled.Add(nameof(flags.UseStoryFrameV4Comparison));
         return disabled;
     }
 
