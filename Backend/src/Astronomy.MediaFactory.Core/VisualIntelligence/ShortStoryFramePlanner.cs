@@ -82,8 +82,9 @@ public interface IShortStoryFramePlanner
 
 public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
 {
-    public const string Version = "4.7D";
+    public const string Version = "4.7E";
     public const string PortraitAspectRatio = "9:16";
+    private const string PromptProvider = "AzureOpenAIImage";
 
     private static readonly NarrativeBeatRole[] RequiredShortBeatOrder =
     [
@@ -125,26 +126,32 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         var plan = Plan(timeline, platform);
         var root = Path.Combine(outputFolder, "short-story-frames");
         var diagnostics = Path.Combine(root, "diagnostics");
+        var framePrompts = Path.Combine(diagnostics, "frame-prompts");
         var comparison = Path.Combine(root, "comparison");
         Directory.CreateDirectory(diagnostics);
+        Directory.CreateDirectory(framePrompts);
         Directory.CreateDirectory(comparison);
 
         var review = BuildReview(plan);
         var compositionModel = BuildCompositionModel(plan);
+        var promptPackages = BuildPromptPackages(plan);
+        var promptReview = BuildPromptReview(plan, promptPackages);
         var manifest = new ShortStoryFrameArtifactManifest
         {
             PlanId = plan.PlanId,
             StoryId = plan.StoryId,
             TimelineId = plan.TimelineId,
             ArtifactRoot = root,
-            Directories = ["diagnostics/", "comparison/"],
-            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
+            Directories = ["diagnostics/", "diagnostics/frame-prompts/", "comparison/"],
+            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/ShortStoryFramePromptReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
             ComparisonArtifacts = ["comparison/"],
             Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["StoryFramePlan"] = "story-frame-plan.json",
                 ["CompositionModel"] = "composition-model.json",
                 ["FrameReview"] = "diagnostics/ShortStoryFrameReview.json",
+                ["FramePromptReview"] = "diagnostics/ShortStoryFramePromptReview.json",
+                ["FramePromptPackages"] = "diagnostics/frame-prompts/",
                 ["FrameGenerationDiagnostics"] = "diagnostics/FrameGenerationDiagnostics.json",
                 ["VisualPromptDiagnostics"] = "diagnostics/VisualPromptDiagnostics.json",
                 ["ComparisonArtifacts"] = "comparison/"
@@ -157,6 +164,9 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         var options = VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFramePlan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFrameReview.json"), JsonSerializer.Serialize(review, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "ShortStoryFramePromptReview.json"), JsonSerializer.Serialize(promptReview, options), cancellationToken);
+        foreach (var package in promptPackages)
+            await File.WriteAllTextAsync(Path.Combine(framePrompts, PromptFileName(package.FrameNumber, package.BeatRole)), JsonSerializer.Serialize(package, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "FrameGenerationDiagnostics.json"), JsonSerializer.Serialize(CreateFrameGenerationDiagnostics(plan), options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualPromptDiagnostics.json"), JsonSerializer.Serialize(CreateVisualPromptDiagnostics(plan), options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
@@ -180,8 +190,57 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         plan.PlanId,
         plan.TimelineId,
         PromptReplacementApplied = false,
-        VisualPromptsGenerated = false,
-        Status = "Artifact alignment only; story frame prompt generation remains unchanged."
+        VisualPromptsGenerated = true,
+        Status = "Story frame prompt packages generated for future comparison only; scene rendering prompts and Azure routing remain unchanged."
+    };
+
+    private static IReadOnlyList<StoryFramePromptPackage> BuildPromptPackages(ShortStoryFramePlan plan) =>
+        plan.FrameDefinitions.Select(frame => new StoryFramePromptPackage
+        {
+            PackageId = $"{plan.PlanId}_frame{frame.FrameNumber:00}_{frame.BeatRole}_prompt".ToLowerInvariant(),
+            PlanId = plan.PlanId,
+            FramePlanId = $"{plan.PlanId}_frame{frame.FrameNumber:00}",
+            FrameNumber = frame.FrameNumber,
+            BeatRole = frame.BeatRole,
+            AspectRatio = plan.AspectRatio,
+            Platform = plan.Platform.ToString(),
+            Provider = PromptProvider,
+            VisualTreatment = frame.RecommendedVisualTreatment,
+            SafeAreaInstructions = "Reserve deterministic overlay safe space in the top band, bottom action band, and right-side platform-control margin; keep astronomy subjects in a strong central vertical hierarchy.",
+            TypographyInstructions = "Do not generate embedded text, captions, labels, letters, numbers, logos, UI, watermarks, or title cards inside the image.",
+            PositivePrompt = $"Native 9:16 portrait astronomy documentary frame for short-form viewing. Fast visual comprehension with strong vertical hierarchy. {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. Compose with deterministic overlay safe space in the top band, bottom action band, and right-side margin. No generated embedded text.",
+            NegativePrompt = "text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, fantasy planets, distorted constellations, landscape layout",
+            Diagnostics = new Dictionary<string, object>
+            {
+                ["azureCallsMade"] = false,
+                ["imageGenerationRequested"] = false,
+                ["scenePromptReplacementApplied"] = false,
+                ["noCroppingLanguage"] = true,
+                ["embeddedTextProhibited"] = true
+            },
+            Versions = new Dictionary<string, string>(plan.Versions) { ["storyFramePromptPackages"] = Version }
+        }).ToArray();
+
+    private static StoryFramePromptReview BuildPromptReview(ShortStoryFramePlan plan, IReadOnlyList<StoryFramePromptPackage> packages) => new()
+    {
+        PlanId = plan.PlanId,
+        PromptCount = packages.Count,
+        AspectRatio = plan.AspectRatio,
+        Provider = PromptProvider,
+        NoCroppingConfirmed = packages.All(package => !ContainsCroppingLanguage(package.PositivePrompt) && !ContainsCroppingLanguage(package.NegativePrompt)),
+        EmbeddedTextProhibited = packages.All(package => package.TypographyInstructions.Contains("Do not generate embedded text", StringComparison.OrdinalIgnoreCase) && package.PositivePrompt.Contains("No generated embedded text", StringComparison.OrdinalIgnoreCase)),
+        BeatCoverage = packages.Select(package => package.BeatRole.ToString()).ToArray(),
+        Warnings = []
+    };
+
+    private static bool ContainsCroppingLanguage(string value) => value.Contains("crop", StringComparison.OrdinalIgnoreCase);
+
+    private static string PromptFileName(int frameNumber, NarrativeBeatRole beatRole) => $"frame{frameNumber:00}-{Slug(beatRole)}-prompt.json";
+
+    private static string Slug(NarrativeBeatRole beatRole) => beatRole switch
+    {
+        NarrativeBeatRole.CallToAction => "call-to-action",
+        _ => beatRole.ToString().ToLowerInvariant()
     };
 
     private static ShortStoryFrameCompositionModel BuildCompositionModel(ShortStoryFramePlan plan) => new()
