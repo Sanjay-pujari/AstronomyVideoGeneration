@@ -223,7 +223,7 @@ public static class OutputArtifactRegistry
                     ? Path.Combine(outputRoot, "gallery", "diagnostics", "EditorialProductReview.json")
                     : GetPath(outputRoot, name),
                 StringComparer.OrdinalIgnoreCase);
-        return new GalleryArtifactManifest("4.5E", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
+        return new GalleryArtifactManifest("4.6A", options.Mode.ToString(), artifacts.Keys.ToArray(), artifacts);
     }
 
     public static string GetManifestPath(string outputRoot) => GetPath(outputRoot, OutputArtifactName.HeroArtifactManifest);
@@ -273,7 +273,7 @@ public sealed record HeroArtifactManifest(string Version, string OutputArtifactM
 
 public sealed record GalleryArtifactManifest(string Version, string OutputArtifactMode, IReadOnlyList<string> ExpectedArtifacts, IReadOnlyDictionary<string, string> Artifacts)
 {
-    public static GalleryArtifactManifest Empty { get; } = new("4.5E", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    public static GalleryArtifactManifest Empty { get; } = new("4.6A", string.Empty, Array.Empty<string>(), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 }
 
 public enum OutputArtifactMode { Production = 0, Development = 1, CI = 2, Debug = 3 }

@@ -15,6 +15,9 @@ public sealed record GalleryIntelligenceContract : EditorialProductContract
     [JsonIgnore]
     public GalleryNarrativeFlow? NarrativeFlow => EditorialSequence.NarrativeFlow;
     public required IReadOnlyList<string> LearningObjectives { get; init; }
+    public required IReadOnlyList<string> EditorialRoles { get; init; }
+    public required IReadOnlyList<string> ViewerJourney { get; init; }
+    public required IReadOnlyList<string> StoryQuestions { get; init; }
     public required IReadOnlyList<EditorialPage> PageDefinitions { get; init; }
     [JsonIgnore]
     public string RecommendedPlatform => PlatformRecommendations.TryGetValue("gallery", out var platform) ? platform : string.Empty;
@@ -331,13 +334,15 @@ public sealed record GalleryEducationalStorytellingReview
 {
     public required string GalleryId { get; init; }
     public required string Version { get; init; }
+    public required IReadOnlyList<string> PageRoles { get; init; }
     public required IReadOnlyList<string> EditorialRoles { get; init; }
     public required IReadOnlyList<string> ViewerQuestions { get; init; }
-    public required IReadOnlyList<string> KnowledgeProgression { get; init; }
+    public required IReadOnlyList<string> KnowledgeTransfer { get; init; }
+    public required IReadOnlyList<string> StoryProgression { get; init; }
     public required IReadOnlyList<string> LearningContinuity { get; init; }
     public required IReadOnlyList<string> MemoryReinforcement { get; init; }
     public required IReadOnlyDictionary<string, string> StoryQuality { get; init; }
-    public required IReadOnlyList<string> Recommendations { get; init; }
+    public required IReadOnlyList<string> CreativeRecommendations { get; init; }
     public required bool GeneratesPrompts { get; init; }
     public required bool ChangesProductionGallery { get; init; }
 }
@@ -387,9 +392,11 @@ public sealed class GalleryEducationalStorytellingDirector
         {
             GalleryId = contract.GalleryId,
             Version = GalleryIntelligenceAlignmentEngine.Version,
+            PageRoles = pages.Select(page => page.PageRole).ToArray(),
             EditorialRoles = pages.Select(page => page.PageRole).ToArray(),
             ViewerQuestions = pages.Select(page => page.ViewerQuestion).ToArray(),
-            KnowledgeProgression = pages.Select(page => $"{page.PageRole}: {page.KeyLearning}").ToArray(),
+            KnowledgeTransfer = pages.Select(page => $"{page.PageRole}: {page.KeyLearning}").ToArray(),
+            StoryProgression = pages.Select(page => $"Page {page.PageNumber} {page.PageRole} answers: {page.ViewerQuestion}").ToArray(),
             LearningContinuity = pages.Zip(pages.Skip(1), (a, b) => $"{a.PageRole} → {b.PageRole}: {Bridge(a.PageRole, b.PageRole)}").ToArray(),
             MemoryReinforcement = [pages.LastOrDefault()?.KeyLearning ?? contract.ViewerTakeaway, contract.ViewerTakeaway],
             StoryQuality = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -399,7 +406,7 @@ public sealed class GalleryEducationalStorytellingDirector
                 ["curiosityProgression"] = "The sequence answers what happened, what is visible, why it happened, how to observe it, and why to remember it.",
                 ["productionSafety"] = "Creative diagnostics only; no production Gallery changes."
             },
-            Recommendations = ["Keep page text focused on exactly one concept.", "Avoid repeating the same learning on adjacent pages.", "Use the Memory page to compress the event into a durable takeaway."],
+            CreativeRecommendations = ["Keep page text focused on exactly one concept.", "Avoid repeating the same learning on adjacent pages.", "Use the Memory page to compress the event into a durable takeaway."],
             GeneratesPrompts = false,
             ChangesProductionGallery = false
         };
@@ -415,7 +422,7 @@ public sealed class GalleryEducationalStorytellingDirector
         QualityDimensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["editorialRoleOrdering"] = "Hook → Recognition → Explanation → Observation → Memory",
-            ["viewerQuestionProgression"] = "What am I seeing? → Which objects are these? → Why is this happening? → How do I observe it? → What should I remember?",
+            ["viewerQuestionProgression"] = "What am I looking at? → Which celestial objects are these? → Why does this happen? → How can I observe it? → What should I remember?",
             ["knowledgeTransfer"] = "Single concept per page with no repeated concepts.",
             ["memoryReinforcement"] = "Final page leaves one durable takeaway."
         },
@@ -425,8 +432,8 @@ public sealed class GalleryEducationalStorytellingDirector
     private static string Bridge(string from, string to) => $"{from} prepares the viewer for {to} without adding a second concept.";
     private static bool ContainsAny(string value, params string[] terms) => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static IReadOnlyList<string> BuildLearningObjectives(VisualStory story, EditorialStrategy strategy) => [$"Answer: {story.ViewerQuestion}", $"Explain: {strategy.RecommendedScienceEmphasis}", $"Observe: {strategy.RecommendedObservationEmphasis}", $"Remember: {story.ViewerTakeaway}"];
-    private static IReadOnlyList<EditorialPage> BuildPlanetPairingPages(VisualStory story, EditorialStrategy strategy, double confidence) => [GalleryIntelligenceAlignmentEngine.Page(1, "Hook", "Generate curiosity.", "What am I seeing?", "Two bright planets appear unusually close.", "The apparent gap between the two bright planets.", "Very Low", "Wide sky view with both planets sharing negative space.", ["Visual first.", "Do not explain everything on page 1."], confidence), GalleryIntelligenceAlignmentEngine.Page(2, "Recognition", "Identify the important objects.", "Which objects are these?", "Identify Jupiter and Venus as the important visible objects.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple."], confidence), GalleryIntelligenceAlignmentEngine.Page(3, "Explanation", "Explain the science.", "Why is this happening?", "Conjunctions occur when planets line up from our viewpoint on Earth.", "Earth-view geometry and apparent alignment.", "Medium", "Relationship-first composition that supports a simple cause-and-effect explanation.", [strategy.RecommendedScienceEmphasis], confidence), GalleryIntelligenceAlignmentEngine.Page(4, "Observation", "Teach practical viewing.", "How do I observe it?", "Observe from the recommended local direction and time window.", "Horizon, direction, and viewing window.", "Medium", "Observation-guide layout with clear sky context.", [strategy.RecommendedObservationEmphasis], confidence), GalleryIntelligenceAlignmentEngine.Page(5, "Memory", "Leave one memorable takeaway.", "What should I remember?", "Planet pairings are viewpoint events: the planets look close even while separated by vast distances.", "A memorable final view of the planetary pair.", "Low", "Clean closing frame with the pair and generous negative space.", [story.ViewerTakeaway], confidence)];
-    private static IReadOnlyList<EditorialPage> BuildDefaultPages(VisualStory story, EditorialStrategy strategy, double confidence) => [GalleryIntelligenceAlignmentEngine.Page(1, "Hook", "Generate curiosity.", "What am I seeing?", story.PrimaryStory, story.PrimaryVisualSubject, "Very Low", story.RecommendedComposition, ["Hook first; explanation later."], confidence), GalleryIntelligenceAlignmentEngine.Page(2, "Recognition", "Identify the important objects.", "Which objects are these?", story.PrimaryVisualSubject, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence), GalleryIntelligenceAlignmentEngine.Page(3, "Explanation", "Explain the science.", "Why is this happening?", strategy.RecommendedScienceEmphasis, story.VisualRelationship, "Medium", story.RecommendedComposition, ["Teach one idea on this page."], confidence), GalleryIntelligenceAlignmentEngine.Page(4, "Observation", "Teach practical viewing.", "How do I observe it?", strategy.RecommendedObservationEmphasis, story.EnvironmentRecommendation, "Medium", story.RecommendedComposition, ["Favor practical observing clarity."], confidence), GalleryIntelligenceAlignmentEngine.Page(5, "Memory", "Leave one memorable takeaway.", "What should I remember?", story.ViewerTakeaway, story.PrimaryVisualSubject, "Low", story.RecommendedComposition, ["Close with a memorable learning outcome."], confidence)];
+    private static IReadOnlyList<EditorialPage> BuildPlanetPairingPages(VisualStory story, EditorialStrategy strategy, double confidence) => [GalleryIntelligenceAlignmentEngine.Page(1, "Hook", "Generate curiosity.", "What am I looking at?", "Two bright planets appear unusually close.", "The apparent gap between the two bright planets.", "Very Low", "Wide sky view with both planets sharing negative space.", ["Visual first.", "Do not explain everything on page 1."], confidence), GalleryIntelligenceAlignmentEngine.Page(2, "Recognition", "Identify the important objects.", "Which celestial objects are these?", "Identify Jupiter and Venus as the important visible objects.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple."], confidence), GalleryIntelligenceAlignmentEngine.Page(3, "Explanation", "Explain the science.", "Why does this happen?", "Conjunctions occur when planets line up from our viewpoint on Earth.", "Earth-view geometry and apparent alignment.", "Medium", "Relationship-first composition that supports a simple cause-and-effect explanation.", [strategy.RecommendedScienceEmphasis], confidence), GalleryIntelligenceAlignmentEngine.Page(4, "Observation", "Teach practical viewing.", "How can I observe it?", "Observe from the recommended local direction and time window.", "Horizon, direction, and viewing window.", "Medium", "Observation-guide layout with clear sky context.", [strategy.RecommendedObservationEmphasis], confidence), GalleryIntelligenceAlignmentEngine.Page(5, "Memory", "Leave one memorable takeaway.", "What should I remember?", "Planet pairings are viewpoint events: the planets look close even while separated by vast distances.", "A memorable final view of the planetary pair.", "Low", "Clean closing frame with the pair and generous negative space.", [story.ViewerTakeaway], confidence)];
+    private static IReadOnlyList<EditorialPage> BuildDefaultPages(VisualStory story, EditorialStrategy strategy, double confidence) => [GalleryIntelligenceAlignmentEngine.Page(1, "Hook", "Generate curiosity.", "What am I looking at?", story.PrimaryStory, story.PrimaryVisualSubject, "Very Low", story.RecommendedComposition, ["Hook first; explanation later."], confidence), GalleryIntelligenceAlignmentEngine.Page(2, "Recognition", "Identify the important objects.", "Which celestial objects are these?", story.PrimaryVisualSubject, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence), GalleryIntelligenceAlignmentEngine.Page(3, "Explanation", "Explain the science.", "Why does this happen?", strategy.RecommendedScienceEmphasis, story.VisualRelationship, "Medium", story.RecommendedComposition, ["Teach one idea on this page."], confidence), GalleryIntelligenceAlignmentEngine.Page(4, "Observation", "Teach practical viewing.", "How can I observe it?", strategy.RecommendedObservationEmphasis, story.EnvironmentRecommendation, "Medium", story.RecommendedComposition, ["Favor practical observing clarity."], confidence), GalleryIntelligenceAlignmentEngine.Page(5, "Memory", "Leave one memorable takeaway.", "What should I remember?", story.ViewerTakeaway, story.PrimaryVisualSubject, "Low", story.RecommendedComposition, ["Close with a memorable learning outcome."], confidence)];
 }
 
 public interface IGalleryIntelligenceAlignmentEngine
@@ -468,6 +475,9 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
             ViewerEmotion = galleryStrategy.ViewerEmotion,
             EditorialSequence = sequence,
             LearningObjectives = sequence.LearningObjectives,
+            EditorialRoles = sequence.PageDefinitions.Select(page => page.PageRole).ToArray(),
+            ViewerJourney = sequence.ViewerJourney,
+            StoryQuestions = sequence.PageDefinitions.Select(page => page.ViewerQuestion).ToArray(),
             PageDefinitions = sequence.PageDefinitions,
             DocumentaryTone = story.DocumentaryTone,
             RecommendedComposition = galleryComposition.RecommendedHierarchy,
@@ -545,19 +555,19 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
 
     private static IReadOnlyList<EditorialPage> BuildPlanetPairingPages(VisualStory story, EditorialStrategy strategy, double confidence) =>
     [
-        Page(1, "Hook", "Create curiosity with the unusual closeness of two bright planets.", "What am I seeing?", "Two bright planets appear unusually close.", "The apparent gap between the two bright planets.", "Very Low", "Wide sky view with both planets sharing negative space.", ["Visual first.", "Do not explain everything on page 1.", "Use the closeness as the narrative hook."], confidence),
-        Page(2, "Recognition", "Identify the objects so the viewer knows what they are seeing.", "Which objects are these?", "Identify Jupiter and Venus.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple.", "Avoid making either planet dominate the story."], confidence),
-        Page(3, "Explanation", "Explain the astronomy behind the apparent pairing.", "Why is this happening?", "Conjunctions occur when planets line up from our viewpoint on Earth.", "Earth-view geometry and apparent alignment.", "Medium", "Relationship-first composition that supports a simple cause-and-effect explanation.", [strategy.RecommendedScienceEmphasis, "Explain apparent closeness without replacing prompts."], confidence),
-        Page(4, "Observation", "Turn the learning into practical viewing guidance.", "How do I observe it?", "Observe from the recommended local direction and time window.", "Horizon, direction, and viewing window.", "Medium", "Observation-guide layout with clear sky context and room for existing overlay systems.", ["Practical guidance.", strategy.RecommendedObservationEmphasis, "Diagnostics only; no production overlay changes."], confidence),
+        Page(1, "Hook", "Create curiosity with the unusual closeness of two bright planets.", "What am I looking at?", "Two bright planets appear unusually close.", "The apparent gap between the two bright planets.", "Very Low", "Wide sky view with both planets sharing negative space.", ["Visual first.", "Do not explain everything on page 1.", "Use the closeness as the narrative hook."], confidence),
+        Page(2, "Recognition", "Identify the objects so the viewer knows what they are seeing.", "Which celestial objects are these?", "Identify Jupiter and Venus.", "Jupiter and Venus as distinct bright points.", "Low", "Balanced pairing with subtle identity emphasis for both planets.", ["Keep object identification simple.", "Avoid making either planet dominate the story."], confidence),
+        Page(3, "Explanation", "Explain the astronomy behind the apparent pairing.", "Why does this happen?", "Conjunctions occur when planets line up from our viewpoint on Earth.", "Earth-view geometry and apparent alignment.", "Medium", "Relationship-first composition that supports a simple cause-and-effect explanation.", [strategy.RecommendedScienceEmphasis, "Explain apparent closeness without replacing prompts."], confidence),
+        Page(4, "Observation", "Turn the learning into practical viewing guidance.", "How can I observe it?", "Observe from the recommended local direction and time window.", "Horizon, direction, and viewing window.", "Medium", "Observation-guide layout with clear sky context and room for existing overlay systems.", ["Practical guidance.", strategy.RecommendedObservationEmphasis, "Diagnostics only; no production overlay changes."], confidence),
         Page(5, "Memory", "Close with a memorable reminder that reinforces the learning.", "What should I remember?", "Planet pairings are viewpoint events: the planets look close even while separated by vast distances.", "A memorable final view of the planetary pair.", "Low", "Clean closing frame with the pair and generous negative space.", ["Memorable ending.", story.ViewerTakeaway, "End with an interesting fact or reminder."], confidence)
     ];
 
     private static IReadOnlyList<EditorialPage> BuildDefaultPages(VisualStory story, EditorialStrategy strategy, double confidence) =>
     [
-        Page(1, "Hook", "Open with the viewer question and visual reason to continue learning.", "What am I seeing?", story.PrimaryStory, story.PrimaryVisualSubject, "Very Low", story.RecommendedComposition, ["Visual first.", "Hook first; explanation later."], confidence),
-        Page(2, "Recognition", "Name what the viewer is seeing without inventing a new story.", "Which objects are these?", story.PrimaryStory, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence),
-        Page(3, "Explanation", "Explain the visual relationship from the shared Visual Story Model.", "Why is this happening?", strategy.RecommendedScienceEmphasis, story.VisualRelationship, "Medium", story.RecommendedComposition, ["Balanced visual + information.", "Teach one idea on this page."], confidence),
-        Page(4, "Observation", "Translate the story into observation guidance.", "How do I observe it?", strategy.RecommendedObservationEmphasis, story.EnvironmentRecommendation, "Medium", story.RecommendedComposition, ["Practical guidance.", "Favor practical observing clarity."], confidence),
+        Page(1, "Hook", "Open with the viewer question and visual reason to continue learning.", "What am I looking at?", story.PrimaryStory, story.PrimaryVisualSubject, "Very Low", story.RecommendedComposition, ["Visual first.", "Hook first; explanation later."], confidence),
+        Page(2, "Recognition", "Name what the viewer is seeing without inventing a new story.", "Which celestial objects are these?", story.PrimaryStory, story.RecommendedViewerFocus, "Low", story.RecommendedComposition, ["Use source story only."], confidence),
+        Page(3, "Explanation", "Explain the visual relationship from the shared Visual Story Model.", "Why does this happen?", strategy.RecommendedScienceEmphasis, story.VisualRelationship, "Medium", story.RecommendedComposition, ["Balanced visual + information.", "Teach one idea on this page."], confidence),
+        Page(4, "Observation", "Translate the story into observation guidance.", "How can I observe it?", strategy.RecommendedObservationEmphasis, story.EnvironmentRecommendation, "Medium", story.RecommendedComposition, ["Practical guidance.", "Favor practical observing clarity."], confidence),
         Page(5, "Memory", "End with the learning result the viewer should remember.", "What should I remember?", story.ViewerTakeaway, story.PrimaryVisualSubject, "Low", story.RecommendedComposition, ["Memorable ending.", "Close with a memorable learning outcome."], confidence)
     ];
 
