@@ -711,8 +711,15 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
             relationshipScore = review.RelationshipScore,
             visualBalanceScore = review.VisualBalanceScore,
             documentaryScore = review.DocumentaryScore,
+            relationshipClarity = review.RelationshipClarity,
+            visualBalance = review.VisualBalance,
+            storyCommunication = review.StoryCommunication,
+            documentaryAuthenticity = review.DocumentaryAuthenticity,
+            scientificPlausibility = review.ScientificPlausibility,
             planetProminenceAssessment = review.PlanetProminenceAssessment,
             compositionRecommendation = review.CompositionRecommendation,
+            creativeRecommendations = review.CreativeRecommendations,
+            benchmarkPreparation = review.BenchmarkPreparation,
             creativeNotes = review.CreativeNotes
         };
     }

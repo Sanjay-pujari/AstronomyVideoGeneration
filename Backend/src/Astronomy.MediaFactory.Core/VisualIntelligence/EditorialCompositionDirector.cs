@@ -15,12 +15,19 @@ public sealed record HeroCompositionTemplate
 
 public sealed record PlanetRelationshipReview
 {
-    public string ReviewVersion { get; init; } = "4.4B.1";
+    public string ReviewVersion { get; init; } = "4.4C.1";
     public required double RelationshipScore { get; init; }
     public required double VisualBalanceScore { get; init; }
     public required double DocumentaryScore { get; init; }
+    public required string RelationshipClarity { get; init; }
+    public required string VisualBalance { get; init; }
+    public required string StoryCommunication { get; init; }
+    public required string DocumentaryAuthenticity { get; init; }
+    public required string ScientificPlausibility { get; init; }
     public required string PlanetProminenceAssessment { get; init; }
     public required string CompositionRecommendation { get; init; }
+    public IReadOnlyList<string> CreativeRecommendations { get; init; } = [];
+    public IReadOnlyList<string> BenchmarkPreparation { get; init; } = [];
     public IReadOnlyList<string> CreativeNotes { get; init; } = [];
 }
 
@@ -58,7 +65,7 @@ public sealed class PlanetRelationshipDirector : IPlanetRelationshipDirector
         var subjects = Normalize(profile.PrimaryObjects.Concat(profile.SupportingObjects));
         if (profile.EventFamily is not (ContractEventFamily.PlanetConjunction or ContractEventFamily.PlanetOpposition) || subjects.Count is < 2 or > 2) return null;
         var pair = string.Join(" + ", subjects);
-        var prominence = $"Balanced relationship-first prominence for {pair}; recommend relative prominence through brightness, clean separation, and placement rather than absolute planet dominance.";
+        var prominence = $"Visual partnership for {pair}; the conjunction itself is the primary subject, with relative prominence expressed through balanced brightness, natural separation, shared center, and coordinated lighting rather than absolute planet dominance.";
         var composition = template.Name switch
         {
             "PlanetPairing_Twilight" => "Use twilight atmosphere with horizontal or gentle diagonal balance, a subtle low horizon only if it clarifies observation, and generous negative space.",
@@ -67,19 +74,40 @@ public sealed class PlanetRelationshipDirector : IPlanetRelationshipDirector
         };
         var notes = new List<string>
         {
-            "Primary story: relationship; two bright planets appear unusually close together.",
-            "Target balanced prominence; avoid a dominant giant planet with a tiny secondary.",
-            "Maintain astronomical plausibility with calm premium documentary realism.",
-            "Avoid generic AI poster styling, fantasy colors, and artificial glow."
+            "Primary story: relationship; two bright planets appear unusually close together before either planet reads as the hero.",
+            "Target balanced prominence and visual partnership; avoid a huge primary with a tiny forgotten secondary.",
+            "Use natural separation, shared visual center, coordinated lighting, and shared atmosphere to make the close approach readable.",
+            "Maintain astronomical plausibility with calm premium documentary realism, twilight atmosphere, and subtle horizon context only when useful.",
+            "Avoid generic AI poster styling, fantasy backgrounds, artificial nebulae, dramatic color explosions, and fake connecting glow."
         };
         if (knowledge is not null) notes.Add($"Knowledge guidance: {knowledge.CompositionStrategy}");
         return new PlanetRelationshipReview
         {
-            RelationshipScore = .96,
-            VisualBalanceScore = .94,
-            DocumentaryScore = .93,
+            RelationshipScore = .97,
+            VisualBalanceScore = .95,
+            DocumentaryScore = .94,
+            RelationshipClarity = "Relationship > Balance > Wonder > Scale: the viewer should immediately read that the two planets appear unusually close together.",
+            VisualBalance = "Prefer balanced pairing, natural separation, shared visual center, coordinated lighting, and shared atmosphere; avoid huge-primary/tiny-secondary hierarchy.",
+            StoryCommunication = "The conjunction is the hero and the individual planets support that story rather than competing as isolated poster objects.",
+            DocumentaryAuthenticity = "Favor twilight, natural atmosphere, observational realism, premium astrophotography restraint, and a subtle horizon only when it improves observability.",
+            ScientificPlausibility = "Show an apparent line-of-sight conjunction with plausible round planetary disks, restrained brightness differences, no fake physical contact, and no artificial nebula spectacle.",
             PlanetProminenceAssessment = prominence,
             CompositionRecommendation = composition,
+            CreativeRecommendations =
+            [
+                "Lead with the apparent closeness of the pair before individual planetary scale.",
+                "Compose the planets as visual partners around a shared center of attention.",
+                "Keep both objects emotionally present even when one is naturally brighter or larger.",
+                "Use documentary twilight or clean sky realism instead of fantasy-space decoration."
+            ],
+            BenchmarkPreparation =
+            [
+                "scenario=bright-planet-conjunction",
+                "compareRelationshipClarity=true",
+                "compareBalancedProminence=true",
+                "compareDocumentaryAuthenticity=true",
+                "runnerStatus=metadata-only"
+            ],
             CreativeNotes = notes
         };
     }
@@ -150,9 +178,9 @@ public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
         return new EditorialCompositionDecision
         {
             Template = template,
-            VisualBalance = knowledge?.VisualBalance ?? (isPairing ? "Balanced visual prominence for the planet relationship; avoid one dominant planet with a tiny secondary point." : "Single clear astronomy subject with supporting context held back."),
+            VisualBalance = knowledge?.VisualBalance ?? (isPairing ? "Balanced visual partnership for the conjunction; avoid huge primary/tiny secondary staging and make the apparent closeness the subject." : "Single clear astronomy subject with supporting context held back."),
             StorytellingEmphasis = knowledge is not null && isPairing ? $"{knowledge.StoryGoal} Relationship: {relationship}." : knowledge?.StoryGoal ?? (isPairing ? $"The conjunction is the hero: {relationship} should feel visually connected as one observable sky moment." : profile.Intent),
-            VisualHierarchy = "Story first, then relationship, then beauty, then scale.",
+            VisualHierarchy = isPairing ? "Relationship first, then balance, then wonder, then scale." : "Story first, then relationship, then beauty, then scale.",
             DocumentaryComposition = knowledge is null ? contextChoice : $"{contextChoice} {knowledge.DocumentaryGuidance}",
             EnvironmentalContext = contextChoice,
             RelationshipScore = relationshipReview?.RelationshipScore ?? (isPairing ? .94 : .78),
@@ -160,10 +188,10 @@ public sealed class EditorialCompositionDirector : IEditorialCompositionDirector
             AstronomyScore = isPairing ? .92 : .88,
             VisualHierarchyScore = relationshipReview?.VisualBalanceScore ?? .93,
             StorytellingNotes = knowledge?.EditorialNotes ?? (isPairing
-                ? ["Treat the conjunction itself as the hero, not Jupiter alone.", "Planets should feel paired through placement, brightness, and separation.", "Preserve circular planetary geometry and plausible relative appearance."]
+                ? ["Treat the conjunction itself as the hero, not Jupiter alone.", "Planets should feel paired through placement, brightness, natural separation, shared center, coordinated lighting, and shared atmosphere.", "Preserve circular planetary geometry and plausible relative appearance."]
                 : ["Use documentary context only when it clarifies the observable event."]),
             Recommendations = knowledge?.AvoidPatterns.Select(p => $"Avoid {p}.").ToList() ?? (isPairing
-                ? ["Target balanced prominence between Jupiter and Venus when both are present.", "Keep foreground silhouettes optional and minimal.", "Avoid clutter, fake glow, stretched planets, and technical prompt language."]
+                ? ["Target balanced visual partnership between Jupiter and Venus when both are present.", "Keep foreground silhouettes optional and minimal; prefer twilight realism and a subtle horizon only when useful.", "Avoid clutter, fake glow, stretched planets, tiny secondary objects, artificial nebulae, fantasy backgrounds, and technical prompt language."]
                 : ["Keep the composition editorial and uncluttered."]),
             PlanetRelationshipReview = relationshipReview
         };
