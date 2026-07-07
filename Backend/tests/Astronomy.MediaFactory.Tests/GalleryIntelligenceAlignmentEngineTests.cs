@@ -25,7 +25,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Equal(story.PrimaryStory, contract.PrimaryStory);
         Assert.Equal("Teach visually.", contract.EditorialSequence.Objective);
         Assert.Equal(5, contract.EditorialSequence.Steps.Count);
-        Assert.Equal("4.5B", contract.Versions["galleryIntelligenceAlignment"]);
+        Assert.Equal("4.5C", contract.Versions["galleryIntelligenceAlignment"]);
     }
 
     [Fact]
@@ -46,6 +46,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.True(File.Exists(Path.Combine(folder, "GalleryIntelligenceContract.json")));
         Assert.True(File.Exists(Path.Combine(folder, "GalleryEditorialSequence.json")));
         Assert.True(File.Exists(Path.Combine(folder, "GalleryReview.json")));
+        Assert.True(File.Exists(Path.Combine(folder, "GalleryInformationDensityReview.json")));
     }
 
     [Fact]
@@ -87,6 +88,44 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
     }
 
     [Fact]
+    public void InformationDensityDirector_Defines_Natural_Density_Progression()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+
+        var sequence = engine.Create(story, composition, strategy).EditorialSequence;
+
+        Assert.Equal(["Hook", "Discovery", "Explanation", "Observation", "Takeaway"], sequence.InformationDensity.Select(page => page.PageRole).ToArray());
+        Assert.Equal(["Very Low", "Low", "Medium", "Medium", "Low"], sequence.InformationDensity.Select(page => page.PageDensity).ToArray());
+        Assert.Equal("Very High", sequence.InformationDensity[0].VisualWeight);
+        Assert.Equal("Balanced visual + information.", sequence.InformationDensity[2].EducationalGuidance);
+        Assert.Equal("Practical guidance.", sequence.InformationDensity[3].EducationalGuidance);
+        Assert.Equal("Memorable ending.", sequence.InformationDensity[4].EducationalGuidance);
+    }
+
+    [Fact]
+    public async Task InformationDensityDiagnostics_Include_Required_Review_Sections()
+    {
+        var story = TestStory();
+        var composition = compositionEngine.Compose(story);
+        var strategy = strategyEngine.Create(story, composition);
+        var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"));
+
+        await engine.WriteDiagnosticsAsync(story, composition, strategy, folder);
+
+        var json = await File.ReadAllTextAsync(Path.Combine(folder, "GalleryInformationDensityReview.json"));
+        Assert.Contains("\"pageDensity\"", json);
+        Assert.Contains("\"visualWeight\"", json);
+        Assert.Contains("\"textWeight\"", json);
+        Assert.Contains("\"learningComplexity\"", json);
+        Assert.Contains("\"viewerLoad\"", json);
+        Assert.Contains("\"recommendations\"", json);
+        Assert.Contains("\"generatesPrompts\": false", json);
+        Assert.Contains("\"changesProductionRouting\": false", json);
+    }
+
+    [Fact]
     public void EditorialSequence_PlanetPairing_Uses_Astronomy_Teaching_Sequence()
     {
         var story = TestStory();
@@ -119,6 +158,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains("\"viewerJourney\"", json);
         Assert.Contains("\"storyProgression\"", json);
         Assert.Contains("\"editorialRecommendations\"", json);
+        Assert.Contains("\"informationDensity\"", json);
     }
 
     [Fact]
@@ -131,6 +171,7 @@ public sealed class GalleryIntelligenceAlignmentEngineTests
         Assert.Contains(OutputArtifactName.GalleryIntelligenceContract.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryEditorialSequence.ToString(), manifest.ExpectedArtifacts);
         Assert.Contains(OutputArtifactName.GalleryReview.ToString(), manifest.ExpectedArtifacts);
+        Assert.Contains(OutputArtifactName.GalleryInformationDensityReview.ToString(), manifest.ExpectedArtifacts);
         Assert.Equal(OutputArtifactRegistry.GetPath(root, OutputArtifactName.GalleryIntelligenceContract), manifest.Artifacts[OutputArtifactName.GalleryIntelligenceContract.ToString()]);
     }
 
