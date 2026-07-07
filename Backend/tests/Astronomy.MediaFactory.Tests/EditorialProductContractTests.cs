@@ -30,6 +30,24 @@ public sealed class EditorialProductContractTests
         Assert.False(review.InheritanceValidation.ChangesPrompts);
         Assert.False(review.InheritanceValidation.ChangesAzure);
         Assert.False(review.InheritanceValidation.ChangesProductionRouting);
+        Assert.True(review.InheritanceValidation.HeroAddsOnlySpecializationFields);
+        Assert.True(review.InheritanceValidation.GalleryAddsOnlySpecializationFields);
+    }
+
+    [Fact]
+    public void EditorialProductReview_Serializes_Contract_Terms()
+    {
+        var json = JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), VisualIntelligenceJson.CreateSerializerOptions());
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.True(root.TryGetProperty("sharedContractFields", out _));
+        Assert.True(root.TryGetProperty("heroSpecialization", out _));
+        Assert.True(root.TryGetProperty("gallerySpecialization", out _));
+        Assert.True(root.TryGetProperty("inheritanceValidation", out _));
+        Assert.True(root.TryGetProperty("sharedCreativeSources", out _));
+        Assert.True(root.TryGetProperty("recommendations", out _));
     }
 
     [Fact]

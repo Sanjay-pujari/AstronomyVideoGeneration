@@ -39,8 +39,11 @@ public abstract record EditorialProductContract
 
 public sealed record EditorialProductReview
 {
+    [JsonPropertyName("sharedContractFields")]
     public required IReadOnlyList<string> SharedFields { get; init; }
+    [JsonPropertyName("heroSpecialization")]
     public required IReadOnlyList<string> HeroSpecificFields { get; init; }
+    [JsonPropertyName("gallerySpecialization")]
     public required IReadOnlyList<string> GallerySpecificFields { get; init; }
     public required EditorialProductInheritanceValidation InheritanceValidation { get; init; }
     public required IReadOnlyList<string> SharedCreativeSources { get; init; }
@@ -58,6 +61,8 @@ public sealed record EditorialProductInheritanceValidation
     public required bool ChangesPrompts { get; init; }
     public required bool ChangesAzure { get; init; }
     public required bool ChangesProductionRouting { get; init; }
+    public required bool HeroAddsOnlySpecializationFields { get; init; }
+    public required bool GalleryAddsOnlySpecializationFields { get; init; }
 }
 
 public static class EditorialProductContractDiagnostics
@@ -100,6 +105,11 @@ public static class EditorialProductContractDiagnostics
         nameof(GalleryIntelligenceContract.PageDefinitions)
     ];
 
+    private static string[] DeclaredSerializableFields(Type type) => type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.DeclaredOnly)
+        .Where(property => property.GetCustomAttributes(typeof(JsonIgnoreAttribute), inherit: false).Length == 0)
+        .Select(property => property.Name)
+        .ToArray();
+
     public static EditorialProductReview CreateReview() => new()
     {
         SharedFields = SharedFields,
@@ -115,7 +125,9 @@ public static class EditorialProductContractDiagnostics
             ChangesRendering = false,
             ChangesPrompts = false,
             ChangesAzure = false,
-            ChangesProductionRouting = false
+            ChangesProductionRouting = false,
+            HeroAddsOnlySpecializationFields = DeclaredSerializableFields(typeof(HeroIntelligenceContract)).SequenceEqual(HeroSpecificFields),
+            GalleryAddsOnlySpecializationFields = DeclaredSerializableFields(typeof(GalleryIntelligenceContract)).OrderBy(field => field, StringComparer.Ordinal).SequenceEqual(GallerySpecificFields.OrderBy(field => field, StringComparer.Ordinal))
         },
         SharedCreativeSources = ["EditorialDecision", "VisualStory", "StoryComposition", "ProductEditorialStrategy"],
         Recommendations = ["Keep Hero and Gallery on the shared EditorialProductContract foundation.", "Limit future Hero and Gallery changes to creative-quality refinement unless the shared contract changes."]
