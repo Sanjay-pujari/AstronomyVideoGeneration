@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 
 namespace Astronomy.MediaFactory.Core.VisualIntelligence;
 
