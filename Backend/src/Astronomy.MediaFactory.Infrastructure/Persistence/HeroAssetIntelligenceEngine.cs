@@ -3552,34 +3552,39 @@ public sealed class HeroAssetStoryGenerator(
         var contract = new HeroIntelligenceContract
         {
             ProductId = $"hero_{FirstNonEmpty(viRequest.CorrelationId, request.EventId)}".ToLowerInvariant(),
+            ProductType = "Hero",
             StoryId = "fallback-story",
-            PlanId = viRequest.ContentGenerationPlanId?.ToString() ?? FirstNonEmpty(viRequest.CorrelationId, request.EventId),
-            EventType = viRequest.EventType,
-            EventFamily = viRequest.EventFamily.ToString(),
+            StoryVersion = "fallback",
+            HeroSpecificFields = new HeroSpecificFields
+            {
+                PlanId = viRequest.ContentGenerationPlanId?.ToString() ?? FirstNonEmpty(viRequest.CorrelationId, request.EventId),
+                EventType = viRequest.EventType,
+                EventFamily = viRequest.EventFamily.ToString(),
+                EmotionalHook = "Diagnostic fallback only; no production prompt replacement.",
+                CompositionGoal = "Preserve production Hero routing and record missing V4 intelligence inputs for review.",
+                VisualRelationship = "unknown; fallback contract generated without complete V4 intelligence inputs",
+                ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0, 0, 0, 0, null),
+                FallbackApplied = true,
+                MissingInputs = [nameof(EditorialDecision), nameof(VisualStory), "StoryCompositionDecision", nameof(ProductEditorialStrategyResult)],
+                Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."]
+            },
             EditorialDecisionId = "fallback-editorial-decision",
             VisualStoryId = "fallback-visual-story",
-            CompositionId = "fallback-hero-composition",
-            EditorialStrategyId = "fallback-hero-editorial-strategy",
+            StoryCompositionId = "fallback-hero-composition",
+            ProductEditorialStrategyId = "fallback-hero-editorial-strategy",
             ViewerQuestion = $"Why does {subject} matter for sky watchers?",
             PrimaryStory = $"A safe diagnostic Hero V4 intelligence fallback for {subject}.",
             ViewerTakeaway = "Required Hero V4 intelligence inputs were unavailable, so production Hero routing remains unchanged.",
-            EmotionalHook = "Diagnostic fallback only; no production prompt replacement.",
-            CompositionGoal = "Preserve production Hero routing and record missing V4 intelligence inputs for review.",
             EditorialGoal = "Non-blocking diagnostic fallback contract.",
             ViewerEmotion = "informed",
-            VisualRelationship = "unknown; fallback contract generated without complete V4 intelligence inputs",
             DocumentaryTone = "diagnostic",
             RecommendedComposition = "Use existing production Hero composition.",
             RecommendedTypography = "Use existing Hero typography system; architecture-only contract.",
             RecommendedInformationDensity = "Low",
             RecommendedVisualBalance = "Preserve existing visual balance.",
-            PlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
-            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0, 0, 0, 0, null),
-            FallbackApplied = true,
-            MissingInputs = [nameof(EditorialDecision), nameof(VisualStory), "StoryCompositionDecision", nameof(ProductEditorialStrategyResult)],
-            Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."],
+            RecommendedPlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
             CreativeConfidence = 0,
-            Versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["editorialProductContract"] = "4.5D" }
+            CreativeVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["editorialProductContract"] = "4.5D" }
         };
         Directory.CreateDirectory(Path.GetDirectoryName(contractPath)!);
         await File.WriteAllTextAsync(contractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken).ConfigureAwait(false);

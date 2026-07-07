@@ -8,13 +8,14 @@ public sealed record GalleryIntelligenceContract : EditorialProductContract
     [JsonIgnore]
     public string GalleryId => ProductId;
     [JsonIgnore]
-    public string StoryCompositionId => CompositionId;
+    public string GalleryEditorialStrategyId => ProductEditorialStrategyId;
     [JsonIgnore]
-    public string GalleryEditorialStrategyId => EditorialStrategyId;
-    public required IReadOnlyList<string> StoryProgression { get; init; }
+    public IReadOnlyList<string> StoryProgression => EditorialSequence.StoryProgression;
     public required GalleryEditorialSequence EditorialSequence { get; init; }
-    public required GalleryNarrativeFlow NarrativeFlow { get; init; }
+    [JsonIgnore]
+    public GalleryNarrativeFlow? NarrativeFlow => EditorialSequence.NarrativeFlow;
     public required IReadOnlyList<string> LearningObjectives { get; init; }
+    public required IReadOnlyList<EditorialPage> PageDefinitions { get; init; }
     [JsonIgnore]
     public string RecommendedPlatform => PlatformRecommendations.TryGetValue("gallery", out var platform) ? platform : string.Empty;
     [JsonIgnore]
@@ -349,28 +350,29 @@ public sealed class GalleryIntelligenceAlignmentEngine : IGalleryIntelligenceAli
         return new GalleryIntelligenceContract
         {
             ProductId = $"gallery_{story.StoryId}".ToLowerInvariant(),
+            ProductType = "Gallery",
             StoryId = story.StoryId,
+            StoryVersion = story.StoryVersion,
             EditorialDecisionId = story.StoryId,
             VisualStoryId = story.StoryId,
-            CompositionId = galleryComposition.CompositionId,
-            EditorialStrategyId = galleryStrategy.StrategyId,
+            StoryCompositionId = galleryComposition.CompositionId,
+            ProductEditorialStrategyId = galleryStrategy.StrategyId,
             ViewerQuestion = story.ViewerQuestion,
             PrimaryStory = story.PrimaryStory,
             ViewerTakeaway = story.ViewerTakeaway,
             EditorialGoal = galleryStrategy.EditorialGoal,
             ViewerEmotion = galleryStrategy.ViewerEmotion,
-            StoryProgression = story.StoryArc.Count > 0 ? story.StoryArc : ["Discovery", "Understanding", "Observation", "Takeaway"],
             EditorialSequence = sequence,
-            NarrativeFlow = narrativeFlow,
             LearningObjectives = sequence.LearningObjectives,
+            PageDefinitions = sequence.PageDefinitions,
             DocumentaryTone = story.DocumentaryTone,
             RecommendedComposition = galleryComposition.RecommendedHierarchy,
             RecommendedTypography = "Use existing Gallery typography system; architecture-only contract.",
             RecommendedInformationDensity = "Progressive",
             RecommendedVisualBalance = story.RecommendedNegativeSpace,
-            PlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["gallery"] = galleryComposition.Platform.ToString() },
+            RecommendedPlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["gallery"] = galleryComposition.Platform.ToString() },
             CreativeConfidence = Math.Clamp(new[] { story.StoryConfidence, galleryComposition.Confidence, galleryStrategy.Confidence }.Average(), 0, 1),
-            Versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            CreativeVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["galleryIntelligenceAlignment"] = Version,
                 ["visualStory"] = story.StoryVersion,

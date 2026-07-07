@@ -5,11 +5,13 @@ namespace Astronomy.MediaFactory.Core.VisualIntelligence;
 public abstract record EditorialProductContract
 {
     public required string ProductId { get; init; }
+    public required string ProductType { get; init; }
     public required string StoryId { get; init; }
+    public required string StoryVersion { get; init; }
     public required string EditorialDecisionId { get; init; }
     public required string VisualStoryId { get; init; }
-    public required string CompositionId { get; init; }
-    public required string EditorialStrategyId { get; init; }
+    public required string StoryCompositionId { get; init; }
+    public required string ProductEditorialStrategyId { get; init; }
     public required string ViewerQuestion { get; init; }
     public required string PrimaryStory { get; init; }
     public required string ViewerTakeaway { get; init; }
@@ -20,9 +22,19 @@ public abstract record EditorialProductContract
     public required string RecommendedTypography { get; init; }
     public required string RecommendedInformationDensity { get; init; }
     public required string RecommendedVisualBalance { get; init; }
-    public required IReadOnlyDictionary<string, string> PlatformRecommendations { get; init; }
+    public required IReadOnlyDictionary<string, string> RecommendedPlatformRecommendations { get; init; }
     public required double CreativeConfidence { get; init; }
-    public required IReadOnlyDictionary<string, string> Versions { get; init; }
+    public required IReadOnlyDictionary<string, string> CreativeVersions { get; init; }
+    public IReadOnlyDictionary<string, object> ExtensionFields { get; init; } = new Dictionary<string, object>();
+
+    [JsonIgnore]
+    public string CompositionId => StoryCompositionId;
+    [JsonIgnore]
+    public string EditorialStrategyId => ProductEditorialStrategyId;
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, string> PlatformRecommendations => RecommendedPlatformRecommendations;
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, string> Versions => CreativeVersions;
 }
 
 public sealed record EditorialProductReview
@@ -31,6 +43,8 @@ public sealed record EditorialProductReview
     public required IReadOnlyList<string> HeroSpecificFields { get; init; }
     public required IReadOnlyList<string> GallerySpecificFields { get; init; }
     public required EditorialProductInheritanceValidation InheritanceValidation { get; init; }
+    public required IReadOnlyList<string> SharedCreativeSources { get; init; }
+    public required IReadOnlyList<string> Recommendations { get; init; }
 }
 
 public sealed record EditorialProductInheritanceValidation
@@ -51,11 +65,13 @@ public static class EditorialProductContractDiagnostics
     public static readonly string[] SharedFields =
     [
         nameof(EditorialProductContract.ProductId),
+        nameof(EditorialProductContract.ProductType),
         nameof(EditorialProductContract.StoryId),
+        nameof(EditorialProductContract.StoryVersion),
         nameof(EditorialProductContract.EditorialDecisionId),
         nameof(EditorialProductContract.VisualStoryId),
-        nameof(EditorialProductContract.CompositionId),
-        nameof(EditorialProductContract.EditorialStrategyId),
+        nameof(EditorialProductContract.StoryCompositionId),
+        nameof(EditorialProductContract.ProductEditorialStrategyId),
         nameof(EditorialProductContract.ViewerQuestion),
         nameof(EditorialProductContract.PrimaryStory),
         nameof(EditorialProductContract.ViewerTakeaway),
@@ -66,32 +82,22 @@ public static class EditorialProductContractDiagnostics
         nameof(EditorialProductContract.RecommendedTypography),
         nameof(EditorialProductContract.RecommendedInformationDensity),
         nameof(EditorialProductContract.RecommendedVisualBalance),
-        nameof(EditorialProductContract.PlatformRecommendations),
+        nameof(EditorialProductContract.RecommendedPlatformRecommendations),
         nameof(EditorialProductContract.CreativeConfidence),
-        nameof(EditorialProductContract.Versions)
+        nameof(EditorialProductContract.CreativeVersions),
+        nameof(EditorialProductContract.ExtensionFields)
     ];
 
     public static readonly string[] HeroSpecificFields =
     [
-        nameof(HeroIntelligenceContract.PlanId),
-        nameof(HeroIntelligenceContract.EventType),
-        nameof(HeroIntelligenceContract.EventFamily),
-        nameof(HeroIntelligenceContract.EmotionalHook),
-        nameof(HeroIntelligenceContract.CompositionGoal),
-        nameof(HeroIntelligenceContract.VisualRelationship),
-        nameof(HeroIntelligenceContract.ConfidenceSummary),
-        nameof(HeroIntelligenceContract.CreativeKnowledgeReview),
-        nameof(HeroIntelligenceContract.FallbackApplied),
-        nameof(HeroIntelligenceContract.MissingInputs),
-        nameof(HeroIntelligenceContract.Warnings)
+        nameof(HeroIntelligenceContract.HeroSpecificFields)
     ];
 
     public static readonly string[] GallerySpecificFields =
     [
-        nameof(GalleryIntelligenceContract.StoryProgression),
         nameof(GalleryIntelligenceContract.EditorialSequence),
-        nameof(GalleryIntelligenceContract.NarrativeFlow),
-        nameof(GalleryIntelligenceContract.LearningObjectives)
+        nameof(GalleryIntelligenceContract.LearningObjectives),
+        nameof(GalleryIntelligenceContract.PageDefinitions)
     ];
 
     public static EditorialProductReview CreateReview() => new()
@@ -110,6 +116,8 @@ public static class EditorialProductContractDiagnostics
             ChangesPrompts = false,
             ChangesAzure = false,
             ChangesProductionRouting = false
-        }
+        },
+        SharedCreativeSources = ["EditorialDecision", "VisualStory", "StoryComposition", "ProductEditorialStrategy"],
+        Recommendations = ["Keep Hero and Gallery on the shared EditorialProductContract foundation.", "Limit future Hero and Gallery changes to creative-quality refinement unless the shared contract changes."]
     };
 }

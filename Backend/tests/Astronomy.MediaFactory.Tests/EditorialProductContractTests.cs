@@ -19,7 +19,7 @@ public sealed class EditorialProductContractTests
         var review = EditorialProductContractDiagnostics.CreateReview();
 
         Assert.Contains(nameof(EditorialProductContract.ProductId), review.SharedFields);
-        Assert.Contains(nameof(HeroIntelligenceContract.EmotionalHook), review.HeroSpecificFields);
+        Assert.Contains(nameof(HeroIntelligenceContract.HeroSpecificFields), review.HeroSpecificFields);
         Assert.Contains(nameof(GalleryIntelligenceContract.EditorialSequence), review.GallerySpecificFields);
         Assert.True(review.InheritanceValidation.HeroDerivesFromEditorialProductContract);
         Assert.True(review.InheritanceValidation.GalleryDerivesFromEditorialProductContract);
@@ -38,14 +38,23 @@ public sealed class EditorialProductContractTests
         var contract = new HeroIntelligenceContract
         {
             ProductId = "hero-story-1",
+            ProductType = "Hero",
             StoryId = "story-1",
-            PlanId = "plan-1",
-            EventType = "planet-conjunction",
-            EventFamily = "PlanetConjunction",
+            StoryVersion = "4.5D-test",
+            HeroSpecificFields = new HeroSpecificFields
+            {
+                PlanId = "plan-1",
+                EventType = "planet-conjunction",
+                EventFamily = "PlanetConjunction",
+                EmotionalHook = "Wonder.",
+                CompositionGoal = "Show the apparent relationship.",
+                VisualRelationship = "Neither planet dominates.",
+                ConfidenceSummary = new HeroIntelligenceConfidenceSummary(.9, .9, .9, .9, null)
+            },
             EditorialDecisionId = "decision-1",
             VisualStoryId = "story-1",
-            CompositionId = "composition-hero",
-            EditorialStrategyId = "strategy-hero",
+            StoryCompositionId = "composition-hero",
+            ProductEditorialStrategyId = "strategy-hero",
             ViewerQuestion = "Why are they close?",
             PrimaryStory = "Two planets appear close.",
             ViewerTakeaway = "The closeness is apparent from Earth.",
@@ -56,13 +65,9 @@ public sealed class EditorialProductContractTests
             RecommendedTypography = "existing Hero typography",
             RecommendedInformationDensity = "Low",
             RecommendedVisualBalance = "shared negative space",
-            PlatformRecommendations = new Dictionary<string, string> { ["landscape"] = "shared negative space" },
+            RecommendedPlatformRecommendations = new Dictionary<string, string> { ["landscape"] = "shared negative space" },
             CreativeConfidence = .9,
-            Versions = new Dictionary<string, string> { ["editorialProductContract"] = "4.5D" },
-            EmotionalHook = "Wonder.",
-            CompositionGoal = "Show the apparent relationship.",
-            VisualRelationship = "Neither planet dominates.",
-            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(.9, .9, .9, .9, null)
+            CreativeVersions = new Dictionary<string, string> { ["editorialProductContract"] = "4.5D" }
         };
 
         var json = JsonSerializer.Serialize(contract, VisualIntelligenceJson.CreateSerializerOptions());

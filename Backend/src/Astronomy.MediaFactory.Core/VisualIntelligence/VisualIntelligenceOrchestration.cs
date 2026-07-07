@@ -549,32 +549,37 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         return new HeroIntelligenceContract
         {
             ProductId = $"hero_{story.StoryId}".ToLowerInvariant(),
+            ProductType = "Hero",
             StoryId = story.StoryId,
-            PlanId = context.ContentGenerationPlanId?.ToString() ?? context.CorrelationId,
-            EventType = context.EventType,
-            EventFamily = context.EventFamily.ToString(),
+            StoryVersion = story.StoryVersion,
+            HeroSpecificFields = new HeroSpecificFields
+            {
+                PlanId = context.ContentGenerationPlanId?.ToString() ?? context.CorrelationId,
+                EventType = context.EventType,
+                EventFamily = context.EventFamily.ToString(),
+                EmotionalHook = story.EmotionalHook,
+                CompositionGoal = composition.CompositionGoal,
+                VisualRelationship = story.VisualRelationship,
+                ConfidenceSummary = new HeroIntelligenceConfidenceSummary(editorialDecision.Confidence, story.StoryConfidence, composition.Confidence, strategy.Confidence, qualityReport?.OverallScore),
+                CreativeKnowledgeReview = knowledgeReview
+            },
             EditorialDecisionId = editorialDecision.StoryId,
             VisualStoryId = story.StoryId,
-            CompositionId = composition.CompositionId,
-            EditorialStrategyId = strategy.StrategyId,
+            StoryCompositionId = composition.CompositionId,
+            ProductEditorialStrategyId = strategy.StrategyId,
             ViewerQuestion = story.ViewerQuestion,
             PrimaryStory = story.PrimaryStory,
             ViewerTakeaway = story.ViewerTakeaway,
-            EmotionalHook = story.EmotionalHook,
-            CompositionGoal = composition.CompositionGoal,
             EditorialGoal = strategy.EditorialGoal,
             ViewerEmotion = strategy.ViewerEmotion,
-            VisualRelationship = story.VisualRelationship,
             DocumentaryTone = story.DocumentaryTone,
             RecommendedComposition = composition.RecommendedHierarchy,
             RecommendedTypography = "Use existing Hero typography system; architecture-only contract.",
             RecommendedInformationDensity = "Low",
             RecommendedVisualBalance = story.RecommendedNegativeSpace,
-            PlatformRecommendations = story.RecommendedPlatformVariations.ToDictionary(k => k.Key, v => v.Value.Recommendation),
-            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(editorialDecision.Confidence, story.StoryConfidence, composition.Confidence, strategy.Confidence, qualityReport?.OverallScore),
-            CreativeKnowledgeReview = knowledgeReview,
+            RecommendedPlatformRecommendations = story.RecommendedPlatformVariations.ToDictionary(k => k.Key, v => v.Value.Recommendation),
             CreativeConfidence = Math.Clamp(new[] { editorialDecision.Confidence, story.StoryConfidence, composition.Confidence, strategy.Confidence }.Average(), 0, 1),
-            Versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            CreativeVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["editorialProductContract"] = "4.5D",
                 ["visualStory"] = story.StoryVersion,
@@ -591,34 +596,39 @@ public sealed class VisualIntelligenceOrchestrator : IVisualIntelligenceOrchestr
         return new HeroIntelligenceContract
         {
             ProductId = $"hero_{FirstNonEmpty(story?.StoryId, context.CorrelationId)}".ToLowerInvariant(),
+            ProductType = "Hero",
             StoryId = story?.StoryId ?? "fallback-story",
-            PlanId = context.ContentGenerationPlanId?.ToString() ?? context.CorrelationId,
-            EventType = context.EventType,
-            EventFamily = context.EventFamily.ToString(),
+            StoryVersion = story?.StoryVersion ?? "fallback",
+            HeroSpecificFields = new HeroSpecificFields
+            {
+                PlanId = context.ContentGenerationPlanId?.ToString() ?? context.CorrelationId,
+                EventType = context.EventType,
+                EventFamily = context.EventFamily.ToString(),
+                EmotionalHook = FirstNonEmpty(story?.EmotionalHook, "Diagnostic fallback only; no production prompt replacement."),
+                CompositionGoal = "Preserve production Hero routing and record missing V4 intelligence inputs for review.",
+                VisualRelationship = FirstNonEmpty(story?.VisualRelationship, "unknown; fallback contract generated without complete V4 intelligence inputs"),
+                ConfidenceSummary = new HeroIntelligenceConfidenceSummary(editorialDecision?.Confidence ?? 0, story?.StoryConfidence ?? 0, 0, 0, qualityReport?.OverallScore),
+                FallbackApplied = true,
+                MissingInputs = missingInputs,
+                Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."]
+            },
             EditorialDecisionId = editorialDecision?.StoryId ?? "fallback-editorial-decision",
             VisualStoryId = story?.StoryId ?? "fallback-visual-story",
-            CompositionId = "fallback-hero-composition",
-            EditorialStrategyId = "fallback-hero-editorial-strategy",
+            StoryCompositionId = "fallback-hero-composition",
+            ProductEditorialStrategyId = "fallback-hero-editorial-strategy",
             ViewerQuestion = FirstNonEmpty(story?.ViewerQuestion, $"Why does {subject} matter for sky watchers?"),
             PrimaryStory = FirstNonEmpty(story?.PrimaryStory, $"A safe diagnostic Hero V4 intelligence fallback for {subject}."),
             ViewerTakeaway = FirstNonEmpty(story?.ViewerTakeaway, "Required Hero V4 intelligence inputs were unavailable, so production Hero routing remains unchanged."),
-            EmotionalHook = FirstNonEmpty(story?.EmotionalHook, "Diagnostic fallback only; no production prompt replacement."),
-            CompositionGoal = "Preserve production Hero routing and record missing V4 intelligence inputs for review.",
             EditorialGoal = "Non-blocking diagnostic fallback contract.",
             ViewerEmotion = "informed",
-            VisualRelationship = FirstNonEmpty(story?.VisualRelationship, "unknown; fallback contract generated without complete V4 intelligence inputs"),
             DocumentaryTone = FirstNonEmpty(story?.DocumentaryTone, "diagnostic"),
             RecommendedComposition = "Use existing production Hero composition.",
             RecommendedTypography = "Use existing Hero typography system; architecture-only contract.",
             RecommendedInformationDensity = "Low",
             RecommendedVisualBalance = FirstNonEmpty(story?.RecommendedNegativeSpace, "Preserve existing visual balance."),
-            PlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
-            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(editorialDecision?.Confidence ?? 0, story?.StoryConfidence ?? 0, 0, 0, qualityReport?.OverallScore),
-            FallbackApplied = true,
-            MissingInputs = missingInputs,
-            Warnings = ["HeroIntelligenceContract fallback was written because required V4 intelligence inputs were missing.", "Production Hero routing was not changed."],
+            RecommendedPlatformRecommendations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["landscape"] = "Use existing production Hero routing; fallback contract is diagnostic only." },
             CreativeConfidence = Math.Clamp(new[] { editorialDecision?.Confidence ?? 0, story?.StoryConfidence ?? 0, 0d, 0d }.Average(), 0, 1),
-            Versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["editorialProductContract"] = "4.5D" }
+            CreativeVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["editorialProductContract"] = "4.5D" }
         };
     }
 

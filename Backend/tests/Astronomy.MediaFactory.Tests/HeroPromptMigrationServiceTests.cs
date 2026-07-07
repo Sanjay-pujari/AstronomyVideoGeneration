@@ -131,31 +131,36 @@ public sealed class HeroPromptMigrationServiceTests
     private static HeroIntelligenceContract IntelligenceContract() => new()
     {
         ProductId = "hero-story-1",
+        ProductType = "Hero",
         StoryId = "story-1",
-        PlanId = "plan-1",
-        EventType = "planet-conjunction",
-        EventFamily = "PlanetConjunction",
+        StoryVersion = "4.5D-test",
+        HeroSpecificFields = new HeroSpecificFields
+        {
+            PlanId = "plan-1",
+            EventType = "planet-conjunction",
+            EventFamily = "PlanetConjunction",
+            EmotionalHook = "Wonder.",
+            CompositionGoal = "Balanced planets communicating their relationship.",
+            VisualRelationship = "The apparent closeness is the subject; neither planet dominates.",
+            ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0.9, 0.9, 0.9, 0.9, null)
+        },
         EditorialDecisionId = "story-1",
         VisualStoryId = "story-1",
-        CompositionId = "composition-hero",
-        EditorialStrategyId = "editorial-hero",
+        StoryCompositionId = "composition-hero",
+        ProductEditorialStrategyId = "editorial-hero",
         ViewerQuestion = "Why do Jupiter and Venus look so close tonight?",
         PrimaryStory = "Jupiter and Venus form an apparent close pairing in the evening sky.",
         ViewerTakeaway = "The planets look close from Earth but are not physically close.",
-        EmotionalHook = "Wonder.",
-        CompositionGoal = "Balanced planets communicating their relationship.",
         EditorialGoal = "Stop scrolling.",
         ViewerEmotion = "Wonder.",
-        VisualRelationship = "The apparent closeness is the subject; neither planet dominates.",
         DocumentaryTone = "documentary",
         RecommendedComposition = "Balanced planets communicating their relationship.",
         RecommendedTypography = "Existing Hero typography.",
         RecommendedInformationDensity = "Low",
         RecommendedVisualBalance = "Shared negative space.",
-        PlatformRecommendations = new Dictionary<string, string> { ["landscape"] = "Use shared negative space around both planets." },
-        ConfidenceSummary = new HeroIntelligenceConfidenceSummary(0.9, 0.9, 0.9, 0.9, null),
+        RecommendedPlatformRecommendations = new Dictionary<string, string> { ["landscape"] = "Use shared negative space around both planets." },
         CreativeConfidence = 0.9,
-        Versions = new Dictionary<string, string> { ["editorialProductContract"] = "4.5D" }
+        CreativeVersions = new Dictionary<string, string> { ["editorialProductContract"] = "4.5D" }
     };
 
     private static CreativeDirectionContract Contract() => new()
