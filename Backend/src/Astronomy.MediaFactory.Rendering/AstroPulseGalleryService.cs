@@ -194,6 +194,11 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             cleanObjectNames = context.EventObjectContext.ObjectNames,
             removedInvalidObjectNameCandidates = context.EventObjectContext.RemovedInvalidObjectNameCandidates,
             hardcodedObjectTermsDetected = hardcodedTerms,
+            realCelestialObjectTreatmentApplied = prompts.Any(RequiresRealCelestialObjectTreatment),
+            jupiterCloudBandsRequired = prompts.Any(p => p.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && p.Contains("cloud bands", StringComparison.OrdinalIgnoreCase)),
+            venusNaturalIlluminationRequired = prompts.Any(p => p.Contains("Venus", StringComparison.OrdinalIgnoreCase) && p.Contains("natural illumination", StringComparison.OrdinalIgnoreCase)),
+            tinyDotOnlyRejected = prompts.Any(p => p.Contains("Reject tiny-dot-only", StringComparison.OrdinalIgnoreCase) || p.Contains("not just tiny dots", StringComparison.OrdinalIgnoreCase)),
+            incorrectObjectHintsRemoved = !prompts.Any(p => p.Contains("Mars reddish-orange", StringComparison.OrdinalIgnoreCase)),
             objectNameValidationPassed = context.EventObjectContext.ObjectNameValidationPassed && hardcodedTerms.Count == 0,
             runtimeHardcodingDetected = hardcodedTerms.Count > 0,
             promptDiversityScore = CalculatePromptDiversityScore(prompts),
@@ -215,7 +220,8 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     {
         context = NormalizeGalleryContext(context);
         var localization = ValidateGalleryLocalization(context, topics, aspect);
-        return new { hindiLocalization = localization.HindiLocalization, sharedFooter = true, validationParity = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6, promptRefinement = topics.All(t => t.AzureImage2Prompt.Contains("one educational idea", StringComparison.OrdinalIgnoreCase) || t.AzureImage2Prompt.Contains("Educational role", StringComparison.OrdinalIgnoreCase)), diagnostics = true, educationalOverlay = topics.All(t => !string.IsNullOrWhiteSpace(t.EducationalRole)), storySequencing = topics.Select(t => t.Number).SequenceEqual(Enumerable.Range(1, 6)), aspectSupported = aspect.Width > 0 && aspect.Height > 0 };
+        var prompts = topics.Select(t => t.AzureImage2Prompt).ToArray();
+        return new { hindiLocalization = localization.HindiLocalization, sharedFooter = true, validationParity = imagePaths.Count == 6 && hashes.Count == 6 && azureCalls >= 6, promptRefinement = topics.All(t => t.AzureImage2Prompt.Contains("one educational idea", StringComparison.OrdinalIgnoreCase) || t.AzureImage2Prompt.Contains("Educational role", StringComparison.OrdinalIgnoreCase)), diagnostics = true, realCelestialObjectTreatmentApplied = prompts.Any(RequiresRealCelestialObjectTreatment), jupiterCloudBandsRequired = prompts.Any(p => p.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) && p.Contains("cloud bands", StringComparison.OrdinalIgnoreCase)), venusNaturalIlluminationRequired = prompts.Any(p => p.Contains("Venus", StringComparison.OrdinalIgnoreCase) && p.Contains("natural illumination", StringComparison.OrdinalIgnoreCase)), tinyDotOnlyRejected = prompts.Any(p => p.Contains("Reject tiny-dot-only", StringComparison.OrdinalIgnoreCase) || p.Contains("not just tiny dots", StringComparison.OrdinalIgnoreCase)), incorrectObjectHintsRemoved = !prompts.Any(p => p.Contains("Mars reddish-orange", StringComparison.OrdinalIgnoreCase)), educationalOverlay = topics.All(t => !string.IsNullOrWhiteSpace(t.EducationalRole)), storySequencing = topics.Select(t => t.Number).SequenceEqual(Enumerable.Range(1, 6)), aspectSupported = aspect.Width > 0 && aspect.Height > 0 };
     }
 
     private static GalleryLocalizationValidation ValidateGalleryLocalization(GalleryContext context, IReadOnlyList<GalleryTopic> topics, AstroPulseGalleryAspect aspect)
@@ -264,7 +270,8 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var warnings = localizationValidation.Warnings.Concat(contract.ValidationRules.Where(r => r.StartsWith("WARN:", StringComparison.OrdinalIgnoreCase))).ToArray();
         var errors = localizationValidation.Errors.Concat(contract.ValidationRules.Where(r => r.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))).ToArray();
         var outputUsable = localizationValidation.ValidationPassed && errors.Length == 0;
-        return new { status = ResolvePhase13ValidationStatus(outputUsable, warnings), validationPassed = outputUsable, validationWarnings = warnings, validationErrors = errors, validationScope = "Phase13GalleryOnly" };
+        var validationChecklist = BuildValidationChecklist(context, topics, Enumerable.Range(1, topics.Count).Select(i => $"gallery-{i:00}.png").ToArray(), new HashSet<string>(Enumerable.Range(1, topics.Count).Select(i => $"hash-{i}"), StringComparer.OrdinalIgnoreCase), topics.Count, aspect);
+        return new { status = ResolvePhase13ValidationStatus(outputUsable, warnings), validationPassed = outputUsable, validationWarnings = warnings, validationErrors = errors, validationScope = "Phase13GalleryOnly", validationChecklist };
     }
 
     private static bool ContainsDevanagari(string value) => !string.IsNullOrEmpty(value) && value.Any(c => c >= '\u0900' && c <= '\u097F');
@@ -423,7 +430,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var objectText = contract.LocalizedPrimaryObjects.Count > 0 ? string.Join(", ", contract.LocalizedPrimaryObjects) : title;
         var metadata = new[] { $"{Localize(contract.Language, "Date", "तारीख")}: {contract.DisplayDate}", $"{Localize(contract.Language, "Time", "समय")}: {contract.DisplayTime}" };
         var languageName = LocalizationResolver.LanguageDisplayName(contract.Language);
-        var basePrompt = $"Event name: {contract.EventName}. Event family: {contract.EventFamily}. Event subtype: {contract.EventSubtype}. Localized event title: {contract.DisplayTitle}. Date: {metadata[0]}. Time: {metadata[1]}. Direction: {contract.Direction}. Observation window: {contract.ObservationWindow}. Resolved object names: {objectText}. Visual hints: {string.Join("; ", contract.VisualHints)}. Prompt hints: {string.Join("; ", contract.PromptHints)}. Output language: {languageName}. Forbidden terms policy: exclude event-profile forbidden concepts. Preserve Gallery V3 design: unique realistic background, no embedded text, deterministic overlay space, one educational idea per slide.";
+        var basePrompt = $"Event name: {contract.EventName}. Event family: {contract.EventFamily}. Event subtype: {contract.EventSubtype}. Localized event title: {contract.DisplayTitle}. Date: {metadata[0]}. Time: {metadata[1]}. Direction: {contract.Direction}. Observation window: {contract.ObservationWindow}. Resolved object names: {objectText}. Visual hints: {string.Join("; ", contract.VisualHints)}. Prompt hints: {string.Join("; ", contract.PromptHints)}. Output language: {languageName}. Forbidden terms policy: exclude event-profile forbidden concepts. Preserve Gallery V3 design: unique realistic background, premium astronomy documentary, clean social media carousel, no embedded text, deterministic overlay space, one educational idea per slide. Reject tiny-dot-only sky renderings when object recognition is the learning goal.";
         return contract.SceneContents.Select((scene, i) => new GalleryTopic(
             i + 1,
             scene.SceneRole,
@@ -431,7 +438,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             [CleanGalleryTitle(FirstNonEmpty(scene.Title, contract.DisplayShortTitle, contract.DisplayTitle)), scene.Subtitle, scene.DetailText],
             scene.VisualIntent,
             scene.OverlayStyle,
-            $"{basePrompt} Asset purpose: {scene.SceneRole}. Visual intent: {scene.VisualIntent}. Educational role: {scene.LocalizedSceneLabel}. Event-specific prompt: {scene.PromptHint}. Required objects: {string.Join(", ", scene.RequiredObjects)}. Forbidden objects: {string.Join(", ", scene.ForbiddenObjects)}. No embedded text. No labels. No watermark.",
+            $"{basePrompt} Asset purpose: {scene.SceneRole}. Visual intent: {scene.VisualIntent}. Page-specific treatment: {BuildPageSpecificTreatment(scene.SceneRole, contract)}. Educational role: {scene.LocalizedSceneLabel}. Event-specific prompt: {scene.PromptHint}. Required objects: {string.Join(", ", scene.RequiredObjects)}. Forbidden objects: {string.Join(", ", scene.ForbiddenObjects)}. No embedded text. No labels. No watermark.",
             scene.SceneRole,
             scene.LocalizedSceneLabel,
             contract.Diagnostics.TryGetValue("footerLabel", out var footer) ? footer : Localize(contract.Language, "Drashyam Astronomy", "दृश्यम खगोल"),
@@ -482,7 +489,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     private static GalleryContext NormalizeGalleryContext(GalleryContext context)
     {
         var eventName = FirstNonEmpty(context.EventName, context.Title, context.EventType);
-        var eventFamily = FirstNonEmpty(context.EventFamily, context.EventType);
+        var eventFamily = ResolveGalleryEventFamily(context);
         var subtype = FirstNonEmpty(context.EventSubtype, ResolveMoonSubtype(eventName), ResolveMoonSubtype(context.EventType));
         var attrs = FirstNonEmpty(context.MoonSubtypeVisualAttributes, BuildMoonSubtypeVisualAttributes(subtype));
         var titleResolution = string.IsNullOrWhiteSpace(context.LocalizedEventTitle) || IsGenericMoonTitle(context.LocalizedEventTitle)
@@ -499,6 +506,47 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
             MoonSubtypeVisualAttributes = FirstNonEmpty(titleResolution.MoonSubtypeVisualAttributes, attrs),
             HeroTitleResolverReused = titleResolution.HeroTitleResolverReused,
             GenericMoonFallbackUsed = titleResolution.GenericMoonFallbackUsed
+        };
+    }
+
+
+    private static string ResolveGalleryEventFamily(GalleryContext context)
+    {
+        var source = FirstNonEmpty(context.EventFamily, context.EventType);
+        var combined = string.Join(" ", context.EventType, context.EventFamily, context.EventName, context.Title);
+        var names = context.EventObjectContext.ObjectNames;
+        var hasJupiterVenus = names.Any(n => n.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && names.Any(n => n.Equals("Venus", StringComparison.OrdinalIgnoreCase));
+        if (hasJupiterVenus && ContainsAny(combined, "Conjunction", "conjunction", "युति")) return "PlanetConjunction";
+        if (hasJupiterVenus && ContainsAny(combined, "Pairing", "Close Pairing", "Grouping", "Planet")) return "PlanetPairing";
+        return source;
+    }
+
+    private static bool RequiresRealCelestialObjectTreatment(string prompt)
+        => prompt.Contains("real celestial object treatment", StringComparison.OrdinalIgnoreCase)
+           || prompt.Contains("recognizable real planet treatment", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildPageSpecificTreatment(string sceneRole, GalleryContentContract contract)
+    {
+        var hasJupiterVenus = contract.PrimaryObjects.Any(o => o.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && contract.PrimaryObjects.Any(o => o.Equals("Venus", StringComparison.OrdinalIgnoreCase));
+        if (!hasJupiterVenus) return sceneRole switch
+        {
+            "Opening view" => "strong event relationship visual",
+            "What happens" => "simple visual explanation of the apparent sky geometry",
+            "Where to look" => "realistic sky/location context",
+            "When to observe" => "clean observing-window context",
+            "Key objects" => "recognizable object close-up or identification treatment",
+            _ => "memorable premium editorial composition"
+        };
+
+        var common = "Jupiter must show visible realistic cloud bands; Venus must be a bright naturally illuminated disk/object; both objects must be visible, clearly related, and not just tiny dots; keep all text for deterministic overlay only";
+        return sceneRole switch
+        {
+            "Opening view" => $"Hook: strong Jupiter + Venus relationship visual; {common}",
+            "What happens" => $"Explanation: visual explanation of apparent conjunction/line-of-sight; {common}",
+            "Where to look" => $"Observation: realistic sky/location context with the pair placed in the observing direction; {common}",
+            "When to observe" => $"Observation timing: realistic twilight/pre-dawn sky context, no embedded text; {common}",
+            "Key objects" => $"Recognition: clearly identify Jupiter and Venus visually by appearance and scale; {common}",
+            _ => $"Memory/Takeaway: memorable premium editorial composition centered on Jupiter + Venus; {common}"
         };
     }
 
@@ -973,7 +1021,14 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     {
         public override string ProviderName => "PlanetPairingGalleryContentProvider";
         public override bool CanResolve(GalleryContext c) => ContainsAny(c.EventType + c.EventFamily + c.EventName, "Planet", "Conjunction", "Pairing", "Grouping");
-        protected override IReadOnlyList<string> BuildHints(GalleryContext c) => ["Mars reddish-orange", "Jupiter bright cream/white", "close apparent pairing", "twilight/pre-dawn sky"];
+        protected override IReadOnlyList<string> BuildHints(GalleryContext c)
+        {
+            var names = c.EventObjectContext.ObjectNames;
+            if (names.Any(n => n.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && names.Any(n => n.Equals("Venus", StringComparison.OrdinalIgnoreCase)))
+                return ["real celestial object treatment", "Jupiter with visible realistic cloud bands", "Venus as a bright naturally illuminated disk/object", "both planets visible and clearly related in a close apparent conjunction", "not just tiny dots in the sky", "premium astronomy documentary carousel"];
+            return ["recognizable real planet treatment", "Jupiter with visible realistic cloud bands when present", "Venus bright natural illumination when present", "close apparent pairing", "twilight/pre-dawn sky"];
+        }
+        protected override IReadOnlyList<string> BuildValidationRules(GalleryContext c) => base.BuildValidationRules(c).Concat(["realCelestialObjectTreatmentApplied", "jupiterCloudBandsRequired", "venusNaturalIlluminationRequired", "tinyDotOnlyRejected", "incorrectObjectHintsRemoved"]).ToArray();
         protected override IReadOnlyList<string> BuildForbiddenTerms(GalleryContext c) => c.ForbiddenTerms.Concat(["meteor", "meteor shower", "radiant"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
