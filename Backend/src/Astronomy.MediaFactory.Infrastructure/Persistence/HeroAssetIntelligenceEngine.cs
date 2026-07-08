@@ -1654,7 +1654,7 @@ public sealed class HeroAssetStoryGenerator(
         var planetGroupingInstruction = planetGroupingPromptApplied
             ? $" Create a cinematic realistic twilight sky for the grouped objects: {objectText}. Show the grouped planets along a gentle arc with each object visually grouped, close enough to read as one grouped sky event but not colliding. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Keep the sky scientifically respectful but not a fake star map. No text, no labels, no watermarks, no diagrams, no UI; final text overlays are added by renderer only."
             : string.Empty;
-        var visualQualityPolicy = VisualQualityFramework.Astronomy().BuildPromptPolicyText();
+        var visualQualityPolicy = VisualPromptPolicyComposer.Compose(VisualPromptProduct.Hero).PositiveGuidance;
         var basePrompt = guidePanelAllowed
             ? $"{visualQualityPolicy} Azure Image2 background only for guide hero. Event-specific astronomy sky for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Deterministic overlay may add compact date/time/direction guide details. No embedded text, no watermark, no logo, no unrelated event imagery.{planetGroupingInstruction}"
             : $"{visualQualityPolicy} Azure Image2 background only for cinematic clean hero. Beautiful event-specific astronomy image for {eventTitle}. Event type: {eventType}. Key objects: {objectText}. Minimal deterministic title/subtitle overlay will be added later. No embedded text, no guide panels, no CTA slogan, no narration sentence, no bottom subtitles, no labels, no watermark, no logo, no unrelated event imagery.{planetGroupingInstruction}";
@@ -1683,8 +1683,8 @@ public sealed class HeroAssetStoryGenerator(
             var objectText = VisualPromptLocalizationService.LocalizeText(FirstNonEmpty(objects.ObjectListText, heroStory.HeroVisualFocus, compositionModel.VisualBlock.SourceScene, eventTitle), heroStory.Language);
             var safeSpace = "Leave clean safe space for deterministic overlay title and compact footer metadata; do not generate text in that space.";
             var enrichment = ResolveEventFamilyPromptEnrichment(eventType, eventTitle);
-            var visualQualityPolicy = VisualQualityFramework.Astronomy().BuildPromptPolicyText();
-            var basePrompt = $"{visualQualityPolicy} Visual intent: CinematicHero. Premium YouTube thumbnail style cinematic astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Generate each native aspect ratio separately, not as a crop from another aspect. Use dramatic lighting, high contrast, deep cinematic color, premium astrophotography-inspired atmosphere, and a clean event-poster composition. {enrichment.Enrichment} Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, telescope UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no UI, no embedded text. {safeSpace}";
+            var visualQualityPolicy = VisualPromptPolicyComposer.Compose(VisualPromptProduct.Hero).PositiveGuidance;
+            var basePrompt = $"{visualQualityPolicy} Visual intent: CinematicHero. Premium platform-native science documentary astronomy hero background for {eventTitle}. Event type: {eventType}. Dominant celestial event: {objectText}. The dominant celestial object/event must occupy 45–65% of the frame, feel close, dramatic, and scroll-stopping. Preserve circular planet geometry: never stretch, squeeze, elongate, or make vertical ovals. Generate each native aspect ratio separately with aspect-native composition. Use natural twilight or sky lighting, restrained documentary contrast, premium astrophotography-inspired atmosphere, and a clean editorial composition. {enrichment.Enrichment} Do not create an observing-guide style image. Do not create a Stellarium look, planetarium screenshot, app screenshot, diagram, star chart, UI, telescope UI, guide panel, legend, labels, embedded text, caption, watermark, or logo. No guide panels, no labels, no UI, no embedded text. Negative guidance: {VisualPromptPolicyComposer.Compose(VisualPromptProduct.Hero).NegativeGuidance}. {safeSpace}";
 
             EventContentGuard.ValidateNoForbiddenTerms("AzureHeroPromptBuilderV2", "hero prompt", basePrompt, intelligence?.ForbiddenTerms ?? []);
             VisualPromptLocalizationService.ValidateHindiPrompt(basePrompt, heroStory.Language);
@@ -1738,12 +1738,13 @@ public sealed class HeroAssetStoryGenerator(
         Directory.CreateDirectory(Path.GetDirectoryName(visualPromptDiagnosticsPath)!);
         TracePhase11HeroRenderer($"HeroCinematicValidator/Renderer OUTPUT visualPromptDiagnosticsPath={visualPromptDiagnosticsPath}; heroDiagnostics object will report heroTitleClipped=false; heroSubtitleClipped=false; heroTitleMetadataOverlap=false; heroTextSafeAreaPassed=true");
         await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(visualPromptDiagnosticsPath)!, "VisualQualityFrameworkReview.json"), JsonSerializer.Serialize(VisualQualityFramework.Astronomy().CreateReview("Hero"), JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(visualPromptDiagnosticsPath)!, "VisualPromptPolicyReview.json"), JsonSerializer.Serialize(VisualPromptPolicyComposer.CreateReview(VisualPromptProduct.Hero), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(visualPromptDiagnosticsPath, JsonSerializer.Serialize(new
         {
             phaseNo = 11,
             product = "Hero V6.5",
             generatedAtUtc = DateTimeOffset.UtcNow,
-            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "event poster", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
+            requiredInputsConsumed = new { visualIntent = true, compositionType = true, promptVariation = true, overlayStyle = "documentary hero", eventType, resolvedObjectNames = intelligence?.ResolvedObjectNames ?? intelligence?.PrimaryObjects ?? [], visualTheme = intelligence?.VisualTheme, skyGuideTheme = intelligence?.SkyGuideTheme, forbiddenTerms = forbidden },
             eventObjectContext = eventObjectContext.ToDiagnostics(),
             objectNamesSource = eventObjectContext.ObjectNamesSource,
             cleanObjectNames = eventObjectContext.ObjectNames,
