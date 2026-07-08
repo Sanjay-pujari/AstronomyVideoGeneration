@@ -168,6 +168,8 @@ public sealed class Phase11HeroArtifactValidationPolicyTests
         Assert.Contains(OutputArtifactName.HeroGenerationDiagnostics, artifacts);
         Assert.Contains(OutputArtifactName.HeroSceneManifest, artifacts);
         Assert.Contains(OutputArtifactName.VisualPromptDiagnostics, artifacts);
+        Assert.Contains(OutputArtifactName.HeroIntelligenceContract, artifacts);
+        Assert.Contains(OutputArtifactName.EditorialProductReview, artifacts);
         Assert.Contains(OutputArtifactName.HeroPromptComparison, artifacts);
         Assert.Contains(OutputArtifactName.HeroMigrationReport, artifacts);
         Assert.Contains(OutputArtifactName.HeroV3Prompt, artifacts);
@@ -198,7 +200,7 @@ public sealed class Phase11HeroArtifactValidationPolicyTests
     {
         var artifacts = new List<OutputArtifactName> { OutputArtifactName.HeroFinal };
         if (options.ShouldWriteDiagnostics)
-            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics]);
+            artifacts.AddRange([OutputArtifactName.HeroReview, OutputArtifactName.HeroLayoutValidation, OutputArtifactName.HeroGenerationDiagnostics, OutputArtifactName.HeroSceneManifest, OutputArtifactName.VisualPromptDiagnostics, OutputArtifactName.HeroIntelligenceContract, OutputArtifactName.EditorialProductReview]);
         if (options.ShouldWriteComparison)
             artifacts.AddRange([OutputArtifactName.HeroPromptComparison, OutputArtifactName.HeroMigrationReport, OutputArtifactName.HeroV3Prompt, OutputArtifactName.HeroV4Prompt]);
         return artifacts;

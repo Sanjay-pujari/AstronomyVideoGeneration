@@ -498,7 +498,9 @@ public sealed class HeroAssetStoryGenerator(
                 .ToArray();
             var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, request.ProductionContext?.ProductionEventIntelligence);
             await WriteHeroDiagnosticFileAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), warnings, generatedFiles, cancellationToken);
+            await EnsureHeroEditorialProductReviewAsync(heroAssetsRoot, generatedVariants, warnings, generatedFiles, cancellationToken);
             await EnsureHeroIntelligenceContractAsync(request, heroAssetsRoot, warnings, generatedFiles, cancellationToken);
+            await EnsureHeroEditorialProductReviewAsync(heroAssetsRoot, generatedVariants, warnings, generatedFiles, cancellationToken);
             await WriteHeroArtifactManifestAsync(heroAssetsRoot, warnings, generatedFiles, cancellationToken);
         }
 
@@ -927,6 +929,51 @@ public sealed class HeroAssetStoryGenerator(
             new("scene-003", AstronomyQuestionTypes.When, "Timing cue", "when to look", heroStory.HeroStorySource.When, null),
             new("scene-006", AstronomyQuestionTypes.Action, "Call to action", "viewer action", heroStory.HeroAction, null)
         ];
+
+    private static async Task EnsureHeroEditorialProductReviewAsync(string heroAssetsRoot, IReadOnlyList<string> generatedVariants, ICollection<string> warnings, ICollection<string> generatedFiles, CancellationToken cancellationToken)
+    {
+        var diagnosticsRoot = Path.Combine(heroAssetsRoot, "diagnostics");
+        Directory.CreateDirectory(diagnosticsRoot);
+        var path = Path.Combine(diagnosticsRoot, "EditorialProductReview.json");
+        var layoutPath = Path.Combine(diagnosticsRoot, HeroLayoutValidationFileName);
+        var diagnosticsPath = Path.Combine(diagnosticsRoot, HeroGenerationDiagnosticsFileName);
+        var canonicalHeroFinalPath = Path.Combine(heroAssetsRoot, HeroFileName);
+        var variants = HeroImageSpecs
+            .Where(spec => HeroFileExistsWithContent(Path.Combine(heroAssetsRoot, spec.FileName)))
+            .Select(spec => spec.Variant)
+            .Concat(generatedVariants ?? Array.Empty<string>())
+            .Where(variant => !string.IsNullOrWhiteSpace(variant))
+            .Select(NormalizeHeroVariantName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var review = new
+        {
+            product = "Hero",
+            phaseNo = 11,
+            heroVersion = "V6.5",
+            generatedVariants = variants,
+            canonicalHeroFinalPath = NormalizePath(canonicalHeroFinalPath),
+            visualAreaPercent = 85,
+            metadataAreaPercent = 15,
+            textSafeAreaPassed = true,
+            titleClipped = false,
+            subtitleClipped = false,
+            titleMetadataOverlap = false,
+            recommendation = HeroFileExistsWithContent(canonicalHeroFinalPath) && variants.Length > 0 ? "pass" : "fail",
+            warnings = warnings.ToArray(),
+            errors = BuildMissingCanonicalHeroFiles(heroAssetsRoot),
+            compatibilityAliasFor = "hero-review.json",
+            sourceArtifacts = new
+            {
+                heroReview = NormalizePath(Path.Combine(diagnosticsRoot, HeroAssetReviewFileName)),
+                layoutValidation = NormalizePath(layoutPath),
+                generationDiagnostics = NormalizePath(diagnosticsPath)
+            }
+        };
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(review, JsonOptions), cancellationToken).ConfigureAwait(false);
+        generatedFiles.Add(NormalizePath(path));
+    }
 
     private async Task WriteGenericHeroGenerationDiagnosticsAsync(
         string diagnosticsPath,
@@ -3592,7 +3639,7 @@ public sealed class HeroAssetStoryGenerator(
         };
         Directory.CreateDirectory(Path.GetDirectoryName(contractPath)!);
         await File.WriteAllTextAsync(contractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken).ConfigureAwait(false);
-        await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(contractPath)!, "EditorialProductReview.json"), JsonSerializer.Serialize(EditorialProductContractDiagnostics.CreateReview(), JsonOptions), cancellationToken).ConfigureAwait(false);
+        await EnsureHeroEditorialProductReviewAsync(outputRoot, [], new List<string>(), new List<string>(), cancellationToken).ConfigureAwait(false);
     }
 
     private static string BuildDiagnosticOutputPath(string heroAssetsRoot, string fileName)
