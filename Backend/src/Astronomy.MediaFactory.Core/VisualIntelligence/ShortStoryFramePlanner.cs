@@ -212,7 +212,6 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "ShortStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
-        await GenerateV4ComparisonAsync(timeline, outputFolder, platform, cancellationToken).ConfigureAwait(false);
         return (plan, review, manifest);
     }
 

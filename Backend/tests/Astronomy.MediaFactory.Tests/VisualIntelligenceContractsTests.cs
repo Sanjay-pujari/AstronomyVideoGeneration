@@ -86,7 +86,8 @@ public sealed class VisualIntelligenceContractsTests
             VisualIntelligenceFeatureFlags.UseQualityScoringBlocking,
             VisualIntelligenceFeatureFlags.UseExperimentalRenderingRules,
             VisualIntelligenceFeatureFlags.UseHeroPromptV4,
-            VisualIntelligenceFeatureFlags.UseStoryFrameV4Comparison
+            VisualIntelligenceFeatureFlags.UseStoryFrameV4Comparison,
+            VisualIntelligenceFeatureFlags.RegenerateStoryFrameV4Comparison
         };
 
         Assert.Contains("UseVisualCreativeDirector", keys);
@@ -99,12 +100,14 @@ public sealed class VisualIntelligenceContractsTests
         Assert.Contains("UseExperimentalRenderingRules", keys);
         Assert.Contains("UseHeroPromptV4", keys);
         Assert.Contains("UseStoryFrameV4Comparison", keys);
+        Assert.Contains("RegenerateStoryFrameV4Comparison", keys);
 
         var options = new VisualIntelligenceOptions();
         Assert.False(options.UseVisualCreativeDirector);
         Assert.False(options.UseQualityScoringBlocking);
         Assert.False(options.UseHeroPromptV4);
         Assert.False(options.UseStoryFrameV4Comparison);
+        Assert.False(options.RegenerateStoryFrameV4Comparison);
     }
 
     [Fact]
