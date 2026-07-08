@@ -5102,13 +5102,18 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var isPlanetConjunction = string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase);
         var forbiddenOpening = isPlanetConjunction ? new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow", "Open", "Opens", "Start", "Starts" } : new[] { "For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow" };
+        var planetConjunctionGreetingPatterns = new[] { "Welcome to Drashyam", "Hello, fellow stargazers", "Greetings, astronomy lovers" };
+        var planetConjunctionGreetingRegex = @"^\s*(Welcome to Drashyam|Hello, fellow stargazers|Greetings, astronomy lovers)\b";
         foreach (var opening in new[] { shortTexts["001-hook"], longTexts["001-hook"] })
         {
             var first = Regex.Match(opening.Trim(), @"^\w+").Value;
             if (forbiddenOpening.Contains(first, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Phase 14 EventStoryComposer opening starts with forbidden word: {first}");
-            if (isPlanetConjunction && !Regex.IsMatch(opening, @"^\s*(Hello, fellow stargazers|Greetings, astronomy lovers)\b", RegexOptions.IgnoreCase))
-                throw new InvalidOperationException("Phase 14 PlanetConjunction opening must begin with a documentary-host greeting.");
+            if (isPlanetConjunction && !Regex.IsMatch(opening, planetConjunctionGreetingRegex, RegexOptions.IgnoreCase))
+            {
+                var preview = opening.Length <= 120 ? opening : opening[..120];
+                throw new InvalidOperationException($"Phase 14 PlanetConjunction opening must begin with a documentary-host greeting. Actual first 120 chars: \"{preview}\". Accepted greeting patterns: {string.Join(", ", planetConjunctionGreetingPatterns)}.");
+            }
         }
         if (!isPlanetConjunction && diagnostics is not null && (!diagnostics.EventDateMentioned || !diagnostics.EventNameMentioned))
             throw new InvalidOperationException("Phase 14 EventStoryComposer opening must contain event date and event name.");

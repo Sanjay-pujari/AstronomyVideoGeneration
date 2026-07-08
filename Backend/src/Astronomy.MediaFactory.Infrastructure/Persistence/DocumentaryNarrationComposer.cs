@@ -28,10 +28,14 @@ internal static partial class EventStoryComposer
         var importance = BuildImportance(family, eventName, contextFact);
         var isHindi = IsHindi(language);
 
+        var coldOpen = string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            ? BuildPlanetConjunctionColdOpen(eventName, eventDateText, intelligence, importance)
+            : $"On {eventDateText}, {eventName} {OpeningVerb(family)}. {importance}";
+
         var sections = isHindi
             ? BuildHindiSections(family, eventName, eventDateText, direction, window, contextFact)
             : new DocumentaryNarrationSections(
-            $"On {eventDateText}, {eventName} {OpeningVerb(family)}. {importance}",
+            coldOpen,
             BuildHook(family, eventName),
             BuildContext(family, eventName, contextFact),
             BuildMainStory(family, eventName),
@@ -108,6 +112,24 @@ internal static partial class EventStoryComposer
     }
 
     private static string OpeningVerb(string family) => family switch { "Meteor" => "reaches its peak", "Moon" => "will rise above the evening horizon", "Eclipse" => "will be visible across parts of the world", _ => "will appear in the sky" };
+    private static string BuildPlanetConjunctionColdOpen(string eventName, string eventDateText, ProductionEventIntelligence? intelligence, string importance)
+    {
+        var objects = (intelligence?.PrimaryObjects ?? [])
+            .Concat(intelligence?.SecondaryObjects ?? [])
+            .Select(Clean)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .ToArray();
+        var objectText = objects.Length switch
+        {
+            >= 2 => $"{objects[0]} and {objects[1]}",
+            1 => objects[0],
+            _ => eventName
+        };
+
+        return $"Welcome to Drashyam. On {eventDateText}, {objectText} will appear unusually close in the sky. {importance}";
+    }
     private static string BuildImportance(string family, string eventName, string contextFact) => family switch { "Meteor" => "Under dark skies, observers may see repeated meteors crossing the night, each one a tiny fragment of cosmic history burning into light.", "Moon" => "As a full moon tied to winter traditions, it connects a familiar sight with centuries of skywatching memory.", "Eclipse" => "For a brief time, the Moon will move across the face of the Sun, creating one of the most dramatic daytime sky events in astronomy.", "PlanetConjunction" => "For a short time, perspective brings distant worlds into the same human field of view, revealing the solar system in motion without suggesting they are physically close.", _ => "For a short time, perspective will bring distant worlds into the same human field of view, revealing the solar system in motion." };
     private static string BuildHook(string family, string eventName) => family switch { "Meteor" => "The story begins quietly, then suddenly: a streak, a pause, and another flash where empty darkness seemed to be.", "Moon" => "Its light is familiar, but the first full moon of the year still changes the landscape, softening edges and pulling attention back to the horizon.", "Eclipse" => "Eclipses turn celestial mechanics into something physical, letting daylight itself become part of the drama.", _ => "To the eye, the planets may seem almost close enough to belong together, even though space keeps them separated by enormous distances." };
     private static string BuildContext(string family, string eventName, string fact) => family switch { "Meteor" => $"Meteor showers are old trails crossing a new night. {fact}", "Moon" => $"Moon names are cultural memory written onto a predictable orbit. {fact}", "Eclipse" => $"An eclipse is a shadow story, possible only when the Sun, Moon, and Earth line up with rare precision. {fact}", "PlanetConjunction" => $"A planetary conjunction is a story of perspective, not proximity. {fact}", _ => $"Planetary conjunctions are stories of perspective, not proximity. {fact}" };
