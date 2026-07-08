@@ -216,7 +216,6 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
         await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "LongStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
-        await GenerateV4ComparisonAsync(timeline, outputFolder, platform, cancellationToken).ConfigureAwait(false);
         return (plan, review, manifest);
     }
 
