@@ -531,6 +531,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentPlanBatchGenerationService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
         services.AddScoped<IContentPlanGenerationReadinessService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
         services.AddScoped<Rc2PipelinePhaseRegistry>();
+        services.AddScoped<SceneIntentBuilder>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
         services.AddScoped<ICategoryProductionPipelineStrategy, DailySkyGuideProductionPipelineStrategy>();

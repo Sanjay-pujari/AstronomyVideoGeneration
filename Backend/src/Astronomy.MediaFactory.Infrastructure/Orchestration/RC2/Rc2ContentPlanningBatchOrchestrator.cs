@@ -6,6 +6,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 public sealed class Rc2ContentPlanningBatchOrchestrator(
     IContentPlanBatchGenerationService v4BatchGeneration,
     Rc2PipelinePhaseRegistry phaseRegistry,
+    SceneIntentBuilder sceneIntentBuilder,
     ILogger<Rc2ContentPlanningBatchOrchestrator> logger)
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -32,6 +33,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             requestedPhases.Count == 0 ? "none" : string.Join(',', requestedPhases));
 
         var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
+        await sceneIntentBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
 
         logger.LogInformation(
             "RC2 content planning orchestration completed. Success={Success}; SelectedPlanCount={SelectedPlanCount}; FailedPlans={FailedPlans}; LastCompletedPhaseNo={LastCompletedPhaseNo}; LastFailedPhaseNo={LastFailedPhaseNo}; OutputRoot={OutputRoot}",
