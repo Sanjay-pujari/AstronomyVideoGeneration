@@ -2867,7 +2867,9 @@ public sealed partial class ProductionPipelineExecutionService(
             longItems = ApplyDocumentaryNarrationToSyncItems(NormalizeV31NarrationSceneIds("long", longItems), documentaryNarration.LongItems);
             var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, subtitleTtsOptions?.Value, cancellationToken);
             var documentaryNarrationV2DiagnosticsPath = await WritePhase14DocumentaryNarrationV2DiagnosticsAsync(planRoot, documentaryNarration, cancellationToken);
-            var v31NarrationIntegrationDiagnosticsPath = Path.Combine(validationRoot, "v31-narration-integration-diagnostics.json");
+            var narrationDiagnosticsRoot = Path.Combine(planRoot, "narration", "diagnostics");
+            Directory.CreateDirectory(narrationDiagnosticsRoot);
+            var v31NarrationIntegrationDiagnosticsPath = Path.Combine(narrationDiagnosticsRoot, "NarrationIntegrationDiagnostics.json");
             await File.WriteAllTextAsync(v31NarrationIntegrationDiagnosticsPath, JsonSerializer.Serialize(new
             {
                 v31NarrationIntegrationDiagnostics = new
@@ -2970,6 +2972,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 shortNarrationSource = NormalizePath(selectedShortNarrationSource),
                 longNarrationSource = NormalizePath(selectedLongNarrationSource),
                 narrationRoot = NormalizePath(narrationOutput.Root),
+                diagnosticsRoot = NormalizePath(Path.Combine(narrationOutput.Root, "diagnostics")),
+                comparisonRoot = NormalizePath(Path.Combine(narrationOutput.Root, "comparison")),
+                manifestPath = NormalizePath(narrationOutput.ManifestPath),
                 narrationManifestPath = NormalizePath(narrationOutput.ManifestPath),
                 NarrationReadPath = NormalizePath(narrationOutput.SelectedNarrationRoot),
                 NarrationWritePath = NormalizePath(narrationOutput.SelectedNarrationRoot),
@@ -3164,9 +3169,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var longSrtWriteValidation = BuildPhase14SrtWriteValidation(longSrtPath, longSrtTiming.Diagnostics.GeneratedSubtitleBlockCount);
         if (!shortSrtWriteValidation.CountsMatch || !longSrtWriteValidation.CountsMatch)
             throw new InvalidOperationException($"Phase 14 final SRT writer mismatch: short actual={shortSrtWriteValidation.ActualSrtBlockCount}, diagnostic={shortSrtWriteValidation.DiagnosticGeneratedCueCount}; long actual={longSrtWriteValidation.ActualSrtBlockCount}, diagnostic={longSrtWriteValidation.DiagnosticGeneratedCueCount}");
-        var validationRoot = Path.Combine(planRoot, "validation");
-        Directory.CreateDirectory(validationRoot);
-        var srtGenerationDiagnosticsPath = Path.Combine(validationRoot, "phase-14-srt-generation-diagnostics.json");
+        var diagnosticsRoot = Path.Combine(narrationRoot, "diagnostics");
+        var comparisonRoot = Path.Combine(narrationRoot, "comparison");
+        Directory.CreateDirectory(diagnosticsRoot);
+        Directory.CreateDirectory(comparisonRoot);
+        var srtGenerationDiagnosticsPath = Path.Combine(diagnosticsRoot, "SubtitleGenerationDiagnostics.json");
         await File.WriteAllTextAsync(srtGenerationDiagnosticsPath, JsonSerializer.Serialize(new
         {
             subtitleTtsOptionsLoaded = configuredSubtitleTtsOptions is not null,
@@ -3181,6 +3188,9 @@ public sealed partial class ProductionPipelineExecutionService(
             NarrationWritePath = NormalizePath(selectedNarrationRoot),
             SubtitleValidationInputPath = NormalizePath(selectedNarrationRoot)
         }, JsonOptions), cancellationToken);
+        var translationDiagnosticsPath = Path.Combine(diagnosticsRoot, "TranslationDiagnostics.json");
+        await File.WriteAllTextAsync(translationDiagnosticsPath, JsonSerializer.Serialize(documentaryNarration.TranslationDiagnostics, JsonOptions), cancellationToken);
+        files.Add(translationDiagnosticsPath);
         files.Add(srtGenerationDiagnosticsPath);
         files.Add(internalShortSrtPath);
         files.Add(internalLongSrtPath);
@@ -3201,6 +3211,23 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new
         {
             version = "v1",
+            languages = new[] { language },
+            formats = new[] { "short", "long" },
+            sceneCount = new { @short = shortItems.Count, @long = longNarrationV3Items.Count, total = shortItems.Count + longNarrationV3Items.Count },
+            subtitlePaths = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
+            diagnosticPaths = new
+            {
+                NarrativeEditorialReview = NormalizePath(Path.Combine(diagnosticsRoot, "NarrativeEditorialReview.json")),
+                NarrativePipelineFlow = NormalizePath(Path.Combine(diagnosticsRoot, "NarrativePipelineFlow.json")),
+                NarrationIntegrationDiagnostics = NormalizePath(Path.Combine(diagnosticsRoot, "NarrationIntegrationDiagnostics.json")),
+                TranslationDiagnostics = NormalizePath(Path.Combine(diagnosticsRoot, "TranslationDiagnostics.json")),
+                SubtitleGenerationDiagnostics = NormalizePath(Path.Combine(diagnosticsRoot, "SubtitleGenerationDiagnostics.json")),
+                SynchronizationDiagnostics = NormalizePath(Path.Combine(diagnosticsRoot, "SynchronizationDiagnostics.json"))
+            },
+            comparisonPaths = new { narrationMigrationReport = NormalizePath(Path.Combine(comparisonRoot, "narration-migration-report.json")) },
+            generationUtc = DateTimeOffset.UtcNow,
+            writerVersion = EventStoryComposer.Version,
+            writerClass = "DocumentaryNarrativeWriter",
             requestedLanguage = language,
             selectedNarrationLanguage = language,
             NarrationReadPath = NormalizePath(selectedNarrationRoot),
@@ -5221,13 +5248,13 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task WritePhase14NarrativeIntegrationDiagnosticsAsync(ProductionPhaseContext context, Phase14DocumentaryNarration narration, CancellationToken cancellationToken)
     {
         ValidatePhase14NarrativeIntegration(narration);
-        var validationRoot = context.ExecutionContext.ValidationRoot ?? Path.Combine(context.OutputRoot, "validation");
-        Directory.CreateDirectory(validationRoot);
+        var diagnosticsRoot = Path.Combine(context.OutputRoot, "narration", "diagnostics");
+        Directory.CreateDirectory(diagnosticsRoot);
         var language = ResolvePipelineLanguage(context.Request.Language);
         var languageWriterType = language == "hi" ? "HindiDocumentaryLanguageWriter" : "EnglishDocumentaryLanguageWriter";
         var allText = string.Join(" ", narration.ShortItems.Values.Concat(narration.LongItems.Values));
         var diagnostics = narration.Diagnostics;
-        var flowPath = Path.Combine(validationRoot, "NarrationPipelineFlow.json");
+        var flowPath = Path.Combine(diagnosticsRoot, "NarrativePipelineFlow.json");
         await File.WriteAllTextAsync(flowPath, JsonSerializer.Serialize(new
         {
             version = "RC1-B.1 Integration Verification",
@@ -5253,7 +5280,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ttsUnchanged = true
         }, JsonOptions), cancellationToken);
 
-        var reviewPath = Path.Combine(validationRoot, "NarrativeEditorialReview.json");
+        var reviewPath = Path.Combine(diagnosticsRoot, "NarrativeEditorialReview.json");
         await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
         {
             editorialWriterExecuted = narration.ComposerCalled && narration.OutputUsed && string.Equals(narration.TextSource, "SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase),
@@ -7541,7 +7568,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static async Task<string> WritePhase14SyncDiagnosticsAsync(string planRoot, string language, string syncRoot, IReadOnlyList<string> checkedPaths, string shortRoot, string longRoot, string shortNarration, string longNarration, IReadOnlyList<string> oldPaths, IReadOnlyList<object> strategies, IReadOnlyList<NarrationSceneDiagnostic> narrationDiagnostics, IReadOnlyList<Phase14MatchedPair> matchedPairs, IReadOnlyList<string> unmatchedNarrationSections, IReadOnlyList<string> unmatchedScenes, IReadOnlyList<string> missingFiles, IReadOnlyList<string> exceptions, Phase14AdapterDiagnostics? adapterDiagnostics, NarrationFileWriteDiagnostics? writeDiagnostics, IReadOnlyList<NarrationFileWriteTraceEntry>? writeTrace, Phase14SceneDurationPlanResolution? sceneDurationPlanResolution, Phase14EventConsistencyDiagnostics? eventConsistencyDiagnostics, CancellationToken ct)
     {
-        var path = Path.Combine(planRoot, "validation", "phase-14-sync-diagnostics.json");
+        var path = Path.Combine(planRoot, "narration", "diagnostics", "SynchronizationDiagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
         {
