@@ -10565,6 +10565,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var productionMotionPlanPath = Path.Combine(planRoot, "motion", "motion-plan.json");
         var previewMotionPlanPath = Path.Combine(planRoot, "motion", "motion-plan-v2-preview.json");
         var previewOnly = videoAssemblyOptions?.Value.VideoAssemblyPreviewOnly == true || context.PipelineRequest.MotionPreviewOnly;
+        var useStoryFramesV4ForVideoAssembly = visualIntelligenceOptions?.Value?.UseStoryFramesV4ForVideoAssembly == true;
+        var longVisualFrameRoot = Path.Combine(planRoot, "long-story-frames");
+        var shortVisualFrameRoot = Path.Combine(planRoot, "short-story-frames");
+        var selectedVisualSource = useStoryFramesV4ForVideoAssembly ? "story-frames-v4" : "scene-assets-v3";
+        const string frameMappingStrategy = "scene-order-scene-purpose";
+        const bool fallbackToSceneAssetsV3 = false;
         var motionPlanPath = File.Exists(previewMotionPlanPath) ? previewMotionPlanPath : productionMotionPlanPath;
         var motionDebugPath = string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? Path.Combine(planRoot, "motion", "motion-debug-v2-preview.json") : Path.Combine(planRoot, "motion", "motion-debug.json");
         var shortVideoPath = Path.Combine(videoRoot, "short", "final.mp4");
@@ -10579,13 +10585,20 @@ public sealed partial class ProductionPipelineExecutionService(
             Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
             Path.Combine(planRoot, "scene-assets")
         };
-        var inputPathsChecked = new[] { syncPath, ttsPath, durationPlanPath, motionPlanPath, motionDebugPath, Path.Combine(sceneAssetsRoot, "short"), Path.Combine(sceneAssetsRoot, "long") };
+        var inputPathsChecked = new List<string> { syncPath, ttsPath, durationPlanPath, motionPlanPath, motionDebugPath };
+        inputPathsChecked.Add(useStoryFramesV4ForVideoAssembly ? shortVisualFrameRoot : Path.Combine(sceneAssetsRoot, "short"));
+        inputPathsChecked.Add(useStoryFramesV4ForVideoAssembly ? longVisualFrameRoot : Path.Combine(sceneAssetsRoot, "long"));
         var errors = new List<string>();
         var missingSceneImages = new List<string>();
+        var missingFrames = new List<string>();
         var missingAudioFiles = new List<string>();
         var oldPathUsageReasons = new List<string>();
         foreach (var path in inputPathsChecked)
             if (!File.Exists(path) && !Directory.Exists(path) && !(previewOnly && string.Equals(path, ttsPath, StringComparison.OrdinalIgnoreCase))) errors.Add($"Input missing: {NormalizePath(path)}");
+        IReadOnlyList<string> storyFrameValidationErrors = useStoryFramesV4ForVideoAssembly
+            ? ValidateStoryFrameV4VideoAssemblyInputs(planRoot, previewOnly, missingFrames)
+            : Array.Empty<string>();
+        errors.AddRange(storyFrameValidationErrors);
 
         var shortSceneCount = 0;
         var longSceneCount = 0;
@@ -10609,16 +10622,17 @@ public sealed partial class ProductionPipelineExecutionService(
         var motionV2StrengthMismatch = HasMotionV2StrengthMismatch(context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed);
         {
             var ttsRoot = File.Exists(ttsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(ttsPath, cancellationToken)) ?? new JsonObject() : new JsonObject();
-            var shortItems = ReadVideoAssemblyItems(planRoot, requestedLanguage, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
-            var longItems = ReadVideoAssemblyItems(planRoot, requestedLanguage, motionRoot, ttsRoot, "long", previewOnly ? int.MaxValue : 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons);
+            var shortItems = ReadVideoAssemblyItems(planRoot, requestedLanguage, motionRoot, ttsRoot, "short", previewOnly ? int.MaxValue : 5, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons, useStoryFramesV4ForVideoAssembly);
+            var longItems = ReadVideoAssemblyItems(planRoot, requestedLanguage, motionRoot, ttsRoot, "long", previewOnly ? int.MaxValue : 9, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons, useStoryFramesV4ForVideoAssembly);
             await WriteMotionDebugAsync(planRoot, shortItems.Concat(longItems).ToArray(), cancellationToken);
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
             initialShortExpandedSceneCount = CountSceneDurationExpansionMatches(initialShortCueLevelDurationsBySceneId, shortItems);
             initialLongExpandedSceneCount = CountSceneDurationExpansionMatches(initialLongCueLevelDurationsBySceneId, longItems);
             var backgroundMusicConfig = ResolvePhase18BackgroundMusicConfig(planRoot);
-            if (shortItems.Count > 0) shortRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
-            if (!previewOnly && longItems.Count > 0) longRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            var visualInputsValid = storyFrameValidationErrors.Count == 0;
+            if (visualInputsValid && shortItems.Count > 0) shortRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (visualInputsValid && !previewOnly && longItems.Count > 0) longRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
             if (previewOnly && File.Exists(longVideoPath)) File.Delete(longVideoPath);
         }
 
@@ -10785,6 +10799,15 @@ public sealed partial class ProductionPipelineExecutionService(
             renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 },
             expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount },
             renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount },
+            useStoryFramesV4ForVideoAssembly,
+            selectedVisualSource,
+            longVisualFrameRoot = NormalizePath(longVisualFrameRoot),
+            shortVisualFrameRoot = NormalizePath(shortVisualFrameRoot),
+            longFrameCount = CountStoryFrameImages(longVisualFrameRoot),
+            shortFrameCount = CountStoryFrameImages(shortVisualFrameRoot),
+            frameMappingStrategy,
+            missingFrames,
+            fallbackToSceneAssetsV3,
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
             selectedVideoAssemblyRoot = NormalizePath(videoRoot),
@@ -10937,6 +10960,15 @@ public sealed partial class ProductionPipelineExecutionService(
             renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 },
             expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount },
             renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount },
+            useStoryFramesV4ForVideoAssembly,
+            selectedVisualSource,
+            longVisualFrameRoot = NormalizePath(longVisualFrameRoot),
+            shortVisualFrameRoot = NormalizePath(shortVisualFrameRoot),
+            longFrameCount = CountStoryFrameImages(longVisualFrameRoot),
+            shortFrameCount = CountStoryFrameImages(shortVisualFrameRoot),
+            frameMappingStrategy,
+            missingFrames,
+            fallbackToSceneAssetsV3,
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
             selectedVideoAssemblyRoot = NormalizePath(videoRoot),
@@ -11078,7 +11110,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
 
-    private static IReadOnlyList<VideoAssemblyItem> ReadVideoAssemblyItems(string planRoot, string language, JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons)
+    private static IReadOnlyList<VideoAssemblyItem> ReadVideoAssemblyItems(string planRoot, string language, JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount, IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons, bool useStoryFramesV4ForVideoAssembly)
     {
         var items = new List<VideoAssemblyItem>();
         var durationPlanItems = ReadSceneDurationPlanItems(planRoot, format);
@@ -11091,7 +11123,9 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var item in (motionRoot[format]?["items"]?.AsArray() ?? []).Take(expectedCount))
         {
             var sceneId = GetString(item, "sceneId") ?? $"{items.Count + 1:000}";
-            var imagePath = FirstNonEmpty(GetString(item, "sceneImagePath"), GetString(item, "imagePath"), ResolveVideoAssemblySceneImageFromManifest(planRoot, format, sceneId, items.Count), string.Empty);
+            var imagePath = useStoryFramesV4ForVideoAssembly
+                ? ResolveStoryFrameV4VideoAssemblyImagePath(planRoot, format, items.Count)
+                : FirstNonEmpty(GetString(item, "sceneImagePath"), GetString(item, "imagePath"), ResolveVideoAssemblySceneImageFromManifest(planRoot, format, sceneId, items.Count), string.Empty);
             var audioPath = ResolveVideoAssemblyAudioPath(ttsRoot, format, sceneId, items.Count) ?? GetString(item, "audioPath") ?? ResolveVideoAssemblyAudioByConvention(imagePath, format, sceneId, items.Count) ?? string.Empty;
             if (!File.Exists(imagePath)) missingSceneImages.Add(NormalizePath(imagePath));
             if (!File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
@@ -11131,6 +11165,80 @@ public sealed partial class ProductionPipelineExecutionService(
                 GetString(item, "easing") ?? ResolveMotionEasing(motionProfile)));
         }
         return items;
+    }
+
+    private static string ResolveStoryFrameV4VideoAssemblyImagePath(string planRoot, string format, int index)
+    {
+        var fileName = string.Equals(format, "long", StringComparison.OrdinalIgnoreCase)
+            ? LongStoryFrameV4VideoAssemblyFileNames.ElementAtOrDefault(index)
+            : ShortStoryFrameV4VideoAssemblyFileNames.ElementAtOrDefault(index);
+        return string.IsNullOrWhiteSpace(fileName)
+            ? string.Empty
+            : Path.Combine(planRoot, string.Equals(format, "long", StringComparison.OrdinalIgnoreCase) ? "long-story-frames" : "short-story-frames", fileName);
+    }
+
+    private static readonly string[] LongStoryFrameV4VideoAssemblyFileNames =
+    [
+        "frame01-hook.png",
+        "frame02-what-is-it.png",
+        "frame03-cause.png",
+        "frame04-interesting-fact.png",
+        "frame05-best-time.png",
+        "frame06-accurate-sky-guide.png",
+        "frame07-what-you-will-see.png",
+        "frame08-viewing-tips.png",
+        "frame09-final-reminder.png"
+    ];
+
+    private static readonly string[] ShortStoryFrameV4VideoAssemblyFileNames =
+    [
+        "frame01-hook.png",
+        "frame02-cause.png",
+        "frame03-accurate-sky-guide.png",
+        "frame04-viewing-tip.png",
+        "frame05-final-reminder.png"
+    ];
+
+    private static IReadOnlyList<string> ValidateStoryFrameV4VideoAssemblyInputs(string planRoot, bool previewOnly, List<string> missingFrames)
+    {
+        var errors = new List<string>();
+        ValidateStoryFrameV4Set(Path.Combine(planRoot, "short-story-frames"), ShortStoryFrameV4VideoAssemblyFileNames, "short", false, errors, missingFrames);
+        if (!previewOnly) ValidateStoryFrameV4Set(Path.Combine(planRoot, "long-story-frames"), LongStoryFrameV4VideoAssemblyFileNames, "long", true, errors, missingFrames);
+        return errors;
+    }
+
+    private static void ValidateStoryFrameV4Set(string root, IReadOnlyList<string> fileNames, string format, bool requireLandscape, List<string> errors, List<string> missingFrames)
+    {
+        var existingCount = CountStoryFrameImages(root);
+        if (existingCount != fileNames.Count) errors.Add($"StoryFrame V4 video assembly requires {fileNames.Count} {format} frames; found {existingCount} in {NormalizePath(root)}.");
+        foreach (var fileName in fileNames)
+        {
+            var path = Path.Combine(root, fileName);
+            if (!File.Exists(path))
+            {
+                var normalized = NormalizePath(path);
+                missingFrames.Add(normalized);
+                errors.Add($"StoryFrame V4 video assembly missing {format} frame: {normalized}");
+                continue;
+            }
+
+            int width;
+            int height;
+            try
+            {
+                using var image = Image.Load(path);
+                width = image.Width;
+                height = image.Height;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"StoryFrame V4 video assembly could not read {format} frame dimensions: {NormalizePath(path)} ({ex.Message})");
+                continue;
+            }
+
+            if (requireLandscape && width <= height) errors.Add($"StoryFrame V4 long frame must be landscape: {NormalizePath(path)} ({width}x{height})");
+            if (!requireLandscape && height <= width) errors.Add($"StoryFrame V4 short frame must be portrait: {NormalizePath(path)} ({width}x{height})");
+        }
     }
 
     private static double NormalizePhase18Scale(double value) => value <= 3.0 ? value * 100.0 : value;

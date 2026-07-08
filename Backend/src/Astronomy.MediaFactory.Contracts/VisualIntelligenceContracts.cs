@@ -324,6 +324,7 @@ public sealed class VisualIntelligenceOptions
     public bool UseHeroImageV4Comparison { get; init; }
     public bool UseStoryFrameV4Comparison { get; init; }
     public bool RegenerateStoryFrameV4Comparison { get; init; }
+    public bool UseStoryFramesV4ForVideoAssembly { get; init; } = false;
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<EventFamily>))]
@@ -365,7 +366,7 @@ public enum CreativeQualityCategory
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<VisualIntelligenceFeatureFlagName>))]
-public enum VisualIntelligenceFeatureFlagName { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("useVisualCreativeDirector")] UseVisualCreativeDirector, [JsonStringEnumMemberName("useCDL")] UseCDL, [JsonStringEnumMemberName("useCreativeDirectionContract")] UseCreativeDirectionContract, [JsonStringEnumMemberName("usePromptComposerV2")] UsePromptComposerV2, [JsonStringEnumMemberName("useProviderProfiles")] UseProviderProfiles, [JsonStringEnumMemberName("useQualityScoring")] UseQualityScoring, [JsonStringEnumMemberName("useQualityScoringBlocking")] UseQualityScoringBlocking, [JsonStringEnumMemberName("useExperimentalRenderingRules")] UseExperimentalRenderingRules, [JsonStringEnumMemberName("useHeroPromptV4")] UseHeroPromptV4, [JsonStringEnumMemberName("useStoryFrameV4Comparison")] UseStoryFrameV4Comparison, [JsonStringEnumMemberName("regenerateStoryFrameV4Comparison")] RegenerateStoryFrameV4Comparison }
+public enum VisualIntelligenceFeatureFlagName { [JsonStringEnumMemberName("unknown")] Unknown = 0, [JsonStringEnumMemberName("useVisualCreativeDirector")] UseVisualCreativeDirector, [JsonStringEnumMemberName("useCDL")] UseCDL, [JsonStringEnumMemberName("useCreativeDirectionContract")] UseCreativeDirectionContract, [JsonStringEnumMemberName("usePromptComposerV2")] UsePromptComposerV2, [JsonStringEnumMemberName("useProviderProfiles")] UseProviderProfiles, [JsonStringEnumMemberName("useQualityScoring")] UseQualityScoring, [JsonStringEnumMemberName("useQualityScoringBlocking")] UseQualityScoringBlocking, [JsonStringEnumMemberName("useExperimentalRenderingRules")] UseExperimentalRenderingRules, [JsonStringEnumMemberName("useHeroPromptV4")] UseHeroPromptV4, [JsonStringEnumMemberName("useStoryFrameV4Comparison")] UseStoryFrameV4Comparison, [JsonStringEnumMemberName("regenerateStoryFrameV4Comparison")] RegenerateStoryFrameV4Comparison, [JsonStringEnumMemberName("useStoryFramesV4ForVideoAssembly")] UseStoryFramesV4ForVideoAssembly }
 
 public sealed record CDL
 {
