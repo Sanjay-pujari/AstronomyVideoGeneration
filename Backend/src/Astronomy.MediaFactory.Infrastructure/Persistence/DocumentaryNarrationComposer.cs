@@ -6,7 +6,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 internal static partial class EventStoryComposer
 {
-    public const string Version = "EventStoryComposerV1";
+    public const string Version = "EventStoryComposerV2";
     private static readonly string[] AuthorInstructionPhrases =
     [
         "explain", "describe", "focus on", "call out", "give safe", "close with",
@@ -16,7 +16,7 @@ internal static partial class EventStoryComposer
 
     private static readonly string[] ForbiddenOpeningWords = ["For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow"];
 
-    public static EventStoryComposerResult Compose(string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
+    public static EventStoryComposerResult Compose(string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context, string? language = null)
     {
         var eventName = NormalizeEventName(Clean(FirstNonEmpty(intelligence?.ShortTitle, intelligence?.Title, context?.EventType, "This event")));
         var eventDate = ResolveEventDate(intelligence);
@@ -26,8 +26,11 @@ internal static partial class EventStoryComposer
         var window = HumanizeNarrationWindow(FirstNonEmpty(intelligence?.BestViewingWindowLocal, intelligence?.PreferredViewingWindow, intelligence?.LocalPeakTime, "the local viewing window"));
         var contextFact = Clean(FirstNonEmpty(intelligence?.ScientificContext, BuildDefaultContext(family, eventName)));
         var importance = BuildImportance(family, eventName, contextFact);
+        var isHindi = IsHindi(language);
 
-        var sections = new DocumentaryNarrationSections(
+        var sections = isHindi
+            ? BuildHindiSections(family, eventName, eventDateText, direction, window, contextFact)
+            : new DocumentaryNarrationSections(
             $"On {eventDateText}, {eventName} {OpeningVerb(family)}. {importance}",
             BuildHook(family, eventName),
             BuildContext(family, eventName, contextFact),
@@ -39,9 +42,56 @@ internal static partial class EventStoryComposer
         var allText = string.Join(" ", sections.ColdOpen, sections.Hook, sections.Context, sections.MainStory, sections.ViewingGuide, sections.EmotionalClosing);
         var openingValid = IsOpeningAllowed(sections.ColdOpen) && ContainsNameAndDate(sections.ColdOpen, eventName, eventDateText);
         var documentaryScore = Math.Min(100, 55 + (openingValid ? 20 : 0) + (ContainsHistoricalOrObservationalContext(allText) ? 15 : 0) + (!ContainsAuthorInstruction(allText) ? 10 : 0));
-        var storytellingScore = Math.Min(100, 50 + (sections.Context.Length > 80 ? 15 : 0) + (sections.MainStory.Length > 80 ? 15 : 0) + (sections.EmotionalClosing.Contains("memory", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (!ContainsRawTimestamp(allText) ? 10 : 0));
+        var storytellingScore = Math.Min(100, 50 + (sections.Context.Length > 80 ? 15 : 0) + (sections.MainStory.Length > 80 ? 15 : 0) + (ContainsAny(sections.EmotionalClosing, ["memory", "याद"]) ? 10 : 0) + (!ContainsRawTimestamp(allText) ? 10 : 0));
         var diagnostics = new EventStoryComposerDiagnostics(Version, "EventDateNameImportance", eventDateKnown && sections.ColdOpen.Contains(eventDateText, StringComparison.OrdinalIgnoreCase), ContainsEventName(sections.ColdOpen, eventName), documentaryScore, storytellingScore, ScoreWonderLanguage(allText), ScoreScientificAccuracy(family, allText), DynamicNarrationGenerated: true, HardcodedTemplateUsed: false, SourceEventFactsUsed: BuildSourceEventFacts(intelligence, contextFact, eventDateText, direction, window), AiRewriteAttemptCount: 0, FallbackStaticTextUsed: false);
         return new EventStoryComposerResult(sections, diagnostics);
+    }
+
+
+    private static bool IsHindi(string? language)
+        => !string.IsNullOrWhiteSpace(language) && (language.StartsWith("hi", StringComparison.OrdinalIgnoreCase) || language.Contains("Hindi", StringComparison.OrdinalIgnoreCase));
+
+    private static DocumentaryNarrationSections BuildHindiSections(string family, string eventName, string eventDateText, string direction, string window, string contextFact)
+    {
+        var title = eventName;
+        var hindiContext = family switch
+        {
+            "Meteor" => "यह धूल अंतरिक्ष में बहुत पुरानी हो सकती है, लेकिन उसकी चमक हमें आज रात दिखाई देती है।",
+            "Moon" => "पूर्णिमा की तारीख पहले से जानी जा सकती है, फिर भी उसका अनुभव मौसम, क्षितिज और रोशनी से बदल जाता है।",
+            "Eclipse" => "इसकी दृश्यता स्थान और समय पर निर्भर करती है, इसलिए स्थानीय जानकारी सबसे जरूरी होती है।",
+            _ => "असल दूरी बहुत बड़ी रहती है; पास आने का अहसास केवल हमारी देखने की रेखा से बनता है।"
+        };
+        return family switch
+        {
+            "Meteor" => new(
+                $"{eventDateText} को {title} अपनी सबसे अच्छी अवस्था के करीब होगा। रात शांत लगेगी, लेकिन किसी भी पल एक चमकदार लकीर आसमान को काट सकती है।",
+                "पहले अंधेरा खाली लगता है। फिर एक टूटता तारा दिखता है, और नजर अपने-आप अगली चमक का इंतजार करने लगती है।",
+                $"उल्का वर्षा तब बनती है जब पृथ्वी पुराने धूमकेतु या क्षुद्रग्रह की छोड़ी हुई धूल से गुजरती है। {hindiContext}",
+                "हर चमक बहुत छोटे कण की आखिरी यात्रा है। वह हमारे वातावरण में जलता है, पल भर के लिए दिखता है, और आकाश को जीवित महसूस करा देता है।",
+                $"सबसे अच्छा अनुभव {window} के दौरान मिलेगा। शहर की रोशनी से दूर जाएं, खुले आसमान की ओर देखें, और आंखों को अंधेरे में ढलने का समय दें।",
+                "ऐसी रातें धैर्य मांगती हैं। लेकिन एक सही चमक आपकी याद में लंबे समय तक रह सकती है।"),
+            "Moon" => new(
+                $"{eventDateText} को {title} शाम के आसमान में उभरेगा। यह परिचित चंद्रमा है, लेकिन क्षितिज के पास इसकी रोशनी अलग तरह से महसूस होती है।",
+                "चंद्रमा रोजमर्रा का लगता है, फिर भी कभी-कभी वही सबसे शांत और सुंदर दृश्य बन जाता है।",
+                $"पूर्णिमा तब होती है जब चंद्रमा हमारे आकाश में सूर्य के ठीक विपरीत होता है। {hindiContext}",
+                "जैसे-जैसे चंद्रमा ऊपर उठता है, उसका रंग गर्म से सफेद होता जाता है। यह बदलाव आकाश की हवा और हमारी दृष्टि, दोनों की कहानी है।",
+                $"देखने के लिए {window} बेहतर रहेगा। {direction} की ओर खुला क्षितिज चुनें, फिर चंद्रमा को धीरे-धीरे ऊपर चढ़ते देखें।",
+                "याद रखने वाली बात सरल है: परिचित चीजें भी, सही समय पर, हमें फिर से देखना सिखा देती हैं।"),
+            "Eclipse" => new(
+                $"{eventDateText} को {title} आकाश में छाया की कहानी लिखेगा। दिन की रोशनी में होने वाला यह बदलाव धीमे-धीमे शुरू होता है, फिर अचानक गहरा महसूस होता है।",
+                "ग्रहण हमें वह गति दिखाता है जिसे हम आम तौर पर महसूस नहीं कर पाते।",
+                $"सूर्य ग्रहण तब होता है जब चंद्रमा पृथ्वी और सूर्य के बीच आ जाता है। {hindiContext}",
+                "सबसे बड़ा नाटक आकार में नहीं, बदलाव में है—रोशनी कम होती है, रंग बदलते हैं, और आसमान अपनी यांत्रिकी सामने रख देता है।",
+                $"स्थानीय दृश्यता {window} में सबसे महत्वपूर्ण होगी। सूर्य की ओर केवल प्रमाणित ग्रहण चश्मे या सुरक्षित सौर फिल्टर से ही देखें।",
+                "छाया गुजर जाती है, लेकिन सुरक्षित तरीके से देखा गया ग्रहण वर्षों तक याद रह सकता है।"),
+            _ => new(
+                $"{eventDateText} को {title} आकाश में दिखाई देगा। यह दूरी का मिलन नहीं, हमारी दृष्टि की खूबसूरत ज्यामिति है।",
+                "पहली नजर में दो चमकीले बिंदु पास-पास लगेंगे। असली कहानी यह है कि वे अंतरिक्ष में बहुत दूर होते हुए भी एक ही फ्रेम में आ जाते हैं।",
+                $"ऐसा संयोग पृथ्वी से दिखने वाली रेखा के कारण बनता है। {hindiContext}",
+                "एक ग्रह अधिक चमकदार लग सकता है, दूसरा अधिक स्थिर। दोनों मिलकर हमें सौर मंडल की गति आंखों से दिखाते हैं।",
+                $"{window} के आसपास {direction} की ओर देखें। पहले सबसे चमकीले बिंदु को पहचानें, फिर उसके पास दिख रहे दूसरे बिंदु से दूरी की तुलना करें।",
+                "कुछ दिनों बाद यह जोड़ी अलग दिखेगी। यही इसकी खूबसूरती है—आकाश बदलता रहता है, और हमें बस सही समय पर ऊपर देखना होता है।")
+        };
     }
 
     public static DocumentaryNarrationSections Compose(DocumentaryNarrationSections input)
@@ -89,7 +139,7 @@ internal static partial class EventStoryComposer
     private static bool ContainsNameAndDate(string opening, string name, string date) => opening.Contains(date, StringComparison.OrdinalIgnoreCase) && ContainsEventName(opening, name);
     private static bool ContainsEventName(string opening, string name) => SignificantWords(name).Any(w => opening.Contains(w, StringComparison.OrdinalIgnoreCase));
     private static IEnumerable<string> SignificantWords(string value) => Regex.Matches(value ?? string.Empty, @"[\p{L}\p{N}]{4,}").Select(m => m.Value).Where(w => !string.Equals(w, "event", StringComparison.OrdinalIgnoreCase));
-    private static bool ContainsHistoricalOrObservationalContext(string text) => ContainsAny(text, ["centuries", "traditions", "observers", "horizon", "atmosphere", "telescope", "shadow", "perspective"]);
+    private static bool ContainsHistoricalOrObservationalContext(string text) => ContainsAny(text, ["centuries", "traditions", "observers", "horizon", "atmosphere", "telescope", "shadow", "perspective", "क्षितिज", "वातावरण", "छाया", "दृष्टि", "आकाश"]);
     private static bool ContainsAny(string text, IEnumerable<string> terms) => terms.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
     private static string BuildDefaultContext(string family, string eventName) => family switch { "Meteor" => "The shower comes from debris left along a comet or asteroid path.", "Moon" => "The full moon has long been used to mark seasons and passing months.", "Eclipse" => "Its path depends on the exact geometry of the Moon's shadow across Earth.", "PlanetConjunction" => "Although the planets appear close together, they remain separated by vast distances in space.", _ => "The alignment is created by changing orbital positions as seen from Earth." };
     private static int ScoreWonderLanguage(string text) => Math.Min(100, 75 + (ContainsAny(text, ["wonder", "memory", "light", "horizon", "distant", "worlds", "motion"]) ? 15 : 0) + (ContainsPerspectiveStatement(text) ? 10 : 0));
