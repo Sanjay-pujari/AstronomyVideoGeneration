@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -175,6 +176,44 @@ public sealed class StoryFrameV4ComparisonTests
         }
     }
 
+    [Theory]
+    [InlineData("short", "002-cause", "recognition")]
+    [InlineData("short", "003-accurate-sky-guide", "observation")]
+    [InlineData("short", "004-viewing-tip", "explanation")]
+    [InlineData("long", "003-cause", "explanationa")]
+    [InlineData("long", "004-interesting-fact", "interestingfact")]
+    [InlineData("long", "005-best-time", "observationa")]
+    [InlineData("long", "006-accurate-sky-guide", "observationb")]
+    [InlineData("long", "007-what-you-will-see", "explanationb")]
+    [InlineData("long", "008-viewing-tips", "memory")]
+    public void Phase18_story_frame_v4_resolution_uses_semantic_scene_mapping(string format, string narrationSceneId, string expectedStoryFrameKey)
+    {
+        var folder = TempFolder();
+        try
+        {
+            Directory.CreateDirectory(folder);
+            var imagePath = Path.Combine(folder, $"frame-{expectedStoryFrameKey}.png");
+            File.WriteAllText(imagePath, "fake image placeholder");
+            var manifestPath = Path.Combine(folder, format == "short" ? "ShortStoryFrameArtifactManifest.json" : "LongStoryFrameArtifactManifest.json");
+            File.WriteAllText(manifestPath, $$"""
+            {
+              "artifacts": {
+                "{{expectedStoryFrameKey}}": "{{Path.GetFileName(imagePath)}}"
+              }
+            }
+            """);
+            var manifest = InvokeLoadStoryFrameV4Manifest(manifestPath, format);
+
+            var resolution = InvokeResolveStoryFrameV4VideoAssemblyImagePath(manifest, format, narrationSceneId, "Narration scene purpose with no matching manifest key");
+
+            Assert.NotNull(resolution);
+            Assert.Equal(expectedStoryFrameKey, ReadStringProperty(resolution!, "StoryFrameKey"));
+            Assert.Equal("semantic-mapping", ReadStringProperty(resolution!, "ResolutionMethod"));
+            Assert.Equal(imagePath, ReadStringProperty(resolution!, "ImagePath"));
+        }
+        finally { Cleanup(folder); }
+    }
+
     private sealed class FakeGenerator(int failFrame = 0, bool configured = true, bool forceLandscape = false) : IAICinematicImageGenerator
     {
         public bool IsConfigured => configured;
@@ -193,6 +232,23 @@ public sealed class StoryFrameV4ComparisonTests
 
     private static string TempFolder() => Path.Combine(Path.GetTempPath(), "story-frame-v4-comparison-" + Guid.NewGuid().ToString("N"));
     private static void Cleanup(string folder) { if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true); }
+
+    private static object InvokeLoadStoryFrameV4Manifest(string manifestPath, string format)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("LoadStoryFrameV4Manifest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return method!.Invoke(null, [manifestPath, format])!;
+    }
+
+    private static object? InvokeResolveStoryFrameV4VideoAssemblyImagePath(object manifest, string format, string sceneId, string scenePurpose)
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ResolveStoryFrameV4VideoAssemblyImagePath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return method!.Invoke(null, [manifest, format, sceneId, scenePurpose]);
+    }
+
+    private static string ReadStringProperty(object instance, string propertyName) =>
+        (string)instance.GetType().GetProperty(propertyName)!.GetValue(instance)!;
 
     private static VisualStory Story() => new()
     {
