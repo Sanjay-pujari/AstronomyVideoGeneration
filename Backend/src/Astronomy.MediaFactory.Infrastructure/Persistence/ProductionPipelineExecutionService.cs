@@ -842,6 +842,8 @@ public sealed partial class ProductionPipelineExecutionService(
             ShortStoryFrameCount: CountStoryFrameImages(Path.Combine(context.OutputRoot, "short-story-frames")),
             Warnings: [],
             Errors: [],
+            LongRequested: requested,
+            ShortRequested: requested,
             GeneratedFiles: []);
 
         if (!requested)
@@ -851,38 +853,46 @@ public sealed partial class ProductionPipelineExecutionService(
         var errors = new List<string>();
         var files = new List<string>();
         var executed = false;
+        var longRequested = true;
+        var shortRequested = true;
+        var story = BuildStoryFrameVisualStory(context);
+        var engine = narrativeCompositionEngine ?? new NarrativeCompositionEngine();
+
         try
         {
-            var story = BuildStoryFrameVisualStory(context);
-            var engine = narrativeCompositionEngine ?? new NarrativeCompositionEngine();
-            if (generateShort)
-            {
-                var shortTimeline = engine.ComposeShort(story);
-                var shortPlanner = shortStoryFramePlanner ?? new ShortStoryFramePlanner(visualIntelligenceOptions);
-                await shortPlanner.GenerateV4ComparisonAsync(shortTimeline, context.OutputRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
-                executed = true;
-            }
-
-            if (generateLong)
-            {
-                var longTimeline = engine.ComposeLong(story);
-                var longPlanner = longStoryFramePlanner ?? new LongStoryFramePlanner(visualIntelligenceOptions);
-                await longPlanner.GenerateV4ComparisonAsync(longTimeline, context.OutputRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
-                executed = true;
-            }
+            var longTimeline = engine.ComposeLong(story);
+            var longPlanner = longStoryFramePlanner ?? new LongStoryFramePlanner(visualIntelligenceOptions);
+            await longPlanner.GenerateV4ComparisonAsync(longTimeline, context.OutputRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
+            executed = true;
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException or ArgumentException or UnauthorizedAccessException)
         {
-            errors.Add($"StoryFrame V4 comparison failed non-blocking in phase {phaseNo}: {ex.GetType().Name}: {ex.Message}");
-            warnings.Add("StoryFrame V4 comparison generation failed non-blocking; scene-assets-v3 production output remains authoritative.");
-            logger.LogWarning(ex, "StoryFrame V4 comparison failed non-blocking after SceneAssetsV3 generation. PhaseNo={PhaseNo}", phaseNo);
+            errors.Add($"Long StoryFrame V4 comparison failed non-blocking in phase {phaseNo}: {ex.GetType().Name}: {ex.Message}");
+            warnings.Add("Long StoryFrame V4 comparison generation failed non-blocking; scene-assets-v3 production output remains authoritative.");
+            logger.LogWarning(ex, "Long StoryFrame V4 comparison failed non-blocking after SceneAssetsV3 generation. PhaseNo={PhaseNo}", phaseNo);
+            await WriteStoryFrameV4FailureDiagnosticsAsync(context.OutputRoot, "long-story-frames", "LongStoryFrameGeneratorDiagnostics.json", phaseNo, ex, cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var shortTimeline = engine.ComposeShort(story);
+            var shortPlanner = shortStoryFramePlanner ?? new ShortStoryFramePlanner(visualIntelligenceOptions);
+            await shortPlanner.GenerateV4ComparisonAsync(shortTimeline, context.OutputRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
+            executed = true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException or ArgumentException or UnauthorizedAccessException)
+        {
+            errors.Add($"Short StoryFrame V4 comparison failed non-blocking in phase {phaseNo}: {ex.GetType().Name}: {ex.Message}");
+            warnings.Add("Short StoryFrame V4 comparison generation failed non-blocking; scene-assets-v3 production output remains authoritative.");
+            logger.LogWarning(ex, "Short StoryFrame V4 comparison failed non-blocking after SceneAssetsV3 generation. PhaseNo={PhaseNo}", phaseNo);
+            await WriteStoryFrameV4FailureDiagnosticsAsync(context.OutputRoot, "short-story-frames", "StoryFrameGeneratorDiagnostics.json", phaseNo, ex, cancellationToken).ConfigureAwait(false);
         }
 
         var longRoot = Path.Combine(context.OutputRoot, "long-story-frames");
         var shortRoot = Path.Combine(context.OutputRoot, "short-story-frames");
-        if (generateLong) files.AddRange(ListFilesIfExists(longRoot));
-        if (generateShort) files.AddRange(ListFilesIfExists(shortRoot));
-        return new StoryFrameV4ComparisonExecutionResult(requested, executed, NormalizePath(longRoot), NormalizePath(shortRoot), CountStoryFrameImages(longRoot), CountStoryFrameImages(shortRoot), warnings, errors, files);
+        files.AddRange(ListFilesIfExists(longRoot));
+        files.AddRange(ListFilesIfExists(shortRoot));
+        return new StoryFrameV4ComparisonExecutionResult(requested, executed, longRequested, shortRequested, NormalizePath(longRoot), NormalizePath(shortRoot), CountStoryFrameImages(longRoot), CountStoryFrameImages(shortRoot), warnings, errors, files);
     }
 
     private static VisualStory BuildStoryFrameVisualStory(ProductionPhaseContext context)
@@ -934,7 +944,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var requested = visualIntelligenceOptions?.Value?.UseStoryFrameV4Comparison == true;
         var longRoot = Path.Combine(context.OutputRoot, "long-story-frames");
         var shortRoot = Path.Combine(context.OutputRoot, "short-story-frames");
-        return new StoryFrameV4ComparisonExecutionResult(requested, Directory.Exists(longRoot) || Directory.Exists(shortRoot), NormalizePath(longRoot), NormalizePath(shortRoot), CountStoryFrameImages(longRoot), CountStoryFrameImages(shortRoot), [], [], []);
+        return new StoryFrameV4ComparisonExecutionResult(requested, Directory.Exists(longRoot) || Directory.Exists(shortRoot), requested, requested, NormalizePath(longRoot), NormalizePath(shortRoot), CountStoryFrameImages(longRoot), CountStoryFrameImages(shortRoot), [], [], []);
     }
 
     private static void PopulateStoryFrameV4Diagnostics(JsonObject d, string outputRoot, StoryFrameV4ComparisonExecutionResult result)
@@ -942,6 +952,10 @@ public sealed partial class ProductionPipelineExecutionService(
         d["useStoryFrameV4Comparison"] = result.Requested;
         d["storyFrameV4ComparisonRequested"] = result.Requested;
         d["storyFrameV4ComparisonExecuted"] = result.Executed;
+        d["longStoryFramesRequested"] = result.LongRequested;
+        d["shortStoryFramesRequested"] = result.ShortRequested;
+        d["longStoryFramesGenerated"] = result.LongStoryFrameCount > 0;
+        d["shortStoryFramesGenerated"] = result.ShortStoryFrameCount > 0;
         d["longStoryFramesRoot"] = result.LongStoryFramesRoot;
         d["shortStoryFramesRoot"] = result.ShortStoryFramesRoot;
         d["longStoryFrameCount"] = result.LongStoryFrameCount;
@@ -953,7 +967,21 @@ public sealed partial class ProductionPipelineExecutionService(
         d["shortStoryFrameComparisonReport"] = NormalizePath(Path.Combine(outputRoot, "short-story-frames", "comparison", "ShortStoryFrameComparison.json"));
     }
 
-    private sealed record StoryFrameV4ComparisonExecutionResult(bool Requested, bool Executed, string LongStoryFramesRoot, string ShortStoryFramesRoot, int LongStoryFrameCount, int ShortStoryFrameCount, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<string> GeneratedFiles);
+    private static async Task WriteStoryFrameV4FailureDiagnosticsAsync(string outputRoot, string folderName, string fileName, int phaseNo, Exception ex, CancellationToken cancellationToken)
+    {
+        var diagnosticsRoot = Path.Combine(outputRoot, folderName, "diagnostics");
+        Directory.CreateDirectory(diagnosticsRoot);
+        await File.WriteAllTextAsync(Path.Combine(diagnosticsRoot, fileName), JsonSerializer.Serialize(new
+        {
+            phaseNo,
+            generated = false,
+            errorType = ex.GetType().Name,
+            errorMessage = ex.Message,
+            productionSceneAssetsUnchanged = true
+        }, JsonOptions), cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed record StoryFrameV4ComparisonExecutionResult(bool Requested, bool Executed, bool LongRequested, bool ShortRequested, string LongStoryFramesRoot, string ShortStoryFramesRoot, int LongStoryFrameCount, int ShortStoryFrameCount, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<string> GeneratedFiles);
 
     private static IReadOnlyList<string> ValidateSceneAssetsV3(ProductionPhaseContext context)
     {
