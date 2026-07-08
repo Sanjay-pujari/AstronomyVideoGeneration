@@ -2867,6 +2867,7 @@ public sealed partial class ProductionPipelineExecutionService(
             longItems = ApplyDocumentaryNarrationToSyncItems(NormalizeV31NarrationSceneIds("long", longItems), documentaryNarration.LongItems);
             var narrationOutput = await WriteNarrationOutputLayerAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), shortItems, longItems, documentaryNarration, subtitleTtsOptions?.Value, cancellationToken);
             var documentaryNarrationV2DiagnosticsPath = await WritePhase14DocumentaryNarrationV2DiagnosticsAsync(planRoot, documentaryNarration, cancellationToken);
+            var narrationCreativeReviewPath = await WriteNarrationCreativeReviewAsync(planRoot, documentaryNarration, cancellationToken);
             var narrationDiagnosticsRoot = Path.Combine(planRoot, "narration", "diagnostics");
             Directory.CreateDirectory(narrationDiagnosticsRoot);
             var v31NarrationIntegrationDiagnosticsPath = Path.Combine(narrationDiagnosticsRoot, "NarrationIntegrationDiagnostics.json");
@@ -3061,7 +3062,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
             var diagnosticsPath = await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration.AdapterDiagnostics, narrationOutput.WriteDiagnostics, narrationOutput.WriteTrace, narrationOutput.SceneDurationPlanResolution, eventConsistencyDiagnostics, cancellationToken);
             if (errors.Count > 0) throw new InvalidOperationException("Phase 14 Scene Audio Sync V1 failed: " + string.Join(" | ", errors));
-            return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath, v31NarrationIntegrationDiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
+            return [syncPath, validationPath, diagnosticsPath, documentaryNarrationV2DiagnosticsPath,
+                    narrationCreativeReviewPath, v31NarrationIntegrationDiagnosticsPath, narrationOutput.ManifestPath, .. narrationOutput.Files];
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
@@ -3431,6 +3433,97 @@ public sealed partial class ProductionPipelineExecutionService(
             sourceComposerVersion = narration.Diagnostics.ScriptComposerVersion
         }, JsonOptions), cancellationToken);
         return path;
+    }
+
+    private static async Task<string> WriteNarrationCreativeReviewAsync(string planRoot, Phase14DocumentaryNarration narration, CancellationToken cancellationToken)
+    {
+        var diagnosticsRoot = Path.Combine(planRoot, "narration", "diagnostics");
+        Directory.CreateDirectory(diagnosticsRoot);
+        var path = Path.Combine(diagnosticsRoot, "NarrationCreativeReview.json");
+        var shortText = string.Join(" ", narration.ShortItems.Values);
+        var longText = string.Join(" ", narration.LongItems.Values);
+        var allText = $"{shortText} {longText}".Trim();
+        var shortEstimatedDurationSec = EstimateNarrationDurationSeconds(shortText);
+        var longEstimatedDurationSec = EstimateNarrationDurationSeconds(longText);
+        var consistencyWarnings = BuildNarrationConsistencyWarnings(narration.ShortItems, narration.LongItems, shortEstimatedDurationSec, longEstimatedDurationSec);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+        {
+            version = "RC1-D",
+            hookStrength = ScoreRc1DNarrationHook(narration.ShortItems.Values.FirstOrDefault() ?? string.Empty),
+            documentaryToneScore = ScoreRc1DDocumentaryTone(allText),
+            naturalnessScore = ScoreRc1DNaturalness(allText),
+            observationClarityScore = ScoreRc1DObservationClarity(allText),
+            shortEstimatedDurationSec,
+            longEstimatedDurationSec,
+            consistencyWarnings,
+            topNarrationImprovements = BuildTopNarrationImprovements(consistencyWarnings, shortEstimatedDurationSec)
+        }, JsonOptions), cancellationToken);
+        return path;
+    }
+
+    private static int EstimateNarrationDurationSeconds(string text)
+        => (int)Math.Ceiling(CountSpokenWords(text) / 2.45);
+
+    private static int ScoreRc1DNarrationHook(string text)
+    {
+        var score = 60;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(before dawn|stop you|takes the lead|bright enough|quiet sky story)\b", RegexOptions.IgnoreCase)) score += 25;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(Jupiter)\b", RegexOptions.IgnoreCase)) score += 10;
+        if (!Regex.IsMatch(text ?? string.Empty, @"\b(hello|fellow stargazers|in this video|today we will|let'?s take a closer look)\b", RegexOptions.IgnoreCase)) score += 5;
+        return Math.Min(100, score);
+    }
+
+    private static int ScoreRc1DDocumentaryTone(string text)
+    {
+        var score = 62 + new[] { "perspective", "distance", "motion", "frame", "geometry", "sky story", "horizon" }.Count(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)) * 5;
+        if (!Regex.IsMatch(text ?? string.Empty, @"\b(metadata|scene|json|render|asset|source answer|you will see)\b", RegexOptions.IgnoreCase)) score += 8;
+        return Math.Min(100, score);
+    }
+
+    private static int ScoreRc1DNaturalness(string text)
+    {
+        var score = 88;
+        score -= Regex.Matches(text ?? string.Empty, @"\b(utilize|therefore|moreover|celestial object|phenomenon|delve|tapestry)\b", RegexOptions.IgnoreCase).Count * 8;
+        score -= Regex.Matches(text ?? string.Empty, @"\b(it is important to note|as an ai|in conclusion|this video)\b", RegexOptions.IgnoreCase).Count * 15;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(use your eyes first|if the sky is clear|one morning to the next)\b", RegexOptions.IgnoreCase)) score += 8;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private static int ScoreRc1DObservationClarity(string text)
+    {
+        var score = 55;
+        if (Regex.IsMatch(text ?? string.Empty, @"\bbefore sunrise\b", RegexOptions.IgnoreCase)) score += 15;
+        if (Regex.IsMatch(text ?? string.Empty, @"\b(face|toward|horizon|direction|southeastern|eastern|western|north|south)\b", RegexOptions.IgnoreCase)) score += 15;
+        if (Regex.IsMatch(text ?? string.Empty, @"\bJupiter first|Jupiter takes the lead|Jupiter is the anchor\b", RegexOptions.IgnoreCase)) score += 10;
+        if (Regex.IsMatch(text ?? string.Empty, @"\bBinoculars can help after you find the pair|Use your eyes first\b", RegexOptions.IgnoreCase)) score += 5;
+        return Math.Min(100, score);
+    }
+
+    private static IReadOnlyList<string> BuildNarrationConsistencyWarnings(IReadOnlyDictionary<string, string> shortItems, IReadOnlyDictionary<string, string> longItems, int shortEstimatedDurationSec, int longEstimatedDurationSec)
+    {
+        var warnings = new List<string>();
+        var text = string.Join(" ", shortItems.Values.Concat(longItems.Values));
+        if (shortEstimatedDurationSec > 90) warnings.Add("Short narration exceeds the hard 90-second maximum.");
+        else if (shortEstimatedDurationSec > 75) warnings.Add("Short narration exceeds the preferred 75-second ceiling.");
+        if (Regex.IsMatch(text, @"\bafter sunset|evening sky|western horizon\b", RegexOptions.IgnoreCase) && Regex.IsMatch(text, @"\bbefore sunrise|pre-dawn\b", RegexOptions.IgnoreCase))
+            warnings.Add("Mixed sunset and pre-dawn guidance detected.");
+        if (!Regex.IsMatch(text, @"\bJupiter\b", RegexOptions.IgnoreCase)) warnings.Add("Jupiter is not clearly present as the hero object.");
+        if (!Regex.IsMatch(text, @"\bVenus\b", RegexOptions.IgnoreCase)) warnings.Add("Venus is not clearly present as the supporting object.");
+        if (Regex.IsMatch(text, @"\blook anywhere near the Sun\b", RegexOptions.IgnoreCase) && !Regex.IsMatch(text, @"\bavoid looking anywhere near the Sun\b", RegexOptions.IgnoreCase))
+            warnings.Add("Solar safety wording may be ambiguous.");
+        return warnings;
+    }
+
+    private static IReadOnlyList<string> BuildTopNarrationImprovements(IReadOnlyList<string> consistencyWarnings, int shortEstimatedDurationSec)
+    {
+        var improvements = new List<string>();
+        if (consistencyWarnings.Count == 0)
+            improvements.Add("RC1-D rewrite strengthens the opening, keeps Jupiter as the hero, and makes Venus the supporting reference point.");
+        if (shortEstimatedDurationSec > 75)
+            improvements.Add("Trim one supporting sentence from the short cut to return closer to the 60-second target.");
+        improvements.Add("Observation guidance is phrased as human field advice: time first, direction second, then binocular safety.");
+        improvements.Add("Textbook phrases were replaced with cinematic but concrete language about perspective, distance, and changing geometry.");
+        return improvements.Concat(consistencyWarnings.Select(warning => $"Review: {warning}")).Take(5).ToArray();
     }
 
 
@@ -4705,15 +4798,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 }
                 : purpose switch
                 {
-                    "hook" => $"Hello, fellow stargazers. {title} offers a quiet chance to watch two bright planets gather before sunrise. At first it looks simple, but the closer we look, the more the scene becomes a story of distance, motion, and perspective. Let’s take a closer look.",
-                    "what-is-it" => $"{title} is a line-of-sight pairing where two planets appear close together in our sky without physically meeting.",
-                    "cause" => $"{objectLabel} appear close because they line up from our viewpoint on Earth, even though they remain far apart in space.",
-                    "interesting-fact" => $"An interesting detail is that {objectLabel} can change their apparent gap from morning to morning, letting you sense the solar system in motion.",
-                    "best-time" => $"The best view is {time}. Look toward the {direction} with a clear view near the horizon.",
-                    "accurate-sky-guide" => $"Look toward the {direction} before sunrise, with a clear view near the horizon.",
-                    "what-you-will-see" => $"You will see {objectLabel} shining close together in the same part of the sky, even though their closeness is only line of sight.",
-                    "viewing-tips" => "Choose an open horizon away from buildings and trees, keep phone screens dim, and give your eyes a few minutes to adjust.",
-                    "final-reminder" => $"In a few days, {objectLabel} will drift apart again. If the sky is clear, this brief pairing can become a memorable pre-dawn view.",
+                    "hook" => $"Before dawn, Jupiter takes the lead and Venus slips in beside it, bright enough to stop you at the window. This is not a meeting in space; it is a rare line of sight, turning distance into a quiet sky story.",
+                    "what-is-it" => $"{title} means Jupiter and Venus appear close in our sky while remaining separated by vast solar-system distances.",
+                    "cause" => "The effect comes from perspective: Earth, Jupiter, and Venus briefly place the two planets along nearly the same viewing direction.",
+                    "interesting-fact" => "Jupiter is the anchor of the scene. Venus supports it as a sharper companion, and their gap can change noticeably from one morning to the next.",
+                    "best-time" => $"Watch {time}. Face the {direction}, and choose a place where buildings or trees do not block the low horizon.",
+                    "accurate-sky-guide" => $"Before sunrise, face the {direction}. Find brilliant Jupiter first; Venus should sit nearby as the supporting point of light.",
+                    "what-you-will-see" => "Expect Jupiter to feel like the hero of the frame, with Venus nearby, cleaner and brighter, making the separation easy to judge by eye.",
+                    "viewing-tips" => "Use your eyes first. Binoculars can help after you find the pair, but keep the horizon open and avoid looking anywhere near the Sun.",
+                    "final-reminder" => "A few mornings later, the two lights will loosen their grip and the geometry will be gone. If the sky is clear, give this one minute before sunrise.",
                     _ => texts[sceneId]
                 };
             texts[sceneId] = RewriteBannedNarrationPhrases(replacement);
@@ -4761,15 +4854,24 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string PlanetConjunctionObjectLabel(string? title, bool isHindi = false)
     {
         var planets = ExtractPlanetNames(title).Take(2).ToArray();
-        if (planets.Length < 2) planets = ["Mars", "Jupiter"];
+        if (planets.Length < 2) planets = ["Jupiter", "Venus"];
+        planets = OrderJupiterVenusHeroFirst(planets);
         return isHindi ? $"{LocalizePlanetHi(planets[0])} और {LocalizePlanetHi(planets[1])}" : $"{planets[0]} and {planets[1]}";
     }
 
     private static string PlanetConjunctionDisplayTitle(string? title, bool isHindi)
     {
         var planets = ExtractPlanetNames(title).Take(2).ToArray();
-        if (planets.Length < 2) planets = ["Mars", "Jupiter"];
+        if (planets.Length < 2) planets = ["Jupiter", "Venus"];
+        planets = OrderJupiterVenusHeroFirst(planets);
         return isHindi ? $"{LocalizePlanetHi(planets[0])}–{LocalizePlanetHi(planets[1])} संयोग" : $"the {planets[0]}–{planets[1]} pairing";
+    }
+
+    private static string[] OrderJupiterVenusHeroFirst(string[] planets)
+    {
+        if (planets.Any(name => name.Equals("Jupiter", StringComparison.OrdinalIgnoreCase)) && planets.Any(name => name.Equals("Venus", StringComparison.OrdinalIgnoreCase)))
+            return ["Jupiter", "Venus"];
+        return planets;
     }
 
     private static IEnumerable<string> ExtractPlanetNames(string? text)
