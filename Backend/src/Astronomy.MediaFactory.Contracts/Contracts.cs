@@ -397,6 +397,8 @@ public sealed class RenderingOptions
     public string CelestialAssetsRoot { get; set; } = "./assets/celestial";
     public int VideoWidth { get; set; } = 1280;
     public int VideoHeight { get; set; } = 720;
+    public int ShortVideoWidth { get; set; } = 1080;
+    public int ShortVideoHeight { get; set; } = 1920;
     public int FrameRate { get; set; } = 30;
     public double ImageTransitionSeconds { get; set; } = 1;
     public string? BackgroundMusicPath { get; set; }
@@ -566,8 +568,8 @@ public sealed record VideoEncodingPreset(
 
     public static VideoEncodingPreset ShortsFinal(RenderingOptions options) => new(
         Name: "ShortsFinal",
-        Width: 1080,
-        Height: 1920,
+        Width: Math.Max(1, options.ShortVideoWidth),
+        Height: Math.Max(1, options.ShortVideoHeight),
         Codec: "libx264",
         Preset: NormalizePreset(options.ShortsPreset, "fast"),
         Crf: options.ShortsCrf > 0 ? options.ShortsCrf : 21,
@@ -580,8 +582,8 @@ public sealed record VideoEncodingPreset(
 
     public static VideoEncodingPreset MetaReelFinal(RenderingOptions options) => new(
         Name: "MetaReelFinal",
-        Width: 1080,
-        Height: 1920,
+        Width: Math.Max(1, options.ShortVideoWidth),
+        Height: Math.Max(1, options.ShortVideoHeight),
         Codec: "libx264",
         Preset: NormalizePreset(options.MetaReelPreset, "fast"),
         Crf: options.MetaReelCrf > 0 ? options.MetaReelCrf : 22,
