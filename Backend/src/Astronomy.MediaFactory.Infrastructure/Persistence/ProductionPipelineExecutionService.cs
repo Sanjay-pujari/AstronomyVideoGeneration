@@ -10612,6 +10612,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var initialLongCueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, "long", requestedLanguage);
         var initialShortExpandedSceneCount = 0;
         var initialLongExpandedSceneCount = 0;
+        var configuredShortTargetDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortTargetDurationSec, 45);
+        var configuredShortMaxDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortMaxDurationSec, 59);
+        var preRenderShortNarrationAudioDurationSec = 0d;
+        var shortDurationFailureReason = string.Empty;
         Phase18RenderDurationExpansionResult? shortRenderResult = null;
         Phase18RenderDurationExpansionResult? longRenderResult = null;
         var motionPlanFound = File.Exists(motionPlanPath);
@@ -10633,6 +10637,12 @@ public sealed partial class ProductionPipelineExecutionService(
             await WriteMotionDebugAsync(planRoot, shortItems.Concat(longItems).ToArray(), cancellationToken);
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
+            preRenderShortNarrationAudioDurationSec = RoundDuration(shortItems.Sum(item => item.SceneDurationSec));
+            if (preRenderShortNarrationAudioDurationSec > configuredShortMaxDurationSec)
+            {
+                shortDurationFailureReason = $"Short narration/audio duration exceeds ShortMaxDurationSec before Phase 18 render; duration={preRenderShortNarrationAudioDurationSec:0.###}s, max={configuredShortMaxDurationSec:0.###}s. Refine short narration generation instead of trimming, speeding up, dropping subtitles, or cutting scenes in video assembly.";
+                errors.Add(shortDurationFailureReason);
+            }
             initialShortExpandedSceneCount = CountSceneDurationExpansionMatches(initialShortCueLevelDurationsBySceneId, shortItems);
             initialLongExpandedSceneCount = CountSceneDurationExpansionMatches(initialLongCueLevelDurationsBySceneId, longItems);
             var backgroundMusicConfig = ResolvePhase18BackgroundMusicConfig(planRoot);
@@ -10641,8 +10651,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 errors.AddRange(unresolvedScenes.Select(scene => $"StoryFrame V4 unresolved scene: format={scene.Format}; sceneId={scene.SceneId}; scenePurpose={scene.ScenePurpose}; manifestPath={NormalizePath(scene.ManifestPath)}; availableManifestSceneKeys=[{string.Join(",", scene.AvailableManifestSceneKeys)}]"));
             }
             var visualInputsValid = storyFrameValidationErrors.Count == 0 && (!useStoryFramesV4ForVideoAssembly || unresolvedScenes.Count == 0);
-            if (visualInputsValid && shortItems.Count > 0) shortRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
-            if (visualInputsValid && !previewOnly && longItems.Count > 0) longRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (visualInputsValid && errors.Count == 0 && shortItems.Count > 0) shortRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "short", shortItems, shortVideoPath, shortAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
+            if (visualInputsValid && errors.Count == 0 && !previewOnly && longItems.Count > 0) longRenderResult = await RenderVideoAssemblyAsync(planRoot, requestedLanguage, "long", longItems, longVideoPath, longAudioTrackPath, backgroundMusicConfig, previewOnly, cancellationToken);
             if (previewOnly && File.Exists(longVideoPath)) File.Delete(longVideoPath);
         }
 
@@ -10692,14 +10702,14 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!longSrtExists) subtitleBurnInErrors.Add($"Long subtitle file missing: {NormalizePath(longSrtPath)}");
             if (File.Exists(shortVideoPath) && shortSrtExists)
             {
-                shortBurnInResult = await BurnInSubtitlesAsync(shortVideoPath, shortSrtPath, cancellationToken);
+                shortBurnInResult = await BurnInSubtitlesAsync(shortVideoPath, shortSrtPath, ScenePresentationProfile.ShortForm, cancellationToken);
                 subtitleBurnInCommandShort = shortBurnInResult.Command;
                 shortSubtitlesApplied = shortBurnInResult.Succeeded;
                 if (!shortBurnInResult.Succeeded) subtitleBurnInErrors.Add($"Short subtitle burn-in failed: {shortBurnInResult.Error}");
             }
             if (File.Exists(longVideoPath) && longSrtExists)
             {
-                longBurnInResult = await BurnInSubtitlesAsync(longVideoPath, longSrtPath, cancellationToken);
+                longBurnInResult = await BurnInSubtitlesAsync(longVideoPath, longSrtPath, ScenePresentationProfile.LongForm, cancellationToken);
                 subtitleBurnInCommandLong = longBurnInResult.Command;
                 longSubtitlesApplied = longBurnInResult.Succeeded;
                 if (!longBurnInResult.Succeeded) subtitleBurnInErrors.Add($"Long subtitle burn-in failed: {longBurnInResult.Error}");
@@ -10729,14 +10739,22 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortLetterboxDetected = false;
         var shortPillarboxDetected = false;
         var shortRotationApplied = false;
-        var shortSubtitleBottomMarginPercent = actualShortOutputHeight > 0 && shortBurnInResult is not null ? Math.Round(shortBurnInResult.MarginV * 100.0 / actualShortOutputHeight, 2, MidpointRounding.AwayFromZero) : 0d;
-        if (!previewOnly && !cueLevelSubtitleValidation) errors.Add("Cue-level subtitle validation failed");
-        if (!shortPublishedMatchesAssembly) errors.Add("Published short video does not match subtitled video-assembly output");
-        if (!previewOnly && !longPublishedMatchesAssembly) errors.Add("Published long video does not match subtitled video-assembly output");
         const double cinematicOutroDurationSec = 4.0;
         const bool cinematicOutroEnabled = true;
         const bool fadeToBlackEnabled = true;
         const double fadeToBlackDurationSec = 1.0;
+        var shortSubtitleBottomMarginPercent = actualShortOutputHeight > 0 && shortBurnInResult is not null ? Math.Round(shortBurnInResult.MarginV * 100.0 / actualShortOutputHeight, 2, MidpointRounding.AwayFromZero) : ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortSubtitleBottomMarginPercent, 14);
+        var shortSubtitleFontScale = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortSubtitleFontScale, 0.34);
+        var shortSubtitleFontSize = shortBurnInResult?.FontSize ?? 0;
+        var shortSubtitleSafeAreaPassed = actualShortOutputHeight <= 0 || shortBurnInResult is null || (shortBurnInResult.MarginV >= Math.Round(actualShortOutputHeight * shortSubtitleBottomMarginPercent / 100.0, MidpointRounding.AwayFromZero) && shortBurnInResult.MaxLines <= 2);
+        var shortNarrationAudioDurationSec = RoundDuration(shortAudioDuration > 0 ? shortAudioDuration : preRenderShortNarrationAudioDurationSec);
+        var shortFinalVideoDurationSec = RoundDuration(shortVideoDuration);
+        var shortDurationWithinLimit = shortNarrationAudioDurationSec <= configuredShortMaxDurationSec && (shortFinalVideoDurationSec <= 0 || shortFinalVideoDurationSec <= configuredShortMaxDurationSec);
+        if (string.IsNullOrWhiteSpace(shortDurationFailureReason) && shortNarrationAudioDurationSec > configuredShortMaxDurationSec) shortDurationFailureReason = $"Short narration/audio duration exceeds ShortMaxDurationSec; duration={shortNarrationAudioDurationSec:0.###}s, max={configuredShortMaxDurationSec:0.###}s. Refine short narration generation.";
+        if (string.IsNullOrWhiteSpace(shortDurationFailureReason) && shortFinalVideoDurationSec > configuredShortMaxDurationSec) shortDurationFailureReason = $"Short final video duration exceeds ShortMaxDurationSec; finalDuration={shortFinalVideoDurationSec:0.###}s, max={configuredShortMaxDurationSec:0.###}s. Refine short narration generation so the assembled short stays under the platform limit.";
+        if (!previewOnly && !cueLevelSubtitleValidation) errors.Add("Cue-level subtitle validation failed");
+        if (!shortPublishedMatchesAssembly) errors.Add("Published short video does not match subtitled video-assembly output");
+        if (!previewOnly && !longPublishedMatchesAssembly) errors.Add("Published long video does not match subtitled video-assembly output");
         var shortExpectedVideoDuration = shortAudioDuration + (cinematicOutroEnabled ? cinematicOutroDurationSec : 0);
         var longExpectedVideoDuration = longAudioDuration + (cinematicOutroEnabled ? cinematicOutroDurationSec : 0);
         var shortDurationDeltaAgainstExpected = Math.Abs(shortVideoDuration - shortExpectedVideoDuration);
@@ -10799,6 +10817,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!previewOnly && perSceneAudioVideoDurationDeltaSec > 0.1) errors.Add($"perSceneAudioVideoDurationDeltaSec > 0.1 sec; actual={RoundDuration(perSceneAudioVideoDurationDeltaSec)}");
         if (!previewOnly && !shortDurationValidationPassed) errors.Add($"short final video duration differs from narration + cinematic outro by >0.1 sec; actual={RoundDuration(shortDurationDeltaAgainstExpected)}");
         if (!previewOnly && !longDurationValidationPassed) errors.Add($"long final video duration differs from narration + cinematic outro by >0.1 sec; actual={RoundDuration(longDurationDeltaAgainstExpected)}");
+        if (!previewOnly && !shortDurationWithinLimit) errors.Add(shortDurationFailureReason);
         if (!previewOnly && shortSrtExists && shortPlanAudioDuration - shortSrtDuration > 0.5) errors.Add($"short.srt ends more than 0.5 sec before planned audio; srt={RoundDuration(shortSrtDuration)}, audio={RoundDuration(shortPlanAudioDuration)}");
         if (!previewOnly && longSrtExists && longPlanAudioDuration - longSrtDuration > 0.5) errors.Add($"long.srt ends more than 0.5 sec before planned audio; srt={RoundDuration(longSrtDuration)}, audio={RoundDuration(longPlanAudioDuration)}");
         if (!previewOnly && shortSrtExists && Math.Abs(shortSrtDuration - shortPlanAudioDuration) > 0.1) errors.Add($"short.srt duration differs from planned audio duration by >0.1 sec; srt={RoundDuration(shortSrtDuration)}, audio={RoundDuration(shortPlanAudioDuration)}");
@@ -10870,6 +10889,15 @@ public sealed partial class ProductionPipelineExecutionService(
             shortRotationApplied,
             shortSubtitleSafeAreaMode = "portrait-bottom-ui-safe",
             shortSubtitleBottomMarginPercent,
+            shortSubtitleFontScale,
+            shortSubtitleFontSize,
+            shortSubtitleSafeAreaPassed,
+            shortTargetDurationSec = configuredShortTargetDurationSec,
+            shortMaxDurationSec = configuredShortMaxDurationSec,
+            shortNarrationAudioDurationSec,
+            shortFinalVideoDurationSec,
+            shortDurationWithinLimit,
+            shortDurationFailureReason,
             longOutputWidth = actualLongOutputWidth,
             longOutputHeight = actualLongOutputHeight,
             longOutputAspectRatio,
@@ -11061,6 +11089,15 @@ public sealed partial class ProductionPipelineExecutionService(
             shortRotationApplied,
             shortSubtitleSafeAreaMode = "portrait-bottom-ui-safe",
             shortSubtitleBottomMarginPercent,
+            shortSubtitleFontScale,
+            shortSubtitleFontSize,
+            shortSubtitleSafeAreaPassed,
+            shortTargetDurationSec = configuredShortTargetDurationSec,
+            shortMaxDurationSec = configuredShortMaxDurationSec,
+            shortNarrationAudioDurationSec,
+            shortFinalVideoDurationSec,
+            shortDurationWithinLimit,
+            shortDurationFailureReason,
             longOutputWidth = actualLongOutputWidth,
             longOutputHeight = actualLongOutputHeight,
             longOutputAspectRatio,
@@ -11201,7 +11238,7 @@ public sealed partial class ProductionPipelineExecutionService(
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), audioDrivenDurationCalibration = true, audioDurationSource = "ActualMp3", subtitleTimingRecalculated = true, audioSubtitleSyncPassed = cueLevelSubtitleValidation, subtitleFontScale = 0.5, subtitleMovedLower = true, subtitleSafeAreaPassed = true, subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) }, finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) }, publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) }, cueLevelSubtitleValidation, cueLevelSubtitleDriftMs, maxCueDriftMs, averageCueDriftMs, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), shortSubtitleFontScale, shortSubtitleFontSize, shortSubtitleBottomMarginPercent, shortSubtitleSafeAreaPassed, shortTargetDurationSec = configuredShortTargetDurationSec, shortMaxDurationSec = configuredShortMaxDurationSec, shortNarrationAudioDurationSec, shortFinalVideoDurationSec, shortDurationWithinLimit, shortDurationFailureReason, audioDrivenDurationCalibration = true, audioDurationSource = "ActualMp3", subtitleTimingRecalculated = true, audioSubtitleSyncPassed = cueLevelSubtitleValidation, subtitleFontScale = 0.5, subtitleMovedLower = true, subtitleSafeAreaPassed = true, subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) }, finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) }, publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) }, cueLevelSubtitleValidation, cueLevelSubtitleDriftMs, maxCueDriftMs, averageCueDriftMs, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Cinematic Video Assembly V2 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
@@ -11908,14 +11945,14 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error, int FontSize = 0, int MarginV = 0, int MaxCharsPerLine = 42, int MaxLines = 2);
 
-    private async Task<SubtitleBurnInResult> BurnInSubtitlesAsync(string videoPath, string srtPath, CancellationToken cancellationToken)
+    private async Task<SubtitleBurnInResult> BurnInSubtitlesAsync(string videoPath, string srtPath, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
         var outputDirectory = Path.GetDirectoryName(videoPath)!;
         var unsubtitledPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(videoPath) + "-without-subtitles" + Path.GetExtension(videoPath));
         var subtitledPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(videoPath) + "-subtitled" + Path.GetExtension(videoPath));
         File.Copy(videoPath, unsubtitledPath, true);
-        var style = await ResolvePhase18SubtitleStyleAsync(videoPath, cancellationToken);
+        var style = await ResolvePhase18SubtitleStyleAsync(videoPath, profile, cancellationToken);
         var filter = $"subtitles='{EscapeFfmpegSubtitlesPath(srtPath)}':force_style='{style.ForceStyle}'";
         var args = new[] { "-y", "-i", unsubtitledPath, "-vf", filter, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "copy", subtitledPath };
         var result = await RunProcessAsync(ffmpegPath, args, cancellationToken);
@@ -11928,7 +11965,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record Phase18SubtitleStyle(string ForceStyle, int FontSize, int MarginV, int MaxCharsPerLine, int MaxLines);
 
-    private async Task<Phase18SubtitleStyle> ResolvePhase18SubtitleStyleAsync(string videoPath, CancellationToken cancellationToken)
+    private async Task<Phase18SubtitleStyle> ResolvePhase18SubtitleStyleAsync(string videoPath, ScenePresentationProfile profile, CancellationToken cancellationToken)
     {
         var (width, height) = await ProbeVideoDimensionsAsync(videoPath, cancellationToken);
         var fontSize = 28;
@@ -11938,12 +11975,24 @@ public sealed partial class ProductionPipelineExecutionService(
         else if (width == 1080 && height == 1920) { fontSize = 29; marginV = 150; }
         else if (height > width) { fontSize = Math.Clamp((int)Math.Round(height * 0.016), 28, 30); marginV = Math.Clamp((int)Math.Round(height * 0.078), 130, 170); }
         else { fontSize = Math.Clamp((int)Math.Round(height * 0.029), 18, 32); marginV = Math.Clamp((int)Math.Round(height * 0.06), 34, 74); }
-        fontSize = Math.Max(10, (int)Math.Round(fontSize * 0.5, MidpointRounding.AwayFromZero));
+        var subtitleFontScale = profile == ScenePresentationProfile.ShortForm ? ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortSubtitleFontScale, 0.34) : 0.5;
+        fontSize = Math.Max(10, (int)Math.Round(fontSize * subtitleFontScale, MidpointRounding.AwayFromZero));
         var safeBottomMargin = Math.Max(18, (int)Math.Round(height * 0.025, MidpointRounding.AwayFromZero));
-        marginV = Math.Max(safeBottomMargin, (int)Math.Round(marginV * 0.6, MidpointRounding.AwayFromZero));
+        if (profile == ScenePresentationProfile.ShortForm)
+        {
+            var configuredMargin = (int)Math.Round(height * ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortSubtitleBottomMarginPercent, 14) / 100.0, MidpointRounding.AwayFromZero);
+            marginV = Math.Max(safeBottomMargin, configuredMargin);
+        }
+        else
+        {
+            marginV = Math.Max(safeBottomMargin, (int)Math.Round(marginV * 0.6, MidpointRounding.AwayFromZero));
+        }
         var forceStyle = $"FontName=Arial,FontSize={fontSize},PrimaryColour=&HFFFFFF&,BackColour=&H99000000&,OutlineColour=&H000000&,BorderStyle=3,Outline=1,Shadow=0,MarginV={marginV},Alignment=2";
         return new Phase18SubtitleStyle(forceStyle, fontSize, marginV, 42, 2);
     }
+
+    private static double ResolveConfiguredPositive(double? value, double fallback)
+        => value is > 0 ? value.Value : fallback;
 
     private static double CalculateAspectRatio(int width, int height)
         => width > 0 && height > 0 ? Math.Round(width / (double)height, 4, MidpointRounding.AwayFromZero) : 0d;
