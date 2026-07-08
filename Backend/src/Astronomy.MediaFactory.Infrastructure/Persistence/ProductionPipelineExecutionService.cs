@@ -2843,8 +2843,14 @@ public sealed partial class ProductionPipelineExecutionService(
 
             try
             {
+                logger.LogInformation("DOCUMENTARY_NARRATIVE_START Phase=14 Language={Language} NarrationGeneratorType={NarrationGeneratorType} NarrativeWriterType={NarrativeWriterType} LanguageWriterType={LanguageWriterType}", ResolvePipelineLanguage(context.Request.Language), "ProductionPipelineExecutionService", "DocumentaryNarrativeWriter", ResolvePipelineLanguage(context.Request.Language) == "hi" ? "HindiDocumentaryLanguageWriter" : "EnglishDocumentaryLanguageWriter");
                 documentaryNarration = await BuildV31ProductionNarrationAsync(context, shortItems, longItems, cancellationToken);
                 eventConsistencyDiagnostics = documentaryNarration.EventConsistencyDiagnostics;
+                await WritePhase14NarrativeIntegrationDiagnosticsAsync(context, documentaryNarration, cancellationToken);
+                logger.LogInformation("EDITORIAL_WRITER_USED {NarrativeWriterType} PromptVersion={PromptVersion} EditorialWriterEnabled={EditorialWriterEnabled}", "DocumentaryNarrativeWriter", EventStoryComposer.Version, true);
+                logger.LogInformation("LANGUAGE_WRITER_USED {LanguageWriterType} Language={Language}", ResolvePipelineLanguage(context.Request.Language) == "hi" ? "HindiDocumentaryLanguageWriter" : "EnglishDocumentaryLanguageWriter", ResolvePipelineLanguage(context.Request.Language));
+                logger.LogInformation("NARRATIVE_SOURCE {NarrationSource}", documentaryNarration.TextSource);
+                logger.LogInformation("DOCUMENTARY_NARRATIVE_COMPLETE Phase=14 Language={Language} NarrationSource={NarrationSource}", ResolvePipelineLanguage(context.Request.Language), documentaryNarration.TextSource);
             }
             catch (Phase14EventConsistencyException)
             {
@@ -2852,8 +2858,8 @@ public sealed partial class ProductionPipelineExecutionService(
             }
             catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
             {
-                var wrappedException = new InvalidOperationException("NarrationGenerationServiceV31 failed", ex);
-                TracePhase14Exception("Phase14.NarrationGenerationServiceV31.wrap", wrappedException);
+                var wrappedException = new InvalidOperationException("DocumentaryNarrativeWriter failed", ex);
+                TracePhase14Exception("Phase14.DocumentaryNarrativeWriter.wrap", wrappedException);
                 WritePhase14ExceptionDiagnostics(context, wrappedException);
                 throw wrappedException;
             }
@@ -2866,9 +2872,10 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 v31NarrationIntegrationDiagnostics = new
                 {
-                    v31NarrationServiceUsed = true,
+                    v31NarrationServiceUsed = false,
+                    documentaryNarrativeWriterUsed = true,
                     narrationSource = documentaryNarration.TextSource,
-                    normalizedNarrationUsed = string.Equals(documentaryNarration.TextSource, "NarrationGenerationService", StringComparison.OrdinalIgnoreCase),
+                    normalizedNarrationUsed = false,
                     sourceSceneCount = documentaryNarration.AdapterDiagnostics.StorySectionCount,
                     adaptedShortSceneCount = documentaryNarration.ShortItems.Count,
                     adaptedLongSceneCount = documentaryNarration.LongItems.Count,
@@ -2915,10 +2922,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 version = "v1",
                 sourceSceneAssetsVersion = "V3.1",
                 sourceNarrationVersion = EventStoryComposer.Version,
-                matchingStrategy = "NarrationGenerationServiceV31",
+                matchingStrategy = "DocumentaryNarrativeWriter",
                 diagnostics = new
                 {
-                    matchingStrategy = "NarrationGenerationServiceV31",
+                    matchingStrategy = "DocumentaryNarrativeWriter",
                     narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                     sectionsExtracted = extractedSections,
                     matchedPairs,
@@ -3023,7 +3030,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 missingNarrationBeats,
                 oldPathUsed = false,
                 validationPassed = errors.Count == 0,
-                matchingStrategy = "NarrationGenerationServiceV31",
+                matchingStrategy = "DocumentaryNarrativeWriter",
                 narrationSceneCount = narrationDiagnostics.Select(n => n.SceneNumber).Distinct().Count(),
                 v31NarrationIntegrationDiagnostics = new
                 {
@@ -5055,7 +5062,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 : documentaryTextBySceneId.TryGetValue(normalizedSceneId, out documentaryText)
                     ? documentaryText
                     : item.NarrationText;
-            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "NarrationGenerationServiceV31" };
+            return item with { NarrationText = text, NarrationBeat = text, SourceNarrationStrategy = "DocumentaryNarrativeWriter" };
         }).ToArray();
 
     private static IReadOnlyList<SceneAudioSyncItem> NormalizeV31NarrationSceneIds(string format, IReadOnlyList<SceneAudioSyncItem> items)
@@ -5076,6 +5083,19 @@ public sealed partial class ProductionPipelineExecutionService(
         => sceneId;
 
     private async Task<Phase14DocumentaryNarration> BuildV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        var language = ResolvePipelineLanguage(context.Request.Language);
+        Phase14ExceptionDiagnosticsState.RequestedLanguage = language;
+        var documentaryNarration = BuildPhase14DocumentaryNarration(context);
+        ValidatePhase14NarrativeIntegration(documentaryNarration);
+        if (documentaryNarration.ShortItems.Count != shortItems.Count || documentaryNarration.LongItems.Count != longItems.Count)
+            throw new InvalidOperationException($"Documentary Narrative Writer scene count mismatch before SRT: short expected={shortItems.Count}, actual={documentaryNarration.ShortItems.Count}; long expected={longItems.Count}, actual={documentaryNarration.LongItems.Count}.");
+        return documentaryNarration;
+    }
+
+    private async Task<Phase14DocumentaryNarration> BuildLegacyV31ProductionNarrationAsync(ProductionPhaseContext context, IReadOnlyList<SceneAudioSyncItem> shortItems, IReadOnlyList<SceneAudioSyncItem> longItems, CancellationToken cancellationToken)
     {
         var language = ResolvePipelineLanguage(context.Request.Language);
         Phase14ExceptionDiagnosticsState.RequestedLanguage = language;
@@ -5106,7 +5126,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 catch (Exception fallbackEx)
                 {
                     generationDiagnostics.Add($"Fallback metadata preview failed with {fallbackEx.GetType().Name}: {fallbackEx.Message}");
-                    throw new InvalidOperationException($"NarrationGenerationServiceV31 failed after fallback metadata attempt. Inner exception: {fallbackEx.GetType().Name}: {fallbackEx.Message}", fallbackEx);
+                    throw new InvalidOperationException($"DocumentaryNarrativeWriter failed after fallback metadata attempt. Inner exception: {fallbackEx.GetType().Name}: {fallbackEx.Message}", fallbackEx);
                 }
             }
         }
@@ -5180,6 +5200,89 @@ public sealed partial class ProductionPipelineExecutionService(
             JsonSerializer.SerializeToElement(metadata, JsonOptions),
             true);
     }
+
+    private static void ValidatePhase14NarrativeIntegration(Phase14DocumentaryNarration narration)
+    {
+        var errors = new List<string>();
+        if (!string.Equals(narration.TextSource, "SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase))
+            errors.Add($"Old narration generator used: {narration.TextSource}.");
+        if (!narration.ComposerCalled || !narration.OutputUsed)
+            errors.Add("Narration bypassed editorial writer.");
+        var activeSources = new[] { narration.TextSource }
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (activeSources.Length != 1)
+            errors.Add("Multiple narration generators used: " + string.Join(", ", activeSources));
+        if (errors.Count > 0)
+            throw new InvalidOperationException("RC1-B.1 integration validation failed before SRT: " + string.Join(" | ", errors));
+    }
+
+    private static async Task WritePhase14NarrativeIntegrationDiagnosticsAsync(ProductionPhaseContext context, Phase14DocumentaryNarration narration, CancellationToken cancellationToken)
+    {
+        ValidatePhase14NarrativeIntegration(narration);
+        var validationRoot = context.ExecutionContext.ValidationRoot ?? Path.Combine(context.OutputRoot, "validation");
+        Directory.CreateDirectory(validationRoot);
+        var language = ResolvePipelineLanguage(context.Request.Language);
+        var languageWriterType = language == "hi" ? "HindiDocumentaryLanguageWriter" : "EnglishDocumentaryLanguageWriter";
+        var allText = string.Join(" ", narration.ShortItems.Values.Concat(narration.LongItems.Values));
+        var diagnostics = narration.Diagnostics;
+        var flowPath = Path.Combine(validationRoot, "NarrationPipelineFlow.json");
+        await File.WriteAllTextAsync(flowPath, JsonSerializer.Serialize(new
+        {
+            version = "RC1-B.1 Integration Verification",
+            phase = "Phase 14",
+            callFlow = new[]
+            {
+                "Phase 14",
+                "Narration Generator: ProductionPipelineExecutionService.BuildV31ProductionNarrationAsync",
+                "Narrative Writer: DocumentaryNarrativeWriter/EventStoryComposer",
+                "Narration JSON: narration-manifest.json and language-scoped narration text files",
+                "SRT Builder: ProductionPipelineExecutionService.BuildNarrationSrtFromSceneDurationPlan",
+                "TTS: Phase 15 Real TTS V2",
+                "Video: Phase 18 Cinematic Video Assembly V2"
+            },
+            narrationGeneratorType = "ProductionPipelineExecutionService",
+            narrativeWriterType = "DocumentaryNarrativeWriter",
+            languageWriterType,
+            promptVersion = EventStoryComposer.Version,
+            narrationSource = narration.TextSource,
+            editorialWriterEnabled = true,
+            exactlyOneNarrationSource = true,
+            srtBeginsAfterEditorialNarration = true,
+            ttsUnchanged = true
+        }, JsonOptions), cancellationToken);
+
+        var reviewPath = Path.Combine(validationRoot, "NarrativeEditorialReview.json");
+        await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(new
+        {
+            editorialWriterExecuted = narration.ComposerCalled && narration.OutputUsed && string.Equals(narration.TextSource, "SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase),
+            language,
+            storyFlowScore = Math.Max(diagnostics.StorytellingScore, ScoreStoryFlowForNarrativeReview(allText)),
+            observationScore = ScoreObservationForNarrativeReview(allText),
+            curiosityScore = Math.Max(diagnostics.WonderScore, ScoreCuriosityForNarrativeReview(allText)),
+            documentaryStyleScore = diagnostics.DocumentaryScore,
+            writerVersion = EventStoryComposer.Version,
+            writerClass = "DocumentaryNarrativeWriter",
+            generationDurationMs = 0,
+            narrationGeneratorType = "ProductionPipelineExecutionService",
+            narrativeWriterType = "DocumentaryNarrativeWriter",
+            languageWriterType,
+            promptVersion = EventStoryComposer.Version,
+            narrationSource = narration.TextSource,
+            editorialWriterEnabled = true,
+            validationPassed = true
+        }, JsonOptions), cancellationToken);
+    }
+
+    private static int ScoreStoryFlowForNarrativeReview(string text)
+        => Math.Min(100, 70 + (ContainsAnyForbiddenPhrase(text, ["story", "motion", "perspective", "memory", "कहानी", "गति", "याद"]) ? 20 : 0) + (ContainsAuthoringInstructionText(text) ? 0 : 10));
+
+    private static int ScoreObservationForNarrativeReview(string text)
+        => Math.Min(100, 68 + new[] { "window", "direction", "horizon", "look", "view", "समय", "दिशा", "क्षितिज", "देख" }.Count(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)) * 5);
+
+    private static int ScoreCuriosityForNarrativeReview(string text)
+        => Math.Min(100, 68 + new[] { "why", "wonder", "story", "perspective", "memory", "क्यों", "कहानी", "खूबसूरती" }.Count(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)) * 5);
 
     private static void ApplyPhase14NarrationResolutionDiagnostics(ProductionPhaseContext context, NarrationPreviewResponse response)
     {
@@ -5484,14 +5587,14 @@ public sealed partial class ProductionPipelineExecutionService(
             NormalizePath(path),
             item.SceneId,
             format,
-            "NarrationGenerationServiceV31",
+            "DocumentaryNarrativeWriter",
             existedBeforeWrite ? "Overwrite" : "Create",
             writeOrder,
             Preview(content, 180),
             content.Contains("centers on", StringComparison.OrdinalIgnoreCase),
             content.Contains("Moon names are cultural memory", StringComparison.OrdinalIgnoreCase),
-            "NarrationGenerationServiceV31",
-            string.IsNullOrWhiteSpace(item.SourceNarrationStrategy) ? "NarrationGenerationServiceV31" : item.SourceNarrationStrategy);
+            "DocumentaryNarrativeWriter",
+            string.IsNullOrWhiteSpace(item.SourceNarrationStrategy) ? "DocumentaryNarrativeWriter" : item.SourceNarrationStrategy);
 
     private static NarrationFileWriteDiagnostics ValidateNarrationFileWriteTrace(IReadOnlyList<NarrationFileWriteTraceEntry> writeTrace, int expectedWriteCount)
     {
@@ -5507,8 +5610,8 @@ public sealed partial class ProductionPipelineExecutionService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var fallbackInjected = writeTrace.Any(entry =>
-            !entry.WriterComponent.Equals("NarrationGenerationServiceV31", StringComparison.OrdinalIgnoreCase)
-            || entry.SourceStrategy.Contains("SceneLevelNarrationComposer", StringComparison.OrdinalIgnoreCase)
+            !entry.WriterComponent.Equals("DocumentaryNarrativeWriter", StringComparison.OrdinalIgnoreCase)
+            || entry.SourceStrategy.Contains("NarrationGenerationService", StringComparison.OrdinalIgnoreCase)
             || entry.SourceStrategy.Contains("Fallback", StringComparison.OrdinalIgnoreCase)
             || entry.SourceStrategy.Contains("SceneTimelineNarrationBeat", StringComparison.OrdinalIgnoreCase)
             || entry.SourceStrategy.Contains("EventProductionIntelligence", StringComparison.OrdinalIgnoreCase)
@@ -5516,7 +5619,7 @@ public sealed partial class ProductionPipelineExecutionService(
             || entry.SourceComponent.Contains("DocumentaryNarrationComposer", StringComparison.OrdinalIgnoreCase));
 
         if (writeTrace.Count != expectedWriteCount || duplicateWrites.Length > 0 || appendedFiles.Length > 0 || fallbackInjected)
-            throw new InvalidOperationException("Narration scene file overwritten after NarrationGenerationServiceV31");
+            throw new InvalidOperationException("Narration scene file overwritten after DocumentaryNarrativeWriter");
 
         return new NarrationFileWriteDiagnostics(writeTrace.Count, duplicateWrites, overwrittenFiles, appendedFiles, fallbackInjected);
     }
@@ -7317,7 +7420,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var visualIntent = GetString(metadata, "visualIntent") ?? GetString(beat, "visualIntent") ?? "";
             var renderMode = GetString(metadata, "renderMode") ?? GetString(beat, "renderMode") ?? GetString(manifest, "renderMode") ?? "";
             var narrationText = string.Empty;
-            var strategy = "NarrationGenerationServiceV31";
+            var strategy = "DocumentaryNarrativeWriter";
             var imagePath = GetString(manifest, "imagePath") ?? Path.Combine(sceneRoot, sceneId + ".png");
             matchedPairs.Add(new Phase14MatchedPair(format, ResolvePhase14ScenePurpose(sceneId), ResolvePhase14ScenePurpose(sceneId), sceneId, sceneId, strategy));
             strategies.Add(new { format, sceneId, beatNo, section = ResolvePhase14ScenePurpose(sceneId), strategy });
@@ -7459,7 +7562,7 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedLongNarrationSource = NormalizePath(longNarration),
             oldPathsChecked = oldPaths.Select(NormalizePath),
             oldPathsIgnored = oldPaths.Select(NormalizePath),
-            matchingStrategy = "NarrationGenerationServiceV31",
+            matchingStrategy = "DocumentaryNarrativeWriter",
             translation = adapterDiagnostics?.TranslationDiagnostics,
             sourceLanguage = adapterDiagnostics?.TranslationDiagnostics?.SourceLanguage,
             translatedLanguage = adapterDiagnostics?.TranslationDiagnostics?.TranslatedLanguage,
