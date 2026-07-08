@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Core.EditorialIntelligence.Contracts;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -53,7 +54,9 @@ public sealed record NarrationPreviewResponse(
     NarrationFormattingDiagnostics FormattingDiagnostics,
     string? ShortTitle = null,
     NarrationPlanHydrationDiagnostics? PlanHydrationDiagnostics = null,
-    NarrationContextDiagnostics? NarrationContextDiagnostics = null)
+    NarrationContextDiagnostics? NarrationContextDiagnostics = null,
+    EditorialIntelligenceContract? EditorialIntelligenceContract = null,
+    string? NarrationPromptEditorialGuidance = null)
 {
     public NarrationValidationResult Validation => OverallValidation;
 }
