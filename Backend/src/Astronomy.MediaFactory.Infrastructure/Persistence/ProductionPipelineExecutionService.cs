@@ -11286,6 +11286,16 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record Phase18RenderDurationExpansionResult(int RenderTimeGroupedTtsSceneCount, int ExpandedSceneCount, IReadOnlyList<VideoAssemblyItem> RenderItems);
 
+    private sealed record Phase18TimelinePolishPlan(
+        double OpeningPauseSec,
+        double ClosingPauseSec,
+        IReadOnlyList<double> SceneDurations,
+        IReadOnlyList<double> ClipDurations,
+        IReadOnlyList<double> TransitionDurations,
+        IReadOnlyList<string> TransitionTypes,
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<string> Recommendations);
+
     private async Task<Phase18RenderDurationExpansionResult> RenderVideoAssemblyAsync(string planRoot, string language, string format, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string narrationTrackPath, Phase18BackgroundMusicConfig backgroundMusicConfig, bool previewOnly, CancellationToken cancellationToken)
     {
         var cueLevelDurationsBySceneId = await BuildCueLevelSceneDurationsFromTtsTimelineAsync(planRoot, format, language, cancellationToken);
@@ -11300,13 +11310,14 @@ public sealed partial class ProductionPipelineExecutionService(
             var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
             var clipPaths = new List<string>();
             var perSceneFilters = new List<object>();
+            var timelinePolish = BuildPhase18TimelinePolishPlan(format, renderItems);
             for (var i = 0; i < renderItems.Count; i++)
             {
                 var item = renderItems[i];
                 var clipPath = Path.Combine(tempRoot, $"{i:000}-{SanitizeFileName(item.SceneId)}.mp4");
-                var duration = Math.Max(0.5, item.SceneDurationSec);
-                var vf = BuildPhase18MotionFilter(item, i);
-                var totalFrames = Math.Max(15, (int)Math.Round(item.SceneDurationSec * 30.0));
+                var duration = Math.Max(0.5, timelinePolish.ClipDurations[i]);
+                var vf = BuildPhase18MotionFilter(item, i, duration);
+                var totalFrames = Math.Max(15, (int)Math.Round(duration * 30.0));
                 var originalSceneDurationSec = i < items.Count ? items[i].SceneDurationSec : item.SceneDurationSec;
                 var durationExpansionMatch = MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, item.SceneId, originalSceneDurationSec);
                 perSceneFilters.Add(new
@@ -11341,14 +11352,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var narrationItems = ReadCanonicalTtsTimelineItems(planRoot, format, language);
             var availableAudioItems = narrationItems.Where(i => !string.IsNullOrWhiteSpace(i.AudioPath) && File.Exists(i.AudioPath)).ToArray();
             var hasNarrationAudio = narrationItems.Count > 0 && availableAudioItems.Length == narrationItems.Count;
-            if (hasNarrationAudio)
-            {
-                await ConcatenateSceneClipsAsync(clipPaths, videoOnlyPath, tempRoot, ffmpegPath, cancellationToken);
-            }
-            else
-            {
-                await CrossfadeSceneClipsAsync(clipPaths, renderItems, videoOnlyPath, ffmpegPath, cancellationToken);
-            }
+            await CrossfadeSceneClipsAsync(clipPaths, timelinePolish, videoOnlyPath, ffmpegPath, cancellationToken);
 
             if (hasNarrationAudio) await ConcatenateNarrationTrackAsync(narrationItems, narrationTrackPath, tempRoot, ffmpegPath, cancellationToken);
             if (!hasNarrationAudio && !previewOnly) throw new InvalidOperationException($"Phase 18 requires every {format} cue-level TTS audio item unless videoAssemblyPreviewOnly is enabled. Found {availableAudioItems.Length}/{narrationItems.Count}.");
@@ -11414,6 +11418,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var muxResult = await RunProcessAsync(ffmpegPath, muxArgs, cancellationToken);
             if (muxResult.ExitCode != 0 || !File.Exists(outputPath)) throw new InvalidOperationException($"Unable to mux final video: {muxResult.Error}");
 
+            await WritePhase18TimelineReviewAsync(Path.GetDirectoryName(outputPath)!, format, timelinePolish, cancellationToken);
+
             if (hasNarrationAudio)
             {
                 var finalMixedAudioDuration = await ProbeAudioDurationSecondsAsync(finalMixedAudioPath, cancellationToken);
@@ -11439,6 +11445,25 @@ public sealed partial class ProductionPipelineExecutionService(
             try { Directory.Delete(tempRoot, true); } catch { }
         }
         return new Phase18RenderDurationExpansionResult(cueLevelDurationsBySceneId.Count, expandedSceneCount, renderItems);
+    }
+
+    private static async Task WritePhase18TimelineReviewAsync(string outputDirectory, string format, Phase18TimelinePolishPlan polish, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var review = new
+        {
+            format,
+            heroDuration = polish.SceneDurations.Count > 0 ? polish.SceneDurations[0] : 0,
+            sceneDurations = polish.SceneDurations,
+            transitionTypes = polish.TransitionTypes,
+            transitionCount = polish.TransitionTypes.Count,
+            averageSceneDuration = polish.SceneDurations.Count > 0 ? RoundDuration(polish.SceneDurations.Average()) : 0,
+            openingPause = polish.OpeningPauseSec,
+            closingPause = polish.ClosingPauseSec,
+            timelineWarnings = polish.Warnings,
+            recommendations = polish.Recommendations
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "TimelineReview.json"), JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
     }
 
     private async Task RecalculatePhase18SceneBasedSubtitleTimingAsync(
@@ -11688,10 +11713,11 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool IsImageExtension(string extension)
         => extension.Equals(".png", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
 
-    private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index)
+    private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index, double? renderDurationSec = null)
     {
         const int fps = 30;
-        var frameCount = Math.Max(15, (int)Math.Round(item.SceneDurationSec * fps));
+        var motionDurationSec = Math.Max(0.5, renderDurationSec ?? item.SceneDurationSec);
+        var frameCount = Math.Max(15, (int)Math.Round(motionDurationSec * fps));
         var denom = Math.Max(1, frameCount - 1).ToString(CultureInfo.InvariantCulture);
         var smoothProgress = $"((1-cos((on/{denom})*PI))/2)";
         var linearProgress = $"(on/{denom})";
@@ -11711,10 +11737,49 @@ public sealed partial class ProductionPipelineExecutionService(
         var zoomExpression = $"{z0}+(({z1})-({z0}))*{progress}";
         var xExpression = $"iw/2-(iw/zoom/2)+(({px0}+(({px1})-({px0}))*{progress})/100)*(iw-iw/zoom)";
         var yExpression = $"ih/2-(ih/zoom/2)+(({py0}+(({py1})-({py0}))*{progress})/100)*(ih-ih/zoom)";
-        return $"scale=2560:1440:force_original_aspect_ratio=increase:flags=lanczos,crop=2560:1440,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d={frameCount}:s=1280x720:fps={fps},trim=duration={item.SceneDurationSec.ToString("0.###", CultureInfo.InvariantCulture)},setpts=PTS-STARTPTS,fps={fps},format=yuv420p";
+        return $"scale=2560:1440:force_original_aspect_ratio=increase:flags=lanczos,crop=2560:1440,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d={frameCount}:s=1280x720:fps={fps},trim=duration={motionDurationSec.ToString("0.###", CultureInfo.InvariantCulture)},setpts=PTS-STARTPTS,fps={fps},format=yuv420p";
     }
 
-    private static async Task CrossfadeSceneClipsAsync(IReadOnlyList<string> clipPaths, IReadOnlyList<VideoAssemblyItem> items, string outputPath, string ffmpegPath, CancellationToken cancellationToken)
+    private static Phase18TimelinePolishPlan BuildPhase18TimelinePolishPlan(string format, IReadOnlyList<VideoAssemblyItem> items)
+    {
+        const double defaultTransitionSec = 0.72;
+        const double openingPauseSec = 0.8;
+        const double closingPauseSec = 4.0;
+        var sceneDurations = items.Select(item => RoundDuration(item.SceneDurationSec)).ToArray();
+        var transitionDurations = Enumerable.Range(0, Math.Max(0, items.Count - 1))
+            .Select(i => i == 0 ? 0.9 : defaultTransitionSec + (i % 2 == 0 ? 0.08 : -0.06))
+            .Select(RoundDuration)
+            .ToArray();
+        var transitionTypes = Enumerable.Range(0, transitionDurations.Length)
+            .Select(i => i == 0 ? "cinematic-crossfade" : i % 3 == 0 ? "dissolve" : i % 3 == 1 ? "fade" : "gentle-crossfade")
+            .ToArray();
+        var clipDurations = items.Select((item, i) => RoundDuration(item.SceneDurationSec + (i < transitionDurations.Length ? transitionDurations[i] : 0))).ToArray();
+        var warnings = new List<string>();
+        if (items.Count == 0) warnings.Add("No scenes were available for documentary timeline polish.");
+        if (items.Count > 0 && items[0].SceneDurationSec < 4.0) warnings.Add("Hero scene narration window is short; visual hold is protected but title readability may still be limited by audio duration.");
+        var observationScenes = items.Count(item => IsObservationScene(item));
+        if (observationScenes == 0 && string.Equals(format, "long", StringComparison.OrdinalIgnoreCase)) warnings.Add("No observation-style scenes were detected for extended viewing time analysis.");
+        var recommendations = new[]
+        {
+            "Keep narration timing authoritative; transitions overlap visual tails instead of moving speech or subtitles.",
+            "Use restrained dissolves and crossfades only; avoid flashy transitions.",
+            "If future narration allows, reserve additional spoken-silence headroom before the first sentence for a stronger title read."
+        };
+        return new Phase18TimelinePolishPlan(openingPauseSec, closingPauseSec, sceneDurations, clipDurations, transitionDurations, transitionTypes, warnings, recommendations);
+    }
+
+    private static bool IsObservationScene(VideoAssemblyItem item)
+    {
+        var text = (item.SceneId + " " + item.Purpose + " " + item.MotionStyle).ToLowerInvariant();
+        return text.Contains("observe", StringComparison.Ordinal)
+            || text.Contains("observation", StringComparison.Ordinal)
+            || text.Contains("where", StringComparison.Ordinal)
+            || text.Contains("direction", StringComparison.Ordinal)
+            || text.Contains("locate", StringComparison.Ordinal)
+            || text.Contains("guide", StringComparison.Ordinal);
+    }
+
+    private static async Task CrossfadeSceneClipsAsync(IReadOnlyList<string> clipPaths, Phase18TimelinePolishPlan polish, string outputPath, string ffmpegPath, CancellationToken cancellationToken)
     {
         if (clipPaths.Count == 1)
         {
@@ -11726,12 +11791,14 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var clipPath in clipPaths) args.AddRange(["-i", clipPath]);
         var filter = new System.Text.StringBuilder();
         for (var i = 0; i < clipPaths.Count; i++) filter.Append(FormattableString.Invariant($"[{i}:v]setpts=PTS-STARTPTS[v{i}];"));
-        var offset = Math.Max(0.1, items[0].SceneDurationSec - 0.8);
-        filter.Append(FormattableString.Invariant($"[v0][v1]xfade=transition=fade:duration=0.8:offset={offset:0.###}[x1]"));
+        var transitionDuration = polish.TransitionDurations[0];
+        var offset = Math.Max(0.1, polish.ClipDurations[0] - transitionDuration);
+        filter.Append(FormattableString.Invariant($"[v0][v1]xfade=transition=fade:duration={transitionDuration:0.###}:offset={offset:0.###}[x1]"));
         for (var i = 2; i < clipPaths.Count; i++)
         {
-            offset += Math.Max(0.1, items[i - 1].SceneDurationSec - 0.8);
-            filter.Append(FormattableString.Invariant($";[x{i - 1}][v{i}]xfade=transition=fade:duration=0.8:offset={offset:0.###}[x{i}]"));
+            transitionDuration = polish.TransitionDurations[i - 1];
+            offset += Math.Max(0.1, polish.ClipDurations[i - 1] - transitionDuration);
+            filter.Append(FormattableString.Invariant($";[x{i - 1}][v{i}]xfade=transition=fade:duration={transitionDuration:0.###}:offset={offset:0.###}[x{i}]"));
         }
         args.AddRange(["-filter_complex", filter.ToString(), "-map", $"[x{clipPaths.Count - 1}]", "-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outputPath]);
         var result = await RunProcessStaticAsync(ffmpegPath, args, cancellationToken);
