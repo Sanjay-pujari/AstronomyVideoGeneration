@@ -10716,6 +10716,20 @@ public sealed partial class ProductionPipelineExecutionService(
         var cueLevelSubtitleDriftMs = new { @short = shortCueValidation.DriftMs, @long = longCueValidation.DriftMs };
         var maxCueDriftMs = Math.Max(shortCueValidation.MaxCueDriftMs, previewOnly ? 0 : longCueValidation.MaxCueDriftMs);
         var averageCueDriftMs = RoundDuration(new[] { shortCueValidation.AverageCueDriftMs, previewOnly ? 0 : longCueValidation.AverageCueDriftMs }.Average());
+        var (configuredShortOutputWidth, configuredShortOutputHeight) = ResolvePhase18CanvasSize("short");
+        var (configuredLongOutputWidth, configuredLongOutputHeight) = ResolvePhase18CanvasSize("long");
+        var (actualShortOutputWidth, actualShortOutputHeight) = File.Exists(shortVideoPath) ? await ProbeVideoDimensionsAsync(shortVideoPath, cancellationToken) : (0, 0);
+        var (actualLongOutputWidth, actualLongOutputHeight) = File.Exists(longVideoPath) ? await ProbeVideoDimensionsAsync(longVideoPath, cancellationToken) : (0, 0);
+        var shortInputFramePath = shortRenderResult?.RenderItems.FirstOrDefault()?.SceneImagePath ?? string.Empty;
+        var (shortInputFrameWidth, shortInputFrameHeight) = File.Exists(shortInputFramePath) ? await ProbeVideoDimensionsAsync(shortInputFramePath, cancellationToken) : (0, 0);
+        var shortOutputAspectRatio = CalculateAspectRatio(actualShortOutputWidth, actualShortOutputHeight);
+        var longOutputAspectRatio = CalculateAspectRatio(actualLongOutputWidth, actualLongOutputHeight);
+        var shortInputFrameAspectRatio = CalculateAspectRatio(shortInputFrameWidth, shortInputFrameHeight);
+        var shortNativePortraitRenderingUsed = actualShortOutputWidth > 0 && actualShortOutputHeight > actualShortOutputWidth;
+        var shortLetterboxDetected = false;
+        var shortPillarboxDetected = false;
+        var shortRotationApplied = false;
+        var shortSubtitleBottomMarginPercent = actualShortOutputHeight > 0 && shortBurnInResult is not null ? Math.Round(shortBurnInResult.MarginV * 100.0 / actualShortOutputHeight, 2, MidpointRounding.AwayFromZero) : 0d;
         if (!previewOnly && !cueLevelSubtitleValidation) errors.Add("Cue-level subtitle validation failed");
         if (!shortPublishedMatchesAssembly) errors.Add("Published short video does not match subtitled video-assembly output");
         if (!previewOnly && !longPublishedMatchesAssembly) errors.Add("Published long video does not match subtitled video-assembly output");
@@ -10773,6 +10787,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (File.Exists(longAudioTrackPath) && !longAudioMuxed) errors.Add("long audio file exists but was not muxed");
         if (!previewOnly && !shortHasAudioStream) errors.Add("short final video has no audio stream");
         if (!previewOnly && !longHasAudioStream) errors.Add("long final video has no audio stream");
+        if (actualShortOutputWidth >= actualShortOutputHeight) errors.Add($"short final video must be portrait; actual={actualShortOutputWidth}x{actualShortOutputHeight}");
+        if (actualShortOutputWidth == 1280 && actualShortOutputHeight == 720) errors.Add("short final video must not be 1280x720 landscape");
+        if (!previewOnly && actualLongOutputWidth <= actualLongOutputHeight) errors.Add($"long final video must remain landscape; actual={actualLongOutputWidth}x{actualLongOutputHeight}");
         if (scenesWithZoom < totalScenes) errors.Add("Not every scene has zoom motion");
         if (scenesWithPan < totalScenes) errors.Add("Not every scene has pan motion");
         if (scenesWithTransitions < Math.Max(0, totalScenes - 1)) errors.Add("Not every scene boundary has a transition");
@@ -10839,6 +10856,27 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
             selectedVideoAssemblyRoot = NormalizePath(videoRoot),
+            shortOutputWidth = actualShortOutputWidth,
+            shortOutputHeight = actualShortOutputHeight,
+            shortOutputAspectRatio,
+            shortNativePortraitRenderingUsed,
+            shortInputFrameWidth,
+            shortInputFrameHeight,
+            shortInputFrameAspectRatio,
+            shortCanvasMode = "native-portrait",
+            shortScaleMode = "cover-fill-preserve-aspect",
+            shortLetterboxDetected,
+            shortPillarboxDetected,
+            shortRotationApplied,
+            shortSubtitleSafeAreaMode = "portrait-bottom-ui-safe",
+            shortSubtitleBottomMarginPercent,
+            longOutputWidth = actualLongOutputWidth,
+            longOutputHeight = actualLongOutputHeight,
+            longOutputAspectRatio,
+            configuredShortOutputWidth,
+            configuredShortOutputHeight,
+            configuredLongOutputWidth,
+            configuredLongOutputHeight,
             languageScopedArtifactsUsed = true,
             shimmerMitigationApplied,
             zoompanFrameDriven,
@@ -11009,6 +11047,27 @@ public sealed partial class ProductionPipelineExecutionService(
             selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) },
             selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
             selectedVideoAssemblyRoot = NormalizePath(videoRoot),
+            shortOutputWidth = actualShortOutputWidth,
+            shortOutputHeight = actualShortOutputHeight,
+            shortOutputAspectRatio,
+            shortNativePortraitRenderingUsed,
+            shortInputFrameWidth,
+            shortInputFrameHeight,
+            shortInputFrameAspectRatio,
+            shortCanvasMode = "native-portrait",
+            shortScaleMode = "cover-fill-preserve-aspect",
+            shortLetterboxDetected,
+            shortPillarboxDetected,
+            shortRotationApplied,
+            shortSubtitleSafeAreaMode = "portrait-bottom-ui-safe",
+            shortSubtitleBottomMarginPercent,
+            longOutputWidth = actualLongOutputWidth,
+            longOutputHeight = actualLongOutputHeight,
+            longOutputAspectRatio,
+            configuredShortOutputWidth,
+            configuredShortOutputHeight,
+            configuredLongOutputWidth,
+            configuredLongOutputHeight,
             languageScopedArtifactsUsed = true,
             shimmerMitigationApplied,
             zoompanFrameDriven,
@@ -11567,12 +11626,13 @@ public sealed partial class ProductionPipelineExecutionService(
             var clipPaths = new List<string>();
             var perSceneFilters = new List<object>();
             var timelinePolish = BuildPhase18TimelinePolishPlan(format, renderItems);
+            var (canvasWidth, canvasHeight) = ResolvePhase18CanvasSize(format);
             for (var i = 0; i < renderItems.Count; i++)
             {
                 var item = renderItems[i];
                 var clipPath = Path.Combine(tempRoot, $"{i:000}-{SanitizeFileName(item.SceneId)}.mp4");
                 var duration = Math.Max(0.5, timelinePolish.ClipDurations[i]);
-                var vf = BuildPhase18MotionFilter(item, i, duration);
+                var vf = BuildPhase18MotionFilter(item, i, duration, canvasWidth, canvasHeight);
                 var totalFrames = Math.Max(15, (int)Math.Round(duration * 30.0));
                 var originalSceneDurationSec = i < items.Count ? items[i].SceneDurationSec : item.SceneDurationSec;
                 var durationExpansionMatch = MatchCueLevelSceneDuration(cueLevelDurationsBySceneId, item.SceneId, originalSceneDurationSec);
@@ -11596,7 +11656,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     totalFrames,
                     filter = vf
                 });
-                var result = await RunProcessAsync(ffmpegPath, ["-y", "-loop", "1", "-i", item.SceneImagePath, "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-vf", vf, "-r", "30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", clipPath], cancellationToken);
+                var result = await RunProcessAsync(ffmpegPath, ["-y", "-loop", "1", "-i", item.SceneImagePath, "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-vf", vf, "-r", "30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-s", $"{canvasWidth}x{canvasHeight}", clipPath], cancellationToken);
                 if (result.ExitCode != 0 || !File.Exists(clipPath)) throw new InvalidOperationException($"Unable to render scene clip {item.SceneId}: {result.Error}");
                 clipPaths.Add(clipPath);
             }
@@ -11846,7 +11906,7 @@ public sealed partial class ProductionPipelineExecutionService(
         return rmsDb <= -60 ? tailWindowSeconds : 0;
     }
 
-    private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error, int FontSize = 0, int MaxCharsPerLine = 42, int MaxLines = 2);
+    private sealed record SubtitleBurnInResult(bool Succeeded, string Command, string Error, int FontSize = 0, int MarginV = 0, int MaxCharsPerLine = 42, int MaxLines = 2);
 
     private async Task<SubtitleBurnInResult> BurnInSubtitlesAsync(string videoPath, string srtPath, CancellationToken cancellationToken)
     {
@@ -11861,9 +11921,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var result = await RunProcessAsync(ffmpegPath, args, cancellationToken);
         var command = BuildProcessCommand(ffmpegPath, args);
         if (result.ExitCode != 0 || !File.Exists(subtitledPath))
-            return new SubtitleBurnInResult(false, command, FirstNonEmpty(result.Error, result.Output, $"FFmpeg exited with code {result.ExitCode}"), style.FontSize, style.MaxCharsPerLine, style.MaxLines);
+            return new SubtitleBurnInResult(false, command, FirstNonEmpty(result.Error, result.Output, $"FFmpeg exited with code {result.ExitCode}"), style.FontSize, style.MarginV, style.MaxCharsPerLine, style.MaxLines);
         File.Copy(subtitledPath, videoPath, true);
-        return new SubtitleBurnInResult(true, command, string.Empty, style.FontSize, style.MaxCharsPerLine, style.MaxLines);
+        return new SubtitleBurnInResult(true, command, string.Empty, style.FontSize, style.MarginV, style.MaxCharsPerLine, style.MaxLines);
     }
 
     private sealed record Phase18SubtitleStyle(string ForceStyle, int FontSize, int MarginV, int MaxCharsPerLine, int MaxLines);
@@ -11884,6 +11944,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var forceStyle = $"FontName=Arial,FontSize={fontSize},PrimaryColour=&HFFFFFF&,BackColour=&H99000000&,OutlineColour=&H000000&,BorderStyle=3,Outline=1,Shadow=0,MarginV={marginV},Alignment=2";
         return new Phase18SubtitleStyle(forceStyle, fontSize, marginV, 42, 2);
     }
+
+    private static double CalculateAspectRatio(int width, int height)
+        => width > 0 && height > 0 ? Math.Round(width / (double)height, 4, MidpointRounding.AwayFromZero) : 0d;
 
     private async Task<(int Width, int Height)> ProbeVideoDimensionsAsync(string videoPath, CancellationToken cancellationToken)
     {
@@ -11969,7 +12032,14 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool IsImageExtension(string extension)
         => extension.Equals(".png", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
 
-    private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index, double? renderDurationSec = null)
+    private (int Width, int Height) ResolvePhase18CanvasSize(string format)
+    {
+        if (string.Equals(format, "short", StringComparison.OrdinalIgnoreCase))
+            return (Math.Max(1, renderingOptions.Value.ShortVideoWidth), Math.Max(1, renderingOptions.Value.ShortVideoHeight));
+        return (Math.Max(1, renderingOptions.Value.VideoWidth), Math.Max(1, renderingOptions.Value.VideoHeight));
+    }
+
+    private static string BuildPhase18MotionFilter(VideoAssemblyItem item, int index, double? renderDurationSec = null, int outputWidth = 1280, int outputHeight = 720)
     {
         const int fps = 30;
         var motionDurationSec = Math.Max(0.5, renderDurationSec ?? item.SceneDurationSec);
@@ -11993,7 +12063,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var zoomExpression = $"{z0}+(({z1})-({z0}))*{progress}";
         var xExpression = $"iw/2-(iw/zoom/2)+(({px0}+(({px1})-({px0}))*{progress})/100)*(iw-iw/zoom)";
         var yExpression = $"ih/2-(ih/zoom/2)+(({py0}+(({py1})-({py0}))*{progress})/100)*(ih-ih/zoom)";
-        return $"scale=2560:1440:force_original_aspect_ratio=increase:flags=lanczos,crop=2560:1440,zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d={frameCount}:s=1280x720:fps={fps},trim=duration={motionDurationSec.ToString("0.###", CultureInfo.InvariantCulture)},setpts=PTS-STARTPTS,fps={fps},format=yuv420p";
+        var preScaleWidth = outputHeight > outputWidth ? 2160 : 2560;
+        var preScaleHeight = outputHeight > outputWidth ? 3840 : 1440;
+        return $"scale={preScaleWidth}:{preScaleHeight}:force_original_aspect_ratio=increase:flags=lanczos,crop={preScaleWidth}:{preScaleHeight},zoompan=z='{zoomExpression}':x='{xExpression}':y='{yExpression}':d={frameCount}:s={outputWidth}x{outputHeight}:fps={fps},trim=duration={motionDurationSec.ToString("0.###", CultureInfo.InvariantCulture)},setpts=PTS-STARTPTS,fps={fps},format=yuv420p";
     }
 
     private static Phase18TimelinePolishPlan BuildPhase18TimelinePolishPlan(string format, IReadOnlyList<VideoAssemblyItem> items)

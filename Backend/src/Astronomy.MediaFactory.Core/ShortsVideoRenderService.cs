@@ -190,8 +190,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             Title = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title,
             AudioPath = finalNarrationPath,
             OutputPath = shortVideoPath,
-            OutputWidth = 1080,
-            OutputHeight = 1920,
+            OutputWidth = Math.Max(1, _renderingOptions.ShortVideoWidth),
+            OutputHeight = Math.Max(1, _renderingOptions.ShortVideoHeight),
             EnableVerticalCrop = true,
             EncodingProfile = publishToYouTube ? VideoRenderProfileKind.ShortsFinal : VideoRenderProfileKind.MetaReelFinal,
             Scenes = shortSequence.Select(scene => new RenderScene
