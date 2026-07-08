@@ -3158,7 +3158,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var sceneDurationPlanResolution = EnsurePhase14SceneDurationPlan(planRoot, shortNarrationFiles, longNarrationFiles, shortItems, longNarrationV3Items);
         var shortCueRewrite = HindiCueDuplicateRewriteResult.Empty("short");
         var longCueRewrite = HindiCueDuplicateRewriteResult.Empty("long");
-        var phase14SubtitleOptions = NormalizePhase14SubtitleTtsOptions(configuredSubtitleTtsOptions);
+        var phase14SubtitleOptions = NormalizePhase14SubtitleTtsOptions(configuredSubtitleTtsOptions, language);
         var shortSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "short", shortNarrationFiles, shortItems, phase14SubtitleOptions);
         var longSrtTiming = BuildNarrationSrtFromCleanFiles(planRoot, language, "long", longNarrationFiles, longNarrationV3Items, phase14SubtitleOptions);
         ValidateSceneNarrationFileOnlyCueSources(shortSrtTiming.Diagnostics, longSrtTiming.Diagnostics);
@@ -5979,7 +5979,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (durationPlanItems.Count == 0)
             durationPlanItems = BuildFallbackPhase14SceneDurationPlanItems(planRoot, format, items, narrationFiles);
 
-        var options = NormalizePhase14SubtitleTtsOptions(null);
+        var options = NormalizePhase14SubtitleTtsOptions(null, requestedLanguage);
         var cueRecords = new List<HindiCueDuplicateRewriteCandidate>();
         for (var i = 0; i < narrationFiles.Count; i++)
         {
@@ -6057,7 +6057,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (durationPlanItems.Count < narrationFiles.Count)
             throw new InvalidOperationException($"Scene duration plan has fewer {format} scene items than narration files.");
 
-        var options = NormalizePhase14SubtitleTtsOptions(subtitleOptions);
+        var options = NormalizePhase14SubtitleTtsOptions(subtitleOptions, requestedLanguage);
         var blocks = new List<SubtitleCueBlock>();
         var perScene = new List<object>();
         var srtGenerationDiagnostics = new List<object>();
@@ -6131,11 +6131,16 @@ public sealed partial class ProductionPipelineExecutionService(
             perScene.Add(new
             {
                 sceneId = durationPlanItem.SceneId,
+                narrationLength = sceneText.Length,
                 sceneDurationPlanAudioPath = NormalizePath(durationPlanItem.AudioPath),
+                ttsDurationSec = RoundDuration(audioDuration),
                 audioDurationSec = RoundDuration(audioDuration),
                 subtitleStart = RoundDuration(sceneStart),
                 subtitleEnd = RoundDuration(sceneEnd),
                 subtitleCueCount = cueChunks.Count,
+                firstCueTime = cueChunks.Count == 0 ? null : RoundDuration(sceneStart),
+                lastCueEndTime = cueChunks.Count == 0 ? null : RoundDuration(sceneEnd),
+                lastCueEndSceneAudioEndDiffSec = cueChunks.Count == 0 ? null : RoundDuration(sceneEnd - sceneEnd),
                 subtitleTextSource = "NarrationFile",
                 subtitleTextOrigin = NormalizePath(narrationFile),
                 requestedLanguage = sourceValidation.RequestedLanguage,
@@ -6155,11 +6160,19 @@ public sealed partial class ProductionPipelineExecutionService(
                 ttsMode = options.TtsMode,
                 format,
                 sceneId = durationPlanItem.SceneId,
+                narrationLength = sceneText.Length,
+                ttsDurationSec = RoundDuration(audioDuration),
                 narrationWordCount = CountSpokenWords(sceneText),
                 generatedCueCount = cueChunks.Count,
+                firstCueTime = cueChunks.Count == 0 ? null : RoundDuration(sceneStart),
+                lastCueEndTime = cueChunks.Count == 0 ? null : RoundDuration(sceneEnd),
+                lastCueEndSceneAudioEndDiffSec = cueChunks.Count == 0 ? null : RoundDuration(sceneEnd - sceneEnd),
                 maxWordsPerCue = options.SubtitleMaxWordsPerCue,
                 maxCharsPerLine = options.SubtitleMaxCharsPerLine,
                 maxLines = options.SubtitleMaxLines,
+                minCueDurationSeconds = RoundDuration(options.SubtitleMinCueDurationMs / 1000.0),
+                maxCueDurationSeconds = RoundDuration(options.SubtitleMaxCueDurationMs / 1000.0),
+                readingSpeedCharsPerSecond = options.ReadingSpeedCharsPerSecond,
                 cueGapMs = options.CueGapMs
             });
             subtitleStart = sceneEnd;
@@ -6812,7 +6825,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (minSeconds * cueChunks.Count > availableSeconds)
             return cueChunks.Select(_ => availableSeconds / cueChunks.Count + gapSeconds).ToArray();
 
-        var weights = cueChunks.Select(chunk => Math.Max(1, CountSpokenWords(chunk))).ToArray();
+        var weights = cueChunks.Select(chunk => Math.Max(1.0, EstimateSubtitleCueWeight(chunk, options))).ToArray();
         var totalWeight = weights.Sum();
         var durations = weights.Select(weight => Math.Clamp(availableSeconds * weight / totalWeight, minSeconds, maxSeconds)).ToArray();
         var delta = availableSeconds - durations.Sum();
@@ -6832,6 +6845,19 @@ public sealed partial class ProductionPipelineExecutionService(
             durations = durations.Select((duration, index) => index < durations.Length - 1 ? duration + gapSeconds : duration).ToArray();
         return durations;
     }
+
+    private static double EstimateSubtitleCueWeight(string chunk, SubtitleTtsOptions options)
+    {
+        if (options.ReadingSpeedCharsPerSecond > 0 && ContainsDevanagari(chunk))
+            return Math.Max(1.0, CountSubtitleReadingCharacters(chunk) / options.ReadingSpeedCharsPerSecond);
+        return Math.Max(1, CountSpokenWords(chunk));
+    }
+
+    private static int CountSubtitleReadingCharacters(string text)
+        => NormalizeNarrationWhitespace(text).Count(ch => !char.IsWhiteSpace(ch) && !char.IsPunctuation(ch));
+
+    private static bool ContainsDevanagari(string? text)
+        => !string.IsNullOrEmpty(text) && text.Any(ch => ch >= '\u0900' && ch <= '\u097F');
 
     private static IReadOnlyList<string> WrapSubtitleChunk(string text)
     {
@@ -6909,10 +6935,10 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private static SubtitleTtsOptions NormalizePhase14SubtitleTtsOptions(SubtitleTtsOptions? configured)
+    private static SubtitleTtsOptions NormalizePhase14SubtitleTtsOptions(SubtitleTtsOptions? configured, string? language = null)
     {
         var fallback = new SubtitleTtsOptions();
-        return new SubtitleTtsOptions
+        var normalized = new SubtitleTtsOptions
         {
             TtsMode = string.IsNullOrWhiteSpace(configured?.TtsMode) ? fallback.TtsMode : configured.TtsMode,
             SubtitleMaxWordsPerCue = Math.Max(1, configured?.SubtitleMaxWordsPerCue ?? fallback.SubtitleMaxWordsPerCue),
@@ -6920,9 +6946,18 @@ public sealed partial class ProductionPipelineExecutionService(
             SubtitleMaxCharsPerLine = Math.Max(1, configured?.SubtitleMaxCharsPerLine ?? fallback.SubtitleMaxCharsPerLine),
             SubtitleMinCueDurationMs = Math.Max(0, configured?.SubtitleMinCueDurationMs ?? fallback.SubtitleMinCueDurationMs),
             SubtitleMaxCueDurationMs = Math.Max(1, configured?.SubtitleMaxCueDurationMs ?? fallback.SubtitleMaxCueDurationMs),
+            ReadingSpeedCharsPerSecond = Math.Max(1, configured?.ReadingSpeedCharsPerSecond ?? fallback.ReadingSpeedCharsPerSecond),
             SentenceBreakPauseMs = Math.Max(0, configured?.SentenceBreakPauseMs ?? fallback.SentenceBreakPauseMs),
             CueGapMs = Math.Max(0, configured?.CueGapMs ?? fallback.CueGapMs)
         };
+        if (!string.Equals(ResolvePipelineLanguage(language), "hi", StringComparison.OrdinalIgnoreCase))
+            return normalized;
+
+        normalized.SubtitleMaxCharsPerLine = configured is null ? 32 : Math.Clamp(normalized.SubtitleMaxCharsPerLine, 30, 34);
+        normalized.SubtitleMinCueDurationMs = Math.Max(normalized.SubtitleMinCueDurationMs, 1400);
+        normalized.SubtitleMaxCueDurationMs = Math.Min(Math.Max(normalized.SubtitleMaxCueDurationMs, normalized.SubtitleMinCueDurationMs), 4000);
+        normalized.ReadingSpeedCharsPerSecond = Math.Clamp(normalized.ReadingSpeedCharsPerSecond, 8, 10);
+        return normalized;
     }
 
     private static SrtValidationResult ValidateNarrationSrt(string srtPath, IReadOnlyList<string> narrationFiles, IReadOnlyList<SubtitleCueSource> subtitleCueSources, string requestedLanguage)
@@ -8288,7 +8323,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static Phase15SceneIdLineageResolution ResolvePhase15VisualSceneIdLineage(string planRoot, string language, string format, IReadOnlyList<Phase15SrtBlock> blocks)
     {
         var expectedVisualSceneIds = ResolvePhase15ExpectedVisualSceneIds(planRoot, format);
-        var options = NormalizePhase14SubtitleTtsOptions(null);
+        var options = NormalizePhase14SubtitleTtsOptions(null, language);
         if (blocks.Count == 0)
             return new Phase15SceneIdLineageResolution([], expectedVisualSceneIds, []);
 
@@ -9199,7 +9234,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(subtitlesRoot);
         var shortSrtPath = Path.Combine(subtitlesRoot, "short.srt");
         var longSrtPath = Path.Combine(subtitlesRoot, "long.srt");
-        var options = NormalizePhase14SubtitleTtsOptions(null);
+        var options = NormalizePhase14SubtitleTtsOptions(null, language);
         var shortSrt = BuildNarrationSrtFromTtsTimeline(planRoot, "short", language, options);
         var longSrt = BuildNarrationSrtFromTtsTimeline(planRoot, "long", language, options);
         File.WriteAllText(shortSrtPath, shortSrt.Srt);
@@ -12035,6 +12070,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var sceneIdsByCue = ResolvePhase15VisualSceneIdsForSrtBlocks(planRoot, language, format, sourceBlocks);
         var sceneDurations = await BuildCueLevelSceneDurationsFromTtsTimelineAsync(planRoot, format, language, cancellationToken);
+        var subtitleOptions = NormalizePhase14SubtitleTtsOptions(null, language);
         var retimedBlocks = new List<Phase15SrtBlock>();
         var diagnostics = new List<object>();
         var timelineStart = TimeSpan.Zero;
@@ -12064,7 +12100,7 @@ public sealed partial class ProductionPipelineExecutionService(
             if (sceneCues.Length > 0)
             {
                 var weights = sceneCues
-                    .Select(cue => Math.Max(1, CountSpokenWords(cue.Text)))
+                    .Select(cue => Math.Max(1.0, EstimateSubtitleCueWeight(cue.Text, subtitleOptions)))
                     .ToArray();
                 var totalWeight = weights.Sum();
                 var cueStart = timelineStart;
@@ -12081,9 +12117,19 @@ public sealed partial class ProductionPipelineExecutionService(
             diagnostics.Add(new
             {
                 sceneId = renderItem.SceneId,
+                narrationLength = sceneCues.Sum(cue => NormalizeNarrationWhitespace(cue.Text).Length),
+                ttsDurationSec = RoundDuration(sceneAudioDuration),
                 sceneAudioDuration = RoundDuration(sceneAudioDuration),
                 sceneSubtitleDuration = RoundDuration(sceneCues.Length == 0 ? 0 : (sceneEnd - timelineStart).TotalSeconds),
+                cueCount = sceneCues.Length,
                 subtitleCueCount = sceneCues.Length,
+                firstCueTime = sceneCues.Length == 0 ? null : RoundDuration(timelineStart.TotalSeconds),
+                lastCueEndTime = sceneCues.Length == 0 ? null : RoundDuration(sceneEnd.TotalSeconds),
+                lastCueEndSceneAudioEndDiffSec = sceneCues.Length == 0 ? null : RoundDuration(sceneEnd.TotalSeconds - sceneEnd.TotalSeconds),
+                maxCharsPerCue = subtitleOptions.SubtitleMaxCharsPerLine,
+                minCueDurationSeconds = RoundDuration(subtitleOptions.SubtitleMinCueDurationMs / 1000.0),
+                maxCueDurationSeconds = RoundDuration(subtitleOptions.SubtitleMaxCueDurationMs / 1000.0),
+                readingSpeedCharsPerSecond = subtitleOptions.ReadingSpeedCharsPerSecond,
                 subtitleDurationDelta = RoundDuration(sceneCues.Length == 0 ? sceneAudioDuration : 0)
             });
             timelineStart = sceneEnd;
