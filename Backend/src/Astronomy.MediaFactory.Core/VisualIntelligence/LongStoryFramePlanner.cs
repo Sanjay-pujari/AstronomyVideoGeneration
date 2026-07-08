@@ -170,6 +170,7 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
         var review = BuildReview(plan);
         var compositionModel = BuildCompositionModel(plan);
         var promptPackages = BuildPromptPackages(plan);
+        var visualQualityFrameworkReview = VisualQualityFramework.Astronomy().CreateReview("Story Frames");
         var promptReview = BuildPromptReview(plan, promptPackages);
         var visualReview = BuildVisualReview(plan);
         var manifest = new LongStoryFrameArtifactManifest
@@ -179,7 +180,7 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
             TimelineId = plan.TimelineId,
             ArtifactRoot = root,
             Directories = ["diagnostics/", "diagnostics/frame-prompts/", "comparison/"],
-            Diagnostics = ["diagnostics/LongStoryFramePlan.json", "diagnostics/LongStoryFrameReview.json", "diagnostics/LongStoryFramePromptReview.json", "diagnostics/LongStoryFrameVisualReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json"],
+            Diagnostics = ["diagnostics/LongStoryFramePlan.json", "diagnostics/LongStoryFrameReview.json", "diagnostics/LongStoryFramePromptReview.json", "diagnostics/LongStoryFrameVisualReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json", "diagnostics/VisualQualityFrameworkReview.json"],
             ComparisonArtifacts = ["comparison/"],
             Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -191,6 +192,7 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
                 ["FramePromptPackages"] = "diagnostics/frame-prompts/",
                 ["FrameGenerationDiagnostics"] = "diagnostics/FrameGenerationDiagnostics.json",
                 ["VisualPromptDiagnostics"] = "diagnostics/VisualPromptDiagnostics.json",
+                ["VisualQualityFrameworkReview"] = "diagnostics/VisualQualityFrameworkReview.json",
                 ["ComparisonArtifacts"] = "comparison/"
             },
             ImagesGenerated = false,
@@ -207,6 +209,7 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
             await File.WriteAllTextAsync(Path.Combine(framePrompts, PromptFileName(package.FrameNumber, package.BeatRole)), JsonSerializer.Serialize(package, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "FrameGenerationDiagnostics.json"), JsonSerializer.Serialize(CreateFrameGenerationDiagnostics(plan), options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualPromptDiagnostics.json"), JsonSerializer.Serialize(CreateVisualPromptDiagnostics(plan), options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualQualityFrameworkReview.json"), JsonSerializer.Serialize(visualQualityFrameworkReview, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "LongStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
@@ -342,17 +345,19 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
             VisualTreatment = frame.RecommendedVisualTreatment,
             SafeAreaInstructions = "Reserve deterministic overlay safe space in the lower third and outer edge margins; keep astronomy subjects in the central documentary field.",
             TypographyInstructions = "Do not generate embedded text, captions, labels, letters, numbers, logos, UI, watermarks, or title cards inside the image.",
-            PositivePrompt = $"Native 16:9 landscape astronomy documentary frame. {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. Compose with deterministic overlay safe space in the lower third and edge margins. No generated embedded text.",
-            NegativePrompt = "text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, fantasy planets, distorted constellations",
+            PositivePrompt = $"{VisualQualityFramework.Astronomy().BuildPromptPolicyText()} Native 16:9 landscape astronomy documentary frame. {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. Compose with deterministic overlay safe space in the lower third and edge margins. No generated embedded text.",
+            NegativePrompt = VisualQualityFramework.Astronomy().NegativePromptPolicy + ", text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, fantasy planets, distorted constellations",
             Diagnostics = new Dictionary<string, object>
             {
                 ["azureCallsMade"] = false,
                 ["imageGenerationRequested"] = false,
                 ["scenePromptReplacementApplied"] = false,
                 ["noCroppingLanguage"] = true,
-                ["embeddedTextProhibited"] = true
+                ["embeddedTextProhibited"] = true,
+                ["visualQualityFrameworkVersion"] = VisualQualityFramework.Version,
+                ["visualQualityFrameworkLoaded"] = true
             },
-            Versions = new Dictionary<string, string>(plan.Versions) { ["storyFramePromptPackages"] = Version }
+            Versions = new Dictionary<string, string>(plan.Versions) { ["storyFramePromptPackages"] = Version, ["visualQualityFramework"] = VisualQualityFramework.Version }
         }).ToArray();
 
     private static StoryFramePromptReview BuildPromptReview(LongStoryFramePlan plan, IReadOnlyList<StoryFramePromptPackage> packages) => new()
