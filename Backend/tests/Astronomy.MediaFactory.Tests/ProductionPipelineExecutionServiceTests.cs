@@ -2843,6 +2843,34 @@ Second display cue.
         Assert.True(bestTimeHumanizationPassed);
     }
 
+    [Fact]
+    public void PlanetConjunctionHookGreetingGuard_PrefixesOnlyUngreetedHookNarration()
+    {
+        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPlanetConjunctionHookGreetingGuard", BindingFlags.NonPublic | BindingFlags.Static);
+        var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Jupiter and Venus make the western sky feel cinematic tonight.",
+            ["002-cause"] = "The planets appear close because their orbits line up along our view from Earth."
+        };
+        var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["001-hook"] = "Hello, fellow stargazers. Jupiter and Venus already have a host greeting.",
+            ["002-what-is-it"] = "A conjunction is an apparent close pairing in the sky."
+        };
+
+        var diagnostics = method!.Invoke(null, ["PlanetConjunction", shortTexts, longTexts])!;
+
+        Assert.StartsWith("Welcome to Drashyam. Jupiter and Venus", shortTexts["001-hook"]);
+        Assert.StartsWith("Hello, fellow stargazers. Jupiter and Venus", longTexts["001-hook"]);
+        Assert.Equal("The planets appear close because their orbits line up along our view from Earth.", shortTexts["002-cause"]);
+        Assert.Equal("A conjunction is an apparent close pairing in the sky.", longTexts["002-what-is-it"]);
+        Assert.True((bool)diagnostics.GetType().GetProperty("HookGreetingRequired")!.GetValue(diagnostics)!);
+        Assert.True((bool)diagnostics.GetType().GetProperty("HookGreetingApplied")!.GetValue(diagnostics)!);
+        Assert.Equal("Welcome to Drashyam", diagnostics.GetType().GetProperty("HookGreetingText")!.GetValue(diagnostics));
+        Assert.Equal("Jupiter and Venus make the western sky feel cinematic tonight.", diagnostics.GetType().GetProperty("HookBeforePrefixFirst120Chars")!.GetValue(diagnostics));
+        Assert.StartsWith("Welcome to Drashyam. Jupiter and Venus", (string)diagnostics.GetType().GetProperty("HookAfterPrefixFirst120Chars")!.GetValue(diagnostics)!);
+    }
+
     private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null, bool enableSceneVariants = false)
     {
         var planId = Guid.NewGuid();

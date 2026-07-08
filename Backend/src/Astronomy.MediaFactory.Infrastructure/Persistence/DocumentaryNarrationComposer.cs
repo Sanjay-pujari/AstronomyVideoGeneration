@@ -211,7 +211,12 @@ internal sealed record EventStoryComposerDiagnostics(
     bool HardcodedTemplateUsed = false,
     IReadOnlyList<string>? SourceEventFactsUsed = null,
     int AiRewriteAttemptCount = 0,
-    bool FallbackStaticTextUsed = false);
+    bool FallbackStaticTextUsed = false,
+    bool HookGreetingRequired = false,
+    bool HookGreetingApplied = false,
+    string? HookGreetingText = null,
+    string? HookBeforePrefixFirst120Chars = null,
+    string? HookAfterPrefixFirst120Chars = null);
 
 internal sealed record LongSceneNarrationExpansionContext(
     string EventType,
