@@ -10573,7 +10573,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var longManifestPath = Path.Combine(longVisualFrameRoot, "LongStoryFrameArtifactManifest.json");
         var shortStoryFrameManifest = useStoryFramesV4ForVideoAssembly ? LoadStoryFrameV4Manifest(shortManifestPath, "short") : StoryFrameV4Manifest.Empty("short", shortManifestPath);
         var longStoryFrameManifest = useStoryFramesV4ForVideoAssembly ? LoadStoryFrameV4Manifest(longManifestPath, "long") : StoryFrameV4Manifest.Empty("long", longManifestPath);
-        const string frameMappingStrategy = "storyframe-manifest-sceneId";
+        const string frameMappingStrategy = "storyframe-v4-semantic-scene-mapping";
         const bool fallbackToSceneAssetsV3 = false;
         var resolvedFrameMappings = new List<StoryFrameV4ResolvedFrameMapping>();
         var unresolvedScenes = new List<StoryFrameV4UnresolvedScene>();
@@ -10755,6 +10755,15 @@ public sealed partial class ProductionPipelineExecutionService(
         var videoRendered = previewOnly ? File.Exists(shortVideoPath) && !File.Exists(longVideoPath) : File.Exists(shortVideoPath) && File.Exists(longVideoPath);
         if (!previewOnly && shortSceneCount != 5) errors.Add($"short scene count != 5; actual={shortSceneCount}");
         if (!previewOnly && longSceneCount != 9) errors.Add($"long scene count != 9; actual={longSceneCount}");
+        if (useStoryFramesV4ForVideoAssembly)
+        {
+            var resolvedShortFrameCount = resolvedFrameMappings.Count(m => string.Equals(m.Format, "short", StringComparison.OrdinalIgnoreCase));
+            var resolvedLongFrameCount = resolvedFrameMappings.Count(m => string.Equals(m.Format, "long", StringComparison.OrdinalIgnoreCase));
+            if (!previewOnly && resolvedShortFrameCount != 5) errors.Add($"StoryFrame V4 short resolved frame count != 5; actual={resolvedShortFrameCount}");
+            if (!previewOnly && resolvedLongFrameCount != 9) errors.Add($"StoryFrame V4 long resolved frame count != 9; actual={resolvedLongFrameCount}");
+            if (unresolvedScenes.Count > 0) errors.Add($"StoryFrame V4 unresolved scene count must be 0; actual={unresolvedScenes.Count}");
+            if (missingSceneImages.Any(string.IsNullOrWhiteSpace)) errors.Add("StoryFrame V4 missingSceneImages contains a blank path");
+        }
         errors.AddRange(missingSceneImages.Select(p => $"Scene image missing: {p}"));
         if (!previewOnly) errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
         if (!File.Exists(shortVideoPath)) errors.Add($"short video missing: {NormalizePath(shortVideoPath)}");
@@ -11163,14 +11172,14 @@ public sealed partial class ProductionPipelineExecutionService(
                 }
                 else
                 {
-                    resolvedFrameMappings.Add(new StoryFrameV4ResolvedFrameMapping(format, sceneId, scenePurpose, NormalizePath(storyFrameResolution.ImagePath), storyFrameResolution.ResolutionMethod));
+                    resolvedFrameMappings.Add(new StoryFrameV4ResolvedFrameMapping(format, sceneId, scenePurpose, storyFrameResolution.StoryFrameKey, NormalizePath(storyFrameResolution.ImagePath), storyFrameResolution.ResolutionMethod));
                 }
             }
             var imagePath = useStoryFramesV4ForVideoAssembly
                 ? storyFrameResolution?.ImagePath ?? string.Empty
                 : FirstNonEmpty(GetString(item, "sceneImagePath"), GetString(item, "imagePath"), ResolveVideoAssemblySceneImageFromManifest(planRoot, format, sceneId, items.Count), string.Empty);
             var audioPath = ResolveVideoAssemblyAudioPath(ttsRoot, format, sceneId, items.Count) ?? GetString(item, "audioPath") ?? ResolveVideoAssemblyAudioByConvention(imagePath, format, sceneId, items.Count) ?? string.Empty;
-            if (!File.Exists(imagePath)) missingSceneImages.Add(NormalizePath(imagePath));
+            if (!string.IsNullOrWhiteSpace(imagePath) && !File.Exists(imagePath)) missingSceneImages.Add(NormalizePath(imagePath));
             if (!File.Exists(audioPath)) missingAudioFiles.Add(NormalizePath(audioPath));
             if (oldPaths.Any(oldPath => IsSameOrUnderPath(NormalizePath(imagePath), NormalizePath(oldPath)) || IsSameOrUnderPath(NormalizePath(audioPath), NormalizePath(oldPath))))
             {
@@ -11215,9 +11224,9 @@ public sealed partial class ProductionPipelineExecutionService(
         public static StoryFrameV4Manifest Empty(string format, string manifestPath) => new(format, manifestPath, false, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), []);
     }
 
-    private sealed record StoryFrameV4Resolution(string ImagePath, string ResolutionMethod);
+    private sealed record StoryFrameV4Resolution(string ImagePath, string StoryFrameKey, string ResolutionMethod);
 
-    private sealed record StoryFrameV4ResolvedFrameMapping(string Format, string SceneId, string ScenePurpose, string ResolvedImagePath, string ResolutionMethod);
+    private sealed record StoryFrameV4ResolvedFrameMapping(string Format, string NarrationSceneId, string NarrationScenePurpose, string StoryFrameKey, string ResolvedImagePath, string ResolutionMethod);
 
     private sealed record StoryFrameV4UnresolvedScene(string Format, string SceneId, string ScenePurpose, string ManifestPath, IReadOnlyList<string> AvailableManifestSceneKeys);
 
@@ -11261,15 +11270,79 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static StoryFrameV4Resolution? ResolveStoryFrameV4VideoAssemblyImagePath(StoryFrameV4Manifest manifest, string format, string sceneId, string scenePurpose)
     {
-        foreach (var key in new[] { sceneId, NormalizeStoryFrameSceneKey(sceneId), scenePurpose, NormalizeStoryFrameSceneKey(scenePurpose) })
-            if (!string.IsNullOrWhiteSpace(key) && manifest.SceneMap.TryGetValue(key, out var exact)) return new StoryFrameV4Resolution(exact, string.Equals(key, sceneId, StringComparison.OrdinalIgnoreCase) ? "exact-sceneId" : "normalized-sceneId-or-purpose");
+        if (!string.IsNullOrWhiteSpace(sceneId) && manifest.SceneMap.TryGetValue(sceneId, out var exactSceneId))
+            return new StoryFrameV4Resolution(exactSceneId, sceneId, "exact-sceneId");
+
+        if (!string.IsNullOrWhiteSpace(scenePurpose) && manifest.SceneMap.TryGetValue(scenePurpose, out var exactPurpose))
+            return new StoryFrameV4Resolution(exactPurpose, scenePurpose, "exact-scenePurpose");
+
+        var semanticKey = ResolveStoryFrameV4SemanticKey(format, sceneId);
+        if (!string.IsNullOrWhiteSpace(semanticKey))
+        {
+            if (manifest.SceneMap.TryGetValue(semanticKey, out var semanticExact))
+                return new StoryFrameV4Resolution(semanticExact, semanticKey, "semantic-mapping");
+
+            var normalizedSemanticKey = NormalizeStoryFrameSceneKey(semanticKey);
+            if (!string.IsNullOrWhiteSpace(normalizedSemanticKey) && manifest.SceneMap.TryGetValue(normalizedSemanticKey, out var semanticNormalized))
+                return new StoryFrameV4Resolution(semanticNormalized, semanticKey, "semantic-mapping");
+        }
+
+        foreach (var key in new[] { NormalizeStoryFrameSceneKey(sceneId), NormalizeStoryFrameSceneKey(scenePurpose) })
+            if (!string.IsNullOrWhiteSpace(key) && manifest.SceneMap.TryGetValue(key, out var normalizedExact))
+                return new StoryFrameV4Resolution(normalizedExact, key, "normalized-fallback");
+
         var wanted = new[] { NormalizeStoryFrameSceneKey(sceneId), NormalizeStoryFrameSceneKey(scenePurpose) }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         foreach (var kvp in manifest.SceneMap)
         {
             var normalizedKey = NormalizeStoryFrameSceneKey(kvp.Key);
-            if (wanted.Any(w => normalizedKey.EndsWith(w, StringComparison.OrdinalIgnoreCase) || w.EndsWith(normalizedKey, StringComparison.OrdinalIgnoreCase))) return new StoryFrameV4Resolution(kvp.Value, "normalized-suffix");
+            if (wanted.Any(w => normalizedKey.EndsWith(w, StringComparison.OrdinalIgnoreCase) || w.EndsWith(normalizedKey, StringComparison.OrdinalIgnoreCase)))
+                return new StoryFrameV4Resolution(kvp.Value, kvp.Key, "normalized-fallback");
         }
         return null;
+    }
+
+    private static string ResolveStoryFrameV4SemanticKey(string format, string sceneId)
+    {
+        var normalizedSceneId = NormalizeStoryFrameNarrationSceneId(sceneId);
+        if (string.Equals(format, "short", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalizedSceneId switch
+            {
+                "001-hook" => "hook",
+                "002-cause" => "recognition",
+                "003-accurate-sky-guide" => "observation",
+                "004-viewing-tip" => "explanation",
+                "005-final-reminder" => "call-to-action",
+                _ => string.Empty
+            };
+        }
+
+        if (string.Equals(format, "long", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalizedSceneId switch
+            {
+                "001-hook" => "hook",
+                "002-what-is-it" => "recognition",
+                "003-cause" => "explanationa",
+                "004-interesting-fact" => "interestingfact",
+                "005-best-time" => "observationa",
+                "006-accurate-sky-guide" => "observationb",
+                "007-what-you-will-see" => "explanationb",
+                "008-viewing-tips" => "memory",
+                "009-final-reminder" => "call-to-action",
+                _ => string.Empty
+            };
+        }
+
+        return string.Empty;
+    }
+
+    private static string NormalizeStoryFrameNarrationSceneId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var name = Path.GetFileNameWithoutExtension(value.Trim()).ToLowerInvariant();
+        name = System.Text.RegularExpressions.Regex.Replace(name, "[^a-z0-9]+", "-").Trim('-');
+        return name;
     }
 
     private static string NormalizeStoryFrameSceneKey(string? value)
