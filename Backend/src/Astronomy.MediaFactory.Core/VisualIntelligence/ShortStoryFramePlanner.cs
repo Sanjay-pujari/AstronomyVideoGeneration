@@ -167,6 +167,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         var compositionModel = BuildCompositionModel(plan);
         var promptPackages = BuildPromptPackages(plan);
         var visualQualityFrameworkReview = VisualQualityFramework.Astronomy().CreateReview("Story Frames");
+        var visualPromptPolicyReview = VisualPromptPolicyComposer.CreateReview(VisualPromptProduct.ShortStoryFrame);
         var promptReview = BuildPromptReview(plan, promptPackages);
         var visualReview = BuildVisualReview(plan);
         var manifest = new ShortStoryFrameArtifactManifest
@@ -176,7 +177,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
             TimelineId = plan.TimelineId,
             ArtifactRoot = root,
             Directories = ["diagnostics/", "diagnostics/frame-prompts/", "comparison/"],
-            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/ShortStoryFramePromptReview.json", "diagnostics/ShortStoryFrameVisualReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json", "diagnostics/VisualQualityFrameworkReview.json"],
+            Diagnostics = ["diagnostics/ShortStoryFramePlan.json", "diagnostics/ShortStoryFrameReview.json", "diagnostics/ShortStoryFramePromptReview.json", "diagnostics/ShortStoryFrameVisualReview.json", "diagnostics/FrameGenerationDiagnostics.json", "diagnostics/VisualPromptDiagnostics.json", "diagnostics/VisualQualityFrameworkReview.json", "diagnostics/VisualPromptPolicyReview.json"],
             ComparisonArtifacts = ["comparison/"],
             Artifacts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -189,6 +190,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
                 ["FrameGenerationDiagnostics"] = "diagnostics/FrameGenerationDiagnostics.json",
                 ["VisualPromptDiagnostics"] = "diagnostics/VisualPromptDiagnostics.json",
                 ["VisualQualityFrameworkReview"] = "diagnostics/VisualQualityFrameworkReview.json",
+                ["VisualPromptPolicyReview"] = "diagnostics/VisualPromptPolicyReview.json",
                 ["ComparisonArtifacts"] = "comparison/"
             },
             ImagesGenerated = false,
@@ -206,6 +208,7 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "FrameGenerationDiagnostics.json"), JsonSerializer.Serialize(CreateFrameGenerationDiagnostics(plan), options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualPromptDiagnostics.json"), JsonSerializer.Serialize(CreateVisualPromptDiagnostics(plan), options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualQualityFrameworkReview.json"), JsonSerializer.Serialize(visualQualityFrameworkReview, options), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(diagnostics, "VisualPromptPolicyReview.json"), JsonSerializer.Serialize(visualPromptPolicyReview, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "story-frame-plan.json"), JsonSerializer.Serialize(plan, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "composition-model.json"), JsonSerializer.Serialize(compositionModel, options), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "ShortStoryFrameArtifactManifest.json"), JsonSerializer.Serialize(manifest, options), cancellationToken);
@@ -341,8 +344,8 @@ public sealed class ShortStoryFramePlanner : IShortStoryFramePlanner
             VisualTreatment = frame.RecommendedVisualTreatment,
             SafeAreaInstructions = "Reserve deterministic overlay safe space in the top band, bottom action band, and right-side platform-control margin; keep astronomy subjects in a strong central vertical hierarchy.",
             TypographyInstructions = "Do not generate embedded text, captions, labels, letters, numbers, logos, UI, watermarks, or title cards inside the image.",
-            PositivePrompt = $"{VisualQualityFramework.Astronomy().BuildPromptPolicyText()} Native 9:16 portrait astronomy documentary frame for short-form viewing. Fast visual comprehension with strong vertical hierarchy. {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. Compose with deterministic overlay safe space in the top band, bottom action band, and right-side margin. No generated embedded text.",
-            NegativePrompt = VisualQualityFramework.Astronomy().NegativePromptPolicy + ", text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, fantasy planets, distorted constellations, landscape layout",
+            PositivePrompt = $"{VisualPromptPolicyComposer.Compose(VisualPromptProduct.ShortStoryFrame).PositiveGuidance} {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. Compose with deterministic overlay safe space in the top band, bottom action band, and right-side margin. No generated embedded text.",
+            NegativePrompt = VisualPromptPolicyComposer.Compose(VisualPromptProduct.ShortStoryFrame).NegativeGuidance + ", text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, fantasy planets, distorted constellations",
             Diagnostics = new Dictionary<string, object>
             {
                 ["azureCallsMade"] = false,
