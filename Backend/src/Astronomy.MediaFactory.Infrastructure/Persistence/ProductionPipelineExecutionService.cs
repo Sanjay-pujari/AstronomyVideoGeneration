@@ -10612,8 +10612,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var initialLongCueLevelDurationsBySceneId = BuildCueLevelSceneDurationsFromTtsTimeline(planRoot, "long", requestedLanguage);
         var initialShortExpandedSceneCount = 0;
         var initialLongExpandedSceneCount = 0;
-        var configuredShortTargetDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortTargetDurationSec, 45);
-        var configuredShortMaxDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortMaxDurationSec, 59);
+        var configuredShortTargetDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortTargetDurationSec, 60);
+        var configuredShortPreferredMaxDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortPreferredMaxDurationSec, 75);
+        var configuredShortHardMaxDurationSec = ResolveConfiguredPositive(videoAssemblyOptions?.Value.ShortHardMaxDurationSec, 90);
+        var shortDurationEnforcementEnabled = videoAssemblyOptions?.Value.ShortDurationEnforcementEnabled ?? false;
+        var configuredShortMaxDurationSec = configuredShortHardMaxDurationSec;
         var preRenderShortNarrationAudioDurationSec = 0d;
         var shortDurationFailureReason = string.Empty;
         Phase18RenderDurationExpansionResult? shortRenderResult = null;
@@ -10627,7 +10630,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var motionV2StrengthWarning = ShouldWarnMotionV2StrengthRequestOverride(context.PipelineRequest.MotionV2Strength, GetString(motionRoot, "motionV2Strength"))
             ? "Motion plan strength differs from request; phase 18 will fail with MotionV2StrengthMismatch."
             : null;
-        var warnings = string.IsNullOrWhiteSpace(motionV2StrengthWarning) ? Array.Empty<string>() : new[] { motionV2StrengthWarning };
+        var warnings = new List<string>();
+        if (!string.IsNullOrWhiteSpace(motionV2StrengthWarning)) warnings.Add(motionV2StrengthWarning);
         var motionV2StrengthUsed = ResolvePhase18MotionV2Strength(context.PipelineRequest.MotionV2Strength, GetString(motionRoot, "motionV2Strength"));
         var motionV2StrengthMismatch = HasMotionV2StrengthMismatch(context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed);
         {
@@ -10638,9 +10642,9 @@ public sealed partial class ProductionPipelineExecutionService(
             shortSceneCount = shortItems.Count;
             longSceneCount = longItems.Count;
             preRenderShortNarrationAudioDurationSec = RoundDuration(shortItems.Sum(item => item.SceneDurationSec));
-            if (preRenderShortNarrationAudioDurationSec > configuredShortMaxDurationSec)
+            if (shortDurationEnforcementEnabled && preRenderShortNarrationAudioDurationSec > configuredShortHardMaxDurationSec)
             {
-                shortDurationFailureReason = $"Short narration/audio duration exceeds ShortMaxDurationSec before Phase 18 render; duration={preRenderShortNarrationAudioDurationSec:0.###}s, max={configuredShortMaxDurationSec:0.###}s. Refine short narration generation instead of trimming, speeding up, dropping subtitles, or cutting scenes in video assembly.";
+                shortDurationFailureReason = $"Short narration/audio duration exceeds ShortHardMaxDurationSec before Phase 18 render; duration={preRenderShortNarrationAudioDurationSec:0.###}s, hardMax={configuredShortHardMaxDurationSec:0.###}s. Refine short narration generation in an earlier phase; Phase 18 does not trim, speed up audio, change narration, or cut scenes.";
                 errors.Add(shortDurationFailureReason);
             }
             initialShortExpandedSceneCount = CountSceneDurationExpansionMatches(initialShortCueLevelDurationsBySceneId, shortItems);
@@ -10749,9 +10753,28 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortSubtitleSafeAreaPassed = actualShortOutputHeight <= 0 || shortBurnInResult is null || (shortBurnInResult.MarginV >= Math.Round(actualShortOutputHeight * shortSubtitleBottomMarginPercent / 100.0, MidpointRounding.AwayFromZero) && shortBurnInResult.MaxLines <= 2);
         var shortNarrationAudioDurationSec = RoundDuration(shortAudioDuration > 0 ? shortAudioDuration : preRenderShortNarrationAudioDurationSec);
         var shortFinalVideoDurationSec = RoundDuration(shortVideoDuration);
-        var shortDurationWithinLimit = shortNarrationAudioDurationSec <= configuredShortMaxDurationSec && (shortFinalVideoDurationSec <= 0 || shortFinalVideoDurationSec <= configuredShortMaxDurationSec);
-        if (string.IsNullOrWhiteSpace(shortDurationFailureReason) && shortNarrationAudioDurationSec > configuredShortMaxDurationSec) shortDurationFailureReason = $"Short narration/audio duration exceeds ShortMaxDurationSec; duration={shortNarrationAudioDurationSec:0.###}s, max={configuredShortMaxDurationSec:0.###}s. Refine short narration generation.";
-        if (string.IsNullOrWhiteSpace(shortDurationFailureReason) && shortFinalVideoDurationSec > configuredShortMaxDurationSec) shortDurationFailureReason = $"Short final video duration exceeds ShortMaxDurationSec; finalDuration={shortFinalVideoDurationSec:0.###}s, max={configuredShortMaxDurationSec:0.###}s. Refine short narration generation so the assembled short stays under the platform limit.";
+        var shortDurationSecForPolicy = Math.Max(shortNarrationAudioDurationSec, shortFinalVideoDurationSec > 0 ? shortFinalVideoDurationSec : shortNarrationAudioDurationSec);
+        var shortDurationWithinLimit = shortDurationSecForPolicy <= configuredShortHardMaxDurationSec || !shortDurationEnforcementEnabled;
+        var shortDurationPolicy = shortDurationSecForPolicy <= configuredShortPreferredMaxDurationSec
+            ? "acceptable"
+            : shortDurationSecForPolicy <= configuredShortHardMaxDurationSec
+                ? "preferred-max-exceeded"
+                : shortDurationEnforcementEnabled
+                    ? "hard-max-exceeded-enforced"
+                    : "hard-max-exceeded-warning-only";
+        var shortDurationWarningLevel = shortDurationSecForPolicy <= configuredShortPreferredMaxDurationSec
+            ? "none"
+            : shortDurationSecForPolicy <= configuredShortHardMaxDurationSec
+                ? "warning"
+                : "strong-warning";
+        if (shortDurationSecForPolicy > configuredShortPreferredMaxDurationSec)
+        {
+            var warning = shortDurationSecForPolicy <= configuredShortHardMaxDurationSec
+                ? $"Short duration exceeds ShortPreferredMaxDurationSec but is within ShortHardMaxDurationSec; duration={shortDurationSecForPolicy:0.###}s, preferredMax={configuredShortPreferredMaxDurationSec:0.###}s, hardMax={configuredShortHardMaxDurationSec:0.###}s."
+                : $"STRONG WARNING: short duration exceeds ShortHardMaxDurationSec; duration={shortDurationSecForPolicy:0.###}s, hardMax={configuredShortHardMaxDurationSec:0.###}s. Phase 18 will not trim audio, speed up audio, change narration, or cut scenes.";
+            warnings.Add(warning);
+            if (string.IsNullOrWhiteSpace(shortDurationFailureReason)) shortDurationFailureReason = warning;
+        }
         if (!previewOnly && !cueLevelSubtitleValidation) errors.Add("Cue-level subtitle validation failed");
         if (!shortPublishedMatchesAssembly) errors.Add("Published short video does not match subtitled video-assembly output");
         if (!previewOnly && !longPublishedMatchesAssembly) errors.Add("Published long video does not match subtitled video-assembly output");
@@ -10893,7 +10916,12 @@ public sealed partial class ProductionPipelineExecutionService(
             shortSubtitleFontSize,
             shortSubtitleSafeAreaPassed,
             shortTargetDurationSec = configuredShortTargetDurationSec,
+            shortPreferredMaxDurationSec = configuredShortPreferredMaxDurationSec,
+            shortHardMaxDurationSec = configuredShortHardMaxDurationSec,
             shortMaxDurationSec = configuredShortMaxDurationSec,
+            shortDurationPolicy,
+            shortDurationWarningLevel,
+            shortDurationEnforcementEnabled,
             shortLimitNarrationAudioDurationSec = shortNarrationAudioDurationSec,
             shortLimitFinalVideoDurationSec = shortFinalVideoDurationSec,
             shortDurationWithinLimit,
@@ -11040,7 +11068,7 @@ public sealed partial class ProductionPipelineExecutionService(
         }, JsonOptions), cancellationToken);
 
         var v2DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-assembly-v2-diagnostics.json");
-        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, requestedLanguage, selectedNarrationLanguage = requestedLanguage, useStoryFramesV4ForVideoAssembly, selectedVisualSource, storyFrameManifestPathShort = NormalizePath(shortManifestPath), storyFrameManifestPathLong = NormalizePath(longManifestPath), storyFrameManifestLoadedShort = shortStoryFrameManifest.Loaded, storyFrameManifestLoadedLong = longStoryFrameManifest.Loaded, storyFrameManifestSceneCountShort = shortStoryFrameManifest.SceneMap.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count(), storyFrameManifestSceneCountLong = longStoryFrameManifest.SceneMap.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count(), frameMappingStrategy, resolvedFrameMappings, missingFrames, unresolvedScenes, availableStoryFrameKeys = new { @short = shortStoryFrameManifest.AvailableKeys, @long = longStoryFrameManifest.AvailableKeys }, fallbackToSceneAssetsV3, selectedTtsTimelinePath = NormalizePath(ttsPath), initialDurationExpansionLanguage = requestedLanguage, renderTimeDurationExpansionLanguage = requestedLanguage, initialGroupedTtsSceneCount = new { @short = initialShortCueLevelDurationsBySceneId.Count, @long = initialLongCueLevelDurationsBySceneId.Count }, renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 }, expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount }, renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount }, selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(videoRoot), languageScopedArtifactsUsed = true, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(v2DiagnosticsPath, JsonSerializer.Serialize(new { rendererVersion = phase18RendererVersion, requestedLanguage, selectedNarrationLanguage = requestedLanguage, useStoryFramesV4ForVideoAssembly, selectedVisualSource, storyFrameManifestPathShort = NormalizePath(shortManifestPath), storyFrameManifestPathLong = NormalizePath(longManifestPath), storyFrameManifestLoadedShort = shortStoryFrameManifest.Loaded, storyFrameManifestLoadedLong = longStoryFrameManifest.Loaded, storyFrameManifestSceneCountShort = shortStoryFrameManifest.SceneMap.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count(), storyFrameManifestSceneCountLong = longStoryFrameManifest.SceneMap.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count(), frameMappingStrategy, resolvedFrameMappings, missingFrames, unresolvedScenes, availableStoryFrameKeys = new { @short = shortStoryFrameManifest.AvailableKeys, @long = longStoryFrameManifest.AvailableKeys }, fallbackToSceneAssetsV3, selectedTtsTimelinePath = NormalizePath(ttsPath), initialDurationExpansionLanguage = requestedLanguage, renderTimeDurationExpansionLanguage = requestedLanguage, initialGroupedTtsSceneCount = new { @short = initialShortCueLevelDurationsBySceneId.Count, @long = initialLongCueLevelDurationsBySceneId.Count }, renderTimeGroupedTtsSceneCount = new { @short = shortRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0, @long = longRenderResult?.RenderTimeGroupedTtsSceneCount ?? 0 }, expandedSceneCount = new { @short = shortRenderResult?.ExpandedSceneCount ?? initialShortExpandedSceneCount, @long = longRenderResult?.ExpandedSceneCount ?? initialLongExpandedSceneCount }, renderSceneCount = new { @short = shortSceneCount, @long = longSceneCount }, selectedSrtPath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)), selectedVideoAssemblyRoot = NormalizePath(videoRoot), languageScopedArtifactsUsed = true, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, requestedMotionV2Strength = context.PipelineRequest.MotionV2Strength, motionV2StrengthUsed, motionV2StrengthMismatch, shortTargetDurationSec = configuredShortTargetDurationSec, shortPreferredMaxDurationSec = configuredShortPreferredMaxDurationSec, shortHardMaxDurationSec = configuredShortHardMaxDurationSec, shortDurationPolicy, shortDurationWarningLevel, shortDurationEnforcementEnabled, warnings, selectedMotionVersion = File.Exists(previewMotionPlanPath) && string.Equals(motionPlanPath, previewMotionPlanPath, StringComparison.OrdinalIgnoreCase) ? "V2" : GetString(motionRoot, "motionVersion") ?? GetString(motionRoot, "version") ?? "unknown", previewOnly, sceneCount = new { @short = shortSceneCount, @long = longSceneCount, total = totalScenes }, transitionType = "crossfade", flickerRisk = "low", missingAudioHandled = previewOnly && missingAudioFiles.Count > 0, output = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, validationPassed }, JsonOptions), cancellationToken);
         var diagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
@@ -11093,7 +11121,12 @@ public sealed partial class ProductionPipelineExecutionService(
             shortSubtitleFontSize,
             shortSubtitleSafeAreaPassed,
             shortTargetDurationSec = configuredShortTargetDurationSec,
+            shortPreferredMaxDurationSec = configuredShortPreferredMaxDurationSec,
+            shortHardMaxDurationSec = configuredShortHardMaxDurationSec,
             shortMaxDurationSec = configuredShortMaxDurationSec,
+            shortDurationPolicy,
+            shortDurationWarningLevel,
+            shortDurationEnforcementEnabled,
             shortNarrationAudioDurationSec,
             shortFinalVideoDurationSec,
             shortDurationWithinLimit,
@@ -11238,7 +11271,7 @@ public sealed partial class ProductionPipelineExecutionService(
             validationPassed
         }, JsonOptions), cancellationToken);
         var validationPath = Path.Combine(validationRoot, "phase-18-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), shortSubtitleFontScale, shortSubtitleFontSize, shortSubtitleBottomMarginPercent, shortSubtitleSafeAreaPassed, shortTargetDurationSec = configuredShortTargetDurationSec, shortMaxDurationSec = configuredShortMaxDurationSec, shortNarrationAudioDurationSec, shortFinalVideoDurationSec, shortDurationWithinLimit, shortDurationFailureReason, audioDrivenDurationCalibration = true, audioDurationSource = "ActualMp3", subtitleTimingRecalculated = true, audioSubtitleSyncPassed = cueLevelSubtitleValidation, subtitleFontScale = 0.5, subtitleMovedLower = true, subtitleSafeAreaPassed = true, subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) }, finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) }, publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) }, cueLevelSubtitleValidation, cueLevelSubtitleDriftMs, maxCueDriftMs, averageCueDriftMs, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2", rendererVersion = phase18RendererVersion, shimmerMitigationApplied, zoompanFrameDriven, zoompanDValue = phase18ZoompanDValue, scaler = phase18Scaler, fps = phase18Fps, perSceneFilterLogged, motionTypeApplied = true, status = validationPassed ? "Succeeded" : "Failed", videoRendered, oldPathUsed, validationPassed, enableSubtitles, subtitleMode, shortSrtPath = NormalizePath(shortSrtPath), longSrtPath = NormalizePath(longSrtPath), shortSrtExists, longSrtExists, shortSubtitlesApplied, longSubtitlesApplied, subtitleBurnInCommandShort, subtitleBurnInCommandLong, subtitleBurnInSucceeded, subtitleStyleApplied = subtitleBurnInSucceeded, subtitleFontSize = Math.Max(shortBurnInResult?.FontSize ?? 0, longBurnInResult?.FontSize ?? 0), shortSubtitleFontScale, shortSubtitleFontSize, shortSubtitleBottomMarginPercent, shortSubtitleSafeAreaPassed, shortTargetDurationSec = configuredShortTargetDurationSec, shortPreferredMaxDurationSec = configuredShortPreferredMaxDurationSec, shortHardMaxDurationSec = configuredShortHardMaxDurationSec, shortMaxDurationSec = configuredShortMaxDurationSec, shortDurationPolicy, shortDurationWarningLevel, shortDurationEnforcementEnabled, shortNarrationAudioDurationSec, shortFinalVideoDurationSec, shortDurationWithinLimit, shortDurationFailureReason, audioDrivenDurationCalibration = true, audioDurationSource = "ActualMp3", subtitleTimingRecalculated = true, audioSubtitleSyncPassed = cueLevelSubtitleValidation, subtitleFontScale = 0.5, subtitleMovedLower = true, subtitleSafeAreaPassed = true, subtitleMaxCharsPerLine = 42, subtitleMaxLines = 2, duplicateNarrationDetected = false, duplicateNarrationFixed = false, duplicateSrtTextDetected = false, subtitleBurnInErrors, subtitleSourcePath = new { @short = NormalizePath(shortSrtPath), @long = NormalizePath(longSrtPath) }, narrationTrackPath = new { @short = NormalizePath(shortAudioTrackPath), @long = NormalizePath(longAudioTrackPath) }, finalMixedAudioPath = new { @short = NormalizePath(shortMixedAudioPath), @long = NormalizePath(longMixedAudioPath) }, publishedVideoSourcePath = new { @short = NormalizePath(shortVideoPath), @long = NormalizePath(longVideoPath) }, publishedVideoPath = new { @short = NormalizePath(legacyShortVideoPath), @long = NormalizePath(legacyLongVideoPath) }, cueLevelSubtitleValidation, cueLevelSubtitleDriftMs, maxCueDriftMs, averageCueDriftMs, finalShortVideoPath = NormalizePath(shortVideoPath), finalLongVideoPath = NormalizePath(longVideoPath), warnings, errors }, JsonOptions), cancellationToken);
         if (!validationPassed) throw new InvalidOperationException("Phase 18 Cinematic Video Assembly V2 failed: " + string.Join(" | ", errors));
         return [shortVideoPath, longVideoPath, shortAudioTrackPath, longAudioTrackPath, cinematicDiagnosticsPath, diagnosticsPath, validationPath, v2DiagnosticsPath];
     }
