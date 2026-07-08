@@ -3428,6 +3428,11 @@ public sealed partial class ProductionPipelineExecutionService(
             closingQualityScore = ScoreClosingQuality(narration.ShortItems.Values.Concat(narration.LongItems.Values).LastOrDefault() ?? string.Empty),
             scientificAccuracyScore = narration.Diagnostics.ScientificAccuracyScore,
             perspectiveStatementPresent = ContainsPerspectiveStatement(allText),
+            hookGreetingRequired = narration.Diagnostics.HookGreetingRequired,
+            hookGreetingApplied = narration.Diagnostics.HookGreetingApplied,
+            hookGreetingText = narration.Diagnostics.HookGreetingText,
+            hookBeforePrefixFirst120Chars = narration.Diagnostics.HookBeforePrefixFirst120Chars,
+            hookAfterPrefixFirst120Chars = narration.Diagnostics.HookAfterPrefixFirst120Chars,
             shortSceneCount = narration.ShortItems.Count,
             longSceneCount = narration.LongItems.Count,
             sourceComposerVersion = narration.Diagnostics.ScriptComposerVersion
@@ -3630,6 +3635,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var composerTrace = new List<SceneNarrationComposerTraceEntry>();
         SanitizeSceneNarrationComposerOutputs(context, family, shortTexts, composerTrace, "short");
         SanitizeSceneNarrationComposerOutputs(context, family, longTexts, composerTrace, "long");
+        var hookGreetingDiagnostics = ApplyPlanetConjunctionHookGreetingGuard(family, shortTexts, longTexts);
         ValidatePhase14EventStoryNarration(family, shortTexts, longTexts, null);
         TracePhase14Checkpoint("phase14.sanitize.completed");
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
@@ -3656,7 +3662,12 @@ public sealed partial class ProductionPipelineExecutionService(
             FirstSentenceByLongScene = longTexts.ToDictionary(kv => kv.Key, kv => FirstSentence(kv.Value), StringComparer.OrdinalIgnoreCase),
             LongSceneNarrationExpansionStrategy = longExpansionStrategy,
             WonderScore = ScoreWonderLanguage(combinedCandidateText(shortTexts, longTexts)),
-            ScientificAccuracyScore = ScoreScientificAccuracy(family, combinedCandidateText(shortTexts, longTexts))
+            ScientificAccuracyScore = ScoreScientificAccuracy(family, combinedCandidateText(shortTexts, longTexts)),
+            HookGreetingRequired = hookGreetingDiagnostics.HookGreetingRequired,
+            HookGreetingApplied = hookGreetingDiagnostics.HookGreetingApplied,
+            HookGreetingText = hookGreetingDiagnostics.HookGreetingText,
+            HookBeforePrefixFirst120Chars = hookGreetingDiagnostics.HookBeforePrefixFirst120Chars,
+            HookAfterPrefixFirst120Chars = hookGreetingDiagnostics.HookAfterPrefixFirst120Chars
         };
         var finalText = shortTexts.Select(kv => new { format = "short", sceneId = kv.Key, text = kv.Value })
             .Concat(longTexts.Select(kv => new { format = "long", sceneId = kv.Key, text = kv.Value }))
@@ -5120,6 +5131,55 @@ public sealed partial class ProductionPipelineExecutionService(
         ValidateNoNarrationV21BannedPhrases(shortTexts.Values.Concat(longTexts.Values));
         ValidatePhase14EventStoryNarrationFormat("short", shortTexts);
         ValidatePhase14EventStoryNarrationFormat("long", longTexts);
+    }
+
+    private static Phase14HookGreetingDiagnostics ApplyPlanetConjunctionHookGreetingGuard(string family, IDictionary<string, string> shortTexts, IDictionary<string, string> longTexts)
+    {
+        const string hookSceneId = "001-hook";
+        const string prefixGreeting = "Welcome to Drashyam";
+        const string prefixText = prefixGreeting + ". ";
+        var greetingRegex = new Regex(@"^\s*(Welcome to Drashyam|Hello, fellow stargazers|Greetings, astronomy lovers)\b", RegexOptions.IgnoreCase);
+
+        if (!string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+            return new Phase14HookGreetingDiagnostics(false, false, null, null, null);
+
+        var beforeSamples = new List<string>();
+        var afterSamples = new List<string>();
+        var applied = false;
+
+        Apply(shortTexts);
+        Apply(longTexts);
+
+        return new Phase14HookGreetingDiagnostics(
+            true,
+            applied,
+            prefixGreeting,
+            beforeSamples.FirstOrDefault(),
+            afterSamples.FirstOrDefault());
+
+        void Apply(IDictionary<string, string> texts)
+        {
+            if (!texts.TryGetValue(hookSceneId, out var text))
+                return;
+
+            beforeSamples.Add(First120Chars(text));
+            if (greetingRegex.IsMatch(text ?? string.Empty))
+            {
+                afterSamples.Add(First120Chars(text));
+                return;
+            }
+
+            var prefixed = prefixText + (text ?? string.Empty).TrimStart();
+            texts[hookSceneId] = prefixed;
+            applied = true;
+            afterSamples.Add(First120Chars(prefixed));
+        }
+    }
+
+    private static string First120Chars(string? text)
+    {
+        var value = text ?? string.Empty;
+        return value.Length <= 120 ? value : value[..120];
     }
 
 
@@ -7901,6 +7961,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         public Phase14TranslationDiagnostics? TranslationDiagnostics { get; init; }
     }
+    private sealed record Phase14HookGreetingDiagnostics(bool HookGreetingRequired, bool HookGreetingApplied, string? HookGreetingText, string? HookBeforePrefixFirst120Chars, string? HookAfterPrefixFirst120Chars);
     private sealed record Phase14TranslationDiagnostics(string RequestedLanguage, string ResolvedFamily, string TranslationMode, string OriginalEnglishTextSnippet, string TranslatedHindiTextSnippet, bool HardcodedTemplateUsed, bool ForbiddenNarrationLeakageDetected, IReadOnlyList<string> LeakedTerms, string SourceLanguage, string TranslatedLanguage, bool TranslationApplied, int HindiCharacterCount, int EnglishCharacterCount, IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneId, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, bool FullSentenceTranslationApplied, double HindiCharacterRatio, bool EnglishFragmentDetected, IReadOnlyList<string> DetectedEnglishFragments, string SourceEnglishSnippet, string FinalHindiSnippet, string TranslationProvider, string TranslationModeDetail, string SourceEnglishSceneText, string TranslatedHindiSceneText, bool FallbackTemplateUsed, bool DeterministicKeywordFallbackUsed, bool DuplicateAcrossScenesDetectedFlag, IReadOnlyList<string> DuplicateSceneIdsDetail, bool TranslationSucceeded, bool FullSentenceTranslationAppliedFlag, bool DictionaryReplacementUsed, int DuplicateSubtitleBlockCount, bool EnglishFragmentDetectedFlag, bool DictionaryReplacementUsedFlag, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed, IReadOnlyList<string> ForbiddenTermsDetected, IReadOnlyList<string> GenericNarrationTermsDetected, IReadOnlyList<string> CrossFamilyLeakageTermsDetected, bool MoonSpecificRewriteApplied = false, int MoonSpecificRewriteCount = 0, IReadOnlyList<string>? EnglishTermsRemaining = null, bool GenericFallbackPhraseDetected = false, bool DuplicateCleanupMoonMode = false, IReadOnlyList<object>? ScenePurposeTranslationDiagnostics = null);
     private sealed record Phase14HindiDuplicateSentenceCleanupResult(IReadOnlyList<string> RepeatedHindiSentencesDetected, IReadOnlyList<string> RepeatedHindiSentencesRemoved, IReadOnlyList<string> DuplicateAcrossScenesDetected, IReadOnlyList<string> SourceSceneIds, IReadOnlyList<string> DuplicateSceneIds, IReadOnlyDictionary<string, string> FinalUniqueSceneText, IReadOnlyList<string> CleanedSceneIds, IReadOnlyList<string> RewrittenSceneIds, IReadOnlyDictionary<string, string> OriginalDuplicateText, IReadOnlyDictionary<string, string> RewrittenUniqueText, IReadOnlyDictionary<string, string> WrittenNarrationFileText, bool DuplicateAcrossScenesRemaining, string DuplicateCleanupFamily, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteSource, IReadOnlyDictionary<string, string> DuplicateCleanupRewriteTarget, bool FamilySpecificRewriteUsed);
     private sealed record SceneNarrationComposerTraceEntry(string Format, string SceneId, string ScenePurpose, string InputNarrationBeat, string InputEventSummary, string RawComposerOutput, string SanitizedComposerOutput, IReadOnlyList<string> RemovedFallbackSentences, bool ContainsCentersOnBeforeSanitize, bool ContainsCentersOnAfterSanitize, string WriterComponent);
