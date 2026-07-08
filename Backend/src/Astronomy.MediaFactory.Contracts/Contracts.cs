@@ -327,6 +327,10 @@ public sealed class VideoAssemblyOptions
     public VideoDurationProfileOptions LongVideo { get; set; } = VideoDurationProfileOptions.LongVideoDefaults();
     public double DurationComparisonToleranceSeconds { get; set; } = DefaultDurationComparisonToleranceSeconds;
     public double LongNarrationWordsPerMinute { get; set; } = 135.0;
+    public double ShortSubtitleFontScale { get; set; } = 0.34;
+    public double ShortSubtitleBottomMarginPercent { get; set; } = 14;
+    public double ShortTargetDurationSec { get; set; } = 45;
+    public double ShortMaxDurationSec { get; set; } = 59;
     public bool VideoAssemblyPreviewOnly { get; set; } = false;
 }
 
