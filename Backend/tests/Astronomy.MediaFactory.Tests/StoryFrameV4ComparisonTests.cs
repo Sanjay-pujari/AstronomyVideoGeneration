@@ -53,10 +53,18 @@ public sealed class StoryFrameV4ComparisonTests
             Assert.True(longReport.ProductionSceneAssetsUnchanged);
             Assert.Equal("16:9", longReport.AspectRatio);
             Assert.Equal("ManualReviewRequired", longReport.Recommendation);
+            Assert.True(longReport.OrientationPassed);
+            Assert.True(longReport.ObjectFidelityPolicyApplied);
+            Assert.True(longReport.ForbiddenObjectPolicyApplied);
+            Assert.True(longReport.FrameCountPassed);
             Assert.Equal(5, shortReport!.ExpectedFrameCount);
             Assert.Equal(5, shortReport.GeneratedFrameCount);
             Assert.True(shortReport.ProductionSceneAssetsUnchanged);
             Assert.Equal("9:16", shortReport.AspectRatio);
+            Assert.True(shortReport.OrientationPassed);
+            Assert.True(shortReport.ObjectFidelityPolicyApplied);
+            Assert.True(shortReport.ForbiddenObjectPolicyApplied);
+            Assert.True(shortReport.FrameCountPassed);
             Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "frame01-hook.png")));
             Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "frame09-call-to-action.png")));
             Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "comparison", "LongStoryFrameComparison.json")));
@@ -64,10 +72,16 @@ public sealed class StoryFrameV4ComparisonTests
             Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "frame05-call-to-action.png")));
             Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "comparison", "ShortStoryFrameComparison.json")));
 
-            using (var longImage = await Image.LoadAsync(Path.Combine(folder, "long-story-frames", "frame01-hook.png")) )
+            using (var longImage = await Image.LoadAsync(Path.Combine(folder, "long-story-frames", "frame01-hook.png")))
+            {
+                Assert.True(longImage.Width > longImage.Height);
                 Assert.Equal(16d / 9d, longImage.Width / (double)longImage.Height, precision: 2);
-            using (var shortImage = await Image.LoadAsync(Path.Combine(folder, "short-story-frames", "frame01-hook.png")) )
+            }
+            using (var shortImage = await Image.LoadAsync(Path.Combine(folder, "short-story-frames", "frame01-hook.png")))
+            {
+                Assert.True(shortImage.Width < shortImage.Height);
                 Assert.Equal(9d / 16d, shortImage.Width / (double)shortImage.Height, precision: 2);
+            }
             Assert.True(File.Exists(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFrameVisualReview.json")));
             Assert.True(File.Exists(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFrameVisualReview.json")));
             Assert.Equal(before, await File.ReadAllTextAsync(productionScene));
@@ -116,7 +130,52 @@ public sealed class StoryFrameV4ComparisonTests
         finally { Cleanup(folder); }
     }
 
-    private sealed class FakeGenerator(int failFrame = 0, bool configured = true) : IAICinematicImageGenerator
+
+    [Fact]
+    public async Task Short_comparison_normalizes_landscape_provider_output_to_portrait()
+    {
+        var folder = TempFolder();
+        try
+        {
+            var planner = new ShortStoryFramePlanner(Options.Create(new VisualIntelligenceOptions { UseStoryFrameV4Comparison = true }), new FakeGenerator(forceLandscape: true));
+
+            var report = await planner.GenerateV4ComparisonAsync(narrativeEngine.ComposeShort(Story()), folder);
+
+            Assert.NotNull(report);
+            Assert.True(report!.OrientationPassed);
+            using var shortImage = await Image.LoadAsync(Path.Combine(folder, "short-story-frames", "frame01-hook.png"));
+            Assert.True(shortImage.Width < shortImage.Height);
+            Assert.Equal(1080, shortImage.Width);
+            Assert.Equal(1920, shortImage.Height);
+            var diagnostics = await File.ReadAllTextAsync(Path.Combine(folder, "short-story-frames", "diagnostics", "StoryFrameGeneratorDiagnostics.json"));
+            Assert.Contains("orientationPolicyApplied", diagnostics);
+            Assert.Contains("objectFidelityPolicyApplied", diagnostics);
+            Assert.Contains("forbiddenObjectPolicyApplied", diagnostics);
+        }
+        finally { Cleanup(folder); }
+    }
+
+    [Fact]
+    public void Jupiter_venus_story_frame_prompts_apply_object_fidelity_and_forbidden_object_policy()
+    {
+        var longPlan = new LongStoryFramePlanner().Plan(narrativeEngine.ComposeLong(Story()));
+        var shortPlan = new ShortStoryFramePlanner().Plan(narrativeEngine.ComposeShort(Story()));
+        var packages = LongStoryFramePlanner.BuildPromptPackages(longPlan).Concat(ShortStoryFramePlanner.BuildPromptPackages(shortPlan));
+
+        foreach (var package in packages)
+        {
+            Assert.Contains("Jupiter must be visible", package.PositivePrompt);
+            Assert.Contains("Jupiter is the primary visual object", package.PositivePrompt);
+            Assert.Contains("Venus must be visible", package.PositivePrompt);
+            Assert.Contains("Venus is the secondary supporting object", package.PositivePrompt);
+            Assert.Contains("recognizable cloud bands", package.PositivePrompt);
+            Assert.Contains("no moon", package.NegativePrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no comet", package.NegativePrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no meteor", package.NegativePrompt, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private sealed class FakeGenerator(int failFrame = 0, bool configured = true, bool forceLandscape = false) : IAICinematicImageGenerator
     {
         public bool IsConfigured => configured;
         public string DeploymentName => "fake-azure-image";
@@ -124,7 +183,9 @@ public sealed class StoryFrameV4ComparisonTests
         {
             if (request.AssetId.EndsWith($"-{failFrame:00}", StringComparison.Ordinal)) throw new InvalidOperationException("planned failure");
             Directory.CreateDirectory(Path.GetDirectoryName(request.PlannedImagePath)!);
-            using var image = new Image<Rgba32>(request.TargetWidth, request.TargetHeight, new Rgba32(4, 8, 20));
+            var imageWidth = forceLandscape ? Math.Max(request.TargetWidth, request.TargetHeight) : request.TargetWidth;
+            var imageHeight = forceLandscape ? Math.Min(request.TargetWidth, request.TargetHeight) : request.TargetHeight;
+            using var image = new Image<Rgba32>(imageWidth, imageHeight, new Rgba32(4, 8, 20));
             await image.SaveAsPngAsync(request.PlannedImagePath, cancellationToken);
             return new AICinematicProviderResult("Generated", request.PlannedImagePath, true, []);
         }
