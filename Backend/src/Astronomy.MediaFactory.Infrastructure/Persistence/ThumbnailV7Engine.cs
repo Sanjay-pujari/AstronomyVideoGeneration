@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.VisualIntelligence;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing;
@@ -288,6 +289,7 @@ public sealed class ThumbnailV7BackgroundPromptBuilder
 
         return string.Join(" ", new[]
         {
+            VisualQualityFramework.Astronomy().BuildPromptPolicyText(),
             $"Create a {dimensions} {variantName} background-only image: {DescribeSky(visualIntelligence.EventType, skyDirection)} for {title}.",
             layoutInstruction + ".",
             $"{objects} visible naturally near each other when part of the event story.",
