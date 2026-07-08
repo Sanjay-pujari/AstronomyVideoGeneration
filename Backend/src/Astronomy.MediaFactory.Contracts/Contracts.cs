@@ -329,8 +329,11 @@ public sealed class VideoAssemblyOptions
     public double LongNarrationWordsPerMinute { get; set; } = 135.0;
     public double ShortSubtitleFontScale { get; set; } = 0.34;
     public double ShortSubtitleBottomMarginPercent { get; set; } = 14;
-    public double ShortTargetDurationSec { get; set; } = 45;
-    public double ShortMaxDurationSec { get; set; } = 59;
+    public double ShortTargetDurationSec { get; set; } = 60;
+    public double ShortPreferredMaxDurationSec { get; set; } = 75;
+    public double ShortHardMaxDurationSec { get; set; } = 90;
+    public bool ShortDurationEnforcementEnabled { get; set; } = false;
+    public double ShortMaxDurationSec { get; set; } = 90;
     public bool VideoAssemblyPreviewOnly { get; set; } = false;
 }
 
