@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.EditorialIntelligence.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -11,11 +13,20 @@ public sealed class NarrationGenerationService : INarrationGenerationService
 {
     private readonly NarrationTimeFormatter formatter = new();
     private readonly MediaFactoryDbContext? db;
+    private readonly IEditorialIntelligenceService? editorialIntelligenceService;
+    private readonly ILogger<NarrationGenerationService>? logger;
 
     public NarrationGenerationService() { }
 
     public NarrationGenerationService(MediaFactoryDbContext db)
         => this.db = db;
+
+    public NarrationGenerationService(MediaFactoryDbContext db, IEditorialIntelligenceService editorialIntelligenceService, ILogger<NarrationGenerationService> logger)
+    {
+        this.db = db;
+        this.editorialIntelligenceService = editorialIntelligenceService;
+        this.logger = logger;
+    }
 
     public async Task<NarrationPreviewResponse> GeneratePreviewAsync(NarrationPreviewRequest request, CancellationToken cancellationToken)
         => Generate(await HydrateAsync(request, cancellationToken), useNormalizer: true);
@@ -102,7 +113,35 @@ public sealed class NarrationGenerationService : INarrationGenerationService
         var diagnostics = new NarrationFormattingDiagnostics(date, peak, window, direction,
             ["FormatEventDate(language)", "FormatPeakTime(language)", "FormatViewingWindow(language)", "FormatDirection(language)", useNormalizer ? "NarrationEventNormalizer" : "Legacy narration context", "No SRT/TTS/video/Phase14 execution"], []);
         var contextDiagnostics = new NarrationContextDiagnostics(useNormalizer, eventName, Clean(request.ShortTitle, string.Empty), context.DisplayTitle, context.DisplayLocation, context.DisplayDate, context.DisplayViewingWindow, context.DisplayDirection, context.Family, context.ObservationContextDiagnostics);
-        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics, Clean(request.ShortTitle, null!), hydratedRequest.Diagnostics, contextDiagnostics);
+        var editorialContract = editorialIntelligenceService?.CreateContract(request.PlanId, eventName, eventType, request.EventMetadata);
+        var promptGuidance = editorialIntelligenceService?.BuildPromptGuidance(editorialContract);
+        if (editorialContract is not null) WriteEditorialDiagnostics(request, eventName, editorialContract);
+        return new NarrationPreviewResponse(request.PlanId, eventType, eventName, language, regionId, request.Format, request.ReturnScenes ? validated : [], overall, diagnostics, Clean(request.ShortTitle, null!), hydratedRequest.Diagnostics, contextDiagnostics, editorialContract, promptGuidance);
+    }
+
+
+    private void WriteEditorialDiagnostics(NarrationPreviewRequest request, string eventName, Astronomy.MediaFactory.Core.EditorialIntelligence.Contracts.EditorialIntelligenceContract contract)
+    {
+        try
+        {
+            var path = Path.Combine(Path.GetTempPath(), "editorial-intelligence-contract.json");
+            File.WriteAllText(path, JsonSerializer.Serialize(new
+            {
+                eventId = request.PlanId,
+                eventName,
+                styleGuideVersion = contract.StyleGuideVersion,
+                selectedVoice = contract.SelectedVoice,
+                observationGuidance = contract.ObservationGuidance,
+                confidenceCues = contract.ConfidenceCues,
+                connectors = contract.SceneConnectors,
+                ending = contract.ChannelEnding,
+                warnings = contract.EditorialWarnings
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogInformation("Editorial intelligence contract created for {EventName}: {StyleGuideVersion} / {Voice}", eventName, contract.StyleGuideVersion, contract.SelectedVoice);
+        }
     }
 
     private static NarrationPreviewScene Scene(string id, string purpose, string narration) => new(id, purpose, narration, new(true, [], []));

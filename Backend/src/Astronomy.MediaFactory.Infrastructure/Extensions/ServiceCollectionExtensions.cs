@@ -16,6 +16,10 @@ using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
+using Astronomy.MediaFactory.Core.EditorialIntelligence.Configuration;
+using Astronomy.MediaFactory.Core.EditorialIntelligence.Services;
+using Astronomy.MediaFactory.Core.EditorialIntelligence.Observation;
+using Astronomy.MediaFactory.Core.EditorialIntelligence.Confidence;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EventScoring;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +36,9 @@ public static class ServiceCollectionExtensions
     {
         services.AddOptions<VisualIntelligenceOptions>()
             .Bind(configuration.GetSection(VisualIntelligenceOptions.SectionName));
+        services.AddOptions<EditorialIntelligenceOptions>()
+            .Bind(configuration.GetSection(EditorialIntelligenceOptions.SectionName))
+            .ValidateOnStart();
         services.AddOptions<OutputArtifactsOptions>()
             .Bind(configuration.GetSection(OutputArtifactsOptions.SectionName));
         services.AddVisualIntelligenceOrchestration();
@@ -663,6 +670,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2NarrationPlanner, WeeklySkyForecastV2NarrationPlanner>();
         services.AddScoped<IWeeklySkyForecastV2NarrationTextGenerator, WeeklySkyForecastV2NarrationTextGenerator>();
         services.AddScoped<INarrationV31Composer, NarrationV31Composer>();
+        services.AddScoped<IObservationConsistencyEngine, ObservationConsistencyEngine>();
+        services.AddScoped<IObservationConfidenceEngine, ObservationConfidenceEngine>();
+        services.AddScoped<IEditorialIntelligenceService, EditorialIntelligenceService>();
         services.AddScoped<INarrationGenerationService, NarrationGenerationService>();
         services.AddScoped<NarrationTimeFormatter>();
         services.AddScoped<IWeeklySkyForecastV2AssetResolver, WeeklySkyForecastV2AssetResolver>();
