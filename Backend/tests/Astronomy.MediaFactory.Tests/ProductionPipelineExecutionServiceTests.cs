@@ -1585,6 +1585,54 @@ Second display cue.
     }
 
     [Fact]
+    public void Phase14HindiSubtitleOptions_UseConservativeCueTimingWithoutChangingEnglishDefaults()
+    {
+        var normalizeMethod = typeof(ProductionPipelineExecutionService).GetMethod("NormalizePhase14SubtitleTtsOptions", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalizeMethod);
+
+        var english = (SubtitleTtsOptions)normalizeMethod!.Invoke(null, new object?[] { null, "en" })!;
+        var hindi = (SubtitleTtsOptions)normalizeMethod!.Invoke(null, new object?[] { null, "hi" })!;
+
+        Assert.Equal(42, english.SubtitleMaxCharsPerLine);
+        Assert.Equal(1200, english.SubtitleMinCueDurationMs);
+        Assert.Equal(4200, english.SubtitleMaxCueDurationMs);
+        Assert.Equal(14d, english.ReadingSpeedCharsPerSecond);
+
+        Assert.InRange(hindi.SubtitleMaxCharsPerLine, 30, 34);
+        Assert.Equal(1400, hindi.SubtitleMinCueDurationMs);
+        Assert.Equal(4000, hindi.SubtitleMaxCueDurationMs);
+        Assert.InRange(hindi.ReadingSpeedCharsPerSecond, 8, 10);
+    }
+
+    [Fact]
+    public void Phase14HindiSubtitleSegmentation_UsesConservativeLineLength()
+    {
+        const string narration = "आज रात पश्चिमी क्षितिज के पास चमकते शुक्र को देखें। चंद्रमा पास में होगा और आपको दिशा पहचानने में मदद करेगा।";
+
+        var normalizeMethod = typeof(ProductionPipelineExecutionService).GetMethod("NormalizePhase14SubtitleTtsOptions", BindingFlags.NonPublic | BindingFlags.Static);
+        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .Single(method => method.Name == "SplitSubtitleChunks" && method.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual([typeof(string), typeof(SubtitleTtsOptions)]));
+        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .Single(method => method.Name == "WrapSubtitleChunk" && method.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual([typeof(string), typeof(SubtitleTtsOptions)]));
+
+        Assert.NotNull(normalizeMethod);
+        Assert.NotNull(splitMethod);
+        Assert.NotNull(wrapMethod);
+
+        var options = (SubtitleTtsOptions)normalizeMethod!.Invoke(null, new object?[] { null, "hi" })!;
+        var chunks = (IReadOnlyList<string>)splitMethod!.Invoke(null, [narration, options])!;
+        var wrapped = chunks.Select(chunk => (IReadOnlyList<string>)wrapMethod!.Invoke(null, [chunk, options])!).ToArray();
+
+        Assert.True(chunks.Count > 1);
+        Assert.Equal(narration, string.Join(" ", chunks));
+        Assert.All(wrapped, lines =>
+        {
+            Assert.InRange(lines.Count, 1, 2);
+            Assert.All(lines, line => Assert.InRange(line.Length, 1, 34));
+        });
+    }
+
+    [Fact]
     public void Phase14SubtitleSegmentation_DoesNotSplitInsideWords()
     {
         const string narration = "Tonight, turn your attention to the western horizon as a planetary conjunction gathers after sunset. Keep watching while Venus and Jupiter settle lower together.";

@@ -371,6 +371,7 @@ public sealed class SubtitleTtsOptions
     public int SubtitleMaxCharsPerLine { get; set; } = 42;
     public int SubtitleMinCueDurationMs { get; set; } = 1200;
     public int SubtitleMaxCueDurationMs { get; set; } = 4200;
+    public double ReadingSpeedCharsPerSecond { get; set; } = 14;
     public int SentenceBreakPauseMs { get; set; } = 80;
     public int CueGapMs { get; set; } = 0;
 }
