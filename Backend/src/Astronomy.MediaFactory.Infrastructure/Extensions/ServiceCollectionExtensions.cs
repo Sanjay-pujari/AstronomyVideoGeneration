@@ -10,6 +10,7 @@ using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Astronomy.MediaFactory.Infrastructure.Analytics;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Operations;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Optimization;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Infrastructure.Scheduling;
@@ -529,6 +530,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ContentPlanBatchGenerationService>();
         services.AddScoped<IContentPlanBatchGenerationService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
         services.AddScoped<IContentPlanGenerationReadinessService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
+        services.AddScoped<Rc2PipelinePhaseRegistry>();
+        services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
         services.AddScoped<ICategoryProductionPipelineStrategy, DailySkyGuideProductionPipelineStrategy>();
         services.AddScoped<ICategoryProductionPipelineStrategy, WeeklySkyForecastProductionPipelineStrategy>();
