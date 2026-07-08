@@ -8,20 +8,25 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public async Task<IReadOnlyList<SceneIntent>> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
+    public async Task<SceneIntentBuilderResult> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
     {
         logger.LogInformation("SceneIntentBuilder executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
 
         if (string.IsNullOrWhiteSpace(response.OutputRoot))
         {
             logger.LogWarning("SceneIntentBuilder skipped diagnostics because RC2 response did not include an OutputRoot.");
-            return [];
+            return SceneIntentBuilderResult.Empty;
         }
 
         var outputRoot = response.OutputRoot!;
+        var productionIntelligencePath = Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json");
+        var questionAnswerSetPath = Path.Combine(outputRoot, "question-engine", "question-answer-set.json");
+        var scenePlanPath = Path.Combine(outputRoot, "question-engine", "question-driven-scene-plan.json");
         var planInput = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "content-plan-production-request.json"));
-        var intelligence = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json"));
-        var sceneElements = ReadSceneElements(outputRoot);
+        var intelligence = ReadFirstJson(productionIntelligencePath);
+        var questionAnswerSet = ReadFirstJson(questionAnswerSetPath);
+        var scenePlan = ReadFirstJson(scenePlanPath);
+        var sceneElements = ReadSceneElements(scenePlan);
 
         if (sceneElements.Count == 0)
         {
@@ -31,11 +36,28 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         var intents = sceneElements.Select((scene, index) => BuildIntent(request, response, planInput, intelligence, scene, index)).ToArray();
         var diagnosticsRoot = Path.Combine(outputRoot, "editorial");
         Directory.CreateDirectory(diagnosticsRoot);
-        var diagnosticsPath = Path.Combine(diagnosticsRoot, "scene-intents.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(intents, JsonOptions), cancellationToken);
+        var sceneIntentsPath = Path.Combine(diagnosticsRoot, "scene-intents.json");
+        var diagnosticsPath = Path.Combine(diagnosticsRoot, "editorial-diagnostics.json");
+        var inputFiles = new[] { productionIntelligencePath, questionAnswerSetPath, scenePlanPath };
+        var diagnostics = new
+        {
+            phaseNo = 6,
+            phaseName = "Scene Intent Builder",
+            orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            inputs = inputFiles.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
+            outputs = new[] { NormalizePath(sceneIntentsPath), NormalizePath(diagnosticsPath) },
+            sceneIntentCount = intents.Length,
+            missingFactWarningCount = intents.Sum(intent => intent.MissingFactWarnings.Count),
+            missingFactWarnings = intents.ToDictionary(intent => intent.SceneId, intent => intent.MissingFactWarnings),
+            questionAnswerSetLoaded = questionAnswerSet.HasValue,
+            scenePlanLoaded = scenePlan.HasValue,
+            productionEventIntelligenceLoaded = intelligence.HasValue
+        };
+        await File.WriteAllTextAsync(sceneIntentsPath, JsonSerializer.Serialize(intents, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
 
-        logger.LogInformation("SceneIntentBuilder wrote {SceneIntentCount} scene intents to {SceneIntentDiagnosticsPath}.", intents.Length, diagnosticsPath);
-        return intents;
+        logger.LogInformation("SceneIntentBuilder wrote {SceneIntentCount} scene intents to {SceneIntentPath} and diagnostics to {DiagnosticsPath}.", intents.Length, sceneIntentsPath, diagnosticsPath);
+        return new SceneIntentBuilderResult(intents, [sceneIntentsPath, diagnosticsPath]);
     }
 
     private static SceneIntent BuildIntent(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, JsonElement? planInput, JsonElement? intelligence, JsonElement scene, int index)
@@ -72,22 +94,10 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
     private static IReadOnlyDictionary<string, string> ToObservationFacts(SceneIntentRequiredFacts facts) => new[] { facts.EventDate, facts.BestViewingTime, facts.ViewingWindow, facts.Direction, facts.Altitude, facts.Constellation, facts.Brightness, facts.MoonInterference, facts.Visibility, facts.RelativePositions }.Where(f => !f.IsMissing && f.Value is not null).ToDictionary(f => f.Name, f => f.Value!);
     private static string InferPurpose(string sceneId) => sceneId.Contains("observ", StringComparison.OrdinalIgnoreCase) || sceneId.Contains("view", StringComparison.OrdinalIgnoreCase) ? "Observation" : "Editorial";
     private static JsonElement? ReadFirstJson(string path) { if (!File.Exists(path)) return null; using var doc = JsonDocument.Parse(File.ReadAllText(path)); return doc.RootElement.Clone(); }
-    private static List<JsonElement> ReadSceneElements(string outputRoot)
+    private static List<JsonElement> ReadSceneElements(JsonElement? scenePlan)
     {
         var scenes = new List<JsonElement>();
-        if (!Directory.Exists(outputRoot)) return scenes;
-        foreach (var path in Directory.EnumerateFiles(outputRoot, "*.json", SearchOption.AllDirectories).Where(p => Path.GetFileName(p).Contains("scene", StringComparison.OrdinalIgnoreCase)).Take(50))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                AddScenes(doc.RootElement, scenes);
-            }
-            catch
-            {
-                // Diagnostics must never block the mapped RC2 phases. Ignore malformed or transient scene files.
-            }
-        }
+        if (scenePlan.HasValue) AddScenes(scenePlan.Value, scenes);
         return scenes.GroupBy(s => FirstNonEmpty(GetString(s, "sceneId"), GetString(s, "id"), s.GetRawText())).Select(g => g.First()).ToList();
     }
     private static void AddScenes(JsonElement element, List<JsonElement> scenes)
@@ -108,4 +118,10 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
     }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
+}
+
+public sealed record SceneIntentBuilderResult(IReadOnlyList<SceneIntent> SceneIntents, IReadOnlyList<string> GeneratedFiles)
+{
+    public static SceneIntentBuilderResult Empty { get; } = new([], []);
 }
