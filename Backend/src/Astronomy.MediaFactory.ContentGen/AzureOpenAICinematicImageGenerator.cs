@@ -17,6 +17,7 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
 {
     private const string ApiVersion = "2024-10-21";
     private static readonly string[] PreferredLandscapeSizes = ["1792x1024", "1536x1024", "1024x1024"];
+    private static readonly string[] PreferredPortraitSizes = ["1024x1792", "1024x1536", "1024x1024", "1792x1024", "1536x1024"];
     private static readonly AzureTokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
 
     private readonly HttpClient _httpClient;
@@ -87,7 +88,7 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
         Directory.CreateDirectory(Path.GetDirectoryName(request.PlannedImagePath) ?? Directory.GetCurrentDirectory());
         var warnings = new List<string>();
 
-        foreach (var size in PreferredLandscapeSizes)
+        foreach (var size in SelectPreferredSizes(request))
         {
             try
             {
@@ -144,13 +145,16 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
             }
         }
 
-        warnings.Add("Azure OpenAI image generation failed because no supported landscape image size was accepted by the configured deployment.");
+        warnings.Add("Azure OpenAI image generation failed because no supported image size was accepted by the configured deployment.");
         return new AICinematicProviderResult(
             "Failed",
             null,
             ProviderConfigured: true,
             warnings);
     }
+
+    private static IReadOnlyList<string> SelectPreferredSizes(AICinematicAssetRequest request) =>
+        request.TargetHeight > request.TargetWidth ? PreferredPortraitSizes : PreferredLandscapeSizes;
 
     private IReadOnlyList<string> GetConfigurationWarnings()
     {

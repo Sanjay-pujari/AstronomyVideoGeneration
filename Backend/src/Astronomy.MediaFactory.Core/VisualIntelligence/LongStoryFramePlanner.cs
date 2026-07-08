@@ -92,6 +92,10 @@ public sealed record LongStoryFrameComparisonReport
     public string Recommendation { get; init; } = "ManualReviewRequired";
     public required IReadOnlyList<string> Warnings { get; init; }
     public required IReadOnlyList<string> FailedFrames { get; init; }
+    public required bool OrientationPassed { get; init; }
+    public required bool ObjectFidelityPolicyApplied { get; init; }
+    public required bool ForbiddenObjectPolicyApplied { get; init; }
+    public bool FrameCountPassed => ExpectedFrameCount == GeneratedFrameCount;
 }
 public interface ILongStoryFramePlanner
 {
@@ -243,7 +247,10 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
             Provider = result.Provider,
             ProductionSceneAssetsUnchanged = result.ProductionSceneAssetsUnchanged,
             Warnings = result.Warnings,
-            FailedFrames = result.FailedFrames
+            FailedFrames = result.FailedFrames,
+            OrientationPassed = result.OrientationPassed,
+            ObjectFidelityPolicyApplied = result.ObjectFidelityPolicyApplied,
+            ForbiddenObjectPolicyApplied = result.ForbiddenObjectPolicyApplied
         };
         var jsonOptions = VisualIntelligenceJson.CreateSerializerOptions(writeIndented: true);
         await File.WriteAllTextAsync(Path.Combine(diagnostics, "LongStoryFrameVisualReview.json"), JsonSerializer.Serialize(visualReview, jsonOptions), cancellationToken).ConfigureAwait(false);
@@ -333,7 +340,7 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
         Status = "Story frame prompt packages generated for future comparison only; scene rendering prompts remain unchanged."
     };
 
-    internal static IReadOnlyList<StoryFramePromptPackage> BuildPromptPackages(LongStoryFramePlan plan) =>
+    public static IReadOnlyList<StoryFramePromptPackage> BuildPromptPackages(LongStoryFramePlan plan) =>
         plan.FrameDefinitions.Select(frame => new StoryFramePromptPackage
         {
             PackageId = $"{plan.PlanId}_frame{frame.FrameNumber:00}_{frame.BeatRole}_prompt".ToLowerInvariant(),
@@ -347,8 +354,8 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
             VisualTreatment = frame.RecommendedVisualTreatment,
             SafeAreaInstructions = "Reserve deterministic overlay safe space in the lower third and outer edge margins; keep astronomy subjects in the central documentary field.",
             TypographyInstructions = "Do not generate embedded text, captions, labels, letters, numbers, logos, UI, watermarks, or title cards inside the image.",
-            PositivePrompt = $"{VisualPromptPolicyComposer.Compose(VisualPromptProduct.LongStoryFrame).PositiveGuidance} {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. Compose with deterministic overlay safe space in the lower third and edge margins. No generated embedded text.",
-            NegativePrompt = VisualPromptPolicyComposer.Compose(VisualPromptProduct.LongStoryFrame).NegativeGuidance + ", text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, distorted constellations",
+            PositivePrompt = $"{VisualPromptPolicyComposer.Compose(VisualPromptProduct.LongStoryFrame).PositiveGuidance} {frame.RecommendedVisualTreatment} Beat intent: {frame.VisualPriority}. Preserve astronomy accuracy, realistic apparent scale, natural sky lighting, and scientifically plausible object placement. For this Jupiter-Venus PLANET_CONJUNCTION, Jupiter must be visible; Jupiter is the primary visual object; Jupiter is round/circular with recognizable cloud bands; Venus must be visible; Venus is the secondary supporting object; Venus is round/circular and appears as a bright natural planet; only allow Jupiter, Venus, realistic stars, horizon/sky context, and observer silhouette when the beat requires it; do not add any Moon, crescent Moon, comet, meteor, asteroid, rocket, spacecraft, random nebula, unrelated planet, random galaxy, or Milky Way. Compose with deterministic overlay safe space in the lower third and edge margins. No generated embedded text.",
+            NegativePrompt = VisualPromptPolicyComposer.Compose(VisualPromptProduct.LongStoryFrame).NegativeGuidance + ", text, words, letters, numbers, captions, labels, logo, watermark, title card, UI chrome, inaccurate astronomy, impossible object scale, distorted constellations, no moon, no crescent moon, no comet, no meteor, no asteroid, no rocket, no spacecraft, no random nebula, no unrelated planet, no random galaxy, no Milky Way",
             Diagnostics = new Dictionary<string, object>
             {
                 ["azureCallsMade"] = false,
@@ -357,7 +364,12 @@ public sealed class LongStoryFramePlanner : ILongStoryFramePlanner
                 ["noCroppingLanguage"] = true,
                 ["embeddedTextProhibited"] = true,
                 ["visualQualityFrameworkVersion"] = VisualQualityFramework.Version,
-                ["visualQualityFrameworkLoaded"] = true
+                ["visualQualityFrameworkLoaded"] = true,
+                ["expectedPrimaryObjects"] = new[] { "Jupiter" },
+                ["expectedSecondaryObjects"] = new[] { "Venus" },
+                ["forbiddenObjectPolicyApplied"] = true,
+                ["orientationPolicyApplied"] = true,
+                ["objectFidelityPolicyApplied"] = true
             },
             Versions = new Dictionary<string, string>(plan.Versions) { ["storyFramePromptPackages"] = Version, ["visualQualityFramework"] = VisualQualityFramework.Version }
         }).ToArray();
