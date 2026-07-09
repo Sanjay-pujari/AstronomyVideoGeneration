@@ -24,6 +24,8 @@ public sealed class SceneAssetsV3Service(
     ILogger<SceneAssetsV3Service> logger) : ISceneAssetsV3Service
 {
     private const string Version = "v3.3";
+    private const int ProviderWidth = 1792;
+    private const int ProviderHeight = 1024;
     private const int Width = 1920;
     private const int Height = 1080;
     private const string RequestedOverlayFont = "DejaVu Sans";
@@ -54,14 +56,14 @@ public sealed class SceneAssetsV3Service(
         var context = await LoadTimelineContextAsync(root, cancellationToken);
         var enableAccurateSkyGuideV2 = request.EnableAccurateSkyGuideV2 ?? renderingOptions.Value.EnableAccurateSkyGuideV2;
         if (request.GenerateShort)
-            shortValidation = await GenerateFormatAsync(root, "short", BuildBeats(context, "short", 5), 5, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, cancellationToken);
+            shortValidation = await GenerateFormatAsync(root, "short", BuildBeats(context, "short", 5), 5, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.ShortTargetWidth, request.ShortTargetHeight, request.ProviderRequestedSize, cancellationToken);
         if (request.GenerateLong)
-            longValidation = await GenerateFormatAsync(root, "long", BuildBeats(context, "long", 9), 9, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, cancellationToken);
+            longValidation = await GenerateFormatAsync(root, "long", BuildBeats(context, "long", 9), 9, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.LongTargetWidth, request.LongTargetHeight, request.ProviderRequestedSize, cancellationToken);
 
         return new SceneAssetsV3Response(root, files, warnings, shortValidation, longValidation);
     }
 
-    private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, bool enableAccurateSkyGuideV2, CancellationToken ct)
+    private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, bool enableAccurateSkyGuideV2, int targetWidth, int targetHeight, string providerRequestedSize, CancellationToken ct)
     {
         var dir = Path.Combine(root, format);
         if (overwrite && Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
@@ -116,7 +118,7 @@ public sealed class SceneAssetsV3Service(
                     var assetRequest = new AICinematicAssetRequest(
                         $"scene-assets-v3-{format}-{beat.SceneId}", beat.SceneId, beat.RenderMode, format, beat.SceneId,
                         "scene-background", beat.VisualIntent, beat.CompositionType, guideV2Enabled ? "Accurate Sky Guide V2, premium astronomy observation guide, NASA and National Geographic style" : StyleFor(beat.RenderMode), prompt,
-                        guideV2Enabled ? "dashboard UI, technical chart, crowded text, location text, watermark, branding, logo" : "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", Width, Height, imagePath);
+                        guideV2Enabled ? "dashboard UI, technical chart, crowded text, location text, watermark, branding, logo" : "infographic, PowerPoint slide, large text panels, fake star labels, UI, watermark, logo", ProviderWidth, ProviderHeight, imagePath);
                     await WritePartialGenerationDiagnosticsAsync(diagnosticsPath, format, context, beat, imagePath, prompt, generationStartedUtc, generationStopwatch.ElapsedMilliseconds, null, generatedFilesBeforeFailure, ct);
                     try
                     {
@@ -145,13 +147,15 @@ public sealed class SceneAssetsV3Service(
                 if (!File.Exists(imagePath) || overwrite && !providerSucceeded)
                 {
                     fallbackUsed = true;
-                    await RenderDeterministicSceneAsync(imagePath, beat, ct);
+                    await RenderDeterministicSceneAsync(imagePath, beat, targetWidth, targetHeight, ct);
                 }
 
                 if (beat.RenderMode == "AccurateSkyGuideScene")
                 {
                     accurateSkyGuideV2Diagnostics.Add(new { enabled = enableAccurateSkyGuideV2, format, beat.SceneId, family = ResolveAccurateSkyGuideV2Family(context.EventType), providerCalled, promptPath = accurateSkyGuidePromptPath ?? string.Empty, outputPath = imagePath, fallbackUsed, imageExists = File.Exists(imagePath) });
                 }
+
+                await EnsureFinalDimensionsAsync(imagePath, targetWidth, targetHeight, ct);
 
                 var forbiddenDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beat.NarrationBeat, beat.VisualIntent, beat.VisualPrompt, beat.OverlayText, beat.SupportingText ?? string.Empty), context.ForbiddenTerms);
                 var providerName = providerCalled ? imageGenerator.GetType().Name : "DeterministicRenderer";
@@ -190,7 +194,14 @@ public sealed class SceneAssetsV3Service(
                     observationGuideDiagnostics = beat.RenderMode == "AccurateSkyGuideScene" ? BuildObservationGuideDiagnostics(beat.SceneGuideType) : null,
                     forbiddenTermsDetected = forbiddenDetected,
                     providerName,
-                    azureCallsCount
+                    azureCallsCount,
+                    finalTargetWidth = targetWidth,
+                    finalTargetHeight = targetHeight,
+                    providerRequestedSize,
+                    postProcessWidth = targetWidth,
+                    postProcessHeight = targetHeight,
+                    resizeMode = "resize",
+                    cropMode = "none"
                 });
                 manifestScenes.Add(new SceneAssetsV3ManifestScene(beat.SceneId, beat.RenderMode, imagePath, beat.NarrationBeat, beat.VisualIntent, beat.VisualSubjectCategory, beat.PrimaryVisualSubject, beat.CameraDistance, beat.OverlayDensity, beat.InformationDensity, beat.OverlayStyle, beat.CompositionType, beat.OverlayText, beat.SupportingText, beat.SceneGuideType, beat.GuideElementsUsed ?? Array.Empty<string>(), await Sha256Async(imagePath, ct), providerCalled, providerSucceeded));
                 files.Add(imagePath);
@@ -216,7 +227,7 @@ public sealed class SceneAssetsV3Service(
         var manifest = new SceneAssetsV3Manifest(Version, format, manifestScenes.Count, manifestScenes);
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneManifest", manifest, context.ForbiddenTerms);
         await WriteJsonAsync(manifestPath, manifest, ct); files.Add(manifestPath);
-        await WriteJsonAsync(diagnosticsPath, new { version = Version, format, currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms, blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0, staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
+        await WriteJsonAsync(diagnosticsPath, new { version = Version, format, phaseNo = 8, phaseName = "Format-Aware Scene Asset Generation", finalTargetWidth = targetWidth, finalTargetHeight = targetHeight, providerRequestedSize, postProcessWidth = targetWidth, postProcessHeight = targetHeight, resizeMode = "resize", cropMode = "none", storyFrameRoot = Path.Combine(Directory.GetParent(root)?.FullName ?? root, format == "short" ? "short-story-frames" : "long-story-frames"), currentPlanId = context.PlanId, currentEventType = context.EventType, eventType = context.EventType, forbiddenTermsSource = context.ForbiddenTermsSource, allowedGuidanceTerms = context.AllowedGuidanceTerms, blockedTermsMatched = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), staleContextDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0, staleContextSource = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms).Count > 0 ? "finalPrompts" : string.Empty, diagnostics = EventContentGuard.BuildDiagnostics(format == "short" ? 8 : 9, "SceneAssetsV3Service", context.EventType, context.StoryTheme, context.VisualTheme, ["production-event-intelligence.json", "question-driven-narration-v2.json"], string.Join(Environment.NewLine, beats.Select(b => b.VisualPrompt)), context.ForbiddenTerms), scenes = sceneDiagnostics }, ct); files.Add(diagnosticsPath);
         await WriteJsonAsync(accurateSkyGuideV2DiagnosticsPath, accurateSkyGuideV2Diagnostics, ct); files.Add(accurateSkyGuideV2DiagnosticsPath);
         await WriteJsonAsync(visualPromptDiagnosticsPath, BuildVisualPromptDiagnostics(format == "short" ? 8 : 9, "Scene Assets V3.3", context, beats.Select(b => new { imageId = b.SceneId, fileName = b.SceneId + ".png", finalPrompt = b.VisualPrompt, b.VisualIntent, b.VisualSubjectCategory, b.PrimaryVisualSubject, b.CameraDistance, dominantPromptSubject = b.PrimaryVisualSubject, overlayDensity = b.OverlayDensity, b.CompositionType, b.PromptVariation, b.OverlayStyle, overlayText = b.DeterministicOverlayText, overlayWordCount = CountWords(b.DeterministicOverlayText), textOverlapRisk = "low", croppedTextRisk = "low", guideElementsAllowed = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), guideElementsDetected = b.VisualIntent == "SkyGuide" || b.VisualIntent.Contains("Diagram", StringComparison.OrdinalIgnoreCase), thumbnailRulesPassed = true, heroRulesPassed = true, sceneGuideType = b.SceneGuideType, guideRenderer = b.RenderMode == "AccurateSkyGuideScene" ? $"Deterministic{b.SceneGuideType}GuideRenderer" : string.Empty, eventType = context.EventType, guideElementsUsed = b.GuideElementsUsed ?? Array.Empty<string>(), observationGuideDiagnostics = b.RenderMode == "AccurateSkyGuideScene" ? BuildObservationGuideDiagnostics(b.SceneGuideType) : null, galleryDiagnostics = new { galleryVersion = "V3", dateAdded = !string.IsNullOrWhiteSpace(context.EventDateText), timeAdded = !string.IsNullOrWhiteSpace(context.PeakTimeText), locationAdded = !string.IsNullOrWhiteSpace(context.PrimaryViewingDirection), eventTypeAdded = !string.IsNullOrWhiteSpace(context.EventType) }, b.SupportingText })), ct); files.Add(visualPromptDiagnosticsPath);
 
@@ -275,6 +286,15 @@ public sealed class SceneAssetsV3Service(
         }, ct);
     }
 
+
+    private static async Task EnsureFinalDimensionsAsync(string path, int targetWidth, int targetHeight, CancellationToken ct)
+    {
+        using var image = await Image.LoadAsync<Rgba32>(path, ct);
+        if (image.Width == targetWidth && image.Height == targetHeight) return;
+        image.Mutate(ctx => ctx.Resize(targetWidth, targetHeight));
+        await image.SaveAsPngAsync(path, new PngEncoder(), ct);
+    }
+
     private static bool IsValidPng(string path)
     {
         try
@@ -317,10 +337,10 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         return common + Environment.NewLine + familyPrompt;
     }
 
-    private async Task RenderDeterministicSceneAsync(string path, SceneAssetsV3Beat beat, CancellationToken ct)
+    private async Task RenderDeterministicSceneAsync(string path, SceneAssetsV3Beat beat, int width, int height, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
-        using var image = new Image<Rgba32>(Width, Height, Color.Black);
+        using var image = new Image<Rgba32>(width, height, Color.Black);
         image.Mutate(ctx =>
         {
             var bg = beat.RenderMode == "AccurateSkyGuideScene" ? Color.FromRgb(5, 10, 22) : Color.FromRgb((byte)(8 + beat.BeatNo * 11), (byte)(16 + beat.BeatNo * 7), (byte)(34 + beat.BeatNo * 13));
@@ -329,16 +349,16 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
             if (beat.RenderMode == "AccurateSkyGuideScene") DrawSkyGuide(ctx, beat);
             else DrawCinematicForeground(ctx, beat);
             var font = ResolveOverlayFont(34, FontStyle.Bold);
-            ctx.DrawText(TruncateForOverlay(beat.OverlayText, 54), font, Color.FromRgba(235, 240, 248, 225), new PointF(90, 875));
-            if (!string.IsNullOrWhiteSpace(beat.SupportingText)) ctx.DrawText(TruncateForOverlay(beat.SupportingText!, 70), ResolveOverlayFont(26, FontStyle.Regular), Color.FromRgba(190, 220, 245, 205), new PointF(90, 922));
+            ctx.DrawText(TruncateForOverlay(beat.OverlayText, 54), font, Color.FromRgba(235, 240, 248, 225), new PointF(Math.Min(90, width / 20), height - 205));
+            if (!string.IsNullOrWhiteSpace(beat.SupportingText)) ctx.DrawText(TruncateForOverlay(beat.SupportingText!, 70), ResolveOverlayFont(26, FontStyle.Regular), Color.FromRgba(190, 220, 245, 205), new PointF(Math.Min(90, width / 20), height - 158));
         });
         await image.SaveAsPngAsync(path, new PngEncoder(), ct);
     }
 
-    private static void DrawStars(IImageProcessingContext ctx, int seed) { for (var i = 0; i < 180; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(58 + (i % 6) * 27)), new EllipsePolygon((i * 137 + seed * 61) % Width, (i * 73 + seed * 89) % 820, 1 + i % 3)); }
+    private static void DrawStars(IImageProcessingContext ctx, int seed) { for (var i = 0; i < 180; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(58 + (i % 6) * 27)), new EllipsePolygon((i * 137 + seed * 61) % width, (i * 73 + seed * 89) % Math.Max(1, height - 260), 1 + i % 3)); }
     private static void DrawCinematicForeground(IImageProcessingContext ctx, SceneAssetsV3Beat beat)
     {
-        ctx.Fill(Color.FromRgb(6, 8, 12), new RectangularPolygon(0, 830, Width, 250));
+        ctx.Fill(Color.FromRgb(6, 8, 12), new RectangularPolygon(0, height - 250, width, 250));
         var first = new PointF(820 + beat.BeatNo * 8, 360 + beat.BeatNo * 9);
         var second = new PointF(950 + beat.BeatNo * 8, 330 + beat.BeatNo * 9);
         ctx.Fill(Color.FromRgb(255, 245, 190), new EllipsePolygon(first, 13));
@@ -351,7 +371,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         var title = ResolveOverlayFont(36, FontStyle.Bold);
         ctx.Fill(Color.FromRgb(4, 12, 32));
         ctx.Fill(Color.FromRgba(18, 36, 58, 150), new RectangularPolygon(0, 520, Width, 560));
-        for (var i = 0; i < 260; i++) ctx.Fill(Color.FromRgba(245, 250, 255, (byte)(50 + i % 150)), new EllipsePolygon((i * 149 + 97) % Width, (i * 83 + 41) % 760, 1 + i % 3));
+        for (var i = 0; i < 260; i++) ctx.Fill(Color.FromRgba(245, 250, 255, (byte)(50 + i % 150)), new EllipsePolygon((i * 149 + 97) % width, (i * 83 + 41) % 760, 1 + i % 3));
         ctx.Fill(Color.FromRgba(10, 16, 22, 245), new RectangularPolygon(0, 810, Width, 270));
         ctx.DrawLine(Color.FromRgb(95, 135, 155), 3, new PointF(120, 812), new PointF(1800, 812));
         ctx.DrawLine(Color.FromRgba(80, 130, 160, 120), 1, new PointF(260, 740), new PointF(1660, 740));
