@@ -55,7 +55,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     {
         var generatedFiles = sceneIntentResult.GeneratedFiles;
         var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 6
-                ? phase with { PhaseName = "Scene Intent Builder", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+                ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
                 : step)
             .ToArray();
 
@@ -63,7 +63,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         {
             steps = steps.Concat([new ProductionPhaseResult(
                 6,
-                "Scene Intent Builder",
+                "Editorial Intelligence Foundation",
                 ProductionPhaseStatus.Succeeded,
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow,
@@ -86,7 +86,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 {
                     GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                     PhaseResults = execution.PhaseResults?.Select(phase => phase.PhaseNo == 6
-                            ? phase with { PhaseName = "Scene Intent Builder", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+                            ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
                             : phase)
                         .ToArray()
                 }

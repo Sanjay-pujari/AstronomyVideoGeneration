@@ -14,7 +14,7 @@ public sealed class Rc2PipelinePhaseRegistry
         new(3, "Generate QuestionAnswerSet"),
         new(4, "Validate Questions"),
         new(5, "Generate Scene Plan"),
-        new(6, "Scene Intent Builder")
+        new(6, "Editorial Intelligence Foundation")
     ];
 
     public IReadOnlyList<int> ResolveRequestedPhaseNumbers(BatchGenerateFromPlansRequest request)
