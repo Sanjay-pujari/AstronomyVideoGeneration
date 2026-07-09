@@ -49,7 +49,25 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
 
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
-        var diagnostics = new { phaseName = PhaseName, inputs = new[] { new { path = NormalizePath(editorialPath), exists = File.Exists(editorialPath) }, new { path = NormalizePath(storyboardPath), exists = File.Exists(storyboardPath) } }, outputsCreated = new[] { planPath, narrationPath, diagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(), sceneCount = narrationScenes.Length, requiredFactCoverage = coverage, prohibitedPhraseViolations = prohibitedViolations, missingFactUsageViolations = missingFactViolations, language, warnings };
+        var errors = prohibitedViolations.Concat(missingFactViolations).ToArray();
+        var diagnostics = new
+        {
+            phaseName = PhaseName,
+            orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            inputs = new[]
+            {
+                new { path = NormalizePath(editorialPath), exists = File.Exists(editorialPath) },
+                new { path = NormalizePath(storyboardPath), exists = File.Exists(storyboardPath) }
+            },
+            outputsCreated = new[] { planPath, narrationPath, diagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            sceneCount = narrationScenes.Length,
+            requiredFactCoverage = coverage,
+            prohibitedPhraseViolations,
+            missingFactUsageViolations,
+            language,
+            warnings,
+            errors
+        };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
         logger.LogInformation("Narration Generator V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
         return new NarrationGeneratorV5Result([planPath, narrationPath, diagnosticsPath]);

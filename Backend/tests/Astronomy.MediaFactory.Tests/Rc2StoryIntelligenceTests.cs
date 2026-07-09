@@ -156,3 +156,162 @@ public sealed class Rc2CreativeStoryboardTests
         Assert.Contains(diagnostics.RootElement.GetProperty("subPhases").EnumerateArray(), phase => phase.GetString() == "7.1 Creative Storyboard Builder");
     }
 }
+
+public sealed class Rc2NarrationV5OrchestrationTests
+{
+    [Fact]
+    public async Task Phase8_RangeRequest_RunsNarrationV5AndAddsOutputsToResponseAndManifest()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "rc2-narration-v5-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "editorial"));
+        Directory.CreateDirectory(Path.Combine(root, "creative"));
+
+        await File.WriteAllTextAsync(Path.Combine(root, "editorial", "editorial-contract.json"), """
+        {
+          "language": "en",
+          "requiredNarrationFacts": [
+            { "name": "bestViewingWindowLocal", "value": "Before dawn" },
+            { "name": "skyDirectionHint", "value": "Eastern sky" }
+          ],
+          "prohibitedPhrases": ["once in a lifetime"],
+          "preferredPhrases": ["look east"]
+        }
+        """);
+        await File.WriteAllTextAsync(Path.Combine(root, "creative", "creative-storyboard.json"), """
+        {
+          "orchestrationVersion": "RC2",
+          "language": "en",
+          "storyArc": "Hook → Observation → Takeaway",
+          "scenes": [
+            { "sceneId": "s1", "sceneOrder": 1, "scenePurpose": "Hook", "keyMessage": "A bright pairing opens the morning sky." },
+            { "sceneId": "s2", "sceneOrder": 2, "scenePurpose": "Observation", "keyMessage": "Use the supported viewing window and direction." }
+          ]
+        }
+        """);
+        await File.WriteAllTextAsync(Path.Combine(root, "phase-manifest.json"), """
+        {
+          "filesGeneratedThisRun": [],
+          "executedPhaseNumbers": [],
+          "phasesActuallyExecuted": [],
+          "phases": []
+        }
+        """);
+
+        var request = new BatchGenerateFromPlansRequest(2026, "US", StartPhaseNo: 1, EndPhaseNo: 8);
+        var response = await new Rc2ContentPlanningBatchOrchestrator(
+            new StubBatchGenerationService(BuildBaseResponse(root)),
+            new Rc2PipelinePhaseRegistry(),
+            new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance),
+            new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
+            new NarrationGeneratorV5(NullLogger<NarrationGeneratorV5>.Instance),
+            NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
+            .GenerateFromPlansAsync(request, CancellationToken.None);
+
+        var expectedFiles = new[]
+        {
+            Path.Combine(root, "narration-v5", "narration-plan.json"),
+            Path.Combine(root, "narration-v5", "narration.json"),
+            Path.Combine(root, "narration-v5", "narration-diagnostics.json")
+        };
+
+        Assert.All(expectedFiles, path => Assert.True(File.Exists(path), path));
+        var phase8 = Assert.Single(response.Steps.OfType<ProductionPhaseResult>(), phase => phase.PhaseNo == 8);
+        Assert.Equal("Narration Generator V5", phase8.PhaseName);
+        Assert.All(expectedFiles, path => Assert.Contains(path, phase8.OutputFiles));
+
+        var execution = Assert.Single(response.Results!.OfType<ContentPlanProductionExecutionResult>());
+        Assert.All(expectedFiles, path => Assert.Contains(path, execution.GeneratedFiles));
+        Assert.Contains(execution.PhaseResults!, phase => phase.PhaseNo == 8 && phase.PhaseName == "Narration Generator V5");
+
+        using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "narration-diagnostics.json")));
+        Assert.Equal("Narration Generator V5", diagnostics.RootElement.GetProperty("phaseName").GetString());
+        Assert.Equal("RC2", diagnostics.RootElement.GetProperty("orchestrationVersion").GetString());
+        Assert.Equal(2, diagnostics.RootElement.GetProperty("sceneCount").GetInt32());
+        Assert.All(diagnostics.RootElement.GetProperty("inputs").EnumerateArray(), input => Assert.True(input.GetProperty("exists").GetBoolean()));
+        Assert.All(diagnostics.RootElement.GetProperty("outputsCreated").EnumerateArray(), output => Assert.True(output.GetProperty("exists").GetBoolean()));
+        Assert.True(diagnostics.RootElement.GetProperty("requiredFactCoverage").TryGetProperty("bestViewingWindowLocal", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("warnings", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("errors", out _));
+
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "phase-manifest.json")));
+        Assert.Contains(manifest.RootElement.GetProperty("phases").EnumerateArray(), phase => phase.GetProperty("phaseNo").GetInt32() == 8 && phase.GetProperty("phaseName").GetString() == "Narration Generator V5");
+        Assert.Contains(manifest.RootElement.GetProperty("filesGeneratedThisRun").EnumerateArray(), file => file.GetString()!.EndsWith("narration-v5/narration.json", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static BatchGenerateFromPlansResponse BuildBaseResponse(string root)
+    {
+        var planId = Guid.NewGuid();
+        var productionRequest = new ContentPlanProductionPipelineRequest(
+            PlanId: planId,
+            Category: "DailySkyGuide",
+            Title: "Moon and Jupiter",
+            ShortTitle: "Moon and Jupiter",
+            EventType: "PlanetaryConjunction",
+            RegionId: "US",
+            Language: "en",
+            PrimaryObjects: ["Moon", "Jupiter"],
+            SecondaryObjects: [],
+            StartUtc: null,
+            PeakUtc: null,
+            EndUtc: null,
+            ScheduledUtc: null,
+            SourceExternalEventId: null,
+            PlannedFormat: "Short",
+            RequestedOutputs: [],
+            VisibilityScore: null,
+            RarityScore: null,
+            AudienceInterestScore: null,
+            ContentOpportunityScore: null,
+            VerificationStatus: null,
+            VerificationSource: null,
+            ContentStrategy: null,
+            LocalPeakTime: null,
+            SkyDirectionHint: null,
+            VisibilityRegion: null,
+            MoonInterference: null,
+            BestViewingWindowLocal: null,
+            RadiantVisibilityNote: null,
+            MoonIlluminationPercent: null,
+            StartPhaseNo: 1,
+            EndPhaseNo: 8,
+            RetryFailedOnly: false);
+        var execution = new ContentPlanProductionExecutionResult(
+            Success: true,
+            DryRun: false,
+            UseProductionPipeline: true,
+            UsedPlaceholderVisuals: false,
+            SelectedPlanCount: 1,
+            PlanId: planId,
+            Title: "Moon and Jupiter",
+            OutputRoot: root,
+            QuestionEngineCompleted: true,
+            ShortScenesGenerated: false,
+            LongScenesGenerated: false,
+            HeroGenerated: false,
+            ThumbnailsGenerated: false,
+            ShortNarrationGenerated: false,
+            LongNarrationGenerated: false,
+            ShortTtsGenerated: false,
+            LongTtsGenerated: false,
+            ShortVideoGenerated: false,
+            LongVideoGenerated: false,
+            FinalShortVideoPath: string.Empty,
+            FinalLongVideoPath: string.Empty,
+            ProductionPipelineRequest: productionRequest,
+            PlannedProductionSteps: [],
+            GeneratedFiles: [],
+            Warnings: [],
+            Errors: [],
+            PhaseResults: []);
+        return new BatchGenerateFromPlansResponse(true, false, 1, 1, 1,
+        [
+            new BatchGenerateFromPlansSelectedPlan(planId, "Moon and Jupiter", "DailySkyGuide", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1, null)
+        ], [], [], [], Results: [execution], UseProductionPipeline: true, Title: "Moon and Jupiter", OutputRoot: root);
+    }
+
+    private sealed class StubBatchGenerationService(BatchGenerateFromPlansResponse response) : IContentPlanBatchGenerationService
+    {
+        public Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(response);
+    }
+}

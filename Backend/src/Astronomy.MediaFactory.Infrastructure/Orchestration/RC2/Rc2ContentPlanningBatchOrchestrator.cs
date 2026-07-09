@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 
@@ -45,10 +47,10 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             var creativeStoryboardResult = await creativeStoryboardBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
             response = ApplyRc2Phase7Response(response, creativeStoryboardResult);
         }
-        if (IsExplicitRc2NarrationRequest(request, requestedPhases))
+        if (IsRc2NarrationPhaseRequested(requestedPhases))
         {
             var narrationResult = await narrationGeneratorV5.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-            response = ApplyRc2Phase8Response(response, narrationResult);
+            response = await ApplyRc2Phase8ResponseAsync(response, narrationResult, cancellationToken);
         }
 
         logger.LogInformation(
@@ -150,19 +152,98 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         return response with { Steps = steps, Results = results };
     }
 
-    private static bool IsExplicitRc2NarrationRequest(BatchGenerateFromPlansRequest request, IReadOnlyList<int> requestedPhases)
-        => requestedPhases.Contains(8) && (request.StartPhaseNo == 8 || request.EndPhaseNo == 8);
+    private static bool IsRc2NarrationPhaseRequested(IReadOnlyList<int> requestedPhases)
+        => requestedPhases.Contains(8);
 
-    private static BatchGenerateFromPlansResponse ApplyRc2Phase8Response(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult)
+    private static async Task<BatchGenerateFromPlansResponse> ApplyRc2Phase8ResponseAsync(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult, CancellationToken cancellationToken)
     {
         var generatedFiles = narrationResult.GeneratedFiles;
         if (generatedFiles.Count == 0) return response;
-        var steps = response.Steps.Concat([new ProductionPhaseResult(8, "Narration Generator V5", ProductionPhaseStatus.Succeeded, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [Combine(response.OutputRoot, "editorial", "editorial-contract.json"), Combine(response.OutputRoot, "creative", "creative-storyboard.json")], generatedFiles, Combine(response.OutputRoot, "narration-v5", "narration-diagnostics.json"), [], [], false)]).ToArray();
-        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution ? execution with { GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() } : result).ToArray();
+
+        var phase8 = new ProductionPhaseResult(
+            8,
+            "Narration Generator V5",
+            ProductionPhaseStatus.Succeeded,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            0,
+            [
+                Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
+                Combine(response.OutputRoot, "creative", "creative-storyboard.json")
+            ],
+            generatedFiles,
+            Combine(response.OutputRoot, "narration-v5", "narration-diagnostics.json"),
+            [],
+            [],
+            false);
+
+        var steps = response.Steps
+            .OfType<ProductionPhaseResult>()
+            .Any(phase => phase.PhaseNo == 8)
+            ? response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 8 ? phase8 : step).ToArray()
+            : response.Steps.Concat([phase8]).ToArray();
+
+        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
+                ? execution with
+                {
+                    GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase8)
+                }
+                : result)
+            .ToArray();
+
+        await UpsertPhaseManifestAsync(response.OutputRoot, phase8, cancellationToken);
         return response with { Steps = steps, Results = results };
+    }
+
+    private static IReadOnlyList<ProductionPhaseResult>? UpsertPhaseResult(IReadOnlyList<ProductionPhaseResult>? phases, ProductionPhaseResult phase)
+    {
+        if (phases is null) return [phase];
+        return phases.Any(existing => existing.PhaseNo == phase.PhaseNo)
+            ? phases.Select(existing => existing.PhaseNo == phase.PhaseNo ? phase : existing).ToArray()
+            : phases.Concat([phase]).ToArray();
+    }
+
+    private static async Task UpsertPhaseManifestAsync(string? outputRoot, ProductionPhaseResult phase, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(outputRoot)) return;
+
+        var manifestPath = Path.Combine(outputRoot, "phase-manifest.json");
+        if (!File.Exists(manifestPath)) return;
+
+        var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath, cancellationToken)) as JsonObject ?? new JsonObject();
+        var phases = manifest["phases"] as JsonArray ?? [];
+        for (var i = phases.Count - 1; i >= 0; i--)
+        {
+            if (phases[i]?["phaseNo"]?.GetValue<int>() == phase.PhaseNo) phases.RemoveAt(i);
+        }
+
+        phases.Add(JsonSerializer.SerializeToNode(phase));
+        manifest["phases"] = phases;
+        manifest["filesGeneratedThisRun"] = BuildManifestFileArray(manifest["filesGeneratedThisRun"], phase.OutputFiles);
+        manifest["executedPhaseNumbers"] = BuildManifestPhaseArray(manifest["executedPhaseNumbers"], phase.PhaseNo);
+        manifest["phasesActuallyExecuted"] = BuildManifestPhaseArray(manifest["phasesActuallyExecuted"], phase.PhaseNo);
+        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static JsonArray BuildManifestFileArray(JsonNode? existing, IReadOnlyList<string> additions)
+    {
+        var values = (existing as JsonArray)?.Select(node => node?.GetValue<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToList() ?? [];
+        values.AddRange(additions.Where(File.Exists).Select(NormalizePath));
+        return new JsonArray(values.Distinct(StringComparer.OrdinalIgnoreCase).Select(JsonValue.Create).ToArray<JsonNode?>());
+    }
+
+    private static JsonArray BuildManifestPhaseArray(JsonNode? existing, int phaseNo)
+    {
+        var values = (existing as JsonArray)?.Select(node => node?.GetValue<int>()).ToList() ?? [];
+        values.Add(phaseNo);
+        return new JsonArray(values.Distinct().Order().Select(JsonValue.Create).ToArray<JsonNode?>());
     }
 
     private static string Combine(string? root, params string[] parts)
         => string.IsNullOrWhiteSpace(root) ? Path.Combine(parts) : Path.Combine(new[] { root }.Concat(parts).ToArray());
+
+    private static string NormalizePath(string path)
+        => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
