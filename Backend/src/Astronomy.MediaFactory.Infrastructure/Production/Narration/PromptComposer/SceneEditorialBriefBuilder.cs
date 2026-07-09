@@ -14,35 +14,22 @@ public sealed class SceneEditorialBriefBuilder
     private static string BuildScene(NarrationBriefV5 scene, DocumentaryStyleContract? styleContract)
     {
         var style = styleContract?.SceneStyles.FirstOrDefault(s => string.Equals(s.SceneId, scene.SceneId, StringComparison.OrdinalIgnoreCase));
-        var lines = new List<string>
-        {
-            "Private producer notes — do not copy these words into narration.",
-            $"Story movement note\n{Clean(scene.SceneGoal)}",
-            $"Beat function\n{Clean(scene.ScenePurpose)}",
-            $"Audience result note\n{CleanAudience(scene.AudienceTakeaway)}",
-            $"Confirmed sky facts\n{FormatFacts(scene.FactsToMention)}",
-            $"Observing action facts\n{Clean(scene.GenerationInstructions)}",
-            $"Tone note\n{Clean(scene.Tone)}",
-            $"Continuity note\n{Clean(scene.ConnectorToNext)}"
-        };
+        var facts = FormatFacts(scene.FactsToMention);
+        var atmosphere = style is null ? string.Empty : string.Join(" ", new[] { style.OpeningStyle, style.DevelopmentStyle, style.ClosingStyle, style.TransitionStyle }.Select(Clean).Where(v => !string.IsNullOrWhiteSpace(v)));
+        var factLanguage = style is null || style.FactTransformations.Count == 0 ? string.Empty : " " + string.Join(" ", style.FactTransformations.Select(Clean));
+        var formatCue = scene.TargetLength.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? "This is the short cut, so favor a faster hook, tighter pacing, and direct observing action without reusing the long narration."
+            : "This is the long cut, so give the writer room for richer explanation, slower spoken rhythm, and stronger science context.";
 
-        if (style is not null)
-        {
-            var atmosphere = string.Join(" ", new[] { style.OpeningStyle, style.DevelopmentStyle, style.ClosingStyle, style.TransitionStyle }.Select(Clean).Where(v => !string.IsNullOrWhiteSpace(v)));
-            if (!string.IsNullOrWhiteSpace(atmosphere)) lines.Add($"Atmosphere note\n{atmosphere}");
-            if (style.FactTransformations.Count > 0) lines.Add($"Fact language note\n{string.Join("; ", style.FactTransformations.Select(Clean))}");
-        }
-
-        return string.Join("\n\n", lines);
+        return Clean($"These are confidential producer notes for a professional documentary writer, not lines for the script. {scene.SceneGoal} {scene.AudienceTakeaway} Work from these confirmed sky details: {facts} {scene.GenerationInstructions} The delivery can stay {scene.Tone}, with continuity shaped by {scene.ConnectorToNext}. {formatCue} {atmosphere}{factLanguage} The writer must create fresh spoken narration and must not quote or paraphrase these notes.");
     }
 
-    private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "Only confirmed broad context." : string.Join("\n", facts.Select(f => $"- {NarrationPromptComposer.NormalizeFactName(f.Name)}: {Clean(f.Value)}"));
-    private static string CleanAudience(string value) => Clean(value).Replace("The viewer should", "The viewer", StringComparison.OrdinalIgnoreCase).Replace("Viewer should", "Viewer", StringComparison.OrdinalIgnoreCase);
+    private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "only broad confirmed context" : string.Join("; ", facts.Select(f => $"{NarrationPromptComposer.NormalizeFactName(f.Name)} is {Clean(f.Value)}"));
     private static string Clean(string value) => PromptLanguageCleaner.CleanText(value)
-        .Replace("Editorial writing objective", "Story movement", StringComparison.OrdinalIgnoreCase)
-        .Replace("Natural sky details to weave into prose", "Sky details", StringComparison.OrdinalIgnoreCase)
-        .Replace("Scientific boundaries for this scene", "Scientific boundary", StringComparison.OrdinalIgnoreCase)
-        .Replace("Movement into the next scene", "Transition", StringComparison.OrdinalIgnoreCase)
-        .Replace("Delivery feel", "Tone", StringComparison.OrdinalIgnoreCase)
+        .Replace("The viewer should", "The audience can", StringComparison.OrdinalIgnoreCase)
+        .Replace("Viewer should", "The audience can", StringComparison.OrdinalIgnoreCase)
+        .Replace("guide the viewer", "orient the audience", StringComparison.OrdinalIgnoreCase)
+        .Replace("open by", "begin with", StringComparison.OrdinalIgnoreCase)
+        .Replace("end with", "close on", StringComparison.OrdinalIgnoreCase)
         .Trim();
 }

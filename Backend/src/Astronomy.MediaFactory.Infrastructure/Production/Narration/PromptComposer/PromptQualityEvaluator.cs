@@ -7,7 +7,7 @@ public sealed class PromptQualityEvaluator
     public const string MajorRevision = "MAJOR_REVISION";
     public const string Regenerate = "REGENERATE";
     public const string Version = "AstroPulse-PromptQuality-v1";
-    private static readonly string[] RequiredSections = ["Your Role", "Astro Pulse Editorial Identity", "Story Overview", "Narrative Brief", "Scientific Guardrails", "Writing Principles", "Output Contract"];
+    private static readonly string[] RequiredSections = ["Your Role", "Astro Pulse Editorial Identity", "Story Overview", "Producer Notes", "Scientific Guardrails", "Writing Principles", "Output Contract"];
     private static readonly string[] EngineeringLeakage = ["metadata", "json", "viewer should", "scene goal", "planning", "checklist", "facts to mention", "available facts"];
 
     public PromptQualityContract Evaluate(string prompt, int sceneCount, int threshold)
@@ -17,12 +17,12 @@ public sealed class PromptQualityEvaluator
         var lower = prompt.ToLowerInvariant();
         var missing = RequiredSections.Where(s => !prompt.Contains(s, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (missing.Length > 0) errors.Add($"Missing editorial brief sections: {string.Join(", ", missing)}.");
-        if (sceneCount > 0 && CountOccurrences(prompt, "Scene Story") < sceneCount) errors.Add("Not every narrative story entry appears to be present.");
+        if (sceneCount > 0 && CountOccurrences(prompt, "Private producer notes") < sceneCount) errors.Add("Not every narrative story entry appears to be present.");
         var leakage = EngineeringLeakage.Where(p => lower.Contains(p)).ToArray();
         if (leakage.Length > 0) errors.Add($"Engineering language remains in the brief: {string.Join(", ", leakage)}.");
         if (prompt.Contains("##", StringComparison.Ordinal)) warnings.Add("Prompt preview uses section headings for readability; final requested narration remains plain text.");
 
-        var sectionCompleteness = Math.Max(0, 100 - missing.Length * 15 - (sceneCount > 0 && CountOccurrences(prompt, "Scene Story") < sceneCount ? 20 : 0));
+        var sectionCompleteness = Math.Max(0, 100 - missing.Length * 15 - (sceneCount > 0 && CountOccurrences(prompt, "Private producer notes") < sceneCount ? 20 : 0));
         var engineering = Math.Max(0, 100 - leakage.Length * 20);
         var editorial = ScoreTerms(prompt, ["documentary", "audience", "wonder", "voice", "scene"], 20);
         var scientific = ScoreTerms(prompt, ["confirmed", "science", "assumptions", "integrity", "unsupported"], 20);
