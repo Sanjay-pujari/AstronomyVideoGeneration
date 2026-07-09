@@ -9,6 +9,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Rendering;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
@@ -47,7 +48,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IOptions<VisualIntelligenceOptions>? visualIntelligenceOptions = null,
     INarrativeCompositionEngine? narrativeCompositionEngine = null,
     ILongStoryFramePlanner? longStoryFramePlanner = null,
-    IShortStoryFramePlanner? shortStoryFramePlanner = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IShortStoryFramePlanner? shortStoryFramePlanner = null,
+    NarrationGeneratorV5? narrationGeneratorV5 = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -165,7 +167,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (4, "Validate Questions", PhaseValidateQuestionsAsync),
         (5, "Generate Scene Plan", PhaseGenerateScenePlanAsync),
         (6, "Enrich Scene Plan", PhaseEnrichScenePlanAsync),
-        (7, "Generate Narration Plan", PhaseGenerateNarrationPlanAsync),
+        (7, "Narration Studio V5", PhaseGenerateNarrationPlanAsync),
         (8, "Format-Aware Scene Asset Generation", PhaseGenerateSceneImagesAsync),
         (9, "Generate Long Scene Images", PhaseValidateLongSceneImagesAsync),
         (10, "Validate Scene Assets", PhaseValidateSceneAssetsAsync),
@@ -325,7 +327,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => phaseNo switch
         {
             6 => File.Exists(BuildEnrichedScenePlanPath(context)),
-            7 => File.Exists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json")),
+            7 => File.Exists(BuildNarrationV5Path(context)),
             _ => true
         };
 
@@ -434,26 +436,58 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         RequireFile(BuildEnrichedScenePlanPath(context), "Enriched question-driven scene plan");
-        var narrationRequest = BuildQuestionDrivenNarrationRequest(context);
-        ValidatePhase7NarrationRequest(narrationRequest, context);
-        var response = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(narrationRequest, cancellationToken)
-            ?? throw new InvalidOperationException("Phase 7 narration generation returned a null response.");
-        if (response.Narration is null)
-            throw new InvalidOperationException("Phase 7 narration generation returned a null narration object.");
-        if (response.Review is null)
-            throw new InvalidOperationException("Phase 7 narration generation returned a null narration review object.");
 
-        var narrationPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json");
-        var reviewPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json");
-        await PersistPhase7NarrationFilesAsync(response, narrationPath, reviewPath, cancellationToken);
-        ValidatePhase7NarrationFilesGenerated(response, narrationPath, reviewPath);
-        var outputs = new List<string>(response.GeneratedFiles ?? Array.Empty<string>());
-        outputs.Add(narrationPath);
-        outputs.Add(reviewPath);
-        Directory.CreateDirectory(context.ExecutionContext.SceneRoot!);
-        CopyFile(narrationPath, Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration.json"), outputs);
-        CopyFile(reviewPath, Path.Combine(context.ExecutionContext.SceneRoot!, "question-driven-narration-review.json"), outputs);
-        return outputs;
+        var generator = narrationGeneratorV5 ?? new NarrationGeneratorV5(Microsoft.Extensions.Logging.Abstractions.NullLogger<NarrationGeneratorV5>.Instance);
+        var request = new BatchGenerateFromPlansRequest(
+            Year: (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
+            RegionId: context.Request.RegionId,
+            Language: context.Request.Language,
+            DryRun: false,
+            UseProductionPipeline: true,
+            StartPhaseNo: 7,
+            EndPhaseNo: 7,
+            PlanId: context.Request.PlanId,
+            EnableSceneAssetsV3: context.PipelineRequest.EnableSceneAssetsV3);
+        var response = new BatchGenerateFromPlansResponse(
+            Success: true,
+            DryRun: false,
+            RequestedTitleCount: 1,
+            SelectedPlanCount: 1,
+            MaxPlans: 1,
+            SelectedPlans: Array.Empty<BatchGenerateFromPlansSelectedPlan>(),
+            Steps: Array.Empty<object>(),
+            Warnings: Array.Empty<BatchGenerateFromPlansWarning>(),
+            Errors: Array.Empty<string>(),
+            UseProductionPipeline: true,
+            PlanId: context.Request.PlanId,
+            Title: context.Request.Title,
+            OutputRoot: context.OutputRoot);
+
+        var result = await generator.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+        ValidatePhase7NarrationV5FilesGenerated(context);
+        return result.GeneratedFiles
+            .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context)])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string BuildNarrationV5Root(ProductionPhaseContext context)
+        => Path.Combine(context.OutputRoot, "narration-v5");
+
+    private static string BuildNarrationV5Path(ProductionPhaseContext context)
+        => Path.Combine(BuildNarrationV5Root(context), "narration.json");
+
+    private static string BuildNarrationV5DiagnosticsPath(ProductionPhaseContext context)
+        => Path.Combine(BuildNarrationV5Root(context), "narration-diagnostics.json");
+
+    private static string BuildNarrationV5PromptPreviewPath(ProductionPhaseContext context)
+        => Path.Combine(BuildNarrationV5Root(context), "prompt-preview.md");
+
+    private static void ValidatePhase7NarrationV5FilesGenerated(ProductionPhaseContext context)
+    {
+        RequireFile(BuildNarrationV5Path(context), "Narration Studio V5 narration output");
+        RequireFile(BuildNarrationV5DiagnosticsPath(context), "Narration Studio V5 diagnostics output");
+        RequireFile(BuildNarrationV5PromptPreviewPath(context), "Narration Studio V5 prompt preview output");
     }
 
     private static async Task PersistPhase7NarrationFilesAsync(QuestionDrivenNarrationResponse response, string narrationPath, string reviewPath, CancellationToken cancellationToken)
@@ -666,10 +700,10 @@ public sealed partial class ProductionPipelineExecutionService(
             EventType: FirstNonEmpty(request.EventType, context.ProductionEventIntelligence.EventType, context.Request.EventType),
             StrategyId: FirstNonEmpty(request.StrategyId, context.ProductionEventIntelligence.StrategyId, context.MediaEventStrategy.EventType),
             SourceOfEventId: request.SourceOfEventId,
-            NarrationGenerated: File.Exists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json")),
-            NarrationPath: Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json").Replace('\\', '/'),
-            ReviewPath: Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json").Replace('\\', '/'),
-            WordCount: CountPhase7NarrationWords(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json")));
+            NarrationGenerated: File.Exists(BuildNarrationV5Path(context)),
+            NarrationPath: BuildNarrationV5Path(context).Replace('\\', '/'),
+            DiagnosticsPath: BuildNarrationV5DiagnosticsPath(context).Replace('\\', '/'),
+            WordCount: CountPhase7NarrationWords(BuildNarrationV5Path(context)));
 
     private static (Guid? EventId, string Source) ResolveEventIdSource(ProductionPhaseContext context)
     {
@@ -697,7 +731,7 @@ public sealed partial class ProductionPipelineExecutionService(
         string? SourceOfEventId,
         bool NarrationGenerated,
         string NarrationPath,
-        string ReviewPath,
+        string DiagnosticsPath,
         int WordCount);
 
     private static int CountPhase7NarrationWords(string narrationPath)
@@ -13086,6 +13120,8 @@ public sealed partial class ProductionPipelineExecutionService(
         if (forbiddenTerms.Length == 0) return;
 
         var paths = new List<string>();
+        var narrationV5Path = BuildNarrationV5Path(context);
+        if (File.Exists(narrationV5Path)) paths.Add(narrationV5Path);
         var narrationPath = Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json");
         if (File.Exists(narrationPath)) paths.Add(narrationPath);
         if (Directory.Exists(context.ExecutionContext.SceneRoot!))
@@ -15068,6 +15104,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (deleteStartPhaseNo <= 7 && deleteEndPhaseNo >= 7)
         {
+            DeleteProductionSubtree(BuildNarrationV5Root(context), deletedFiles, deletedDirectories);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), deletedFiles);
         }
@@ -15203,6 +15240,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static IReadOnlyList<string> ResolvePhaseOwnedOutputRoots(ProductionPhaseContext context, int startPhaseNo, int endPhaseNo)
     {
         var roots = new List<string>();
+        if (startPhaseNo <= 7 && endPhaseNo >= 7) roots.Add(BuildNarrationV5Root(context));
         if (startPhaseNo <= 9 && endPhaseNo >= 8) roots.Add(context.ExecutionContext.SceneRoot!);
         if (startPhaseNo <= 11 && endPhaseNo >= 11) roots.Add(context.ExecutionContext.HeroRoot!);
         if (startPhaseNo <= 12 && endPhaseNo >= 12) roots.Add(context.ExecutionContext.ThumbnailRoot!);
