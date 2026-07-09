@@ -154,6 +154,15 @@ A validated Narration Engine artifact with JSON manifest, localized metadata, an
 - [RC2 Release Notes](../releases/AstronomyV3RC2.md)
 - [Event Families](../event-families/README.md)
 
+
+## Chronicle Editorial Engine v1.0
+
+Narration Engine uses Chronicle Editorial Engine as its domain-independent editorial layer. Chronicle accepts verified contracts from the knowledge and story layers, turns machine facts into human facts, composes a producer-style narrative brief, drafts and edits documentary narration, and performs an internal editorial review before emitting narration only.
+
+Chronicle does not own astronomical truth, observation calculations, diagnostics, publishing metadata, SSML packaging, subtitles, or TTS rendering. Those responsibilities remain in the surrounding product modules. Chronicle owns meaning, flow, documentary voice, natural teaching, and production-leakage prevention.
+
+See [Chronicle Editorial Engine](./ChronicleEditorialEngine.md) for the complete v1.0 workflow and certification rules.
+
 ## Narration Product Model
 
 ```mermaid
