@@ -157,8 +157,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         var composer = promptComposer ?? new NarrationPromptComposer();
         var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [producerNotesContractPath, knowledgeContractPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
-        var transcriptionistInput = new DocumentaryTranscriptionistInput(longSceneFactCards, shortSceneFactCards, styleContract?.VoiceProfile ?? "CalmDocumentary", "Return documentary-script JSON with sceneId, sceneOrder, and narrationText for each scene. LLM input is only scene fact cards, tone profile, and this output format.");
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v4", "LLMDocumentaryTranscriptionist", "local-documentary-transcriptionist-v2", 0.7m, 0.9m, 1800, "Transform scene fact cards into natural spoken documentary language. Preserve facts. Invent nothing. Do not expose field names. Do not mention fact cards. Do not add producer language.", JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
+        var transcriptionistInput = new DocumentaryTranscriptionistInput(longSceneFactCards, shortSceneFactCards, styleContract?.VoiceProfile ?? "CalmDocumentary", "Return documentary-script JSON with sceneId, sceneOrder, and narrationText for each scene. Use fact cards as verified notes only. They are not narration. Do not repeat field names, labels, producer notes, or metadata. Long script is richer, slower, and more explanatory; short script is tighter, faster, and action-led.");
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v4", "LLMDocumentaryTranscriptionist", "local-documentary-transcriptionist-v2", 0.7m, 0.9m, 1800, "Use the fact cards as verified notes, not narration. Transform only the facts into natural spoken documentary language. Preserve facts. Invent nothing. Do not repeat field names, labels, headings, producer-note phrases, raw metadata, or ISO timestamps. Long script: richer, slower, more explanatory. Short script: tighter, faster, stronger hook/action.", JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -632,7 +632,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var facts = brief.FactsToMention.ToDictionary(f => f.Name, f => f.Value, StringComparer.OrdinalIgnoreCase);
         var text = scene.NarrationText;
         if (!ContainsAny(text, "happening", "watch", "see")) text += " You are watching a real sky alignment unfold, not just a date on a calendar.";
-        if (!ContainsAny(text, "when", "time", "outside", "window")) text += " Use the best viewing window as your cue for when to step outside.";
+        if (!ContainsAny(text, "when", "time", "outside", "window")) text += " Use the stated time range as your cue for when to step outside.";
         if (!ContainsAny(text, "where", "look", "face", "toward", "horizon")) text += " Look toward the clearest part of the indicated sky and keep the horizon open.";
         if (!ContainsAny(text, "see", "view", "appear", "expect")) text += " What you should see is the main pattern standing out against the sky.";
         if (!ContainsAny(text, "eye", "binocular", "telescope") && TryGetFact(facts, "nakedEyeVisibility", out var nakedEye) && IsAffirmative(nakedEye)) text += " Start with your eyes; equipment is optional.";
@@ -848,10 +848,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "open by", "end with", "the event feels", "warning", "the story", "let viewers", "by the end", "keep the tone", "raw metadata", "diagnostic text"];
+    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "guide", "open by", "end with", "the event feels", "warning", "the story", "story language", "narrative hint", "let viewers", "by the end", "keep the tone", "raw metadata", "diagnostic text", "peak date/time", "peak date", "peak time", "confirmed detail", "producer note", "the sky becomes", "curiosity", "best viewing window"];
     private static readonly string[] PromptLeakagePhrases = ["metadata", "prompt", "json", "llm", "system message", "user prompt", "contract", "schema"];
     private static readonly string[] RawNarrativeLeakagePhrases = ["mustSayFacts", "mustExplain", "mustGuide", "mustNotSay", "transitionToNext", "raw narrative"];
-    private static readonly string[] SceneFactCardFieldNames = ["sceneId", "sceneOrder", "sceneRole", "facts", "observations", "requiredMentions", "forbiddenClaims", "transitionFact", "estimatedDurationSeconds", "sourceSceneIntentId", "sourceStoryFrameId", "fact card", "fact cards"];
+    private static readonly string[] SceneFactCardFieldNames = ["sceneId", "sceneOrder", "format", "facts", "observations", "visibility", "timing", "location", "objects", "science", "requiredMentions", "forbiddenClaims", "estimatedDurationSeconds", "sourceSceneIntentId", "sourceStoryFrameId", "sceneRole", "transitionFact", "fact card", "fact cards"];
     private static readonly Regex IsoDateTimeRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RawUtcRegex = new(@"\b(?:UTC|Z\s*time|Coordinated Universal Time)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DuplicatedTransformedPhraseRegex = new(@"\b(?:around around|face the look toward|(?<dir>look toward|face|turn toward)\s+(?:the\s+)?\k<dir>)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -897,7 +897,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 public sealed record RawNarrative(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<RawNarrativeScene> Scenes);
 public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> MustSayFacts, IReadOnlyList<string> MustExplain, IReadOnlyList<string> MustGuide, IReadOnlyList<string> MustNotSay, string TransitionToNext, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
-public sealed record SceneFactCard(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, string TransitionFact, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
+public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record DocumentaryTranscriptionistInput(SceneFactCardSet LongSceneFactCards, SceneFactCardSet ShortSceneFactCards, string ToneProfile, string OutputFormatRequirement);
 public sealed record DocumentaryScript(string ContractVersion, string Format, string Language, IReadOnlyList<DocumentaryScriptScene> Scenes, string FullScriptText);
 public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, string NarrationText, IReadOnlyList<string> RequiredFactsPreserved, IReadOnlyList<string> MustNotSay, string ObservationGuidance)
@@ -910,53 +910,77 @@ public static class SceneFactCardGenerator
     public static SceneFactCardSet Build(string format, ProducerNotesContract notes, string orchestrationVersion)
     {
         var selected = notes.Briefs.Where(b => b.FormatRequirement.Equals(format, StringComparison.OrdinalIgnoreCase)).OrderBy(b => b.SceneOrder).ToArray();
-        var cards = selected.Select((scene, index) => new SceneFactCard(
-            scene.SceneId,
-            scene.SceneOrder,
-            ResolveRole(scene.NarrativeGoal, index),
-            scene.KeyFacts.Select(f => $"{f.Name}: {f.Value}").Where(IsStructuredFact).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            ExtractObservationFacts(scene.ObservationGuidance),
-            scene.KeyFacts.Select(f => f.Value).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            scene.KeyFacts.Count == 0 ? ["Do not invent unconfirmed event details."] : ["Do not invent unconfirmed altitude, constellation, brightness, weather, optical aid, or physical-distance claims."],
-            FirstStructuredFact(scene.TransitionContext),
-            format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 12 : 28,
-            scene.SceneId,
-            scene.SceneId)).ToArray();
-        return new SceneFactCardSet("AstroPulse-SceneFactCards-v1", orchestrationVersion, format.ToLowerInvariant(), notes.Language, cards);
+        var normalizedFormat = format.ToLowerInvariant();
+        var cards = selected.Select(scene =>
+        {
+            var facts = scene.KeyFacts.Select(f => CleanFactValue(f.Value)).Where(IsStructuredFact).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var observations = ExtractObservationFacts(scene.ObservationGuidance);
+            return new SceneFactCard(
+                scene.SceneId,
+                scene.SceneOrder,
+                normalizedFormat,
+                facts,
+                observations,
+                Categorize(scene, observations, "visibility", "visible", "viewing", "window", "naked eye", "telescope", "binocular", "weather", "moonlight", "horizon"),
+                Categorize(scene, observations, "time", "date", "peak", "after sunset", "before sunrise", "evening", "morning", "night", "hour"),
+                Categorize(scene, observations, "location", "region", "country", "city", "sky direction", "direction", "western", "eastern", "northern", "southern", "west", "east", "north", "south"),
+                Categorize(scene, observations, "object", "planet", "moon", "venus", "jupiter", "mars", "saturn", "mercury", "star", "comet", "meteor"),
+                Categorize(scene, observations, "science", "apparent", "perspective", "orbit", "separation", "degree", "physically", "distance", "geometry"),
+                facts,
+                scene.KeyFacts.Count == 0 ? ["Do not invent unconfirmed event details."] : ["Do not invent unconfirmed altitude, constellation, brightness, weather, optical aid, or physical-distance claims."],
+                normalizedFormat.Equals("short", StringComparison.OrdinalIgnoreCase) ? 12 : 28,
+                scene.SceneId,
+                scene.SceneId);
+        }).ToArray();
+        return new SceneFactCardSet("AstroPulse-SceneFactCards-v2", orchestrationVersion, normalizedFormat, notes.Language, cards);
     }
 
-    private static string ResolveRole(string value, int index)
+    private static IReadOnlyList<string> Categorize(ProducerNotesScene scene, IReadOnlyList<string> observations, params string[] keywords)
     {
-        var lower = value.ToLowerInvariant();
-        if (lower.Contains("observ") || lower.Contains("view")) return "Observation";
-        if (lower.Contains("explain") || lower.Contains("science")) return "Science";
-        if (lower.Contains("close") || lower.Contains("ending")) return "Closing";
-        return index == 0 ? "Opening" : "Context";
+        return scene.KeyFacts
+            .Where(f => ContainsAny(f.Name, keywords) || ContainsAny(f.Value, keywords))
+            .Select(f => CleanFactValue(f.Value))
+            .Concat(observations.Where(v => ContainsAny(v, keywords)))
+            .Where(IsStructuredFact)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static IReadOnlyList<string> ExtractObservationFacts(string value) => Regex.Split(value ?? string.Empty, @"(?<=[.!?])\s+")
-        .Select(v => v.Trim(' ', '.', ';', ':'))
+        .Select(CleanFactValue)
         .Where(IsStructuredFact)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
-    private static string FirstStructuredFact(string value) => Regex.Split(value ?? string.Empty, @"(?<=[.!?])\s+")
-        .Select(v => v.Trim(' ', '.', ';', ':'))
-        .FirstOrDefault(IsStructuredFact) ?? string.Empty;
+    private static bool ContainsAny(string? value, params string[] keywords) => !string.IsNullOrWhiteSpace(value) && keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+
+    private static string CleanFactValue(string? value)
+    {
+        var cleaned = Regex.Replace(value ?? string.Empty, @"^[A-Za-z0-9_ /()\-]+:\s*", string.Empty, RegexOptions.CultureInvariant).Trim(' ', '.', ';', ':');
+        return string.IsNullOrWhiteSpace(cleaned) ? string.Empty : cleaned + ".";
+    }
 
     private static bool IsStructuredFact(string value) => !string.IsNullOrWhiteSpace(value) && !LooksLikeProducerLanguage(value);
 
-    private static bool LooksLikeProducerLanguage(string value) => value.Contains("prompt", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("metadata", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("warning", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("the story", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("guide the viewer", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("curiosity turns", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("sky becomes easier", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("event feels", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("audience promise", StringComparison.OrdinalIgnoreCase)
-        || value.Contains("scene purpose", StringComparison.OrdinalIgnoreCase);
+    private static bool LooksLikeProducerLanguage(string value) => ContainsAny(value,
+        "prompt",
+        "metadata",
+        "warning",
+        "the story",
+        "story language",
+        "narrative hint",
+        "guide the viewer",
+        "curiosity",
+        "sky becomes",
+        "event feels",
+        "audience promise",
+        "scene purpose",
+        "confirmed detail",
+        "peak date/time",
+        "best viewing window",
+        "spoken label");
 }
+
 
 public static class RawNarrativeGenerator
 {
@@ -999,12 +1023,12 @@ public static class LlmDocumentaryTranscriptionist
     {
         var scenes = cardSet.Cards.OrderBy(s => s.SceneOrder).Select(scene =>
         {
-            var facts = scene.Facts.Concat(scene.RequiredMentions).Select(CleanFact).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var facts = scene.Facts.Concat(scene.Observations).Concat(scene.Visibility).Concat(scene.Timing).Concat(scene.Location).Concat(scene.Objects).Concat(scene.Science).Concat(scene.RequiredMentions).Select(CleanFact).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var observations = scene.Observations.Where(v => !LooksLikePlanningText(v)).Select(CleanFact).ToArray();
-            var lead = cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? "Watch for the confirmed sky detail:" : "In the evening sky, the confirmed detail is simple:";
-            var body = string.Join(" ", new[] { lead }.Concat(facts.Take(cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 2 : 4)).Concat(observations.Take(2)));
-            if (cardSet.Format.Equals("long", StringComparison.OrdinalIgnoreCase)) body += " Taken together, these details make the event easier to recognize from the ground.";
-            else body += " Keep the check brief and practical.";
+            var takeCount = cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 3 : 6;
+            var body = string.Join(" ", facts.Take(takeCount).Concat(observations.Take(cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 1 : 3)));
+            if (cardSet.Format.Equals("long", StringComparison.OrdinalIgnoreCase)) body += " From Earth, that view is a matter of perspective, so the practical check is where and when to look.";
+            else body += " Step outside at the right time and look in the right direction.";
             return new DocumentaryScriptScene(scene.SceneId, scene.SceneOrder, CleanScript(body), facts, scene.ForbiddenClaims, string.Join(" ", observations));
         }).ToArray();
         return new DocumentaryScript("AstroPulse-DocumentaryScript-v1", cardSet.Format, cardSet.Language, scenes, string.Join("\n\n", scenes.Select(s => s.NarrationText)));
@@ -1016,7 +1040,7 @@ public static class LlmDocumentaryTranscriptionist
         return cleaned.TrimEnd('.') + ".";
     }
 
-    private static bool LooksLikePlanningText(string value) => value.Contains("prompt", StringComparison.OrdinalIgnoreCase) || value.Contains("metadata", StringComparison.OrdinalIgnoreCase) || value.Contains("warning", StringComparison.OrdinalIgnoreCase) || value.Contains("the story", StringComparison.OrdinalIgnoreCase) || value.Contains("audience", StringComparison.OrdinalIgnoreCase) || value.Contains("viewer", StringComparison.OrdinalIgnoreCase);
+    private static bool LooksLikePlanningText(string value) => value.Contains("prompt", StringComparison.OrdinalIgnoreCase) || value.Contains("metadata", StringComparison.OrdinalIgnoreCase) || value.Contains("warning", StringComparison.OrdinalIgnoreCase) || value.Contains("the story", StringComparison.OrdinalIgnoreCase) || value.Contains("audience", StringComparison.OrdinalIgnoreCase) || value.Contains("viewer", StringComparison.OrdinalIgnoreCase) || value.Contains("confirmed detail", StringComparison.OrdinalIgnoreCase) || value.Contains("peak date/time", StringComparison.OrdinalIgnoreCase);
     private static string CleanScript(string value) => Regex.Replace(value, "\\s{2,}", " ", RegexOptions.CultureInvariant).Trim();
 }
 
