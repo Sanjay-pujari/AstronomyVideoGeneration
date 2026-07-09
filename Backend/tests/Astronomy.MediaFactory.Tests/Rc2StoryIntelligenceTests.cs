@@ -55,7 +55,7 @@ public sealed class Rc2StoryIntelligenceTests
             MaxPlans: 1,
             SelectedPlans:
             [
-                new BatchGenerateFromPlansSelectedPlan(Guid.NewGuid(), "Moon and Jupiter Close Approach", "PlanetaryConjunction", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1)
+                new BatchGenerateFromPlansSelectedPlan(Guid.NewGuid(), "Moon and Jupiter Close Approach", "PlanetaryConjunction", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1, null)
             ],
             Steps: [],
             Warnings: [],
@@ -134,7 +134,7 @@ public sealed class Rc2CreativeStoryboardTests
         var request = new BatchGenerateFromPlansRequest(2026, "US", StartPhaseNo: 1, EndPhaseNo: 7);
         var response = new BatchGenerateFromPlansResponse(true, true, 1, 1, 1,
         [
-            new BatchGenerateFromPlansSelectedPlan(Guid.NewGuid(), "Moon and Jupiter Close Approach", "PlanetaryConjunction", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1)
+            new BatchGenerateFromPlansSelectedPlan(Guid.NewGuid(), "Moon and Jupiter Close Approach", "PlanetaryConjunction", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1, null)
         ], [], [], [], "Moon and Jupiter Close Approach", root);
 
         await new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance).BuildAndWriteDiagnosticsAsync(request, response, CancellationToken.None);
@@ -313,9 +313,10 @@ public sealed class Rc2NarrationV5OrchestrationTests
             BestViewingWindowLocal: null,
             RadiantVisibilityNote: null,
             MoonIlluminationPercent: null,
-            StartPhaseNo: 1,
-            EndPhaseNo: 8,
-            RetryFailedOnly: false);
+            RecommendedPublishWindow: null,
+            RecommendedContentTypes: [],
+            Warnings: [],
+            SourceNotes: []);
         var execution = new ContentPlanProductionExecutionResult(
             Success: true,
             DryRun: false,
