@@ -49,16 +49,16 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
 
         var diagnostics = new
         {
-            phaseNo = 6,
+            phaseNo = 5,
             phaseName = PhaseName,
             orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
             subPhases = new[]
             {
-                "6.1 Observation Metadata Builder",
-                "6.2A Story Graph Builder",
-                "6.2B Scene Intent Builder",
-                "6.3 Editorial Contract Builder",
-                "6.4 Editorial Diagnostics"
+                "5.1 Observation Metadata Builder",
+                "5.2A Story Graph Builder",
+                "5.2B Scene Intent Builder",
+                "5.3 Editorial Contract Builder",
+                "5.4 Editorial Diagnostics"
             },
             inputs = inputFiles.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
             outputs = new[] { NormalizePath(observationMetadataPath), NormalizePath(storyGraphPath), NormalizePath(sceneIntentsPath), NormalizePath(editorialContractPath), NormalizePath(diagnosticsPath) },

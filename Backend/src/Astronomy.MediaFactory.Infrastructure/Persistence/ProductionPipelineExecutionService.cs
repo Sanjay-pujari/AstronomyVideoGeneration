@@ -13658,7 +13658,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static string SceneAssetsHookDiagnosticsPath(ProductionPhaseContext context, int phaseNo)
-        => Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-scene-hook-diagnostics.json");
+        => Path.Combine(context.ExecutionContext.ValidationRoot!, $"scene-assets-phase-{phaseNo:00}-diagnostics.json");
 
     private async Task WriteSceneAssetsHookDiagnosticsAsync(ProductionPhaseContext context, JsonObject diagnostics, CancellationToken cancellationToken)
     {
@@ -13810,6 +13810,13 @@ public sealed partial class ProductionPipelineExecutionService(
             shortStoryFrameRoot = NormalizePath(Path.Combine(context.OutputRoot, "short-story-frames")),
             @long = BuildPhase8FormatDiagnosticsObject(longDiag),
             @short = BuildPhase8FormatDiagnosticsObject(shortDiag),
+            longAssetsGenerated = longRequested && longDiag.MissingSceneIds.Count == 0 && longDiag.SceneCount == longDiag.ExpectedSceneCount,
+            shortAssetsGenerated = shortRequested && shortDiag.MissingSceneIds.Count == 0 && shortDiag.SceneCount == shortDiag.ExpectedSceneCount,
+            longDimensions = new { width = 1920, height = 1080 },
+            shortDimensions = new { width = 2160, height = 3840 },
+            longSceneManifestExists = File.Exists(Path.Combine(longRoot, "scene-manifest-v3.json")),
+            shortSceneManifestExists = File.Exists(Path.Combine(shortRoot, "scene-manifest-v3.json")),
+            sceneManifestExists = new { @long = File.Exists(Path.Combine(longRoot, "scene-manifest-v3.json")), @short = File.Exists(Path.Combine(shortRoot, "scene-manifest-v3.json")) },
             shortFinalPortrait = 2160 < 3840,
             staleFilesCountedAsCurrentRunOutputs = staleCounted,
             generatedFilesCurrentRunOnly = generatedFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),

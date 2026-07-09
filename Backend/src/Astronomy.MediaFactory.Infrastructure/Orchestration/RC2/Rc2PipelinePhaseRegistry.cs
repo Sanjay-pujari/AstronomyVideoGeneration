@@ -13,10 +13,10 @@ public sealed class Rc2PipelinePhaseRegistry
         new(2, "Build ProductionEventIntelligence"),
         new(3, "Generate QuestionAnswerSet"),
         new(4, "Validate Questions"),
-        new(5, "Generate Scene Plan"),
-        new(6, "Editorial Intelligence Foundation"),
-        new(7, "Creative Intelligence Foundation"),
-        new(8, "Narration Generator V5")
+        new(5, "Editorial Intelligence Foundation"),
+        new(6, "Creative Intelligence / Story Frames"),
+        new(7, "Narration Studio V5"),
+        new(8, "Format-Aware Scene Asset Generation")
     ];
 
     public IReadOnlyList<int> ResolveRequestedPhaseNumbers(BatchGenerateFromPlansRequest request)

@@ -6,7 +6,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
 public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder> logger)
 {
-    private const string PhaseName = "Creative Intelligence Foundation";
+    private const string PhaseName = "Creative Intelligence / Story Frames";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly string[] AstronomyVisualAccuracyRules =
     [
@@ -33,7 +33,7 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
 
     public async Task<CreativeStoryboardBuilderResult> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Creative Intelligence Foundation executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
+        logger.LogInformation("Creative Intelligence / Story Frames executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return CreativeStoryboardBuilderResult.Empty;
 
         var outputRoot = response.OutputRoot!;
@@ -54,10 +54,10 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         var inputs = new[] { editorialContractPath, storyGraphPath, sceneIntentsPath };
         var diagnostics = new
         {
-            phaseNo = 7,
+            phaseNo = 6,
             phaseName = PhaseName,
             orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
-            subPhases = new[] { "7.1 Creative Storyboard Builder", "7.6 Creative Diagnostics" },
+            subPhases = new[] { "6.1 Creative Storyboard Builder", "6.6 Creative Diagnostics" },
             inputs = inputs.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
             outputs = new[] { NormalizePath(storyboardPath), NormalizePath(diagnosticsPath) },
             creativeSceneCount = storyboard.Scenes.Count,
@@ -66,7 +66,7 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
 
-        logger.LogInformation("Creative Intelligence Foundation wrote {CreativeSceneCount} creative storyboard scenes and diagnostics to {DiagnosticsPath}.", storyboard.Scenes.Count, diagnosticsPath);
+        logger.LogInformation("Creative Intelligence / Story Frames wrote {CreativeSceneCount} creative storyboard scenes and diagnostics to {DiagnosticsPath}.", storyboard.Scenes.Count, diagnosticsPath);
         return new CreativeStoryboardBuilderResult(storyboard, [storyboardPath, diagnosticsPath]);
     }
 

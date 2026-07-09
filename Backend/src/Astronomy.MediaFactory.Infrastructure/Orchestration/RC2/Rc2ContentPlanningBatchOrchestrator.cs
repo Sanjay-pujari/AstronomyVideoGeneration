@@ -38,11 +38,11 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 
         var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
-        if (requestedPhases.Contains(6) && CanRunRc2Overlay(response, 6))
+        if (requestedPhases.Contains(5) && CanRunRc2Overlay(response, 5))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
                 response,
-                6,
+                5,
                 "Editorial Intelligence Foundation",
                 [
                     Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"),
@@ -53,17 +53,17 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 async () =>
                 {
                     var sceneIntentResult = await sceneIntentBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-                    response = ApplyRc2Phase6Response(response, sceneIntentResult);
+                    response = ApplyRc2Phase5Response(response, sceneIntentResult);
                     return sceneIntentResult.GeneratedFiles;
                 },
                 cancellationToken);
         }
-        if (requestedPhases.Contains(7) && CanRunRc2Overlay(response, 7))
+        if (requestedPhases.Contains(6) && CanRunRc2Overlay(response, 6))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
                 response,
-                7,
-                "Creative Intelligence Foundation",
+                6,
+                "Creative Intelligence / Story Frames",
                 [
                     Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
                     Combine(response.OutputRoot, "editorial", "story-graph.json"),
@@ -73,17 +73,17 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 async () =>
                 {
                     var creativeStoryboardResult = await creativeStoryboardBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-                    response = ApplyRc2Phase7Response(response, creativeStoryboardResult);
+                    response = ApplyRc2Phase6Response(response, creativeStoryboardResult);
                     return creativeStoryboardResult.GeneratedFiles;
                 },
                 cancellationToken);
         }
-        if (IsRc2NarrationPhaseRequested(requestedPhases) && CanRunRc2Overlay(response, 8))
+        if (IsRc2NarrationPhaseRequested(requestedPhases) && CanRunRc2Overlay(response, 7))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
                 response,
-                8,
-                "Narration Generator V5",
+                7,
+                "Narration Studio V5",
                 [
                     Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
                     Combine(response.OutputRoot, "creative", "creative-storyboard.json")
@@ -92,7 +92,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 async () =>
                 {
                     var narrationResult = await narrationGeneratorV5.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-                    response = await ApplyRc2Phase8ResponseAsync(response, narrationResult, cancellationToken);
+                    response = await ApplyRc2Phase7ResponseAsync(response, narrationResult, cancellationToken);
                     return narrationResult.GeneratedFiles;
                 },
                 cancellationToken);
@@ -237,18 +237,18 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             Errors = response.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
 
-    private static BatchGenerateFromPlansResponse ApplyRc2Phase6Response(BatchGenerateFromPlansResponse response, SceneIntentBuilderResult sceneIntentResult)
+    private static BatchGenerateFromPlansResponse ApplyRc2Phase5Response(BatchGenerateFromPlansResponse response, SceneIntentBuilderResult sceneIntentResult)
     {
         var generatedFiles = sceneIntentResult.GeneratedFiles;
-        var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 6
+        var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 5
                 ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
                 : step)
             .ToArray();
 
-        if (!steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == 6) && generatedFiles.Count > 0)
+        if (!steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == 5) && generatedFiles.Count > 0)
         {
             steps = steps.Concat([new ProductionPhaseResult(
-                6,
+                5,
                 "Editorial Intelligence Foundation",
                 ProductionPhaseStatus.Succeeded,
                 DateTimeOffset.UtcNow,
@@ -271,7 +271,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 ? execution with
                 {
                     GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    PhaseResults = execution.PhaseResults?.Select(phase => phase.PhaseNo == 6
+                    PhaseResults = execution.PhaseResults?.Select(phase => phase.PhaseNo == 5
                             ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
                             : phase)
                         .ToArray()
@@ -282,19 +282,19 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         return response with { Steps = steps, Results = results };
     }
 
-    private static BatchGenerateFromPlansResponse ApplyRc2Phase7Response(BatchGenerateFromPlansResponse response, CreativeStoryboardBuilderResult creativeStoryboardResult)
+    private static BatchGenerateFromPlansResponse ApplyRc2Phase6Response(BatchGenerateFromPlansResponse response, CreativeStoryboardBuilderResult creativeStoryboardResult)
     {
         var generatedFiles = creativeStoryboardResult.GeneratedFiles;
-        var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 7
-                ? phase with { PhaseName = "Creative Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+        var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 6
+                ? phase with { PhaseName = "Creative Intelligence / Story Frames", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
                 : step)
             .ToArray();
 
-        if (!steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == 7) && generatedFiles.Count > 0)
+        if (!steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == 6) && generatedFiles.Count > 0)
         {
             steps = steps.Concat([new ProductionPhaseResult(
-                7,
-                "Creative Intelligence Foundation",
+                6,
+                "Creative Intelligence / Story Frames",
                 ProductionPhaseStatus.Succeeded,
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow,
@@ -316,7 +316,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 ? execution with
                 {
                     GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    PhaseResults = execution.PhaseResults is null ? null : execution.PhaseResults.Concat(steps.OfType<ProductionPhaseResult>().Where(phase => phase.PhaseNo == 7 && execution.PhaseResults.All(existing => existing.PhaseNo != 7))).ToArray()
+                    PhaseResults = execution.PhaseResults is null ? null : execution.PhaseResults.Concat(steps.OfType<ProductionPhaseResult>().Where(phase => phase.PhaseNo == 6 && execution.PhaseResults.All(existing => existing.PhaseNo != 6))).ToArray()
                 }
                 : result)
             .ToArray();
@@ -325,16 +325,16 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     }
 
     private static bool IsRc2NarrationPhaseRequested(IReadOnlyList<int> requestedPhases)
-        => requestedPhases.Contains(8);
+        => requestedPhases.Contains(7);
 
-    private static async Task<BatchGenerateFromPlansResponse> ApplyRc2Phase8ResponseAsync(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult, CancellationToken cancellationToken)
+    private static async Task<BatchGenerateFromPlansResponse> ApplyRc2Phase7ResponseAsync(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult, CancellationToken cancellationToken)
     {
         var generatedFiles = narrationResult.GeneratedFiles;
         if (generatedFiles.Count == 0) return response;
 
-        var phase8 = new ProductionPhaseResult(
-            8,
-            "Narration Generator V5",
+        var phase7 = new ProductionPhaseResult(
+            7,
+            "Narration Studio V5",
             ProductionPhaseStatus.Succeeded,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
@@ -351,20 +351,20 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 
         var steps = response.Steps
             .OfType<ProductionPhaseResult>()
-            .Any(phase => phase.PhaseNo == 8)
-            ? response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 8 ? phase8 : step).ToArray()
-            : response.Steps.Concat([phase8]).ToArray();
+            .Any(phase => phase.PhaseNo == 7)
+            ? response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 7 ? phase7 : step).ToArray()
+            : response.Steps.Concat([phase7]).ToArray();
 
         var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
                 ? execution with
                 {
                     GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase8)
+                    PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase7)
                 }
                 : result)
             .ToArray();
 
-        await UpsertPhaseManifestAsync(response.OutputRoot, phase8, cancellationToken);
+        await UpsertPhaseManifestAsync(response.OutputRoot, phase7, cancellationToken);
         return response with { Steps = steps, Results = results };
     }
 
@@ -397,7 +397,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         if (phase.Status == ProductionPhaseStatus.Succeeded)
         {
             manifest["phasesActuallyExecuted"] = BuildManifestPhaseArray(manifest["phasesActuallyExecuted"], phase.PhaseNo);
-            manifest["lastCompletedPhaseNo"] = phase.PhaseNo;
+            manifest["lastCompletedPhaseNo"] = Math.Max(manifest["lastCompletedPhaseNo"]?.GetValue<int>() ?? 0, phase.PhaseNo);
             manifest["lastFailedPhaseNo"] = null;
         }
         else if (phase.Status == ProductionPhaseStatus.Failed)
