@@ -174,7 +174,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var longShortDistinctivenessScore = File.Exists(longNarrationPath) && File.Exists(shortNarrationPath) ? CalculateDistinctivenessScore(GetNarrationText(longNarrationPath), GetNarrationText(shortNarrationPath)) : 0;
         var shortCopiedFromLong = File.Exists(longNarrationPath) && File.Exists(shortNarrationPath) && (GetNarrationText(longNarrationPath).Equals(GetNarrationText(shortNarrationPath), StringComparison.OrdinalIgnoreCase) || longShortDistinctivenessScore < 35);
         var producerNotesLeakagePhrases = DetectProducerNotesLeakage(producerNotesContract, fullText);
-        var producerNotesLeakageDetected = producerNotesLeakagePhrases.Length > 0;
+        var producerNotesLeakageDetected = producerNotesLeakagePhrases.Count > 0;
         var expectedCounts = requestedFormats.ToDictionary(f => f, f => ResolveExpectedFrameCount(outputRoot, f), StringComparer.OrdinalIgnoreCase);
         var formatSceneCountViolations = requestedFormats.Where(f => expectedCounts[f] > 0 && ResolveNarrationSceneCount(Path.Combine(narrationRoot, f, "narration.json")) != expectedCounts[f]).Select(f => $"{f} narration scene count does not match expected story frame count {expectedCounts[f]}.").ToArray();
         var certificationViolations = engineeringLeakageViolations.Select(p => $"Instruction leakage phrase found: {p}")
