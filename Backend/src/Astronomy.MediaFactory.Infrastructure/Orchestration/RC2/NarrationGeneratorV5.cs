@@ -444,15 +444,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var detailPhrase = BuildNaturalDetailPhrase(brief.FactsToMention);
         var purpose = brief.ScenePurpose;
         var purposeKind = ClassifySceneRole(purpose);
-        var sceneAim = RewriteForNarration(brief.SceneGoal);
-        var audienceMeaning = RewriteTakeawayForNarration(brief.AudienceTakeaway);
         var text = purposeKind switch
         {
-            "hook" => $"As the sky changes color, {LowerFirst(sceneAim)} {detailPhrase} It is the kind of quiet alignment that rewards a second look.",
-            "science" => $"The reason is perspective. These objects are not necessarily moving closer together in space. From Earth, their separate paths briefly line up, creating the impression that they share the same piece of sky. {detailPhrase}",
-            "observation" => $"Now turn the idea into a real plan. {BuildObservationGuidance(facts)} {detailPhrase}",
-            "takeaway" or "closing" => $"By the time you step outside, the scene should feel familiar before you see it. {audienceMeaning}",
-            _ => $"{sceneAim} {detailPhrase} That detail carries us into the next part of the story."
+            "hook" => $"As twilight deepens, the sky sets up a quiet meeting worth noticing. {detailPhrase} This is an easy moment to miss, but a rewarding one to catch.",
+            "science" => $"The closeness is a line-of-sight effect. Jupiter and Venus remain worlds apart, yet from Earth their separate paths can briefly seem to gather in one small patch of sky. {detailPhrase}",
+            "observation" => $"Turn the story into a simple observing plan. {BuildObservationGuidance(facts)} {detailPhrase}",
+            "takeaway" or "closing" => $"After the viewing window passes, the memory is simple: two bright worlds sharing one quiet corner of the sky. {BuildClosingMeaning(facts)}",
+            _ => $"The story moves from curiosity into recognition. {detailPhrase} The sky becomes easier to read with each detail."
         };
         text = ApplyFormatNarrationStyle(text, purposeKind, format);
 
@@ -499,6 +497,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         else if (!ContainsAny(text, "eye", "binocular", "telescope") && (TryGetFact(facts, "binocularGuidance", out var equipment) || TryGetFact(facts, "telescopeGuidance", out equipment))) text += $" For equipment, {LowerFirst(NaturalizeIsoDates(equipment))}";
         if (!ContainsAny(text, "matter", "matters", "rare", "special", "because")) text += " It matters because these ordinary-looking positions reveal the larger motion of the solar system.";
         return scene with { NarrationText = ImproveSpokenRhythm(FixDuplicatedPhrases(NaturalizeIsoDates(RemoveLeakage(text)))) };
+    }
+
+    private static string BuildClosingMeaning(IReadOnlyDictionary<string, string> facts)
+    {
+        if (TryGetFact(facts, "skyDirectionHint", out var direction) || TryGetFact(facts, "direction", out direction)) return $"Next time the light fades, that part of the sky will feel a little more familiar near {NaturalDirection(direction)}.";
+        return "Moments like this turn ordinary dusk into a reason to pause and look up.";
     }
 
     private static string BuildNaturalDetailPhrase(IReadOnlyList<NarrationFactV5> facts)
@@ -702,7 +706,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal"];
+    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "open by", "end with", "the event feels", "warning"];
     private static readonly string[] PromptLeakagePhrases = ["metadata", "prompt", "json", "llm", "system message", "user prompt", "contract", "schema"];
     private static readonly Regex IsoDateTimeRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RawUtcRegex = new(@"\b(?:UTC|Z\s*time|Coordinated Universal Time)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -895,13 +899,14 @@ public sealed class EditorialBriefInterpreter
     [
         "scene purpose", "audience promise", "available facts", "facts to mention", "metadata", "warning", "missing metadata",
         "checklist", "prompt", "JSON", "which objects form", "where in the sky", "what to do next", "understand", "know",
-        "keep in mind", "anchor"
+        "keep in mind", "anchor", "guide the viewer", "open by", "end with", "the event feels"
     ];
 
     public static readonly string[] ForbiddenNarrationPhrases =
     [
         "instruction fragment", "planning heading", "scene purpose", "audience promise", "diagnostic warning",
-        "which objects form", "where in the sky", "what to do next", "understand", "know"
+        "which objects form", "where in the sky", "what to do next", "understand", "know", "guide the viewer",
+        "open by", "end with", "the event feels", "warning", "metadata"
     ];
 
     public EditorialBriefContract Interpret(KnowledgeFormatContract knowledgeContract, IReadOnlyList<string> diagnosticWarnings)
@@ -955,11 +960,11 @@ public sealed class EditorialBriefInterpreter
 
     private static string AudienceTakeaway(string role, string source) => Clean(role) switch
     {
-        "Hook" => "The event feels clear, visible, and worth a closer look.",
-        "Discovery" => "The viewer can orient themselves to the visible sky moment.",
+        "Hook" => "A clear, visible sky pairing earns curiosity quickly.",
+        "Discovery" => "Orientation becomes practical and approachable.",
         "Science" => "The apparent closeness is explained as perspective from Earth.",
-        "Observation" => "The viewer has a practical next step for observing.",
-        "Takeaway" or "Closing" => "The sky feels connected to everyday life.",
+        "Observation" => "A practical observing next step is ready.",
+        "Takeaway" or "Closing" => "The sky connects back to everyday life.",
         _ => Clean(source)
     };
 
@@ -967,11 +972,11 @@ public sealed class EditorialBriefInterpreter
     {
         var source = $"{goal} {instructions}";
         if (source.Contains("which objects form", StringComparison.OrdinalIgnoreCase) || source.Contains("event", StringComparison.OrdinalIgnoreCase) && Clean(role) == "Hook")
-            return "Open by introducing the main sky objects naturally through the visible sky moment.";
+            return "Main sky objects belong inside the visible sky moment.";
         if (source.Contains("where in the sky", StringComparison.OrdinalIgnoreCase) || Clean(role) == "Discovery")
-            return "Guide the viewer naturally toward the correct part of the sky.";
+            return "Orientation points toward the correct part of the sky.";
         if (source.Contains("what to do next", StringComparison.OrdinalIgnoreCase) || Clean(role) == "Observation")
-            return "End with a clear, calm observing action.";
+            return "Clear, calm observing action belongs here.";
         return Clean(role) switch
         {
             "Science" => "Explain the visual effect in plain documentary language without adding unsupported detail.",
