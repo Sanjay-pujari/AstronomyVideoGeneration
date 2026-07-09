@@ -7,6 +7,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     IContentPlanBatchGenerationService v4BatchGeneration,
     Rc2PipelinePhaseRegistry phaseRegistry,
     SceneIntentBuilder sceneIntentBuilder,
+    CreativeStoryboardBuilder creativeStoryboardBuilder,
     ILogger<Rc2ContentPlanningBatchOrchestrator> logger)
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -37,6 +38,11 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         {
             var sceneIntentResult = await sceneIntentBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
             response = ApplyRc2Phase6Response(response, sceneIntentResult);
+        }
+        if (requestedPhases.Contains(7))
+        {
+            var creativeStoryboardResult = await creativeStoryboardBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+            response = ApplyRc2Phase7Response(response, creativeStoryboardResult);
         }
 
         logger.LogInformation(
@@ -89,6 +95,48 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                             ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
                             : phase)
                         .ToArray()
+                }
+                : result)
+            .ToArray();
+
+        return response with { Steps = steps, Results = results };
+    }
+
+    private static BatchGenerateFromPlansResponse ApplyRc2Phase7Response(BatchGenerateFromPlansResponse response, CreativeStoryboardBuilderResult creativeStoryboardResult)
+    {
+        var generatedFiles = creativeStoryboardResult.GeneratedFiles;
+        var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 7
+                ? phase with { PhaseName = "Creative Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+                : step)
+            .ToArray();
+
+        if (!steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == 7) && generatedFiles.Count > 0)
+        {
+            steps = steps.Concat([new ProductionPhaseResult(
+                7,
+                "Creative Intelligence Foundation",
+                ProductionPhaseStatus.Succeeded,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                0,
+                [
+                    Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
+                    Combine(response.OutputRoot, "editorial", "story-graph.json"),
+                    Combine(response.OutputRoot, "editorial", "scene-intents.json")
+                ],
+                generatedFiles,
+                Combine(response.OutputRoot, "creative", "creative-diagnostics.json"),
+                [],
+                [],
+                false)])
+                .ToArray();
+        }
+
+        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
+                ? execution with
+                {
+                    GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    PhaseResults = execution.PhaseResults is null ? null : execution.PhaseResults.Concat(steps.OfType<ProductionPhaseResult>().Where(phase => phase.PhaseNo == 7 && execution.PhaseResults.All(existing => existing.PhaseNo != 7))).ToArray()
                 }
                 : result)
             .ToArray();
