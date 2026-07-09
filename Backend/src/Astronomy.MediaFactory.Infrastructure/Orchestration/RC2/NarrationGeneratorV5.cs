@@ -28,6 +28,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var diagnosticsPath = Path.Combine(narrationRoot, "narration-diagnostics.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
         var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
+        var promptQualityPath = Path.Combine(narrationRoot, "prompt-quality.json");
         var llmRequestPath = Path.Combine(narrationRoot, "llm-request.json");
         var styleRoot = Path.Combine(narrationRoot, "style");
         Directory.CreateDirectory(styleRoot);
@@ -74,8 +75,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
 
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract), cancellationToken);
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, "NarrationStudio", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "Write Astro Pulse narration as natural documentary voiceover.", promptComposerOutput.PromptPreviewMarkdown, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(promptPreviewPath)], DateTime.UtcNow, language, briefs.Length);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v2", "NarrationPromptComposerV3", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "You are a senior documentary writer for Astro Pulse.", promptComposerOutput.PromptPreviewMarkdown, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(promptPreviewPath), NormalizePath(promptQualityPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -85,11 +86,18 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var generationErrors = new List<string>();
         try
         {
-            narrationScenes = GenerateNarrationFromComposedPrompt(llmRequest, narrationBriefs).ToArray();
+            if (!promptComposerOutput.PromptQuality.ReadyForGeneration)
+            {
+                generationErrors.Add($"Prompt quality gate blocked narration generation. Score: {promptComposerOutput.PromptQuality.OverallPromptScore}.");
+            }
+            else
+            {
+                narrationScenes = GenerateNarrationFromComposedPrompt(llmRequest, narrationBriefs).ToArray();
             fullText = string.Join("\n\n", narrationScenes.Select(scene => scene.NarrationText));
             narration = new NarrationV5("AstroPulse-Narration-v5", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, narrationScenes, fullText, ChannelEnding);
             llmGenerationExecuted = true;
             await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
+            }
         }
         catch (Exception ex)
         {
@@ -117,7 +125,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) },
                 new { path = NormalizePath(styleContractPath), exists = File.Exists(styleContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -144,6 +152,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             promptComposerReadyForGeneration = promptComposerOutput.Diagnostics.ReadyForGeneration,
             promptPreviewPath = NormalizePath(promptPreviewPath),
             promptDiagnosticsPath = NormalizePath(promptDiagnosticsPath),
+            promptQualityPath = NormalizePath(promptQualityPath),
+            promptQuality = promptComposerOutput.PromptQuality,
             language,
             warnings,
             errors
@@ -151,7 +161,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Generator V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
     }
 
     private static NarrationPlanV5Scene BuildPlanScene(JsonElement scene, int index, IReadOnlyList<NarrationFactV5> facts)
@@ -172,13 +182,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var facts = brief.FactsToMention.ToDictionary(f => f.Name, f => f.Value, StringComparer.OrdinalIgnoreCase);
         var detailPhrase = BuildNaturalDetailPhrase(brief.FactsToMention);
         var purpose = brief.ScenePurpose;
+        var sceneAim = RewriteForNarration(brief.SceneGoal);
+        var audienceMeaning = RewriteTakeawayForNarration(brief.AudienceTakeaway);
         var text = purpose.ToLowerInvariant() switch
         {
-            "hook" => $"{brief.SceneGoal} {detailPhrase} For a few quiet minutes, the sky turns motion into something you can feel.",
-            "science" => $"{brief.SceneGoal} From Earth, the geometry is simple but beautiful: distant worlds appear to draw close as their orbits change the spacing we see in the sky. {detailPhrase}",
-            "observation" => $"{brief.SceneGoal} {BuildObservationGuidance(facts)} {detailPhrase}",
-            "takeaway" or "closing" => $"{brief.SceneGoal} {RewriteTakeawayForNarration(brief.AudienceTakeaway)}",
-            _ => $"{brief.SceneGoal} {detailPhrase} Let the next moment carry that idea forward."
+            "hook" => $"{sceneAim} {detailPhrase} For a few quiet minutes, the sky turns motion into something you can feel.",
+            "science" => $"{sceneAim} From Earth, the geometry is simple but beautiful: distant worlds appear to draw close as their orbits change the spacing we see in the sky. {detailPhrase}",
+            "observation" => $"{sceneAim} {BuildObservationGuidance(facts)} {detailPhrase}",
+            "takeaway" or "closing" => $"{sceneAim} {audienceMeaning}",
+            _ => $"{sceneAim} {detailPhrase} Let the next moment carry that idea forward."
         };
 
         if (language.Equals("hi", StringComparison.OrdinalIgnoreCase)) text = text.Trim();
@@ -214,7 +226,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     }
 
 
-    private static string RewriteTakeawayForNarration(string value) => value.Replace("The viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase);
+    private static string RewriteTakeawayForNarration(string value) => RewriteForNarration(value).Replace("The viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase).Replace("Viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase);
+    private static string RewriteForNarration(string value) => value
+        .Replace("Narrate", "Notice", StringComparison.OrdinalIgnoreCase)
+        .Replace("scene goal", "the heart of this moment", StringComparison.OrdinalIgnoreCase)
+        .Replace("event identity", "what is happening in the sky", StringComparison.OrdinalIgnoreCase)
+        .Replace("Verified details", "confirmed sky details", StringComparison.OrdinalIgnoreCase)
+        .Replace("facts to mention", "sky details", StringComparison.OrdinalIgnoreCase)
+        .Replace("metadata", "context", StringComparison.OrdinalIgnoreCase)
+        .Trim();
     private static string EnsureSingleEnding(string text)
     {
         var without = text.Replace(ChannelEnding, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
@@ -253,7 +273,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
-public sealed record NarrationLlmRequestV1(string RequestVersion, string OrchestrationVersion, string Component, string Model, decimal Temperature, decimal TopP, int MaxTokens, string SystemPrompt, string UserPrompt, IReadOnlyList<string> SourceFiles, DateTime CreatedUtc, string Language, int SceneCount);
+public sealed record NarrationLlmRequestV1(string RequestVersion, string Component, string Model, decimal Temperature, decimal TopP, int MaxTokens, string SystemPrompt, string UserPrompt, int PromptQualityScore, IReadOnlyList<string> SourceContracts, DateTime CreatedUtc);
 
 public sealed record NarrationFactV5(string Name, string Value);
 public sealed record NarrationPlanV5(string NarrationPlanVersion, string OrchestrationVersion, string Language, string VoiceProfile, string StoryArc, IReadOnlyList<NarrationFactV5> RequiredNarrationFacts, IReadOnlyList<string> ProhibitedPhrases, IReadOnlyList<string> PreferredPhrases, string ChannelEnding, IReadOnlyList<NarrationPlanV5Scene> Scenes);
