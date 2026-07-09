@@ -14,7 +14,7 @@ internal static partial class EventStoryComposer
         "primary sky objects", "event experience", "sky geometry"
     ];
 
-    private static readonly string[] ForbiddenOpeningWords = ["For", "During", "As", "When", "Imagine", "Tonight", "Tomorrow"];
+    private static readonly string[] ForbiddenOpeningWords = ["For", "During", "When", "Imagine", "Tonight", "Tomorrow"];
 
     public static EventStoryComposerResult Compose(string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context, string? language = null)
     {
@@ -28,9 +28,7 @@ internal static partial class EventStoryComposer
         var importance = BuildImportance(family, eventName, contextFact);
         var isHindi = IsHindi(language);
 
-        var coldOpen = string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
-            ? BuildPlanetConjunctionColdOpen(eventName, eventDateText, intelligence, importance)
-            : $"On {eventDateText}, {eventName} {OpeningVerb(family)}. {importance}";
+        var coldOpen = BuildCuriosityOpening(family, eventName, eventDateText, direction, window, intelligence, importance);
 
         var sections = isHindi
             ? BuildHindiSections(family, eventName, eventDateText, direction, window, contextFact)
@@ -39,7 +37,7 @@ internal static partial class EventStoryComposer
             BuildHook(family, eventName),
             BuildContext(family, eventName, contextFact),
             BuildMainStory(family, eventName),
-            BuildViewingGuide(family, direction, window),
+            BuildViewingGuide(family, direction, window, intelligence),
             BuildClosing(family));
 
         sections = Compose(sections);
@@ -112,7 +110,21 @@ internal static partial class EventStoryComposer
     }
 
     private static string OpeningVerb(string family) => family switch { "Meteor" => "reaches its peak", "Moon" => "will rise above the evening horizon", "Eclipse" => "will be visible across parts of the world", _ => "will appear in the sky" };
-    private static string BuildPlanetConjunctionColdOpen(string eventName, string eventDateText, ProductionEventIntelligence? intelligence, string importance)
+    private static string BuildCuriosityOpening(string family, string eventName, string eventDateText, string direction, string window, ProductionEventIntelligence? intelligence, string importance)
+    {
+        var opening = family switch
+        {
+            "Meteor" => $"After darkness settles on {eventDateText}, the quiet overhead sky may begin flashing without warning.",
+            "Moon" => $"Near the horizon on {eventDateText}, a familiar light returns with a different kind of presence.",
+            "Eclipse" => $"On {eventDateText}, daylight can begin to feel strangely altered as the alignment unfolds.",
+            "PlanetConjunction" => BuildPlanetConjunctionColdOpen(eventName, eventDateText, intelligence),
+            _ => $"As twilight fades on {eventDateText}, a small arrangement of bright points begins drawing attention toward {direction}."
+        };
+
+        return $"{opening} {importance}";
+    }
+
+    private static string BuildPlanetConjunctionColdOpen(string eventName, string eventDateText, ProductionEventIntelligence? intelligence)
     {
         var objects = (intelligence?.PrimaryObjects ?? [])
             .Concat(intelligence?.SecondaryObjects ?? [])
@@ -128,15 +140,40 @@ internal static partial class EventStoryComposer
             _ => eventName
         };
 
-        return $"Welcome to Drashyam. On {eventDateText}, {objectText} will appear unusually close in the sky. {importance}";
+        return $"As twilight fades on {eventDateText}, {objectText} begin drawing attention because they seem to gather in the same part of the sky.";
     }
     private static string BuildImportance(string family, string eventName, string contextFact) => family switch { "Meteor" => "Under dark skies, observers may see repeated meteors crossing the night, each one a tiny fragment of cosmic history burning into light.", "Moon" => "As a full moon tied to winter traditions, it connects a familiar sight with centuries of skywatching memory.", "Eclipse" => "For a brief time, the Moon will move across the face of the Sun, creating one of the most dramatic daytime sky events in astronomy.", "PlanetConjunction" => "For a short time, perspective brings distant worlds into the same human field of view, revealing the solar system in motion without suggesting they are physically close.", _ => "For a short time, perspective will bring distant worlds into the same human field of view, revealing the solar system in motion." };
     private static string BuildHook(string family, string eventName) => family switch { "Meteor" => "The story begins quietly, then suddenly: a streak, a pause, and another flash where empty darkness seemed to be.", "Moon" => "Its light is familiar, but the first full moon of the year still changes the landscape, softening edges and pulling attention back to the horizon.", "Eclipse" => "Eclipses turn celestial mechanics into something physical, letting daylight itself become part of the drama.", _ => "To the eye, the planets may seem almost close enough to belong together, even though space keeps them separated by enormous distances." };
     private static string BuildContext(string family, string eventName, string fact) => family switch { "Meteor" => $"Meteor showers are old trails crossing a new night. {fact}", "Moon" => $"Moon names are cultural memory written onto a predictable orbit. {fact}", "Eclipse" => $"An eclipse is a shadow story, possible only when the Sun, Moon, and Earth line up with rare precision. {fact}", "PlanetConjunction" => $"A planetary conjunction is a story of perspective, not proximity. {fact}", _ => $"Planetary conjunctions are stories of perspective, not proximity. {fact}" };
     private static string BuildMainStory(string family, string eventName) => family switch { "Meteor" => "Each meteor is small enough to fit in your hand, but fast enough to announce itself across the atmosphere in a line of fire.", "Moon" => "As the Moon climbs, its color and brightness change with the air near the horizon, making a familiar world feel newly discovered.", "Eclipse" => "The change arrives in stages: a bite from the Sun, a dimming of the ground, and then the unmistakable sense that the sky is moving on a grand scale.", "PlanetConjunction" => "One planet may blaze brighter while the other looks steadier, but their apparent closeness is a line-of-sight effect across deep space.", _ => "One object may blaze brighter, the other may seem steadier, but together they make orbital motion visible without a telescope." };
-    private static string BuildViewingGuide(string family, string direction, string window) => family == "Eclipse"
+    private static string BuildViewingGuide(string family, string direction, string window, ProductionEventIntelligence? intelligence)
+    {
+        var observationDetails = BuildObservationDetails(family, intelligence);
+        var guide = family == "Eclipse"
         ? $"The event reaches its strongest visibility during {window}; look toward the Sun only with certified solar eclipse glasses."
         : $"The best view comes from a clear, open location facing {direction}. The event reaches its strongest visibility during {window}, so arrive early enough for your eyes to settle into the scene.";
+        return string.IsNullOrWhiteSpace(observationDetails) ? guide : $"{guide} {observationDetails}";
+    }
+
+    private static string BuildObservationDetails(string family, ProductionEventIntelligence? intelligence)
+    {
+        var parts = new List<string>();
+        var visibility = Clean(FirstNonEmpty(intelligence?.ObservationInfo?.VisibilityStatus, intelligence?.ViewingQuality));
+        if (!string.IsNullOrWhiteSpace(visibility) && !ContainsRawTimestamp(visibility))
+            parts.Add(visibility);
+
+        var equipment = Clean(intelligence?.ObservationInfo?.SafetyNotes.FirstOrDefault(note => note.Contains("binocular", StringComparison.OrdinalIgnoreCase) || note.Contains("telescope", StringComparison.OrdinalIgnoreCase) || note.Contains("naked", StringComparison.OrdinalIgnoreCase)));
+        if (!string.IsNullOrWhiteSpace(equipment))
+            parts.Add(equipment.Contains("naked", StringComparison.OrdinalIgnoreCase) ? "You will not need a telescope." : equipment);
+        else if (family != "Eclipse")
+            parts.Add("Start with your eyes; binoculars are optional, not required.");
+
+        var skyConditions = Clean(FirstNonEmpty(intelligence?.ObservationInfo?.Confidence, intelligence?.MoonInterference));
+        if (!string.IsNullOrWhiteSpace(skyConditions) && !ContainsRawTimestamp(skyConditions))
+            parts.Add(skyConditions);
+
+        return string.Join(" ", parts.Distinct(StringComparer.OrdinalIgnoreCase).Select(EnsureTerminalPunctuation));
+    }
     private static string BuildClosing(string family) => family switch { "Eclipse" => "Moments like this remind us how dynamic our sky really is. The shadow passes quickly. But the memory can stay with you for years.", _ => "Moments like this reward patience and attention. The sky moves on. But the memory of seeing it can stay with you for years." };
 
     private static IReadOnlyList<string> BuildSourceEventFacts(ProductionEventIntelligence? intelligence, string contextFact, string eventDateText, string direction, string window)
