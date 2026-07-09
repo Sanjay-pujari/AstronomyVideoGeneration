@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
-public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
+public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer promptComposer)
 {
     private const string PhaseName = "Narration Generator V5";
     private const string ChannelEnding = "Until next time, keep looking up.";
@@ -23,6 +23,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
         var briefsPath = Path.Combine(narrationRoot, "narration-briefs.json");
         var narrationPath = Path.Combine(narrationRoot, "narration.json");
         var diagnosticsPath = Path.Combine(narrationRoot, "narration-diagnostics.json");
+        var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
+        var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
 
         var contract = ReadFirstJson(editorialPath);
         var storyboard = ReadFirstJson(storyboardPath);
@@ -54,7 +56,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
         var narrationNaturalnessWarnings = BuildNaturalnessWarnings(fullText, narrationScenes);
 
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(new NarrationBriefsV5("AstroPulse-NarrationBriefs-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, briefs), JsonOptions), cancellationToken);
+        var narrationBriefs = new NarrationBriefsV5("AstroPulse-NarrationBriefs-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, briefs);
+        await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(narrationBriefs, JsonOptions), cancellationToken);
+        var promptComposerOutput = await promptComposer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath], promptPreviewPath, promptDiagnosticsPath), cancellationToken);
         await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         var errors = prohibitedViolations.Concat(missingFactViolations).ToArray();
         var diagnostics = new
@@ -65,9 +69,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
             {
                 new { path = NormalizePath(editorialPath), exists = File.Exists(editorialPath) },
                 new { path = NormalizePath(storyboardPath), exists = File.Exists(storyboardPath) },
-                new { path = NormalizePath(planPath), exists = File.Exists(planPath) }
+                new { path = NormalizePath(planPath), exists = File.Exists(planPath) },
+                new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, narrationPath, diagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
             narrativeDirectorExecuted = true,
@@ -77,13 +82,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
             prohibitedPhraseViolations = prohibitedViolations,
             missingFactUsageViolations = missingFactViolations,
             narrationNaturalnessWarnings,
+            promptComposerExecuted = true,
+            promptComposerReadyForGeneration = promptComposerOutput.Diagnostics.ReadyForGeneration,
+            promptPreviewPath = NormalizePath(promptPreviewPath),
+            promptDiagnosticsPath = NormalizePath(promptDiagnosticsPath),
             language,
             warnings,
             errors
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
         logger.LogInformation("Narration Generator V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, narrationPath, diagnosticsPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath]);
     }
 
     private static NarrationPlanV5Scene BuildPlanScene(JsonElement scene, int index, IReadOnlyList<NarrationFactV5> facts)

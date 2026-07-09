@@ -533,6 +533,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Rc2PipelinePhaseRegistry>();
         services.AddScoped<SceneIntentBuilder>();
         services.AddScoped<CreativeStoryboardBuilder>();
+        services.AddScoped<NarrationPromptComposer>();
+        services.AddScoped<IPromptComposer<NarrationPromptComposerInput, NarrationPromptComposerOutput>>(sp => sp.GetRequiredService<NarrationPromptComposer>());
         services.AddScoped<NarrationGeneratorV5>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
