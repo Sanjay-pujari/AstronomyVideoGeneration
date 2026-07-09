@@ -237,7 +237,15 @@ public sealed class Rc2NarrationV5OrchestrationTests
             Path.Combine(root, "narration-v5", "producer-notes", "producer-notes-diagnostics.json"),
             Path.Combine(root, "narration-v5", "prompt-preview.md"),
             Path.Combine(root, "narration-v5", "prompt-diagnostics.json"),
+            Path.Combine(root, "narration-v5", "raw-narrative", "long", "raw-narrative.json"),
+            Path.Combine(root, "narration-v5", "raw-narrative", "short", "raw-narrative.json"),
+            Path.Combine(root, "narration-v5", "raw-narrative", "raw-narrative-diagnostics.json"),
+            Path.Combine(root, "narration-v5", "documentary-script", "long", "documentary-script.json"),
+            Path.Combine(root, "narration-v5", "documentary-script", "short", "documentary-script.json"),
+            Path.Combine(root, "narration-v5", "documentary-script", "documentary-script-diagnostics.json"),
             Path.Combine(root, "narration-v5", "llm-request.json"),
+            Path.Combine(root, "narration-v5", "long", "narration.json"),
+            Path.Combine(root, "narration-v5", "short", "narration.json"),
             Path.Combine(root, "narration-v5", "narration.json"),
             Path.Combine(root, "narration-v5", "narration-diagnostics.json")
         };
@@ -262,6 +270,11 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.True(diagnostics.RootElement.GetProperty("narrativeDirectorExecuted").GetBoolean());
         Assert.True(diagnostics.RootElement.GetProperty("producerNotesGenerated").GetBoolean());
         Assert.False(diagnostics.RootElement.GetProperty("producerNotesLeakageDetected").GetBoolean());
+        Assert.True(diagnostics.RootElement.GetProperty("rawNarrativeGenerated").GetBoolean());
+        Assert.True(diagnostics.RootElement.GetProperty("documentaryScriptGenerated").GetBoolean());
+        Assert.Equal("raw-narrative", diagnostics.RootElement.GetProperty("llmInputSource").GetString());
+        Assert.True(diagnostics.RootElement.GetProperty("producerNotesExcludedFromLlm").GetBoolean());
+        Assert.True(diagnostics.RootElement.GetProperty("narrativeBriefExcludedFromLlm").GetBoolean());
         Assert.True(diagnostics.RootElement.TryGetProperty("longShortDistinctivenessScore", out _));
         Assert.Equal(2, diagnostics.RootElement.GetProperty("narrationBriefCount").GetInt32());
         Assert.True(diagnostics.RootElement.TryGetProperty("factsDistributedByScene", out _));
@@ -286,8 +299,9 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.DoesNotContain("Available facts", promptPreview);
 
         using var llmRequest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "llm-request.json")));
-        Assert.Equal("AstroPulse-NarrationLlmRequest-v1", llmRequest.RootElement.GetProperty("requestVersion").GetString());
-        Assert.Equal("NarrationStudio", llmRequest.RootElement.GetProperty("component").GetString());
+        Assert.Equal("AstroPulse-NarrationLlmRequest-v3", llmRequest.RootElement.GetProperty("requestVersion").GetString());
+        Assert.Equal("LLMDocumentaryTranscriptionist", llmRequest.RootElement.GetProperty("component").GetString());
+        Assert.DoesNotContain("producer-notes", llmRequest.RootElement.GetProperty("userPrompt").GetString()!, StringComparison.OrdinalIgnoreCase);
 
         using var producerNotes = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "producer-notes", "producer-notes-contract.json")));
         Assert.True(producerNotes.RootElement.GetProperty("contractVersion").GetString()!.Contains("ProducerNotes", StringComparison.OrdinalIgnoreCase));
