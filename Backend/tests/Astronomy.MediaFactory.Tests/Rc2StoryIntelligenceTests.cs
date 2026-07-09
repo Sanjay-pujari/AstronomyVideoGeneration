@@ -211,6 +211,9 @@ public sealed class Rc2NarrationV5OrchestrationTests
         {
             Path.Combine(root, "narration-v5", "narration-plan.json"),
             Path.Combine(root, "narration-v5", "narration-briefs.json"),
+            Path.Combine(root, "narration-v5", "prompt-preview.md"),
+            Path.Combine(root, "narration-v5", "prompt-diagnostics.json"),
+            Path.Combine(root, "narration-v5", "llm-request.json"),
             Path.Combine(root, "narration-v5", "narration.json"),
             Path.Combine(root, "narration-v5", "narration-diagnostics.json")
         };
@@ -227,6 +230,7 @@ public sealed class Rc2NarrationV5OrchestrationTests
         using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "narration-diagnostics.json")));
         Assert.Equal("Narration Generator V5", diagnostics.RootElement.GetProperty("phaseName").GetString());
         Assert.Equal("RC2", diagnostics.RootElement.GetProperty("orchestrationVersion").GetString());
+        Assert.Equal("AstroPulse-NarrationValidator-v2", diagnostics.RootElement.GetProperty("validationVersion").GetString());
         Assert.Equal(2, diagnostics.RootElement.GetProperty("sceneCount").GetInt32());
         Assert.All(diagnostics.RootElement.GetProperty("inputs").EnumerateArray(), input => Assert.True(input.GetProperty("exists").GetBoolean()));
         Assert.All(diagnostics.RootElement.GetProperty("outputsCreated").EnumerateArray(), output => Assert.True(output.GetProperty("exists").GetBoolean()));
@@ -236,8 +240,27 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.True(diagnostics.RootElement.TryGetProperty("factsDistributedByScene", out _));
         Assert.True(diagnostics.RootElement.TryGetProperty("repeatedFactWarnings", out _));
         Assert.True(diagnostics.RootElement.TryGetProperty("narrationNaturalnessWarnings", out _));
+        Assert.True(diagnostics.RootElement.GetProperty("promptComposerExecuted").GetBoolean());
+        Assert.True(diagnostics.RootElement.GetProperty("llmRequestCreated").GetBoolean());
+        Assert.True(diagnostics.RootElement.GetProperty("llmGenerationExecuted").GetBoolean());
+        Assert.True(diagnostics.RootElement.TryGetProperty("scientificAccuracyScore", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("editorialQualityScore", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("naturalnessScore", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("observationGuidanceScore", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("flowScore", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("overallDocumentaryScore", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("engineeringLeakageViolations", out _));
         Assert.True(diagnostics.RootElement.TryGetProperty("warnings", out _));
         Assert.True(diagnostics.RootElement.TryGetProperty("errors", out _));
+
+        var promptPreview = await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "prompt-preview.md"));
+        Assert.Contains("## 1. Your Role", promptPreview);
+        Assert.Contains("## 8. Output Contract", promptPreview);
+        Assert.DoesNotContain("Available facts", promptPreview);
+
+        using var llmRequest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "llm-request.json")));
+        Assert.Equal("AstroPulse-NarrationLlmRequest-v1", llmRequest.RootElement.GetProperty("requestVersion").GetString());
+        Assert.Equal("NarrationStudio", llmRequest.RootElement.GetProperty("component").GetString());
 
         using var briefs = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "narration-briefs.json")));
         Assert.Equal(2, briefs.RootElement.GetProperty("briefs").GetArrayLength());

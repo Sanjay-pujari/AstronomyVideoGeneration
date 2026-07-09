@@ -8,16 +8,14 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     public const string ComposerName = "NarrationPromptComposer";
     public static readonly string[] PromptSections =
     [
-        "System Role",
-        "Astro Pulse Identity",
-        "Voice Profile",
-        "Editorial Rules",
-        "Creative Context",
-        "Story Arc",
-        "Scene Briefs",
-        "Fact Usage Rules",
-        "Prohibited Phrases",
-        "Output Format"
+        "Your Role",
+        "Astro Pulse Editorial Identity",
+        "Documentary Voice",
+        "Story Overview",
+        "Scene Editorial Briefs",
+        "Scientific Guardrails",
+        "Writing Principles",
+        "Output Contract"
     ];
 
     public static readonly string[] ProhibitedInternalPhrases =
@@ -27,7 +25,10 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         "the viewer should",
         "scene goal",
         "facts to mention",
-        "metadata"
+        "metadata",
+        "available facts",
+        "prompt",
+        "JSON"
     ];
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -74,26 +75,59 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     private static string BuildPrompt(string language, string storyArc, IReadOnlyList<NarrationFactV5> facts, IReadOnlyList<string> prohibited, IReadOnlyList<string> preferred, IReadOnlyList<NarrationBriefV5> scenes)
     {
         var sb = new StringBuilder();
-        AddSection(sb, 1, "System Role", "You are a senior documentary narration writer for an astronomy video. Write natural documentary narration only. Do not expose planning notes, source labels, or production metadata.");
-        AddSection(sb, 2, "Astro Pulse Identity", "The channel voice is Astro Pulse: calm, precise, cinematic, practical, and grounded in verified astronomy. The narration should feel warm and human, not like a checklist.");
-        AddSection(sb, 3, "Voice Profile", $"Language: {language}. Tone: calm documentary. Use clear spoken sentences that are compatible with scene-based TTS and SRT segmentation.");
-        AddSection(sb, 4, "Editorial Rules", BuildEditorialRules(preferred));
-        AddSection(sb, 5, "Creative Context", BuildCreativeContext(storyArc));
-        AddSection(sb, 6, "Story Arc", storyArc);
-        AddSection(sb, 7, "Scene Briefs", BuildSceneBriefs(scenes));
-        AddSection(sb, 8, "Fact Usage Rules", BuildFactRules(facts));
-        AddSection(sb, 9, "Prohibited Phrases", string.Join("\n", prohibited.Select(p => $"- Do not use: {p}")));
-        AddSection(sb, 10, "Output Format", "Return scene-based output only, preserving each sceneId and scenePurpose. Each scene must contain narrationText suitable for direct TTS/SRT use. Do not add markdown, bullet lists, diagnostics, metadata, or commentary inside the generated narration. The observation scene must include practical viewing guidance. The final scene must include the channel ending exactly once: \"Until next time, keep looking up.\"");
+        AddSection(sb, 1, "Your Role", "You are a senior documentary narration writer for an astronomy video. Write natural spoken narration that feels calm, precise, cinematic, and human.");
+        AddSection(sb, 2, "Astro Pulse Editorial Identity", "Astro Pulse helps curious viewers understand what is happening in the night sky and how to watch it with realistic expectations. The voice is warm, practical, scientifically careful, and never sensational.");
+        AddSection(sb, 3, "Documentary Voice", $"Language: {language}. Use clear scene-based spoken sentences for narration, timed delivery, captions, and voiceover. Keep the rhythm smooth enough for a short documentary.");
+        AddSection(sb, 4, "Story Overview", $"Shape the piece around this arc: {storyArc}. Let each scene feel like the next natural step in one continuous sky story.");
+        AddSection(sb, 5, "Scene Editorial Briefs", BuildSceneBriefs(scenes));
+        AddSection(sb, 6, "Scientific Guardrails", BuildGuardrails(facts, prohibited));
+        AddSection(sb, 7, "Writing Principles", BuildWritingPrinciples(preferred));
+        AddSection(sb, 8, "Output Contract", "Return one narration entry for every scene, preserving sceneId and scenePurpose. Each narrationText must be ready for direct voiceover and captions. Include practical observation guidance in the Observation scene. Include exactly this channel ending once, only in the final scene: \"Until next time, keep looking up.\"");
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
 
     private static void AddSection(StringBuilder sb, int number, string title, string body) => sb.AppendLine($"## {number}. {title}").AppendLine(body.Trim()).AppendLine();
 
-    private static string BuildEditorialRules(IReadOnlyList<string> preferred) => "Write natural documentary narration. Do not list facts mechanically. Use facts naturally in sentences. Do not invent missing facts. Do not say or imply unavailable altitude, constellation, brightness, weather, equipment, or optical-aid details. Avoid internal phrases such as Verified details, event identity, the viewer should, scene goal, facts to mention, and metadata." + (preferred.Count == 0 ? string.Empty : $"\nPreferred wording cues: {string.Join(", ", preferred)}.");
-    private static string BuildCreativeContext(string storyArc) => $"Shape the narration around the creative storyboard and its arc: {storyArc}. Keep transitions cinematic but concise.";
-    private static string BuildFactRules(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "No required facts were supplied. Use only facts present in the scene briefs and do not invent missing details." : "Use these verified facts only when they fit naturally; do not dump them as a list:\n" + string.Join("\n", facts.Select(f => $"- {f.Name}: {f.Value}"));
-    private static string BuildSceneBriefs(IReadOnlyList<NarrationBriefV5> scenes) => scenes.Count == 0 ? "No scene briefs were supplied." : string.Join("\n\n", scenes.Select(s => $"Scene {s.SceneOrder}: {s.SceneId} ({s.ScenePurpose})\n- Intent: {s.GenerationInstructions}\n- Takeaway cue: {s.AudienceTakeaway}\n- Connector: {s.ConnectorToNext}\n- Tone/Pacing: {s.Tone}; {s.Pacing}\n- Target length: {s.TargetLength}\n- Available facts: {FormatFacts(s.FactsToMention)}\n- Avoid: {string.Join("; ", s.FactsToAvoid)}"));
-    private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "none" : string.Join("; ", facts.Select(f => $"{f.Name}={f.Value}"));
+    private static string BuildGuardrails(IReadOnlyList<NarrationFactV5> facts, IReadOnlyList<string> prohibited)
+    {
+        var details = facts.Count == 0 ? "No confirmed sky details were supplied. Stay general and do not invent specifics." : "Natural details to weave in when they serve the scene:\n" + string.Join("\n", facts.Select(f => $"- {NormalizeFact(f)}"));
+        var blocked = prohibited.Count == 0 ? "Do not state or imply unavailable altitude, constellation, brightness, weather, equipment, or optical-aid details." : "Do not state or imply:\n" + string.Join("\n", prohibited.Select(p => $"- {HumanizeProhibited(p)}"));
+        return details + "\n\n" + blocked;
+    }
+
+    private static string BuildWritingPrinciples(IReadOnlyList<string> preferred) => "Write in natural documentary prose, not labels or checklists. Weave details into sentences only when they help the moment. Use gentle transitions, concrete sky language, and realistic observing advice." + (preferred.Count == 0 ? string.Empty : $"\nWriting rhythm: {string.Join(", ", preferred)}.");
+    private static string BuildSceneBriefs(IReadOnlyList<NarrationBriefV5> scenes) => scenes.Count == 0 ? "No scene briefs were supplied." : string.Join("\n\n", scenes.Select(s => $"Scene {s.SceneOrder}: {s.SceneId} ({s.ScenePurpose})\n- Scene purpose: {s.SceneGoal}\n- Audience promise: {RewriteAudiencePromise(s.AudienceTakeaway)}\n- Natural details to weave in: {FormatFacts(s.FactsToMention)}\n- Do not state or imply: {FormatAvoidance(s.FactsToAvoid)}\n- Lead naturally into: {s.ConnectorToNext}\n- Writing rhythm: {s.Tone}; {s.Pacing}; {s.TargetLength}. {RewriteInstructions(s.GenerationInstructions)}"));
+    private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "none supplied" : string.Join("; ", facts.Select(NormalizeFact));
+
+    public static string NormalizeFact(NarrationFactV5 fact)
+    {
+        var label = NormalizeFactName(fact.Name);
+        var value = fact.Value.Trim();
+        if (fact.Name.Contains("RelativePositions", StringComparison.OrdinalIgnoreCase) && decimal.TryParse(value, out var degrees)) value = $"about {degrees:0.##} degrees";
+        return $"{label}: {value}";
+    }
+
+    public static string NormalizeFactName(string name) => name.ToLowerInvariant() switch
+    {
+        "eventdate" or "eventdatelocal" => "Peak date/time",
+        "bestviewingtime" or "bestviewingwindowlocal" => "Best viewing window",
+        "viewingwindow" => "Viewing window",
+        "direction" or "skydirectionhint" => "Where to look",
+        "visibility" or "visibilityregion" => "Viewing region",
+        "relativepositions" => "Angular separation",
+        "eventtimelocal" => "Peak time",
+        _ when name.Contains("separation", StringComparison.OrdinalIgnoreCase) => "Angular separation",
+        _ when name.Contains("direction", StringComparison.OrdinalIgnoreCase) => "Where to look",
+        _ when name.Contains("window", StringComparison.OrdinalIgnoreCase) => "Best viewing window",
+        _ when name.Contains("region", StringComparison.OrdinalIgnoreCase) => "Viewing region",
+        _ => HumanizeName(name)
+    };
+
+    private static string HumanizeName(string value) => string.Concat(value.Select((c, i) => i > 0 && char.IsUpper(c) ? " " + char.ToLowerInvariant(c) : i == 0 ? char.ToUpperInvariant(c).ToString() : c.ToString())).Replace("Utc", "UTC", StringComparison.OrdinalIgnoreCase);
+    private static string FormatAvoidance(IReadOnlyList<string> avoid) => avoid.Count == 0 ? "no unsupported details" : string.Join("; ", avoid.Select(HumanizeProhibited));
+    private static string HumanizeProhibited(string value) => value.Replace("Verified details", "source-label language", StringComparison.OrdinalIgnoreCase).Replace("event identity", "internal identity wording", StringComparison.OrdinalIgnoreCase).Replace("the viewer should", "instructional audience wording", StringComparison.OrdinalIgnoreCase).Replace("scene goal", "planning labels", StringComparison.OrdinalIgnoreCase).Replace("facts to mention", "planning labels", StringComparison.OrdinalIgnoreCase).Replace("metadata", "production notes", StringComparison.OrdinalIgnoreCase).Replace("available facts", "planning labels", StringComparison.OrdinalIgnoreCase).Replace("prompt", "production notes", StringComparison.OrdinalIgnoreCase).Replace("JSON", "data-format language", StringComparison.OrdinalIgnoreCase);
+    private static string RewriteAudiencePromise(string value) => value.Replace("The viewer should", "Leave the audience able to", StringComparison.OrdinalIgnoreCase);
+    private static string RewriteInstructions(string value) => value.Replace("event identity", "what the sky event is", StringComparison.OrdinalIgnoreCase).Replace("Verified details", "source labels", StringComparison.OrdinalIgnoreCase);
     private static IReadOnlyList<NarrationFactV5> ReadFacts(JsonElement? element, string name) => ReadArray(element, name).Select(e => new NarrationFactV5(GetString(e, "name") ?? "Fact", GetString(e, "value") ?? string.Empty)).Where(f => !string.IsNullOrWhiteSpace(f.Value)).ToArray();
     private static IReadOnlyList<JsonElement> ReadArray(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return []; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Array) return p.Value.EnumerateArray().Select(i => i.Clone()).ToArray(); return []; }
     private static IReadOnlyList<string> FindStringArray(JsonElement? element, string name) => ReadArray(element, name).Select(ValueToString).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToArray();
