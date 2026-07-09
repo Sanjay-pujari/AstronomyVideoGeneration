@@ -41,9 +41,15 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         Directory.CreateDirectory(diagnosticsRoot);
         var observationMetadataPath = Path.Combine(diagnosticsRoot, "observation-metadata.json");
         var sceneIntentsPath = Path.Combine(diagnosticsRoot, "scene-intents.json");
+        var editorialContractPath = Path.Combine(diagnosticsRoot, "editorial-contract.json");
         var diagnosticsPath = Path.Combine(diagnosticsRoot, "editorial-diagnostics.json");
-        var inputFiles = new[] { productionIntelligencePath, questionAnswerSetPath, scenePlanPath };
-        var allWarnings = observationMetadata.MissingFactWarnings.Concat(intents.SelectMany(intent => intent.MissingFactWarnings)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var inputFiles = new[] { productionIntelligencePath, questionAnswerSetPath, scenePlanPath, observationMetadataPath, sceneIntentsPath };
+        var contract = BuildEditorialContract(request, response, observationMetadata, intents);
+        var allWarnings = observationMetadata.MissingFactWarnings.Concat(intents.SelectMany(intent => intent.MissingFactWarnings)).Concat(contract.MissingFactWarnings).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await File.WriteAllTextAsync(observationMetadataPath, JsonSerializer.Serialize(observationMetadata, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(sceneIntentsPath, JsonSerializer.Serialize(intents, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(editorialContractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken);
+
         var diagnostics = new
         {
             phaseNo = 6,
@@ -53,10 +59,11 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             {
                 "6.1 Observation Metadata Builder",
                 "6.2 Scene Intent Builder",
+                "6.3 Editorial Contract Builder",
                 "6.4 Editorial Diagnostics"
             },
             inputs = inputFiles.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
-            outputs = new[] { NormalizePath(observationMetadataPath), NormalizePath(sceneIntentsPath), NormalizePath(diagnosticsPath) },
+            outputs = new[] { NormalizePath(observationMetadataPath), NormalizePath(sceneIntentsPath), NormalizePath(editorialContractPath), NormalizePath(diagnosticsPath) },
             sceneIntentCount = intents.Length,
             missingFactWarningCount = allWarnings.Length,
             missingFactWarnings = allWarnings,
@@ -64,12 +71,10 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             scenePlanLoaded = scenePlan.HasValue,
             productionEventIntelligenceLoaded = intelligence.HasValue
         };
-        await File.WriteAllTextAsync(observationMetadataPath, JsonSerializer.Serialize(observationMetadata, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(sceneIntentsPath, JsonSerializer.Serialize(intents, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
 
         logger.LogInformation("Editorial Intelligence Foundation wrote observation metadata, {SceneIntentCount} scene intents, and diagnostics to {DiagnosticsPath}.", intents.Length, diagnosticsPath);
-        return new SceneIntentBuilderResult(intents, [observationMetadataPath, sceneIntentsPath, diagnosticsPath]);
+        return new SceneIntentBuilderResult(intents, [observationMetadataPath, sceneIntentsPath, editorialContractPath, diagnosticsPath]);
     }
 
     private static ObservationMetadata BuildObservationMetadata(JsonElement? planInput, JsonElement? intelligence)
@@ -140,6 +145,88 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             FirstNonEmpty(GetString(scene, "visualIntent"), GetString(scene, "visualPrompt"), $"Show a scientifically respectful {purpose.ToLowerInvariant()} visual for {eventName}.")!,
             ["Do not invent missing facts.", "Use observation-metadata.json as the factual source for observation details.", "Surface missing metadata as warnings."],
             FirstNonEmpty(GetString(scene, "editorialTone"), "Clear, accurate, practical, and wonder-driven")!, warnings);
+    }
+
+
+    private static EditorialContract BuildEditorialContract(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, ObservationMetadata metadata, IReadOnlyList<SceneIntent> intents)
+    {
+        var firstIntent = intents.FirstOrDefault();
+        var eventType = FirstNonEmpty(firstIntent?.EventType, response.SelectedPlans.FirstOrDefault()?.ContentCategoryCode, "Unknown")!;
+        var eventName = FirstNonEmpty(firstIntent?.EventName, response.Title, response.SelectedPlans.FirstOrDefault()?.Title, "Unknown")!;
+        var warnings = new List<string>();
+
+        EditorialContractFact FactValue(string name, object? value)
+        {
+            var missing = value switch
+            {
+                null => true,
+                string text => string.IsNullOrWhiteSpace(text),
+                IReadOnlyCollection<string> collection => collection.Count == 0,
+                _ => false
+            };
+            if (missing) warnings.Add($"Missing metadata for {name}.");
+            return new EditorialContractFact(missing ? null : value, missing, missing ? null : "editorial/observation-metadata.json");
+        }
+
+        var eventFacts = new EditorialContractEventFacts(
+            FactValue("startUtc", metadata.Timing.StartUtc),
+            FactValue("peakUtc", metadata.Timing.PeakUtc),
+            FactValue("endUtc", metadata.Timing.EndUtc),
+            FactValue("startLocal", metadata.Timing.StartLocal),
+            FactValue("peakLocal", metadata.Timing.PeakLocal),
+            FactValue("endLocal", metadata.Timing.EndLocal),
+            FactValue("primaryObjects", metadata.ObjectFacts.PrimaryObjects),
+            FactValue("secondaryObjects", metadata.ObjectFacts.SecondaryObjects),
+            FactValue("angularSeparationDegrees", metadata.ObjectFacts.AngularSeparationDegrees));
+
+        var observationFacts = new EditorialContractObservationFacts(
+            FactValue("bestViewingWindowLocal", metadata.Fields.BestViewingWindowLocal),
+            FactValue("skyDirectionHint", metadata.Fields.SkyDirectionHint),
+            FactValue("visibilityRegion", metadata.Fields.VisibilityRegion),
+            FactValue("moonInterference", metadata.Fields.MoonInterference),
+            FactValue("moonIlluminationPercent", metadata.Fields.MoonIlluminationPercent),
+            FactValue("altitude", null),
+            FactValue("azimuth", null),
+            FactValue("constellation", null),
+            FactValue("brightness", null),
+            FactValue("elongation", null),
+            FactValue("moonPhase", null),
+            FactValue("nakedEyeVisibility", null),
+            FactValue("binocularVisibility", null),
+            FactValue("telescopeVisibility", null),
+            FactValue("weatherConfidence", null),
+            FactValue("lightPollution", null));
+
+        var confidenceCues = new List<string>();
+        if (!string.IsNullOrWhiteSpace(metadata.Fields.BestViewingWindowLocal)) confidenceCues.Add("Use the supported local viewing window when giving observation guidance.");
+        if (!string.IsNullOrWhiteSpace(metadata.Fields.SkyDirectionHint)) confidenceCues.Add("Use the supported sky direction hint for where to look.");
+        if (!string.IsNullOrWhiteSpace(metadata.Fields.MoonInterference)) confidenceCues.Add("Mention moon interference only in the qualified form supplied by metadata.");
+
+        var requiredNarrationFacts = intents.SelectMany(intent => new[] { intent.RequiredFacts.EventDate, intent.RequiredFacts.BestViewingTime, intent.RequiredFacts.ViewingWindow, intent.RequiredFacts.Direction, intent.RequiredFacts.MoonInterference, intent.RequiredFacts.Visibility, intent.RequiredFacts.RelativePositions }).Where(f => !f.IsMissing).GroupBy(f => f.Name).Select(g => g.First()).ToArray();
+        var requiredVisualFacts = intents.SelectMany(intent => intent.ObservationFacts.Select(f => new EditorialContractFact(f.Value, false, "editorial/scene-intents.json"))).ToArray();
+
+        warnings.AddRange(metadata.MissingFactWarnings);
+        warnings.AddRange(intents.SelectMany(intent => intent.MissingFactWarnings));
+
+        return new EditorialContract(
+            "AstroPulse-EditorialContract-v1",
+            Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            "AstroPulse-StyleGuide-v1",
+            "CalmDocumentary",
+            eventType,
+            eventName,
+            request.Language,
+            request.RegionId,
+            eventFacts,
+            observationFacts,
+            intents,
+            requiredNarrationFacts,
+            requiredVisualFacts,
+            confidenceCues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            ["appears", "look toward", "visible near", "reaches its highest point", "brighter object", "steady glow", "clear skies"],
+            ["insane", "crazy", "unbelievable", "magical", "mind-blowing", "once in a lifetime", "shocking", "you won’t believe"],
+            new EditorialChannelIdentity("AstroPulse", "Until next time, keep looking up."),
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     private static string? ToLocal(string? utcValue, string? timeZoneId)
@@ -239,6 +326,59 @@ public sealed record ObservationObjectFacts(IReadOnlyList<string> PrimaryObjects
 public sealed record ObservationFields(string? BestViewingWindowLocal, string? SkyDirectionHint, string? MoonInterference, string? MoonIlluminationPercent, string? VisibilityRegion);
 public sealed record ObservationDerivedFacts(EventWindowUtc? EventWindowUtc, string? PeakLocal, string? AngularSeparation, IReadOnlyList<string> ObjectPair);
 public sealed record EventWindowUtc(string? StartUtc, string? EndUtc);
+
+public sealed record EditorialContract(
+    string ContractVersion,
+    string OrchestrationVersion,
+    string StyleGuideVersion,
+    string VoiceProfile,
+    string EventType,
+    string EventName,
+    string Language,
+    string RegionId,
+    EditorialContractEventFacts EventFacts,
+    EditorialContractObservationFacts ObservationFacts,
+    IReadOnlyList<SceneIntent> SceneIntents,
+    IReadOnlyList<SceneIntentFact> RequiredNarrationFacts,
+    IReadOnlyList<EditorialContractFact> RequiredVisualFacts,
+    IReadOnlyList<string> ConfidenceCues,
+    IReadOnlyList<string> PreferredPhrases,
+    IReadOnlyList<string> ProhibitedPhrases,
+    EditorialChannelIdentity ChannelIdentity,
+    IReadOnlyList<string> MissingFactWarnings);
+
+public sealed record EditorialContractFact(object? Value, bool IsMissing, string? Source);
+
+public sealed record EditorialContractEventFacts(
+    EditorialContractFact StartUtc,
+    EditorialContractFact PeakUtc,
+    EditorialContractFact EndUtc,
+    EditorialContractFact StartLocal,
+    EditorialContractFact PeakLocal,
+    EditorialContractFact EndLocal,
+    EditorialContractFact PrimaryObjects,
+    EditorialContractFact SecondaryObjects,
+    EditorialContractFact AngularSeparationDegrees);
+
+public sealed record EditorialContractObservationFacts(
+    EditorialContractFact BestViewingWindowLocal,
+    EditorialContractFact SkyDirectionHint,
+    EditorialContractFact VisibilityRegion,
+    EditorialContractFact MoonInterference,
+    EditorialContractFact MoonIlluminationPercent,
+    EditorialContractFact Altitude,
+    EditorialContractFact Azimuth,
+    EditorialContractFact Constellation,
+    EditorialContractFact Brightness,
+    EditorialContractFact Elongation,
+    EditorialContractFact MoonPhase,
+    EditorialContractFact NakedEyeVisibility,
+    EditorialContractFact BinocularVisibility,
+    EditorialContractFact TelescopeVisibility,
+    EditorialContractFact WeatherConfidence,
+    EditorialContractFact LightPollution);
+
+public sealed record EditorialChannelIdentity(string ChannelName, string DefaultEnding);
 
 public sealed record SceneIntentBuilderResult(IReadOnlyList<SceneIntent> SceneIntents, IReadOnlyList<string> GeneratedFiles)
 {
