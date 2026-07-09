@@ -109,7 +109,21 @@ public sealed record QuestionDrivenNarrationDiagnosticsDto(
     IReadOnlyDictionary<string, string>? V31FormatScenePurposeToSceneId = null,
     IReadOnlyDictionary<string, string>? V31FormatSceneIdToScenePurpose = null,
     int AiRewriteAttemptCount = 0,
-    bool FallbackStaticTextUsed = false);
+    bool FallbackStaticTextUsed = false,
+    int DocumentaryVoiceScore = 0,
+    int SpokenLanguageScore = 0,
+    int ObservationGuidanceScore = 0,
+    int ScientificAccuracyScore = 0,
+    int EditorialFlowScore = 0,
+    int TransitionQualityScore = 0,
+    int ViewerRetentionScore = 0,
+    int AstroPulseIdentityScore = 0,
+    int OverallNarrationScore = 0,
+    bool NarrationPostEditorApplied = false,
+    bool InstructionLeakageDetected = false,
+    bool PromptLeakageDetected = false,
+    bool DuplicatedTransformationsDetected = false,
+    IReadOnlyList<string>? NarrationPostEditorRewrittenScenes = null);
 
 public sealed record QuestionDrivenNarrationReviewCheckDto(
     string Name,
