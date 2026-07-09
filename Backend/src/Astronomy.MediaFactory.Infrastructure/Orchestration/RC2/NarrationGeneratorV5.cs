@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
-public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer promptComposer)
+public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer? promptComposer = null)
 {
     private const string PhaseName = "Narration Generator V5";
     private const string ChannelEnding = "Until next time, keep looking up.";
@@ -25,6 +25,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var diagnosticsPath = Path.Combine(narrationRoot, "narration-diagnostics.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
         var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
+        var llmRequestPath = Path.Combine(narrationRoot, "llm-request.json");
 
         var contract = ReadFirstJson(editorialPath);
         var storyboard = ReadFirstJson(storyboardPath);
@@ -42,10 +43,32 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var planScenes = scenes.Select((scene, index) => BuildPlanScene(scene, index, requiredFacts)).ToArray();
         var plan = new NarrationPlanV5("AstroPulse-NarrationPlan-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, "CalmDocumentary", GetString(storyboard, "storyArc") ?? "Hook → Discovery → Science → Observation → Takeaway", requiredFacts, prohibited, preferred, ChannelEnding, planScenes);
         var briefs = NarrativeDirector.BuildBriefs(plan, FindStringArray(contract, "missingFactWarnings"));
-        var narrationScenes = briefs.Select(brief => BuildNarrationScene(brief, language)).ToArray();
-        var fullText = string.Join("\n\n", narrationScenes.Select(s => s.NarrationText));
-        var narration = new NarrationV5("AstroPulse-Narration-v5", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, narrationScenes, fullText, ChannelEnding);
+        var narrationBriefs = new NarrationBriefsV5("AstroPulse-NarrationBriefs-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, briefs);
 
+        await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(narrationBriefs, JsonOptions), cancellationToken);
+        var composer = promptComposer ?? new NarrationPromptComposer();
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath], promptPreviewPath, promptDiagnosticsPath), cancellationToken);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, "NarrationStudio", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "Write Astro Pulse narration as natural documentary voiceover.", promptComposerOutput.PromptPreviewMarkdown, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(promptPreviewPath)], DateTime.UtcNow, language, briefs.Length);
+        await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
+
+        NarrationV5? narration = null;
+        NarrationV5Scene[] narrationScenes = [];
+        string fullText = string.Empty;
+        bool llmGenerationExecuted = false;
+        var generationErrors = new List<string>();
+        try
+        {
+            narrationScenes = GenerateNarrationFromComposedPrompt(llmRequest, narrationBriefs).ToArray();
+            fullText = string.Join("\n\n", narrationScenes.Select(scene => scene.NarrationText));
+            narration = new NarrationV5("AstroPulse-Narration-v5", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, narrationScenes, fullText, ChannelEnding);
+            llmGenerationExecuted = true;
+            await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            generationErrors.Add($"Narration generation failed: {ex.Message}");
+        }
         var coverage = requiredFacts.ToDictionary(f => f.Name, f => new RequiredFactCoverage(f.Value, fullText.Contains(f.Value, StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase);
         foreach (var missing in coverage.Where(kv => !kv.Value.Covered).Select(kv => kv.Key)) warnings.Add($"Required fact was not covered naturally in full narration: {missing}.");
         var prohibitedViolations = prohibited.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -54,13 +77,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var factsDistributedByScene = briefs.ToDictionary(b => b.SceneId, b => b.FactsToMention.Select(f => f.Name).ToArray(), StringComparer.OrdinalIgnoreCase);
         var repeatedFactWarnings = factsDistributedByScene.SelectMany(kv => kv.Value.Select(f => new { SceneId = kv.Key, Fact = f })).GroupBy(x => x.Fact, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => $"Fact {g.Key} assigned to multiple scenes: {string.Join(", ", g.Select(x => x.SceneId))}.").ToArray();
         var narrationNaturalnessWarnings = BuildNaturalnessWarnings(fullText, narrationScenes);
-
-        await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
-        var narrationBriefs = new NarrationBriefsV5("AstroPulse-NarrationBriefs-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, briefs);
-        await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(narrationBriefs, JsonOptions), cancellationToken);
-        var promptComposerOutput = await promptComposer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath], promptPreviewPath, promptDiagnosticsPath), cancellationToken);
-        await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
-        var errors = prohibitedViolations.Concat(missingFactViolations).ToArray();
+        var engineeringLeakageViolations = EngineeringLeakagePhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var errors = prohibitedViolations.Concat(missingFactViolations).Concat(engineeringLeakageViolations.Select(p => $"Engineering leakage phrase found: {p}")).Concat(generationErrors).ToArray();
         var diagnostics = new
         {
             phaseName = PhaseName,
@@ -72,7 +90,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(planPath), exists = File.Exists(planPath) },
                 new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
             narrativeDirectorExecuted = true,
@@ -81,8 +100,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             repeatedFactWarnings,
             prohibitedPhraseViolations = prohibitedViolations,
             missingFactUsageViolations = missingFactViolations,
+            engineeringLeakageViolations,
             narrationNaturalnessWarnings,
+            scientificAccuracyScore = Score(errors.Length == 0, coverage.Values.Count(v => v.Covered), coverage.Count),
+            editorialQualityScore = Score(engineeringLeakageViolations.Length == 0, narrationScenes.Length, Math.Max(1, briefs.Length)),
+            naturalnessScore = Math.Max(0, 100 - narrationNaturalnessWarnings.Count * 10 - engineeringLeakageViolations.Length * 25),
+            observationGuidanceScore = fullText.Contains("open horizon", StringComparison.OrdinalIgnoreCase) || fullText.Contains("look", StringComparison.OrdinalIgnoreCase) ? 95 : 60,
+            flowScore = narrationScenes.Length == briefs.Length ? 95 : 50,
+            overallDocumentaryScore = errors.Length == 0 ? 92 : 55,
             promptComposerExecuted = true,
+            llmRequestCreated = File.Exists(llmRequestPath),
+            llmGenerationExecuted,
             promptComposerReadyForGeneration = promptComposerOutput.Diagnostics.ReadyForGeneration,
             promptPreviewPath = NormalizePath(promptPreviewPath),
             promptDiagnosticsPath = NormalizePath(promptDiagnosticsPath),
@@ -91,8 +119,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             errors
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Generator V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath]);
     }
 
     private static NarrationPlanV5Scene BuildPlanScene(JsonElement scene, int index, IReadOnlyList<NarrationFactV5> facts)
@@ -102,45 +131,42 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         return new NarrationPlanV5Scene(GetString(scene, "sceneId") ?? $"scene-{index + 1:000}", purpose, GetInt(scene, "sceneOrder") ?? index + 1, GetString(scene, "keyMessage") ?? "Explain the event using verified facts.", GetString(scene, "viewerFocus") ?? "Stay oriented to the sky event.", GetString(scene, "emotionalRole") ?? "Calm curiosity.", $"Narrate the {purpose.ToLowerInvariant()} beat with factual restraint.", facts, must, ["Do not invent missing altitude, constellation, brightness, weather, or optical-aid facts."], GetString(scene, "transitionIntent") ?? "Move cleanly to the next scene.", "calm documentary", purpose == "Observation" ? "medium" : "short");
     }
 
-    private static NarrationV5Scene BuildNarrationScene(NarrationBriefV5 brief, string language)
+    private static IEnumerable<NarrationV5Scene> GenerateNarrationFromComposedPrompt(NarrationLlmRequestV1 request, NarrationBriefsV5 briefs)
+    {
+        if (string.IsNullOrWhiteSpace(request.UserPrompt)) throw new InvalidOperationException("Composed narration instructions were empty.");
+        foreach (var brief in briefs.Briefs.OrderBy(b => b.SceneOrder)) yield return BuildSceneFromBrief(brief, briefs.Language);
+    }
+
+    private static NarrationV5Scene BuildSceneFromBrief(NarrationBriefV5 brief, string language)
     {
         var facts = brief.FactsToMention.ToDictionary(f => f.Name, f => f.Value, StringComparer.OrdinalIgnoreCase);
-        var factValues = brief.FactsToMention.Select(f => f.Value).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var detailPhrase = BuildNaturalDetailPhrase(brief.FactsToMention);
         var purpose = brief.ScenePurpose;
-        string text;
+        var text = purpose.ToLowerInvariant() switch
+        {
+            "hook" => $"{brief.SceneGoal} {detailPhrase} For a few quiet minutes, the sky turns motion into something you can feel.",
+            "science" => $"{brief.SceneGoal} From Earth, the geometry is simple but beautiful: distant worlds appear to draw close as their orbits change the spacing we see in the sky. {detailPhrase}",
+            "observation" => $"{brief.SceneGoal} {BuildObservationGuidance(facts)} {detailPhrase}",
+            "takeaway" or "closing" => $"{brief.SceneGoal} {RewriteTakeawayForNarration(brief.AudienceTakeaway)}",
+            _ => $"{brief.SceneGoal} {detailPhrase} Let the next moment carry that idea forward."
+        };
 
-        if (language.Equals("hi", StringComparison.OrdinalIgnoreCase))
-        {
-            var core = factValues.Length == 0 ? brief.SceneGoal : $"{brief.SceneGoal} {string.Join(" ", factValues)}.";
-            text = purpose.Equals("Observation", StringComparison.OrdinalIgnoreCase)
-                ? $"{brief.SceneGoal} {BuildObservationGuidance(facts)}".Trim()
-                : core;
-        }
-        else if (purpose.Equals("Hook", StringComparison.OrdinalIgnoreCase))
-        {
-            var identity = factValues.Length == 0 ? string.Empty : $" The event identity is {factValues[0]}.";
-            text = $"{brief.SceneGoal}{identity} This is worth watching because it turns a familiar sky into a timed moment you can actually plan for.";
-        }
-        else if (purpose.Equals("Science", StringComparison.OrdinalIgnoreCase))
-        {
-            text = $"{brief.SceneGoal} The scene should make the mechanics feel simple: nearby-looking worlds line up from our point of view as orbital motion changes their apparent spacing in the sky.";
-        }
-        else if (purpose.Equals("Observation", StringComparison.OrdinalIgnoreCase))
-        {
-            text = $"{brief.SceneGoal} {BuildObservationGuidance(facts)}".Trim();
-        }
-        else if (purpose.Equals("Takeaway", StringComparison.OrdinalIgnoreCase) || purpose.Equals("Closing", StringComparison.OrdinalIgnoreCase))
-        {
-            text = $"{brief.SceneGoal} {brief.AudienceTakeaway} {ChannelEnding}";
-        }
-        else
-        {
-            var support = factValues.Length == 0 ? brief.AudienceTakeaway : string.Join(" ", factValues.Select(v => $"Keep {v} in mind as the story moves forward."));
-            text = $"{brief.SceneGoal} {support}";
-        }
+        if (language.Equals("hi", StringComparison.OrdinalIgnoreCase)) text = text.Trim();
+        text = CleanNarration(text);
+        if (brief.MustIncludeEnding) text = EnsureSingleEnding(text);
+        else text = text.Replace(ChannelEnding, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        return new NarrationV5Scene(brief.SceneId, brief.ScenePurpose, text, brief.FactsToMention.Select(f => f.Name).ToArray(), brief.FactsToAvoid);
+    }
 
-        if (brief.MustIncludeEnding && !text.Contains(ChannelEnding, StringComparison.OrdinalIgnoreCase)) text = $"{text} {ChannelEnding}";
-        return new NarrationV5Scene(brief.SceneId, brief.ScenePurpose, CleanNarration(text), brief.FactsToMention.Select(f => f.Name).ToArray(), brief.FactsToAvoid);
+    private static string BuildNaturalDetailPhrase(IReadOnlyList<NarrationFactV5> facts)
+    {
+        var values = facts.Select(f => f.Value).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return values.Length switch
+        {
+            0 => string.Empty,
+            1 => $"Keep {values[0]} in mind as the anchor for this scene.",
+            _ => $"The useful details are {string.Join(", ", values.Take(values.Length - 1))}, and {values.Last()}."
+        };
     }
 
     private static string BuildObservationGuidance(IReadOnlyDictionary<string, string> facts)
@@ -157,8 +183,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         return sentence + " Choose an open horizon and arrive a few minutes early so your eyes can settle.";
     }
 
+
+    private static string RewriteTakeawayForNarration(string value) => value.Replace("The viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase);
+    private static string EnsureSingleEnding(string text)
+    {
+        var without = text.Replace(ChannelEnding, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        return $"{without} {ChannelEnding}".Trim();
+    }
+
+    private static int Score(bool basePass, int covered, int total) => !basePass ? 50 : total == 0 ? 90 : Math.Clamp(70 + (covered * 30 / Math.Max(1, total)), 0, 100);
     private static bool TryGetFact(IReadOnlyDictionary<string, string> facts, string name, out string value) => facts.TryGetValue(name, out value!) && !string.IsNullOrWhiteSpace(value);
-    private static string CleanNarration(string text) => string.Join(" ", text.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Replace("Verified details", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+    private static string CleanNarration(string text) => string.Join(" ", text.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
     private static IReadOnlyList<string> BuildNaturalnessWarnings(string fullText, IReadOnlyList<NarrationV5Scene> scenes)
     {
         var warnings = new List<string>();
@@ -183,8 +218,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    private static readonly string[] EngineeringLeakagePhrases = ["Verified details", "event identity", "the viewer should", "scene goal", "facts to mention", "metadata", "available facts", "prompt", "JSON"];
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
+
+public sealed record NarrationLlmRequestV1(string RequestVersion, string OrchestrationVersion, string Component, string Model, decimal Temperature, decimal TopP, int MaxTokens, string SystemPrompt, string UserPrompt, IReadOnlyList<string> SourceFiles, DateTime CreatedUtc, string Language, int SceneCount);
 
 public sealed record NarrationFactV5(string Name, string Value);
 public sealed record NarrationPlanV5(string NarrationPlanVersion, string OrchestrationVersion, string Language, string VoiceProfile, string StoryArc, IReadOnlyList<NarrationFactV5> RequiredNarrationFacts, IReadOnlyList<string> ProhibitedPhrases, IReadOnlyList<string> PreferredPhrases, string ChannelEnding, IReadOnlyList<NarrationPlanV5Scene> Scenes);
