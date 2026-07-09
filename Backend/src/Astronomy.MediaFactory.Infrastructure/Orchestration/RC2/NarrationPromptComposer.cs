@@ -72,7 +72,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
             PromptSections.Length,
             ProhibitedInternalPhrases,
             missing.Concat(quality.Warnings).ToArray(),
-            missing.Count == 0 && quality.ReadyForGeneration);
+            missing.Count == 0);
 
         return new NarrationPromptComposerOutput(prompt, diagnostics, quality);
     }

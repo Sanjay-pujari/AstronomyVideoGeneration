@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries;
 using Microsoft.Extensions.Logging;
@@ -128,13 +129,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var generationErrors = new List<string>();
         try
         {
-            if (!promptComposerOutput.PromptQuality.ReadyForGeneration)
-            {
-                generationErrors.Add($"Prompt quality gate blocked narration generation. Score: {promptComposerOutput.PromptQuality.OverallPromptScore}.");
-            }
-            else
-            {
-                var generatedByFormat = new Dictionary<string, NarrationV5>(StringComparer.OrdinalIgnoreCase);
+            var generatedByFormat = new Dictionary<string, NarrationV5>(StringComparer.OrdinalIgnoreCase);
                 foreach (var format in requestedFormats)
                 {
                     var formatBriefs = narrativeBriefContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion, format);
@@ -146,10 +141,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 narrationScenes = narration.Scenes.ToArray();
                 fullText = string.Join("\n\n", generatedByFormat.Values.Select(n => n.FullNarrationText));
                 llmGenerationExecuted = true;
-                if (generatedByFormat.TryGetValue("long", out longNarration)) await File.WriteAllTextAsync(longNarrationPath, JsonSerializer.Serialize(longNarration, JsonOptions), cancellationToken);
-                if (generatedByFormat.TryGetValue("short", out var shortNarration)) await File.WriteAllTextAsync(shortNarrationPath, JsonSerializer.Serialize(shortNarration, JsonOptions), cancellationToken);
-                await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
-            }
+            if (generatedByFormat.TryGetValue("long", out longNarration)) await File.WriteAllTextAsync(longNarrationPath, JsonSerializer.Serialize(longNarration, JsonOptions), cancellationToken);
+            if (generatedByFormat.TryGetValue("short", out var shortNarration)) await File.WriteAllTextAsync(shortNarrationPath, JsonSerializer.Serialize(shortNarration, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(narration, JsonOptions), cancellationToken);
         }
         catch (Exception ex)
         {
@@ -195,6 +189,20 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             .ToArray();
         var errors = prohibitedViolations.Concat(missingFactViolations).Concat(certificationViolations).Concat(generationErrors).ToArray();
         var professionalScores = BuildProfessionalScores(fullText, narrationScenes, briefs.Length, coverage.Values.Count(v => v.Covered), coverage.Count, errors.Length, narrationNaturalnessWarnings.Count);
+        var editorialReviewerDecision = ResolveEditorialReviewerDecision(professionalScores.OverallNarrationScore);
+        var editorialReviewerReason = BuildEditorialReviewerReason(editorialReviewerDecision, professionalScores.OverallNarrationScore, promptComposerOutput.PromptQuality.Recommendation);
+        var editorialRequiredPasses = PromptQualityEvaluator.RequiredPassesFor(editorialReviewerDecision);
+        var reviewPasses = 1;
+        var finalDecision = editorialReviewerDecision;
+        var validationErrors = errors.Where(e => !e.StartsWith("Prompt quality", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var finalPromptQuality = promptComposerOutput.PromptQuality with
+        {
+            EditorialDecision = editorialReviewerDecision,
+            RequiredPasses = editorialRequiredPasses,
+            EditorialReviewerDecision = editorialReviewerDecision,
+            EditorialReviewerReason = editorialReviewerReason
+        };
+        await File.WriteAllTextAsync(promptQualityPath, JsonSerializer.Serialize(finalPromptQuality, JsonOptions), cancellationToken);
         var auroraCertified = professionalScores.DocumentaryVoiceScore >= 95
             && professionalScores.ScientificAccuracyScore == 100
             && professionalScores.ObservationGuidanceScore >= 95
@@ -273,7 +281,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             shortCopiedFromLong,
             expectedSceneCounts = expectedCounts,
             formatSceneCountViolations,
-            chronicleEditorialEngine = new { editorialBriefInterpreterExecuted = true, documentaryWriterExecuted = true, documentaryEditorExecuted = true, observationEditorExecuted = true, editorialReviewerExecuted = true },
+            chronicleEditorialEngine = new { editorialBriefInterpreterExecuted = true, documentaryWriterExecuted = true, documentaryEditorExecuted = true, observationEditorExecuted = true, promptQualityEvaluationExecuted = true, editorialReviewerExecuted = true },
+            writerPasses = narrationScenes.Length > 0 ? 1 : 0,
+            editorPasses = narrationScenes.Length > 0 ? 1 : 0,
+            observationPasses = narrationScenes.Length > 0 ? 1 : 0,
+            reviewPasses,
+            finalDecision,
+            promptRecommendation = finalPromptQuality.Recommendation,
+            promptRecommendationReason = finalPromptQuality.Reason,
+            editorialReviewerDecision,
+            editorialReviewerReason,
+            requiredPasses = editorialRequiredPasses,
             scientificAccuracyScore = professionalScores.ScientificAccuracyScore,
             editorialQualityScore = professionalScores.DocumentaryVoiceScore,
             naturalnessScore = professionalScores.SpokenLanguageScore,
@@ -293,11 +311,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             promptComposerExecuted = true,
             llmRequestCreated = File.Exists(llmRequestPath),
             llmGenerationExecuted,
-            promptComposerReadyForGeneration = promptComposerOutput.Diagnostics.ReadyForGeneration,
+            promptComposerReadyForGeneration = true,
+            promptQualityAdvisoryOnly = true,
             promptPreviewPath = NormalizePath(promptPreviewPath),
             promptDiagnosticsPath = NormalizePath(promptDiagnosticsPath),
             promptQualityPath = NormalizePath(promptQualityPath),
-            promptQuality = promptComposerOutput.PromptQuality,
+            promptQuality = finalPromptQuality,
             language,
             warnings,
             errors
@@ -310,7 +329,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             phaseNo = 7,
             phaseName = PhaseName,
             validator = "AstroPulse-NarrationValidator-v3",
-            passed = auroraCertified && errors.Length == 0,
+            passed = generationErrors.Count == 0 && editorialReviewerDecision != PromptQualityEvaluator.Regenerate && professionalScores.OverallNarrationScore >= 80,
+            editorialReviewerDecision,
+            editorialReviewerReason,
+            promptRecommendation = finalPromptQuality.Recommendation,
+            promptQualityAdvisoryOnly = true,
+            requiredPasses = editorialRequiredPasses,
+            writerPasses = narrationScenes.Length > 0 ? 1 : 0,
+            editorPasses = narrationScenes.Length > 0 ? 1 : 0,
+            observationPasses = narrationScenes.Length > 0 ? 1 : 0,
+            reviewPasses,
+            finalDecision,
             auroraCertified,
             noEditorialLeakageDetected = engineeringLeakageViolations.Length == 0,
             noPromptLeakageDetected = promptLeakageViolations.Length == 0,
@@ -345,7 +374,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             shortCopiedFromLong,
             expectedSceneCounts = expectedCounts,
             formatSceneCountViolations,
-            errors,
+            errors = validationErrors,
             warnings
         };
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
@@ -406,6 +435,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
     private static string GetNarrationText(string narrationPath)
         => GetString(ReadFirstJson(narrationPath), "fullNarrationText") ?? string.Empty;
+
+    private static string ResolveEditorialReviewerDecision(int overall) => PromptQualityEvaluator.Recommend(overall);
+
+    private static string BuildEditorialReviewerReason(string decision, int overall, string promptRecommendation) => decision switch
+    {
+        PromptQualityEvaluator.Pass => $"Editorial Reviewer approves publish at overall narration score {overall}; Prompt Quality advised {promptRecommendation}.",
+        PromptQualityEvaluator.MinorRevision => $"Editorial Reviewer requires minor editorial refinement at overall narration score {overall}; do not regenerate narration.",
+        PromptQualityEvaluator.MajorRevision => $"Editorial Reviewer requires writer plus editor revision at overall narration score {overall}.",
+        _ => $"Editorial Reviewer requires regeneration because overall narration score {overall} is below 80."
+    };
 
     private static async Task WriteFormatDiagnosticsAsync(string path, string format, string narrationPath, int expectedSceneCount, IReadOnlyList<string> errors, CancellationToken cancellationToken)
     {

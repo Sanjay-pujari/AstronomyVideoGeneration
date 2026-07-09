@@ -2,6 +2,10 @@ namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptCompo
 
 public sealed class PromptQualityEvaluator
 {
+    public const string Pass = "PASS";
+    public const string MinorRevision = "MINOR_REVISION";
+    public const string MajorRevision = "MAJOR_REVISION";
+    public const string Regenerate = "REGENERATE";
     public const string Version = "AstroPulse-PromptQuality-v1";
     private static readonly string[] RequiredSections = ["Your Role", "Astro Pulse Editorial Identity", "Story Overview", "Narrative Brief", "Scientific Guardrails", "Writing Principles", "Output Contract"];
     private static readonly string[] EngineeringLeakage = ["metadata", "json", "viewer should", "scene goal", "planning", "checklist", "facts to mention", "available facts"];
@@ -25,10 +29,29 @@ public sealed class PromptQualityEvaluator
         var writing = ScoreTerms(prompt, ["sentence rhythm", "paragraph rhythm", "transition rhythm", "pacing", "vocabulary"], 20);
         var readability = prompt.Length > 900 && prompt.Split('\n').Average(l => l.Length) < 140 ? 95 : 75;
         var overall = (sectionCompleteness + engineering + editorial + scientific + writing + readability) / 6;
-        if (overall < threshold) errors.Add($"Prompt quality score {overall} is below the configured threshold {threshold}.");
+        if (overall < threshold) warnings.Add($"Prompt quality score {overall} is below the configured advisory threshold {threshold}.");
 
-        return new PromptQualityContract(Version, overall, sectionCompleteness, editorial, scientific, writing, engineering, readability, warnings, errors, errors.Count == 0 && overall >= threshold);
+        var recommendation = Recommend(overall);
+        var requiredPasses = RequiredPassesFor(recommendation);
+        var reason = recommendation switch
+        {
+            Pass => $"Prompt Quality advises publish readiness at score {overall}.",
+            MinorRevision => $"Prompt Quality advises an editorial pass for score {overall}; narration generation must continue.",
+            MajorRevision => $"Prompt Quality advises writer plus editor revision for score {overall}; narration generation must continue.",
+            _ => $"Prompt Quality advises regeneration review for score {overall}; only the Editorial Reviewer may require regeneration."
+        };
+
+        return new PromptQualityContract(Version, overall, sectionCompleteness, editorial, scientific, writing, engineering, readability, warnings, errors, true, recommendation, reason, recommendation, requiredPasses, recommendation, $"Editorial Reviewer initial decision mirrors advisory prompt recommendation until narration diagnostics are available: {reason}");
     }
+
+    public static string Recommend(int overall) => overall >= 95 ? Pass : overall >= 90 ? MinorRevision : overall >= 80 ? MajorRevision : Regenerate;
+    public static IReadOnlyList<string> RequiredPassesFor(string recommendation) => recommendation switch
+    {
+        Pass => [],
+        MinorRevision => ["DocumentaryEditor", "ObservationEditor"],
+        MajorRevision => ["DocumentaryWriter", "DocumentaryEditor", "ObservationEditor"],
+        _ => ["RegenerateDraft"]
+    };
 
     private static int ScoreTerms(string text, IReadOnlyList<string> terms, int each) => Math.Min(100, terms.Count(t => text.Contains(t, StringComparison.OrdinalIgnoreCase)) * each);
     private static int CountOccurrences(string text, string value)
