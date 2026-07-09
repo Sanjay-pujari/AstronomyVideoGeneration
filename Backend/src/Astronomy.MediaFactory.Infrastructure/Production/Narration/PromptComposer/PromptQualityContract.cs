@@ -11,4 +11,10 @@ public sealed record PromptQualityContract(
     int ReadabilityScore,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    bool ReadyForGeneration);
+    bool ReadyForGeneration,
+    string Recommendation,
+    string Reason,
+    string EditorialDecision,
+    IReadOnlyList<string> RequiredPasses,
+    string EditorialReviewerDecision,
+    string EditorialReviewerReason);
