@@ -9,7 +9,7 @@ The implemented production runner executes ordered phase definitions, writes pha
 ```mermaid
 flowchart TD
   P1[1 Load Plan] --> P2[2 Production Intelligence] --> P3[3 Q&A]
-  P3 --> P4[4 Validate Q&A] --> P5[5 Scene Plan] --> P6[6 Enriched Scene Plan]
+  P3 --> P4[4 Validate Q&A] --> P5[5 Scene Plan] --> P6[6 Editorial Intelligence Foundation]
   P6 --> P7[7 Narration Plan] --> P8[8 Short Assets] --> P9[9 Long Assets]
   P9 --> P10[10 Asset Validation]
   P10 --> P11[11 Hero]
@@ -27,7 +27,7 @@ flowchart TD
 | 3 | Generate QuestionAnswerSet | Create viewer-question framing for one event. | Plan id, region, language, event id. | `question-answer-set.json`. | Generated file list and later Phase 4 file requirement. |
 | 4 | Validate Questions | Gate question-answer availability. | Phase 3 output. | Phase validation only. | Requires `question-answer-set.json`; rerun Phase 3/4. |
 | 5 | Generate Scene Plan | Build question-driven scene plan. | Event id, region, language, execution context. | `question-driven-scene-plan.json`. | Missing output fails dependent Phase 6. |
-| 6 | Enrich Scene Plan | Add narration/visual/overlay/accessibility intent and optional visual variants. | Phase 5 scene plan, event intelligence, required objects. | `question-driven-scene-plan.enriched.json`, diagnostics. | Checks `isValid`, scene count, leakage, required visual objects, optional variant count. |
+| 6 | Editorial Intelligence Foundation | Build observation metadata, derive scene intents from that metadata, and write editorial diagnostics. Internal sub-phases are implementation details: 6.1 Observation Metadata Builder, 6.2 Scene Intent Builder, and 6.4 Editorial Diagnostics. The 6.3 Editorial Contract Builder is intentionally not implemented yet. | `plan-input/production-event-intelligence.json`, `question-engine/question-answer-set.json`, `question-engine/question-driven-scene-plan.json`. | `editorial/observation-metadata.json`, `editorial/scene-intents.json`, `editorial/editorial-diagnostics.json`. | Verifies input existence, records missing fact warnings, reports scene intent count, and preserves unsupported/missing direction, altitude, constellation, brightness, and moon-interference facts as warnings rather than inventing them. |
 | 7 | Generate Narration Plan | Produce question-driven narration JSON and review. | Enriched scene plan, plan/event/region/language. | `question-driven-narration.json`, `question-driven-narration-review.json`. | Null response, missing persisted files, failed review checks stop the phase. |
 | 8 | Generate Short Scene Assets V3 | Realize short-form scene assets. | Enriched plan, narration, visual source strategy. | `scene-assets-v3/short/**/final.png`, manifests/diagnostics. | Scene asset coverage checked in Phase 10. |
 | 9 | Generate Long Scene Assets V3 | Realize long-form scene assets. | Same as Phase 8 for long profile. | `scene-assets-v3/long/**/final.png`, manifests/diagnostics. | Scene asset coverage checked in Phase 10. |
@@ -41,6 +41,16 @@ flowchart TD
 | 17 | Motion Layer V1 / V2 preview | Create per-scene motion and filter plans. | Scene assets, duration plan, request motion strength. | Motion plan JSON, `phase-17-validation.json`. | Detects motion-strength mismatches and missing motion data. |
 | 18 | Cinematic Video Assembly V2 | Assemble short/long video media with subtitles, audio mix, outro, and fade. | Phase 10 assets, Phase 15 audio, Phase 16 durations, Phase 17 motion, SRT. | Final MP4s, mixed audio, render diagnostics, `phase-18-validation.json`. | Validates cue subtitle drift, scene audio/video sync, final audio/video duration, subtitle safe area. |
 
+
+## Phase 6 Editorial Intelligence Foundation
+Public Phase 6 is **Editorial Intelligence Foundation**. Its internal sub-phases are implementation details, not separate public pipeline phases:
+
+- **6.1 Observation Metadata Builder** runs first and converts available event timing, object, and observation fields into `editorial/observation-metadata.json`. UTC timing is converted to local time only when a `timeZone` fact exists. Missing fields are recorded as warnings rather than inferred.
+- **6.2 Scene Intent Builder** consumes `editorial/observation-metadata.json` and the question-driven scene plan to produce `editorial/scene-intents.json`; it no longer acts as a separate public phase and no longer guesses observation details directly from raw event metadata.
+- **6.4 Editorial Diagnostics** writes `editorial/editorial-diagnostics.json` with input existence, output paths, scene intent counts, and missing fact warnings.
+
+The **6.3 Editorial Contract Builder** remains intentionally unimplemented for now.
+
 ## Architecture
 `ProductionPipelineExecutionService` owns the phase list and invokes each phase action inside `ExecutePhaseAsync`. Before execution it validates the current event lock for phases up to 15. After each action it checks required outputs, reads special diagnostics for selected phases, and writes `validation/phase-XX-validation.json`. Requested outputs gate optional phases: hero is phase 11, thumbnail phase 12, long/short video phases 15-17, short video phase 18, and long video QA phase 19.
 
@@ -48,7 +58,7 @@ flowchart TD
 - `ContentPlanBatchGenerationService`: starts/ranges production executions and records status.
 - `ProductionPipelineExecutionService`: phase orchestration, validation writing, output gating, recovery-aware execution.
 - `PipelineJobProcessor`/`PipelineJobExecutor`: asynchronous job queue for main videos, shorts, publish, and archive.
-- Phase services: question engine, scene planner/enricher, narration generator, scene asset generators, hero/thumbnail/gallery engines, TTS, duration calibration, motion, FFmpeg assembly.
+- Phase services: question engine, scene planner, Editorial Intelligence Foundation builders, narration generator, scene asset generators, hero/thumbnail/gallery engines, TTS, duration calibration, motion, FFmpeg assembly.
 - `ProductionPhaseContext`: carries request, intelligence, strategy, output roots, execution mode, and overwrite metadata.
 
 ## Responsibilities
@@ -61,7 +71,7 @@ flowchart TD
 Pipeline request fields: plan id, astronomy event intelligence id, region, language, requested output types, dry-run/overwrite/retry flags, phase range, execution mode, and media event strategy. Phase-specific inputs are previous phase JSON files and media assets listed in the table above.
 
 ## Outputs
-Every phase emits a validation JSON document. Product outputs include plan snapshots, intelligence diagnostics, question/scene/narration JSON, short/long scene assets, hero/thumbnail/gallery media, sync/TTS/duration/motion JSON, SRT files, mixed audio, and final MP4s.
+Every phase emits a validation JSON document. Product outputs include plan snapshots, intelligence diagnostics, question/scene/narration JSON, editorial observation metadata, editorial scene intents, short/long scene assets, hero/thumbnail/gallery media, sync/TTS/duration/motion JSON, SRT files, mixed audio, and final MP4s.
 
 ## Dependencies
 Core service interfaces, Infrastructure implementations, ContentGen, Rendering, Azure Speech/Image/OpenAI, ImageSharp, FFmpeg/FFprobe, file-system working roots, persistence repository, and optional Skyfield/Stellarium intelligence paths.
