@@ -35,6 +35,7 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
         _httpClient = httpClient;
         _options = options.Value;
         _aiCinematicOptions = aiCinematicOptions.Value;
+        _httpClient.Timeout = Timeout.InfiniteTimeSpan;
         _logger = logger;
         _credential = _options.UseManagedIdentity
             ? new DefaultAzureCredential(new DefaultAzureCredentialOptions

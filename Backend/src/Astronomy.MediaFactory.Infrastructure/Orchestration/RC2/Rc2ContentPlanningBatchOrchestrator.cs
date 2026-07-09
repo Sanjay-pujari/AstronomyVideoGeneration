@@ -37,20 +37,64 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             requestedPhases.Count == 0 ? "none" : string.Join(',', requestedPhases));
 
         var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
-        if (requestedPhases.Contains(6))
+        if (requestedPhases.Contains(6) && CanRunRc2Overlay(response, 6))
         {
-            var sceneIntentResult = await sceneIntentBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-            response = ApplyRc2Phase6Response(response, sceneIntentResult);
+            response = await ExecuteRc2OverlayPhaseAsync(
+                response,
+                6,
+                "Editorial Intelligence Foundation",
+                [
+                    Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"),
+                    Combine(response.OutputRoot, "question-engine", "question-answer-set.json"),
+                    Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.json")
+                ],
+                Combine(response.OutputRoot, "editorial", "editorial-diagnostics.json"),
+                async () =>
+                {
+                    var sceneIntentResult = await sceneIntentBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+                    response = ApplyRc2Phase6Response(response, sceneIntentResult);
+                    return sceneIntentResult.GeneratedFiles;
+                },
+                cancellationToken);
         }
-        if (requestedPhases.Contains(7))
+        if (requestedPhases.Contains(7) && CanRunRc2Overlay(response, 7))
         {
-            var creativeStoryboardResult = await creativeStoryboardBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-            response = ApplyRc2Phase7Response(response, creativeStoryboardResult);
+            response = await ExecuteRc2OverlayPhaseAsync(
+                response,
+                7,
+                "Creative Intelligence Foundation",
+                [
+                    Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
+                    Combine(response.OutputRoot, "editorial", "story-graph.json"),
+                    Combine(response.OutputRoot, "editorial", "scene-intents.json")
+                ],
+                Combine(response.OutputRoot, "creative", "creative-diagnostics.json"),
+                async () =>
+                {
+                    var creativeStoryboardResult = await creativeStoryboardBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+                    response = ApplyRc2Phase7Response(response, creativeStoryboardResult);
+                    return creativeStoryboardResult.GeneratedFiles;
+                },
+                cancellationToken);
         }
-        if (IsRc2NarrationPhaseRequested(requestedPhases))
+        if (IsRc2NarrationPhaseRequested(requestedPhases) && CanRunRc2Overlay(response, 8))
         {
-            var narrationResult = await narrationGeneratorV5.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-            response = await ApplyRc2Phase8ResponseAsync(response, narrationResult, cancellationToken);
+            response = await ExecuteRc2OverlayPhaseAsync(
+                response,
+                8,
+                "Narration Generator V5",
+                [
+                    Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
+                    Combine(response.OutputRoot, "creative", "creative-storyboard.json")
+                ],
+                Combine(response.OutputRoot, "narration-v5", "narration-diagnostics.json"),
+                async () =>
+                {
+                    var narrationResult = await narrationGeneratorV5.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+                    response = await ApplyRc2Phase8ResponseAsync(response, narrationResult, cancellationToken);
+                    return narrationResult.GeneratedFiles;
+                },
+                cancellationToken);
         }
 
         logger.LogInformation(
@@ -64,6 +108,94 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 
         return response;
     }
+
+
+    private async Task<BatchGenerateFromPlansResponse> ExecuteRc2OverlayPhaseAsync(
+        BatchGenerateFromPlansResponse response,
+        int phaseNo,
+        string phaseName,
+        IReadOnlyList<string> inputFiles,
+        string diagnosticsPath,
+        Func<Task<IReadOnlyList<string>>> executeAsync,
+        CancellationToken cancellationToken)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            var generatedFiles = await executeAsync();
+            var currentFiles = generatedFiles.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var status = currentFiles.Length == generatedFiles.Count ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed;
+            var errors = status == ProductionPhaseStatus.Succeeded
+                ? Array.Empty<string>()
+                : generatedFiles.Where(path => !File.Exists(path)).Select(path => $"Expected RC2 output was not created in this run: {NormalizePath(path)}").ToArray();
+            var phase = await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, phaseName, status, started, inputFiles, currentFiles, diagnosticsPath, [], errors, status == ProductionPhaseStatus.Succeeded ? "Validation passed." : "Validation failed: required output missing.", status != ProductionPhaseStatus.Succeeded, null, cancellationToken);
+            response = UpsertResponsePhase(response, phase);
+            await UpsertPhaseManifestAsync(response.OutputRoot, phase, cancellationToken);
+            return status == ProductionPhaseStatus.Succeeded ? response : MarkResponseFailed(response, phaseNo, errors);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            var phase = await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, phaseName, ProductionPhaseStatus.Failed, started, inputFiles, [], diagnosticsPath, [], [ex.Message], ex.Message, true, ex, cancellationToken);
+            response = UpsertResponsePhase(response, phase);
+            await UpsertPhaseManifestAsync(response.OutputRoot, phase, cancellationToken);
+            return MarkResponseFailed(response, phaseNo, [ex.Message]);
+        }
+    }
+
+    private static bool CanRunRc2Overlay(BatchGenerateFromPlansResponse response, int phaseNo)
+        => response.Success
+            && response.LastFailedPhaseNo is null
+            && !response.Steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == phaseNo && phase.Status == ProductionPhaseStatus.Failed);
+
+    private static async Task<ProductionPhaseResult> WriteRc2PhaseValidationAsync(string? outputRoot, int phaseNo, string phaseName, ProductionPhaseStatus status, DateTimeOffset started, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, string diagnosticsPath, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, Exception? exception, CancellationToken cancellationToken)
+    {
+        var finished = DateTimeOffset.UtcNow;
+        var validationPath = Combine(outputRoot, "validation", $"phase-{phaseNo:00}-validation.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles.Select(NormalizePath).ToArray(), outputFiles.Select(NormalizePath).ToArray(), NormalizePath(validationPath), warnings, errors, canRetry, reason);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            phaseNo,
+            phaseName,
+            status = status.ToString(),
+            startedUtc = started,
+            finishedUtc = finished,
+            durationMs = result.DurationMs,
+            inputFiles = result.InputFiles,
+            outputFiles = result.OutputFiles,
+            warnings,
+            errors,
+            exceptionType = exception?.GetType().Name,
+            exceptionMessage = exception?.Message,
+            canRetry,
+            reason,
+            diagnosticsPath = NormalizePath(diagnosticsPath),
+            validationScope = "RC2 overlay phase validation; production orchestration result is not overwritten when production phase failed."
+        }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        return result;
+    }
+
+    private static BatchGenerateFromPlansResponse UpsertResponsePhase(BatchGenerateFromPlansResponse response, ProductionPhaseResult phase)
+    {
+        var steps = response.Steps.OfType<ProductionPhaseResult>().Any(existing => existing.PhaseNo == phase.PhaseNo)
+            ? response.Steps.Select(step => step is ProductionPhaseResult existing && existing.PhaseNo == phase.PhaseNo ? phase : step).ToArray()
+            : response.Steps.Concat([phase]).ToArray();
+        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
+                ? execution with { PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase), GeneratedFiles = execution.GeneratedFiles.Concat(phase.OutputFiles.Where(File.Exists)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+                : result)
+            .ToArray();
+        return response with { Steps = steps, Results = results };
+    }
+
+    private static BatchGenerateFromPlansResponse MarkResponseFailed(BatchGenerateFromPlansResponse response, int phaseNo, IReadOnlyList<string> errors)
+        => response with
+        {
+            Success = false,
+            FailedPlans = Math.Max(1, response.FailedPlans),
+            LastFailedPhaseNo = phaseNo,
+            LastCompletedPhaseNo = response.LastCompletedPhaseNo is null ? null : Math.Min(response.LastCompletedPhaseNo.Value, phaseNo - 1),
+            Errors = response.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+        };
 
     private static BatchGenerateFromPlansResponse ApplyRc2Phase6Response(BatchGenerateFromPlansResponse response, SceneIntentBuilderResult sceneIntentResult)
     {
@@ -222,7 +354,16 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         manifest["phases"] = phases;
         manifest["filesGeneratedThisRun"] = BuildManifestFileArray(manifest["filesGeneratedThisRun"], phase.OutputFiles);
         manifest["executedPhaseNumbers"] = BuildManifestPhaseArray(manifest["executedPhaseNumbers"], phase.PhaseNo);
-        manifest["phasesActuallyExecuted"] = BuildManifestPhaseArray(manifest["phasesActuallyExecuted"], phase.PhaseNo);
+        if (phase.Status == ProductionPhaseStatus.Succeeded)
+        {
+            manifest["phasesActuallyExecuted"] = BuildManifestPhaseArray(manifest["phasesActuallyExecuted"], phase.PhaseNo);
+            manifest["lastCompletedPhaseNo"] = phase.PhaseNo;
+            manifest["lastFailedPhaseNo"] = null;
+        }
+        else if (phase.Status == ProductionPhaseStatus.Failed)
+        {
+            manifest["lastFailedPhaseNo"] = phase.PhaseNo;
+        }
         await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
