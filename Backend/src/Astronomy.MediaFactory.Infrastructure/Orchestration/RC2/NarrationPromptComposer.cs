@@ -49,6 +49,13 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         var prohibitedPhrases = FindStringArray(input.EditorialContract, "prohibitedPhrases").Concat(ProhibitedInternalPhrases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var preferredPhrases = FindStringArray(input.EditorialContract, "preferredPhrases");
         var scenes = input.NarrationBriefs?.Briefs.OrderBy(b => b.SceneOrder).ToArray() ?? [];
+        if (scenes.Length > 0)
+        {
+            requiredFacts = scenes.SelectMany(s => s.FactsToMention)
+                .GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToArray();
+        }
         var styleContract = input.DocumentaryStyleContract;
 
         var prompt = BuildPrompt(language, storyArc, requiredFacts, prohibitedPhrases, preferredPhrases, scenes, styleContract);

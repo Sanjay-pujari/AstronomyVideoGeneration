@@ -28,6 +28,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var briefsPath = Path.Combine(narrationRoot, "narration-briefs.json");
         var narrationPath = Path.Combine(narrationRoot, "narration.json");
         var diagnosticsPath = Path.Combine(narrationRoot, "narration-diagnostics.json");
+        var knowledgeRoot = Path.Combine(narrationRoot, "knowledge");
+        Directory.CreateDirectory(knowledgeRoot);
+        var knowledgeContractPath = Path.Combine(knowledgeRoot, "knowledge-format-contract.json");
+        var knowledgeDiagnosticsPath = Path.Combine(knowledgeRoot, "knowledge-format-diagnostics.json");
         var validationRoot = Path.Combine(outputRoot, "validation");
         Directory.CreateDirectory(validationRoot);
         var validationPath = Path.Combine(validationRoot, "phase-07-validation.json");
@@ -56,10 +60,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var planScenes = scenes.Select((scene, index) => BuildPlanScene(scene, index, requiredFacts)).ToArray();
         var plan = new NarrationPlanV5("AstroPulse-NarrationPlan-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, "CalmDocumentary", GetString(storyboard, "storyArc") ?? "Hook → Discovery → Science → Observation → Takeaway", requiredFacts, prohibited, preferred, ChannelEnding, planScenes);
         var briefs = NarrativeDirector.BuildBriefs(plan, FindStringArray(contract, "missingFactWarnings"));
-        var narrationBriefs = new NarrationBriefsV5("AstroPulse-NarrationBriefs-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, briefs);
+        var rawNarrationBriefs = new NarrationBriefsV5("AstroPulse-NarrationBriefs-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, briefs);
+        var formatter = new KnowledgeFormatter();
+        var knowledgeContract = formatter.Format(requiredFacts, rawNarrationBriefs, language);
+        var knowledgeDiagnostics = formatter.BuildDiagnostics(knowledgeContract, requiredFacts, rawNarrationBriefs);
+        var narrationBriefs = knowledgeContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion);
 
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(narrationBriefs, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(knowledgeContractPath, JsonSerializer.Serialize(knowledgeContract, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(knowledgeDiagnosticsPath, JsonSerializer.Serialize(knowledgeDiagnostics, JsonOptions), cancellationToken);
 
         var styleStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var styleWarnings = new List<string>();
@@ -80,8 +90,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
 
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v2", "NarrationPromptComposerV3", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "You are a senior documentary writer for Astro Pulse.", promptComposerOutput.PromptPreviewMarkdown, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(promptPreviewPath), NormalizePath(promptQualityPath)], DateTime.UtcNow);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath, styleContractPath, knowledgeContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v2", "NarrationPromptComposerV3", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "You are a senior documentary writer for Astro Pulse.", promptComposerOutput.PromptPreviewMarkdown, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(knowledgeContractPath), NormalizePath(promptPreviewPath), NormalizePath(promptQualityPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -118,12 +128,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var narrationNaturalnessWarnings = BuildNaturalnessWarnings(fullText, narrationScenes);
         var engineeringLeakageViolations = EngineeringLeakagePhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var promptLeakageViolations = PromptLeakagePhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
-        var isoDateTimeViolations = IsoDateTimeRegex.Matches(fullText).Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var isoDateTimeViolations = IsoDateTimeRegex.Matches(fullText).Select(m => m.Value).Concat(RawUtcRegex.Matches(fullText).Select(m => m.Value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var duplicatedPhraseViolations = DuplicatedTransformedPhraseRegex.Matches(fullText).Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var diagnosticWarningViolations = ContainsAny(fullText, "diagnostic warning", "diagnostics warning", "warning:") ? new[] { "Diagnostic warning language found in final narration." } : [];
+        var writerConsumedRawMetadata = !knowledgeDiagnostics.RawMetadataRemoved || narrationBriefs.Briefs.SelectMany(b => b.FactsToMention).Any(f => KnowledgeFormatter.ContainsRawMetadata(f.Value));
         var certificationViolations = engineeringLeakageViolations.Select(p => $"Instruction leakage phrase found: {p}")
             .Concat(promptLeakageViolations.Select(p => $"Prompt leakage phrase found: {p}"))
             .Concat(isoDateTimeViolations.Select(p => $"Raw ISO datetime/date found: {p}"))
             .Concat(duplicatedPhraseViolations.Select(p => $"Duplicated transformed phrase found: {p}"))
+            .Concat(diagnosticWarningViolations)
+            .Concat(writerConsumedRawMetadata ? ["Documentary Writer consumed raw metadata instead of formatted knowledge."] : [])
             .ToArray();
         var errors = prohibitedViolations.Concat(missingFactViolations).Concat(certificationViolations).Concat(generationErrors).ToArray();
         var professionalScores = BuildProfessionalScores(fullText, narrationScenes, briefs.Length, coverage.Values.Count(v => v.Covered), coverage.Count, errors.Length, narrationNaturalnessWarnings.Count);
@@ -138,7 +152,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             && engineeringLeakageViolations.Length == 0
             && promptLeakageViolations.Length == 0
             && isoDateTimeViolations.Length == 0
-            && duplicatedPhraseViolations.Length == 0;
+            && duplicatedPhraseViolations.Length == 0
+            && diagnosticWarningViolations.Length == 0
+            && !writerConsumedRawMetadata;
         var diagnostics = new
         {
             phaseNo = 7,
@@ -150,9 +166,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(storyboardPath), exists = File.Exists(storyboardPath) },
                 new { path = NormalizePath(planPath), exists = File.Exists(planPath) },
                 new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) },
-                new { path = NormalizePath(styleContractPath), exists = File.Exists(styleContractPath) }
+                new { path = NormalizePath(styleContractPath), exists = File.Exists(styleContractPath) },
+                new { path = NormalizePath(knowledgeContractPath), exists = File.Exists(knowledgeContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -166,7 +183,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             promptLeakageViolations,
             isoDateTimeViolations,
             duplicatedPhraseViolations,
+            diagnosticWarningViolations,
             narrationNaturalnessWarnings,
+            knowledgeFormatterExecuted = true,
+            rawMetadataRemoved = knowledgeDiagnostics.RawMetadataRemoved,
+            instructionFragmentsRemoved = knowledgeDiagnostics.InstructionFragmentsRemoved,
+            isoDateLeakageDetected = isoDateTimeViolations.Length > 0,
+            duplicatedPhraseDetected = duplicatedPhraseViolations.Length > 0,
+            formattedKnowledgeUsedByWriter = !writerConsumedRawMetadata,
+            knowledgeFormatContractPath = NormalizePath(knowledgeContractPath),
+            knowledgeFormatDiagnosticsPath = NormalizePath(knowledgeDiagnosticsPath),
             chronicleEditorialEngine = new { documentaryWriterExecuted = true, documentaryEditorExecuted = true, observationEditorExecuted = true, editorialReviewerExecuted = true },
             scientificAccuracyScore = professionalScores.ScientificAccuracyScore,
             editorialQualityScore = professionalScores.DocumentaryVoiceScore,
@@ -208,6 +234,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             noPromptLeakageDetected = promptLeakageViolations.Length == 0,
             noIsoDateTimeDetected = isoDateTimeViolations.Length == 0,
             noDuplicatedTransformedPhrasesDetected = duplicatedPhraseViolations.Length == 0,
+            noDiagnosticWarningsInNarration = diagnosticWarningViolations.Length == 0,
+            formattedKnowledgeUsedByWriter = !writerConsumedRawMetadata,
+            knowledgeFormatterExecuted = true,
+            rawMetadataRemoved = knowledgeDiagnostics.RawMetadataRemoved,
+            instructionFragmentsRemoved = knowledgeDiagnostics.InstructionFragmentsRemoved,
             documentaryVoiceScore = professionalScores.DocumentaryVoiceScore,
             scientificAccuracyScore = professionalScores.ScientificAccuracyScore,
             observationGuidanceScore = professionalScores.ObservationGuidanceScore,
@@ -222,7 +253,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
     }
 
     private static NarrationPlanV5Scene BuildPlanScene(JsonElement scene, int index, IReadOnlyList<NarrationFactV5> facts)
@@ -315,10 +346,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (TryGetFact(facts, "eventDateLocal", out var date) || TryGetFact(facts, "date", out date)) sentences.Add($"Plan for {date}.");
         if (TryGetFact(facts, "bestViewingWindowLocal", out var window)) sentences.Add($"The best time to step outside is {LowerFirst(window)}.");
         else if (TryGetFact(facts, "eventTimeLocal", out var time) || TryGetFact(facts, "time", out time)) sentences.Add($"Try looking around {time}.");
-        if (TryGetFact(facts, "skyDirectionHint", out var direction) || TryGetFact(facts, "direction", out direction)) sentences.Add($"Face {NaturalDirection(direction)} and choose the clearest horizon you can find.");
+        if (TryGetFact(facts, "skyDirectionHint", out var direction) || TryGetFact(facts, "direction", out direction)) sentences.Add(direction.StartsWith("Face ", StringComparison.OrdinalIgnoreCase) || direction.StartsWith("Look ", StringComparison.OrdinalIgnoreCase) ? $"{direction}, and choose the clearest horizon you can find." : $"Face {NaturalDirection(direction)} and choose the clearest horizon you can find.");
         if (TryGetFact(facts, "constellation", out var constellation)) sentences.Add($"If you can identify the constellations, use {constellation} as a gentle landmark.");
         if (TryGetFact(facts, "relativePositions", out var separation) || TryGetFact(facts, "angularSeparation", out separation)) sentences.Add($"The spacing should look close enough to compare in a single glance.");
-        if (TryGetFact(facts, "nakedEyeVisibility", out var nakedEye)) sentences.Add(IsAffirmative(nakedEye) ? "Your eyes are enough to begin." : "Use confirmed local guidance before choosing equipment.");
+        if (TryGetFact(facts, "nakedEyeVisibility", out var nakedEye)) sentences.Add(nakedEye.Contains("won\'t need", StringComparison.OrdinalIgnoreCase) ? "You won't need a telescope; start with your eyes." : IsAffirmative(nakedEye) ? "Your eyes are enough to begin." : "Use confirmed local guidance before choosing equipment.");
         else if (TryGetFact(facts, "binocularGuidance", out var binoculars) || TryGetFact(facts, "telescopeGuidance", out binoculars)) sentences.Add($"For equipment, {LowerFirst(NaturalizeIsoDates(binoculars))}");
         if (TryGetFact(facts, "lightPollutionConsiderations", out var lightPollution)) sentences.Add($"Darker surroundings will make the view cleaner, but the main pattern should still be easy to recognize if the horizon is open.");
         return string.Join(" ", sentences);
@@ -328,16 +359,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     {
         var clean = NaturalizeIsoDates(value.Trim());
         if (name.Contains("window", StringComparison.OrdinalIgnoreCase)) return $"The most useful viewing window is {LowerFirst(clean)}.";
-        if (name.Contains("direction", StringComparison.OrdinalIgnoreCase)) return $"Look toward {NaturalDirection(clean)}.";
-        if (name.Contains("date", StringComparison.OrdinalIgnoreCase)) return $"This is a sky moment for {clean}.";
+        if (name.Contains("direction", StringComparison.OrdinalIgnoreCase)) return clean.StartsWith("Face ", StringComparison.OrdinalIgnoreCase) || clean.StartsWith("Look ", StringComparison.OrdinalIgnoreCase) ? $"{clean}." : $"Look toward {NaturalDirection(clean)}.";
+        if (name.Contains("date", StringComparison.OrdinalIgnoreCase)) return clean.StartsWith("on ", StringComparison.OrdinalIgnoreCase) ? $"{clean}." : $"This is a sky moment for {clean}.";
         if (name.Contains("time", StringComparison.OrdinalIgnoreCase)) return $"Around {clean}, the view should be at its best.";
         if (name.Contains("region", StringComparison.OrdinalIgnoreCase)) return $"It favors observers in {clean}.";
         if (name.Contains("moon", StringComparison.OrdinalIgnoreCase)) return $"The Moon's phase matters here: {clean}.";
         if (name.Contains("altitude", StringComparison.OrdinalIgnoreCase)) return "It should sit high enough to see clearly if your horizon is open.";
         if (name.Contains("azimuth", StringComparison.OrdinalIgnoreCase)) return string.Empty;
         if (name.Contains("constellation", StringComparison.OrdinalIgnoreCase)) return $"The scene sits near {clean}.";
-        if (name.Contains("separation", StringComparison.OrdinalIgnoreCase) || name.Contains("relativePositions", StringComparison.OrdinalIgnoreCase)) return $"They appear close together in the sky, separated by about {clean} degrees.";
-        if (name.Contains("naked", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "It should be visible to the unaided eye." : "It may not be easy with the unaided eye.";
+        if (name.Contains("separation", StringComparison.OrdinalIgnoreCase) || name.Contains("relativePositions", StringComparison.OrdinalIgnoreCase)) return Regex.IsMatch(clean, "\\d") ? $"They appear close together in the sky, separated by about {clean} degrees." : $"They appear {clean}.";
+        if (name.Contains("naked", StringComparison.OrdinalIgnoreCase)) return clean.Contains("won\'t need", StringComparison.OrdinalIgnoreCase) ? $"{clean}." : IsAffirmative(clean) ? "It should be visible to the unaided eye." : "It may not be easy with the unaided eye.";
         if (name.Contains("binocular", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "Binoculars can make the view more satisfying." : string.Empty;
         if (name.Contains("telescope", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "A telescope is optional, not the starting point." : string.Empty;
         if (name.Contains("appearance", StringComparison.OrdinalIgnoreCase)) return $"Expect {LowerFirst(clean)}.";
@@ -445,6 +476,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (!string.IsNullOrWhiteSpace(naturalValue) && fullText.Contains(naturalValue, StringComparison.OrdinalIgnoreCase)) return true;
         var natural = NaturalizeFact(fact.Name, fact.Value);
         if (!string.IsNullOrWhiteSpace(natural) && fullText.Contains(natural, StringComparison.OrdinalIgnoreCase)) return true;
+        var formattedValue = KnowledgeFormatter.FormatValue(fact.Name, fact.Value);
+        if (!string.IsNullOrWhiteSpace(formattedValue) && fullText.Contains(formattedValue, StringComparison.OrdinalIgnoreCase)) return true;
+        if (fact.Name.Contains("date", StringComparison.OrdinalIgnoreCase) && DateTimeOffset.TryParse(fact.Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
+        {
+            return fullText.Contains(dto.ToString("MMMM d", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+        }
         return fact.Name.Contains("altitude", StringComparison.OrdinalIgnoreCase) || fact.Name.Contains("azimuth", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -479,6 +516,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal"];
     private static readonly string[] PromptLeakagePhrases = ["metadata", "prompt", "json", "llm", "system message", "user prompt", "contract", "schema"];
     private static readonly Regex IsoDateTimeRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RawUtcRegex = new(@"\b(?:UTC|Z\s*time|Coordinated Universal Time)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DuplicatedTransformedPhraseRegex = new(@"\b(?:around around|face the look toward|(?<dir>look toward|face|turn toward)\s+(?:the\s+)?\k<dir>)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
@@ -492,7 +530,134 @@ public sealed record NarrationV5(string NarrationVersion, string OrchestrationVe
 public sealed record NarrationV5Scene(string SceneId, string ScenePurpose, string NarrationText, IReadOnlyList<string> RequiredFactsCovered, IReadOnlyList<string> Warnings);
 public sealed record RequiredFactCoverage(string Value, bool Covered);
 public sealed record ProfessionalNarrationScores(int DocumentaryVoiceScore, int ScientificAccuracyScore, int ObservationGuidanceScore, int EditorialFlowScore, int SpokenLanguageScore, int ViewerRetentionScore, int AstroPulseIdentityScore, int OverallNarrationScore);
+public sealed record KnowledgeFormatContract(string ContractVersion, string Language, IReadOnlyList<KnowledgeFormattedFact> FormattedFacts, IReadOnlyList<KnowledgeFormattedScene> Scenes)
+{
+    public NarrationBriefsV5 ToNarrationBriefs(string orchestrationVersion) => new("AstroPulse-NarrationBriefs-v1", orchestrationVersion, Language, Scenes.Select(s => new NarrationBriefV5(s.SceneId, s.ScenePurpose, s.SceneOrder, s.SceneGoal, s.AudienceTakeaway, s.FactsToMention, s.FactsToAvoid, s.AlreadyCoveredFacts, s.ConnectorToNext, s.Tone, s.Pacing, s.TargetLength, s.MustIncludeEnding, s.GenerationInstructions)).ToArray());
+}
+public sealed record KnowledgeFormattedFact(string Name, string FormattedValue);
+public sealed record KnowledgeFormattedScene(string SceneId, string ScenePurpose, int SceneOrder, string SceneGoal, string AudienceTakeaway, IReadOnlyList<NarrationFactV5> FactsToMention, IReadOnlyList<string> FactsToAvoid, IReadOnlyList<string> AlreadyCoveredFacts, string ConnectorToNext, string Tone, string Pacing, string TargetLength, bool MustIncludeEnding, string GenerationInstructions);
+public sealed record KnowledgeFormatDiagnostics(string Component, int RawFactCount, int FormattedFactCount, bool RawMetadataRemoved, bool InstructionFragmentsRemoved, int RawFactsWithMetadata, int WriterFactsWithMetadataBeforeFormatting, int SceneCount);
 public sealed record NarrationGeneratorV5Result(IReadOnlyList<string> GeneratedFiles) { public static NarrationGeneratorV5Result Empty { get; } = new([]); }
+
+
+public sealed class KnowledgeFormatter
+{
+    private static readonly Regex IsoRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex DegreeRegex = new(@"(?<value>\d+(?:\.\d+)?)\s*(?:°|degrees?)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly string[] InstructionFragments = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "metadata", "prompt", "JSON", "Verified details", "event identity", "facts to mention", "scene goal", "the viewer should", "viewer should"];
+
+    public KnowledgeFormatContract Format(IReadOnlyList<NarrationFactV5> requiredFacts, NarrationBriefsV5 briefs, string language)
+    {
+        var formattedFacts = requiredFacts.Select(f => new KnowledgeFormattedFact(f.Name, FormatValue(f.Name, f.Value))).ToArray();
+        var byName = formattedFacts.GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().FormattedValue, StringComparer.OrdinalIgnoreCase);
+        var scenes = briefs.Briefs.Select(brief => new KnowledgeFormattedScene(
+            brief.SceneId,
+            brief.ScenePurpose,
+            brief.SceneOrder,
+            CleanInstructionText(brief.SceneGoal),
+            CleanInstructionText(brief.AudienceTakeaway),
+            brief.FactsToMention.Select(f => new NarrationFactV5(f.Name, byName.TryGetValue(f.Name, out var formatted) ? formatted : FormatValue(f.Name, f.Value))).ToArray(),
+            brief.FactsToAvoid.Select(CleanInstructionText).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray(),
+            brief.AlreadyCoveredFacts,
+            CleanInstructionText(brief.ConnectorToNext),
+            brief.Tone,
+            brief.Pacing,
+            brief.TargetLength,
+            brief.MustIncludeEnding,
+            CleanInstructionText(brief.GenerationInstructions))).ToArray();
+        return new KnowledgeFormatContract("AstroPulse-KnowledgeFormatContract-v1", language, formattedFacts, scenes);
+    }
+
+    public KnowledgeFormatDiagnostics BuildDiagnostics(KnowledgeFormatContract contract, IReadOnlyList<NarrationFactV5> rawFacts, NarrationBriefsV5 rawBriefs)
+    {
+        var formattedText = JsonSerializer.Serialize(contract, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return new KnowledgeFormatDiagnostics(
+            "KnowledgeFormatter-v1",
+            rawFacts.Count,
+            contract.FormattedFacts.Count,
+            !ContainsRawMetadata(formattedText),
+            !InstructionFragments.Any(p => formattedText.Contains(p, StringComparison.OrdinalIgnoreCase)),
+            rawFacts.Count(f => ContainsRawMetadata(f.Value)),
+            rawBriefs.Briefs.SelectMany(b => b.FactsToMention).Count(f => ContainsRawMetadata(f.Value)),
+            contract.Scenes.Count);
+    }
+
+    public static bool ContainsRawMetadata(string value) => IsoRegex.IsMatch(value) || value.Contains("UTC", StringComparison.OrdinalIgnoreCase) || value.Contains("T00:", StringComparison.OrdinalIgnoreCase);
+
+    public static string FormatValue(string name, string value)
+    {
+        var clean = CleanInstructionText(value.Trim());
+        if (string.IsNullOrWhiteSpace(clean)) return clean;
+        if (name.Contains("date", StringComparison.OrdinalIgnoreCase) || name.Contains("time", StringComparison.OrdinalIgnoreCase) || IsoRegex.IsMatch(clean)) clean = FormatDates(clean);
+        if (name.Contains("separation", StringComparison.OrdinalIgnoreCase) || name.Contains("relativePositions", StringComparison.OrdinalIgnoreCase)) clean = FormatAngularSeparation(clean);
+        if (name.Contains("direction", StringComparison.OrdinalIgnoreCase) || name.Contains("azimuth", StringComparison.OrdinalIgnoreCase)) clean = FormatDirection(clean);
+        if (name.Contains("altitude", StringComparison.OrdinalIgnoreCase)) clean = FormatAltitude(clean);
+        if (name.Contains("naked", StringComparison.OrdinalIgnoreCase) || name.Contains("visibility", StringComparison.OrdinalIgnoreCase) || name.Contains("equipment", StringComparison.OrdinalIgnoreCase) || name.Contains("binocular", StringComparison.OrdinalIgnoreCase) || name.Contains("telescope", StringComparison.OrdinalIgnoreCase)) clean = FormatEquipment(clean);
+        return CleanInstructionText(clean).Trim().TrimEnd('.');
+    }
+
+    private static string FormatDates(string value) => IsoRegex.Replace(value, m =>
+    {
+        if (DateTimeOffset.TryParse(m.Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto)) return $"On the evening of {dto.ToString("MMMM d", CultureInfo.InvariantCulture)}";
+        if (DateOnly.TryParseExact(m.Value[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)) return $"on {d.ToString("MMMM d", CultureInfo.InvariantCulture)}";
+        return m.Value;
+    }).Replace("UTC", "local time", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatAngularSeparation(string value)
+    {
+        var m = DegreeRegex.Match(value);
+        if (!m.Success || !decimal.TryParse(m.Groups["value"].Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var degrees)) return value;
+        var phrase = degrees switch
+        {
+            >= 1.45m and <= 1.75m => "just over one and a half degrees apart",
+            < 1m => "less than a degree apart",
+            < 2m => "about two degrees apart",
+            _ => $"about {Math.Round(degrees)} degrees apart"
+        };
+        return phrase;
+    }
+
+    private static string FormatDirection(string value)
+    {
+        var lower = value.ToLowerInvariant();
+        if (lower.Contains("west")) return "Face the western horizon shortly after sunset";
+        if (lower.Contains("east")) return "Face the eastern horizon when the sky is clear";
+        if (lower.Contains("south")) return "Look toward the southern sky";
+        if (lower.Contains("north")) return "Look toward the northern sky";
+        return value.Replace("look toward", "Face", StringComparison.OrdinalIgnoreCase).Replace("sky sky", "sky", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatAltitude(string value)
+    {
+        var m = DegreeRegex.Match(value);
+        if (!m.Success || !decimal.TryParse(m.Groups["value"].Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var degrees)) return value;
+        if (degrees is >= 20 and <= 35) return "about halfway between the horizon and overhead";
+        if (degrees < 15) return "low above the horizon";
+        if (degrees > 60) return "high in the sky";
+        return "comfortably above the horizon";
+    }
+
+    private static string FormatEquipment(string value)
+    {
+        if (value.Contains("excellent", StringComparison.OrdinalIgnoreCase) || value.Contains("naked", StringComparison.OrdinalIgnoreCase) || value.Contains("true", StringComparison.OrdinalIgnoreCase) || value.Contains("yes", StringComparison.OrdinalIgnoreCase)) return "You won't need a telescope";
+        if (value.Contains("binocular", StringComparison.OrdinalIgnoreCase)) return "Binoculars may make the view easier";
+        return value;
+    }
+
+    private static string CleanInstructionText(string value)
+    {
+        var cleaned = value;
+        foreach (var phrase in InstructionFragments) cleaned = Regex.Replace(cleaned, $@"\b{Regex.Escape(phrase)}\b:?", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        cleaned = Regex.Replace(cleaned, "\\s{2,}", " ", RegexOptions.CultureInvariant)
+            .Replace(" .", ".", StringComparison.Ordinal)
+            .Replace(" ,", ",", StringComparison.Ordinal)
+            .Replace("around around", "around", StringComparison.OrdinalIgnoreCase)
+            .Replace("face the look toward", "look toward", StringComparison.OrdinalIgnoreCase)
+            .Replace("sky sky", "sky", StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', '.', ':', ';', '-');
+        return cleaned;
+    }
+}
 
 public static class NarrativeDirector
 {
