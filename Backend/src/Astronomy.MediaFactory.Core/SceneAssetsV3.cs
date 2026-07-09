@@ -5,7 +5,12 @@ public sealed record SceneAssetsV3Request(
     bool GenerateShort = true,
     bool GenerateLong = true,
     bool OverwriteExisting = false,
-    bool? EnableAccurateSkyGuideV2 = null);
+    bool? EnableAccurateSkyGuideV2 = null,
+    int LongTargetWidth = 1920,
+    int LongTargetHeight = 1080,
+    int ShortTargetWidth = 2160,
+    int ShortTargetHeight = 3840,
+    string ProviderRequestedSize = "1792x1024");
 
 public sealed record SceneAssetsV3Response(
     string OutputRoot,
