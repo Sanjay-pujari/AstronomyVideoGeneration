@@ -13,7 +13,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         "Your Role",
         "Astro Pulse Editorial Identity",
         "Story Overview",
-        "Narrative Brief",
+        "Producer Notes",
         "Scientific Guardrails",
         "Writing Principles",
         "Output Contract"
@@ -94,7 +94,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         AddSection(sb, 1, "Your Role", new RoleSectionBuilder().Build());
         AddSection(sb, 2, "Astro Pulse Editorial Identity", new EditorialIdentitySectionBuilder().Build());
         AddSection(sb, 3, "Story Overview", new StoryOverviewSectionBuilder().Build(language, storyArc));
-        AddSection(sb, 4, "Narrative Brief", new SceneEditorialBriefBuilder().Build(scenes, styleContract));
+        AddSection(sb, 4, "Producer Notes", new SceneEditorialBriefBuilder().Build(scenes, styleContract));
         AddSection(sb, 5, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, prohibited));
         AddSection(sb, 6, "Writing Principles", new WritingPrinciplesSectionBuilder().Build(preferred, prohibited, styleContract));
         AddSection(sb, 7, "Output Contract", new OutputContractSectionBuilder().Build());

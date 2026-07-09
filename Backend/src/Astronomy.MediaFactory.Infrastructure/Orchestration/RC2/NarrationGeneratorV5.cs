@@ -38,10 +38,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         Directory.CreateDirectory(editorialBriefRoot);
         var editorialBriefContractPath = Path.Combine(editorialBriefRoot, "editorial-brief-contract.json");
         var editorialBriefDiagnosticsPath = Path.Combine(editorialBriefRoot, "editorial-brief-diagnostics.json");
-        var narrativeBriefRoot = Path.Combine(narrationRoot, "narrative-brief");
-        Directory.CreateDirectory(narrativeBriefRoot);
-        var narrativeBriefContractPath = Path.Combine(narrativeBriefRoot, "narrative-brief-contract.json");
-        var narrativeBriefDiagnosticsPath = Path.Combine(narrativeBriefRoot, "narrative-brief-diagnostics.json");
+        var producerNotesRoot = Path.Combine(narrationRoot, "producer-notes");
+        Directory.CreateDirectory(producerNotesRoot);
+        var producerNotesContractPath = Path.Combine(producerNotesRoot, "producer-notes-contract.json");
+        var producerNotesDiagnosticsPath = Path.Combine(producerNotesRoot, "producer-notes-diagnostics.json");
         var longRoot = Path.Combine(narrationRoot, "long");
         var shortRoot = Path.Combine(narrationRoot, "short");
         Directory.CreateDirectory(longRoot);
@@ -86,9 +86,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var editorialBriefContract = interpreter.Interpret(knowledgeContract, FindStringArray(contract, "missingFactWarnings"));
         var editorialBriefDiagnostics = interpreter.BuildDiagnostics(editorialBriefContract, rawNarrationBriefs, knowledgeContract);
         var requestedFormats = ResolveRequestedNarrationFormats(outputRoot, request, response);
-        var narrativeBriefContract = NarrativeBriefComposer.Compose(editorialBriefContract, knowledgeContract, requestedFormats);
-        var narrativeBriefDiagnostics = NarrativeBriefComposer.BuildDiagnostics(narrativeBriefContract);
-        var narrationBriefs = narrativeBriefContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion);
+        var producerNotesContract = ProducerNotesComposer.Compose(editorialBriefContract, knowledgeContract, requestedFormats);
+        var producerNotesDiagnostics = ProducerNotesComposer.BuildDiagnostics(producerNotesContract);
+        var narrationBriefs = producerNotesContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion);
 
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(narrationBriefs, JsonOptions), cancellationToken);
@@ -96,8 +96,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(knowledgeDiagnosticsPath, JsonSerializer.Serialize(knowledgeDiagnostics, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(editorialBriefContractPath, JsonSerializer.Serialize(editorialBriefContract, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(editorialBriefDiagnosticsPath, JsonSerializer.Serialize(editorialBriefDiagnostics, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(narrativeBriefContractPath, JsonSerializer.Serialize(narrativeBriefContract, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(narrativeBriefDiagnosticsPath, JsonSerializer.Serialize(narrativeBriefDiagnostics, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(producerNotesContractPath, JsonSerializer.Serialize(producerNotesContract, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(producerNotesDiagnosticsPath, JsonSerializer.Serialize(producerNotesDiagnostics, JsonOptions), cancellationToken);
 
         var styleStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var styleWarnings = new List<string>();
@@ -118,8 +118,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
 
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [narrativeBriefContractPath, knowledgeContractPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v2", "NarrationPromptComposerV3", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "You are a senior documentary writer for Astro Pulse.", promptComposerOutput.PromptPreviewMarkdown, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrativeBriefContractPath), NormalizePath(knowledgeContractPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(promptPreviewPath), NormalizePath(promptQualityPath)], DateTime.UtcNow);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [producerNotesContractPath, knowledgeContractPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v2", "NarrationPromptComposerV3", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "You are a senior documentary writer for Astro Pulse.", promptComposerOutput.PromptPreviewMarkdown, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(producerNotesContractPath), NormalizePath(knowledgeContractPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(promptPreviewPath), NormalizePath(promptQualityPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -132,7 +132,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             var generatedByFormat = new Dictionary<string, NarrationV5>(StringComparer.OrdinalIgnoreCase);
                 foreach (var format in requestedFormats)
                 {
-                    var formatBriefs = narrativeBriefContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion, format);
+                    var formatBriefs = producerNotesContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion, format);
                     var scenesForFormat = RunChronicleEditorialEngine(llmRequest, formatBriefs, format).ToArray();
                     var textForFormat = string.Join("\n\n", scenesForFormat.Select(scene => scene.NarrationText));
                     generatedByFormat[format] = new NarrationV5($"AstroPulse-Narration-v5-{format}", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, scenesForFormat, textForFormat, ChannelEnding);
@@ -164,14 +164,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var isoDateTimeViolations = IsoDateTimeRegex.Matches(fullText).Select(m => m.Value).Concat(RawUtcRegex.Matches(fullText).Select(m => m.Value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var duplicatedPhraseViolations = DuplicatedTransformedPhraseRegex.Matches(fullText).Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var diagnosticWarningViolations = ContainsAny(fullText, "diagnostic warning", "diagnostics warning", "warning:") ? new[] { "Diagnostic warning language found in final narration." } : [];
-        var writerInputText = BuildEffectiveWriterInputText(narrativeBriefContract);
+        var writerInputText = BuildEffectiveWriterInputText(producerNotesContract);
         var forbiddenWriterInputDetected = EditorialBriefInterpreter.ForbiddenWriterInputPhrases.Where(p => writerInputText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var forbiddenNarrationDetected = EditorialBriefInterpreter.ForbiddenNarrationPhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var diagnosticWarningsInWriterInput = ContainsAny(writerInputText, "missing metadata", "diagnostic warning", "diagnostics warning", "warning:");
-        var writerConsumedRawMetadata = !knowledgeDiagnostics.RawMetadataRemoved || narrativeBriefContract.Briefs.SelectMany(b => b.KeyFacts).Any(f => KnowledgeFormatter.ContainsRawMetadata(f.Value));
+        var writerConsumedRawMetadata = !knowledgeDiagnostics.RawMetadataRemoved || producerNotesContract.Briefs.SelectMany(b => b.KeyFacts).Any(f => KnowledgeFormatter.ContainsRawMetadata(f.Value));
         var bothFormatsRequested = requestedFormats.Contains("long") && requestedFormats.Contains("short");
         var missingRequestedFormats = requestedFormats.Where(f => !File.Exists(Path.Combine(narrationRoot, f, "narration.json"))).ToArray();
-        var shortCopiedFromLong = File.Exists(longNarrationPath) && File.Exists(shortNarrationPath) && GetNarrationText(longNarrationPath).Equals(GetNarrationText(shortNarrationPath), StringComparison.OrdinalIgnoreCase);
+        var longShortDistinctivenessScore = File.Exists(longNarrationPath) && File.Exists(shortNarrationPath) ? CalculateDistinctivenessScore(GetNarrationText(longNarrationPath), GetNarrationText(shortNarrationPath)) : 0;
+        var shortCopiedFromLong = File.Exists(longNarrationPath) && File.Exists(shortNarrationPath) && (GetNarrationText(longNarrationPath).Equals(GetNarrationText(shortNarrationPath), StringComparison.OrdinalIgnoreCase) || longShortDistinctivenessScore < 35);
+        var producerNotesLeakagePhrases = DetectProducerNotesLeakage(producerNotesContract, fullText);
+        var producerNotesLeakageDetected = producerNotesLeakagePhrases.Length > 0;
         var expectedCounts = requestedFormats.ToDictionary(f => f, f => ResolveExpectedFrameCount(outputRoot, f), StringComparer.OrdinalIgnoreCase);
         var formatSceneCountViolations = requestedFormats.Where(f => expectedCounts[f] > 0 && ResolveNarrationSceneCount(Path.Combine(narrationRoot, f, "narration.json")) != expectedCounts[f]).Select(f => $"{f} narration scene count does not match expected story frame count {expectedCounts[f]}.").ToArray();
         var certificationViolations = engineeringLeakageViolations.Select(p => $"Instruction leakage phrase found: {p}")
@@ -184,7 +187,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             .Concat(diagnosticWarningsInWriterInput ? ["Diagnostic warning language found in writer input."] : [])
             .Concat(writerConsumedRawMetadata ? ["Documentary Writer consumed raw metadata instead of formatted knowledge."] : [])
             .Concat(bothFormatsRequested && missingRequestedFormats.Length > 0 ? [$"Both formats requested but missing narration format(s): {string.Join(", ", missingRequestedFormats)}."] : [])
-            .Concat(shortCopiedFromLong ? ["Short narration is a copy of long narration."] : [])
+            .Concat(producerNotesLeakageDetected ? producerNotesLeakagePhrases.Select(p => $"Producer notes leaked into narration: {p}") : [])
+            .Concat(shortCopiedFromLong ? ["Short narration is identical or near-identical to long narration."] : [])
             .Concat(formatSceneCountViolations)
             .ToArray();
         var errors = prohibitedViolations.Concat(missingFactViolations).Concat(certificationViolations).Concat(generationErrors).ToArray();
@@ -221,6 +225,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             && !diagnosticWarningsInWriterInput
             && !writerConsumedRawMetadata
             && missingRequestedFormats.Length == 0
+            && !producerNotesLeakageDetected
             && !shortCopiedFromLong
             && formatSceneCountViolations.Length == 0;
         var diagnostics = new
@@ -237,9 +242,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(styleContractPath), exists = File.Exists(styleContractPath) },
                 new { path = NormalizePath(knowledgeContractPath), exists = File.Exists(knowledgeContractPath) },
                 new { path = NormalizePath(editorialBriefContractPath), exists = File.Exists(editorialBriefContractPath) },
-                new { path = NormalizePath(narrativeBriefContractPath), exists = File.Exists(narrativeBriefContractPath) }
+                new { path = NormalizePath(producerNotesContractPath), exists = File.Exists(producerNotesContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, narrativeBriefContractPath, narrativeBriefDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -272,13 +277,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             forbiddenNarrationDetected,
             editorialBriefContractPath = NormalizePath(editorialBriefContractPath),
             editorialBriefDiagnosticsPath = NormalizePath(editorialBriefDiagnosticsPath),
-            narrativeBriefComposerExecuted = true,
-            narrativeBriefContractPath = NormalizePath(narrativeBriefContractPath),
-            narrativeBriefDiagnosticsPath = NormalizePath(narrativeBriefDiagnosticsPath),
+            producerNotesComposerExecuted = true,
+            producerNotesContractPath = NormalizePath(producerNotesContractPath),
+            producerNotesDiagnosticsPath = NormalizePath(producerNotesDiagnosticsPath),
             requestedFormats,
             bothFormatsRequested,
             missingRequestedFormats,
             shortCopiedFromLong,
+            producerNotesGenerated = File.Exists(producerNotesContractPath),
+            producerNotesLeakageDetected,
+            producerNotesLeakagePhrases,
+            longShortDistinctivenessScore,
             expectedSceneCounts = expectedCounts,
             formatSceneCountViolations,
             chronicleEditorialEngine = new { editorialBriefInterpreterExecuted = true, documentaryWriterExecuted = true, documentaryEditorExecuted = true, observationEditorExecuted = true, promptQualityEvaluationExecuted = true, editorialReviewerExecuted = true },
@@ -329,7 +338,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             phaseNo = 7,
             phaseName = PhaseName,
             validator = "AstroPulse-NarrationValidator-v3",
-            passed = generationErrors.Count == 0 && editorialReviewerDecision != PromptQualityEvaluator.Regenerate && professionalScores.OverallNarrationScore >= 80,
+            passed = generationErrors.Count == 0 && validationErrors.Length == 0 && editorialReviewerDecision != PromptQualityEvaluator.Regenerate && professionalScores.OverallNarrationScore >= 80,
             editorialReviewerDecision,
             editorialReviewerReason,
             promptRecommendation = finalPromptQuality.Recommendation,
@@ -365,13 +374,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             viewerRetentionScore = professionalScores.ViewerRetentionScore,
             astroPulseIdentityScore = professionalScores.AstroPulseIdentityScore,
             overallNarrationScore = professionalScores.OverallNarrationScore,
-            narrativeBriefComposerExecuted = true,
-            narrativeBriefContractPath = NormalizePath(narrativeBriefContractPath),
-            narrativeBriefDiagnosticsPath = NormalizePath(narrativeBriefDiagnosticsPath),
+            producerNotesComposerExecuted = true,
+            producerNotesContractPath = NormalizePath(producerNotesContractPath),
+            producerNotesDiagnosticsPath = NormalizePath(producerNotesDiagnosticsPath),
             requestedFormats,
             bothFormatsRequested,
             missingRequestedFormats,
             shortCopiedFromLong,
+            producerNotesGenerated = File.Exists(producerNotesContractPath),
+            producerNotesLeakageDetected,
+            producerNotesLeakagePhrases,
+            longShortDistinctivenessScore,
             expectedSceneCounts = expectedCounts,
             formatSceneCountViolations,
             errors = validationErrors,
@@ -380,13 +393,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, narrativeBriefContractPath, narrativeBriefDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
     }
 
-    private static string BuildEffectiveWriterInputText(NarrativeBriefContract narrativeBriefContract)
+    private static string BuildEffectiveWriterInputText(ProducerNotesContract producerNotesContract)
     {
-        var story = narrativeBriefContract.Briefs.SelectMany(s => new[] { s.SceneStory, s.NarrativeGoal, s.AudienceExperience, s.ObservationGuidance, s.EmotionalTone, s.TransitionContext });
-        var facts = narrativeBriefContract.Briefs.SelectMany(s => s.KeyFacts.Select(f => f.Value));
+        var story = producerNotesContract.Briefs.SelectMany(s => new[] { s.SceneStory, s.NarrativeGoal, s.AudienceExperience, s.ObservationGuidance, s.EmotionalTone, s.TransitionContext });
+        var facts = producerNotesContract.Briefs.SelectMany(s => s.KeyFacts.Select(f => f.Value));
         return string.Join("\n", story.Concat(facts));
     }
 
@@ -487,9 +500,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         {
             "hook" => $"As twilight deepens, the sky sets up a quiet meeting worth noticing. {detailPhrase} This is an easy moment to miss, but a rewarding one to catch.",
             "science" => $"The closeness is a line-of-sight effect. Jupiter and Venus remain worlds apart, yet from Earth their separate paths can briefly seem to gather in one small patch of sky. {detailPhrase}",
-            "observation" => $"Turn the story into a simple observing plan. {BuildObservationGuidance(facts)} {detailPhrase}",
+            "observation" => $"Make it practical now. {BuildObservationGuidance(facts)} {detailPhrase}",
             "takeaway" or "closing" => $"After the viewing window passes, the memory is simple: two bright worlds sharing one quiet corner of the sky. {BuildClosingMeaning(facts)}",
-            _ => $"The story moves from curiosity into recognition. {detailPhrase} The sky becomes easier to read with each detail."
+            _ => $"Curiosity turns into recognition. {detailPhrase} Each detail makes the sky easier to read."
         };
         text = ApplyFormatNarrationStyle(text, purposeKind, format);
 
@@ -504,7 +517,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     {
         if (format.Equals("short", StringComparison.OrdinalIgnoreCase))
         {
-            var action = purposeKind is "hook" ? "Look up soon." : purposeKind is "observation" ? "Step outside, find the open horizon, and start with your eyes." : "Keep the idea simple.";
+            var action = purposeKind is "hook" ? "Look up soon." : purposeKind is "observation" ? "Step outside, find the open horizon, and start with your eyes." : "Stay with the visible sky.";
             return $"{action} {text}";
         }
 
@@ -745,11 +758,46 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "open by", "end with", "the event feels", "warning"];
+    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "open by", "end with", "the event feels", "warning", "the story", "let viewers", "by the end", "keep the tone", "raw metadata", "diagnostic text"];
     private static readonly string[] PromptLeakagePhrases = ["metadata", "prompt", "json", "llm", "system message", "user prompt", "contract", "schema"];
     private static readonly Regex IsoDateTimeRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RawUtcRegex = new(@"\b(?:UTC|Z\s*time|Coordinated Universal Time)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DuplicatedTransformedPhraseRegex = new(@"\b(?:around around|face the look toward|(?<dir>look toward|face|turn toward)\s+(?:the\s+)?\k<dir>)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static int CalculateDistinctivenessScore(string longText, string shortText)
+    {
+        var longTokens = TokenizeForSimilarity(longText);
+        var shortTokens = TokenizeForSimilarity(shortText);
+        if (longTokens.Count == 0 || shortTokens.Count == 0) return 0;
+        var overlap = longTokens.Intersect(shortTokens, StringComparer.OrdinalIgnoreCase).Count();
+        var union = longTokens.Union(shortTokens, StringComparer.OrdinalIgnoreCase).Count();
+        var jaccardSimilarity = union == 0 ? 1d : (double)overlap / union;
+        var lengthDelta = Math.Abs(longTokens.Count - shortTokens.Count) / (double)Math.Max(longTokens.Count, shortTokens.Count);
+        return Math.Clamp((int)Math.Round((1d - jaccardSimilarity) * 75d + lengthDelta * 25d), 0, 100);
+    }
+
+    private static HashSet<string> TokenizeForSimilarity(string text) => Regex.Matches(text.ToLowerInvariant(), "[a-z0-9']+")
+        .Select(m => m.Value)
+        .Where(t => t.Length > 3)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<string> DetectProducerNotesLeakage(ProducerNotesContract contract, string narrationText)
+    {
+        var leaks = new List<string>();
+        foreach (var phrase in EngineeringLeakagePhrases.Concat(PromptLeakagePhrases))
+        {
+            if (narrationText.Contains(phrase, StringComparison.OrdinalIgnoreCase)) leaks.Add(phrase);
+        }
+
+        foreach (var note in contract.Briefs.SelectMany(b => new[] { b.SceneStory, b.NarrativeGoal, b.AudienceExperience, b.ObservationGuidance, b.TransitionContext }))
+        {
+            var sentence = note.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault(v => v.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 6);
+            if (!string.IsNullOrWhiteSpace(sentence) && narrationText.Contains(sentence, StringComparison.OrdinalIgnoreCase)) leaks.Add(sentence);
+        }
+
+        return leaks.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
@@ -800,12 +848,12 @@ public sealed record EditorialBriefContract(string ContractVersion, string Langu
 
 public sealed record EditorialBriefScene(string SceneId, string SceneRole, int SceneOrder, string EmotionalPurpose, string AudienceTakeaway, string NaturalWritingGuidance);
 public sealed record EditorialBriefDiagnostics(string Component, int SceneCount, bool PlanningLanguageRemoved, bool DiagnosticWarningsRemoved, bool SceneIntentConvertedToGuidance, IReadOnlyList<string> RemovedWriterPhrases, IReadOnlyList<string> DiagnosticWarningsKeptOutOfWriterInput);
-public sealed record NarrativeBriefContract(string ContractVersion, string Language, IReadOnlyList<NarrativeBriefScene> Briefs)
+public sealed record ProducerNotesContract(string ContractVersion, string Language, IReadOnlyList<ProducerNotesScene> Briefs)
 {
     public NarrationBriefsV5 ToNarrationBriefs(string orchestrationVersion, string? format = null)
     {
         var selected = string.IsNullOrWhiteSpace(format) ? Briefs : Briefs.Where(b => b.FormatRequirement.Equals(format, StringComparison.OrdinalIgnoreCase));
-        return new NarrationBriefsV5("AstroPulse-NarrativeBriefs-v1", orchestrationVersion, Language, selected.OrderBy(b => b.SceneOrder).Select(scene =>
+        return new NarrationBriefsV5("AstroPulse-ProducerNotes-v1", orchestrationVersion, Language, selected.OrderBy(b => b.SceneOrder).Select(scene =>
             new NarrationBriefV5(
                 scene.SceneId,
                 scene.NarrativeGoal,
@@ -824,7 +872,7 @@ public sealed record NarrativeBriefContract(string ContractVersion, string Langu
     }
 }
 
-public sealed record NarrativeBriefScene(
+public sealed record ProducerNotesScene(
     [property: JsonIgnore] string SceneId,
     [property: JsonIgnore] int SceneOrder,
     string SceneStory,
@@ -837,9 +885,9 @@ public sealed record NarrativeBriefScene(
     [property: JsonIgnore] string FormatRequirement,
     [property: JsonIgnore] bool MustIncludeEnding);
 
-public sealed record NarrativeBriefDiagnostics(string Component, int BriefCount, IReadOnlyList<string> FormatsRequested, bool ContainsOnlyAllowedFields, bool EditorialInstructionsRemoved, bool PlanningLanguageRemoved, bool SceneLabelsRemoved, bool AudiencePromisesRemoved, IReadOnlyList<string> ForbiddenPhrasesDetected);
+public sealed record ProducerNotesDiagnostics(string Component, int BriefCount, IReadOnlyList<string> FormatsRequested, bool ContainsOnlyAllowedFields, bool EditorialInstructionsRemoved, bool PlanningLanguageRemoved, bool SceneLabelsRemoved, bool AudiencePromisesRemoved, IReadOnlyList<string> ForbiddenPhrasesDetected);
 
-public static class NarrativeBriefComposer
+public static class ProducerNotesComposer
 {
     private static readonly string[] Forbidden =
     [
@@ -848,17 +896,17 @@ public static class NarrativeBriefComposer
         "use the confirmed", "keep observation", "in plain spoken language", "must", "metadata", "warning", "missing metadata"
     ];
 
-    public static NarrativeBriefContract Compose(EditorialBriefContract editorial, KnowledgeFormatContract knowledge, IReadOnlyList<string> formats)
+    public static ProducerNotesContract Compose(EditorialBriefContract editorial, KnowledgeFormatContract knowledge, IReadOnlyList<string> formats)
     {
         var knowledgeByScene = knowledge.Scenes.ToDictionary(s => s.SceneId, StringComparer.OrdinalIgnoreCase);
         var finalSceneOrder = editorial.Scenes.Max(s => s.SceneOrder);
-        var briefs = new List<NarrativeBriefScene>();
+        var briefs = new List<ProducerNotesScene>();
         foreach (var format in formats)
         foreach (var scene in editorial.Scenes.OrderBy(s => s.SceneOrder))
         {
             var k = knowledgeByScene[scene.SceneId];
             var keyFacts = k.FactsToMention.Select(f => new NarrationFactV5(f.Name, Clean(f.Value))).ToArray();
-            briefs.Add(new NarrativeBriefScene(
+            briefs.Add(new ProducerNotesScene(
                 scene.SceneId,
                 scene.SceneOrder,
                 BuildSceneStory(scene, k, keyFacts),
@@ -871,14 +919,14 @@ public static class NarrativeBriefComposer
                 format.ToLowerInvariant(),
                 scene.SceneOrder == finalSceneOrder));
         }
-        return new NarrativeBriefContract("AstroPulse-NarrativeBriefContract-v1", editorial.Language, briefs);
+        return new ProducerNotesContract("AstroPulse-ProducerNotesContract-v1", editorial.Language, briefs);
     }
 
-    public static NarrativeBriefDiagnostics BuildDiagnostics(NarrativeBriefContract contract)
+    public static ProducerNotesDiagnostics BuildDiagnostics(ProducerNotesContract contract)
     {
         var text = JsonSerializer.Serialize(contract, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         var forbidden = Forbidden.Where(p => text.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return new NarrativeBriefDiagnostics("NarrativeBriefComposer-v1", contract.Briefs.Count, contract.Briefs.Select(b => b.FormatRequirement).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), true, forbidden.Length == 0, forbidden.Length == 0, true, forbidden.All(p => !p.Contains("audience promise", StringComparison.OrdinalIgnoreCase)), forbidden);
+        return new ProducerNotesDiagnostics("ProducerNotesComposer-v1", contract.Briefs.Count, contract.Briefs.Select(b => b.FormatRequirement).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), true, forbidden.Length == 0, forbidden.Length == 0, true, forbidden.All(p => !p.Contains("audience promise", StringComparison.OrdinalIgnoreCase)), forbidden);
     }
 
     private static string BuildSceneStory(EditorialBriefScene scene, KnowledgeFormattedScene knowledge, IReadOnlyList<NarrationFactV5> facts)
