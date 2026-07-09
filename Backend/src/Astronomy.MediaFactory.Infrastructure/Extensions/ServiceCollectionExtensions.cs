@@ -533,6 +533,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Rc2PipelinePhaseRegistry>();
         services.AddScoped<SceneIntentBuilder>();
         services.AddScoped<CreativeStoryboardBuilder>();
+        services.AddScoped<NarrationGeneratorV5>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
         services.AddScoped<ICategoryProductionPipelineStrategy, DailySkyGuideProductionPipelineStrategy>();

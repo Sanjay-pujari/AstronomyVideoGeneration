@@ -87,7 +87,9 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         var sourceScenes = graphScenes.Count > 0 ? graphScenes : intentScenes;
         if (sourceScenes.Count == 0) warnings.Add("No editorial scenes were available for creative storyboard generation.");
 
-        var scenes = sourceScenes.Select((scene, index) => BuildScene(scene, intentScenes, index, eventName, warnings)).ToArray();
+        var primarySubject = ResolvePrimarySubjectFromContract(contract, eventName);
+        var secondarySubjects = ResolveSecondarySubjectsFromContract(contract);
+        var scenes = sourceScenes.Select((scene, index) => BuildScene(scene, intentScenes, index, eventName, primarySubject, secondarySubjects, warnings)).ToArray();
         warnings.AddRange(FindStringArray(contract, "missingFactWarnings").Select(w => $"Editorial warning carried into creative layer: {w}"));
         return new CreativeStoryboard(
             "AstroPulse-CreativeStoryboard-v1",
@@ -103,7 +105,7 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    private static CreativeStoryboardScene BuildScene(JsonElement scene, IReadOnlyList<JsonElement> intents, int index, string eventName, List<string> warnings)
+    private static CreativeStoryboardScene BuildScene(JsonElement scene, IReadOnlyList<JsonElement> intents, int index, string eventName, string primarySubject, IReadOnlyList<string> secondarySubjects, List<string> warnings)
     {
         var sceneId = FirstNonEmpty(GetString(scene, "sceneId"), $"scene-{index + 1:000}")!;
         var purpose = NormalizePurpose(FirstNonEmpty(GetString(scene, "scenePurpose"), GetString(scene, "purpose"))) ?? FallbackPurpose(index);
@@ -121,8 +123,8 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
             defaults.EmotionalRole,
             FirstNonEmpty(GetString(scene, "visualRole"), GetString(intent, "visualIntent"), $"Translate the {purpose.ToLowerInvariant()} beat into a clear visual decision.")!,
             FirstNonEmpty(GetString(scene, "motionRole"), "Use motion only to support comprehension and pacing.")!,
-            ResolvePrimarySubject(intent, eventName),
-            ResolveSecondarySubjects(intent),
+            primarySubject,
+            secondarySubjects,
             defaults.CompositionIntent,
             purpose == "Science" ? "Stable explanatory camera with legible spatial relationships." : "Calm documentary camera that keeps the main subjects easy to understand.",
             purpose == "Hook" ? "Natural high-contrast night-sky lighting without disaster-like drama." : "Natural sky lighting consistent with the supported observation context.",
@@ -132,10 +134,64 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
             ProhibitedVisualChoices);
     }
 
-    private static string ResolvePrimarySubject(JsonElement intent, string eventName)
-        => ReadObjectStrings(intent, "observationFacts").TryGetValue("RelativePositions", out var relative) ? relative : eventName;
-    private static IReadOnlyList<string> ResolveSecondarySubjects(JsonElement intent)
-        => ReadObjectStrings(intent, "observationFacts").Where(kv => !string.Equals(kv.Key, "RelativePositions", StringComparison.OrdinalIgnoreCase)).Select(kv => $"{kv.Key}: {kv.Value}").ToArray();
+    private static string ResolvePrimarySubjectFromContract(JsonElement? contract, string eventName)
+    {
+        var primaryObjects = FindContractFactArray(contract, "primaryObjects");
+        var secondaryObjects = FindContractFactArray(contract, "secondaryObjects");
+        var objects = primaryObjects.Concat(secondaryObjects).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return objects.Length == 0 ? eventName : string.Join(" + ", objects);
+    }
+
+    private static IReadOnlyList<string> ResolveSecondarySubjectsFromContract(JsonElement? contract)
+    {
+        var subjects = new List<string>();
+        AddFactSubject(subjects, contract, "angularSeparationDegrees", "Angular separation");
+        AddFactSubject(subjects, contract, "bestViewingWindowLocal", "Best viewing window");
+        AddFactSubject(subjects, contract, "skyDirectionHint", "Sky direction");
+        return subjects;
+    }
+
+    private static void AddFactSubject(List<string> subjects, JsonElement? contract, string factName, string label)
+    {
+        var value = FindContractFactString(contract, factName);
+        if (!string.IsNullOrWhiteSpace(value)) subjects.Add($"{label}: {value}");
+    }
+
+    private static IReadOnlyList<string> FindContractFactArray(JsonElement? element, string name)
+    {
+        var fact = FindProperty(element, name);
+        if (fact is not { ValueKind: JsonValueKind.Object } obj || !TryGetProperty(obj, "value", out var value) || value.ValueKind != JsonValueKind.Array) return [];
+        return value.EnumerateArray().Select(ValueToString).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToArray();
+    }
+
+    private static string? FindContractFactString(JsonElement? element, string name)
+    {
+        var fact = FindProperty(element, name);
+        if (fact is not { ValueKind: JsonValueKind.Object } obj || !TryGetProperty(obj, "value", out var value)) return null;
+        return ValueToString(value);
+    }
+
+    private static JsonElement? FindProperty(JsonElement? element, string name)
+    {
+        if (!element.HasValue) return null;
+        if (element.Value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var p in element.Value.EnumerateObject())
+            {
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value;
+                var nested = FindProperty(p.Value, name);
+                if (nested.HasValue) return nested;
+            }
+        }
+        return null;
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var p in element.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) { value = p.Value; return true; }
+        value = default;
+        return false;
+    }
     private static (string ViewerFocus, string EmotionalRole, string CompositionIntent) DefaultsFor(string purpose) => purpose switch
     {
         "Hook" => ("Understand why this event is worth watching.", "Create curiosity and immediate visual interest.", "Strong opening composition with the main astronomical subjects clearly visible."),
