@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Contracts;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
@@ -11,7 +12,6 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     [
         "Your Role",
         "Astro Pulse Editorial Identity",
-        "Documentary Voice",
         "Story Overview",
         "Scene Editorial Briefs",
         "Scientific Guardrails",
@@ -29,7 +29,9 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         "metadata",
         "available facts",
         "prompt",
-        "JSON"
+        "JSON",
+        "planning",
+        "checklist"
     ];
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -50,7 +52,10 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         var styleContract = input.DocumentaryStyleContract;
 
         var prompt = BuildPrompt(language, storyArc, requiredFacts, prohibitedPhrases, preferredPhrases, scenes, styleContract);
-        var outputFiles = new[] { input.PromptPreviewPath, input.PromptDiagnosticsPath };
+        prompt = new PromptLanguageCleaner().Clean(prompt);
+        var quality = new PromptQualityEvaluator().Evaluate(prompt, scenes.Length, input.PromptQualityThreshold);
+        var promptQualityPath = ResolvePromptQualityPath(input);
+        var outputFiles = new[] { input.PromptPreviewPath, input.PromptDiagnosticsPath, promptQualityPath };
         var diagnostics = new NarrationPromptDiagnostics(
             ComposerName,
             Rc2PipelinePhaseRegistry.OrchestrationVersion,
@@ -59,17 +64,19 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
             scenes.Length,
             PromptSections.Length,
             ProhibitedInternalPhrases,
-            missing,
-            missing.Count == 0);
+            missing.Concat(quality.Warnings).ToArray(),
+            missing.Count == 0 && quality.ReadyForGeneration);
 
-        return new NarrationPromptComposerOutput(prompt, diagnostics);
+        return new NarrationPromptComposerOutput(prompt, diagnostics, quality);
     }
 
     public async Task<NarrationPromptComposerOutput> ComposeAndWriteAsync(NarrationPromptComposerInput input, CancellationToken cancellationToken)
     {
         var output = Compose(input);
         Directory.CreateDirectory(Path.GetDirectoryName(input.PromptPreviewPath)!);
+        var promptQualityPath = ResolvePromptQualityPath(input);
         await File.WriteAllTextAsync(input.PromptPreviewPath, output.PromptPreviewMarkdown, cancellationToken);
+        await File.WriteAllTextAsync(promptQualityPath, JsonSerializer.Serialize(output.PromptQuality, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(input.PromptDiagnosticsPath, JsonSerializer.Serialize(output.Diagnostics, JsonOptions), cancellationToken);
         return output;
     }
@@ -77,14 +84,13 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     private static string BuildPrompt(string language, string storyArc, IReadOnlyList<NarrationFactV5> facts, IReadOnlyList<string> prohibited, IReadOnlyList<string> preferred, IReadOnlyList<NarrationBriefV5> scenes, DocumentaryStyleContract? styleContract)
     {
         var sb = new StringBuilder();
-        AddSection(sb, 1, "Your Role", "You are a senior documentary narration writer for an astronomy video. Write natural spoken narration that feels calm, precise, cinematic, and human.");
-        AddSection(sb, 2, "Astro Pulse Editorial Identity", "Astro Pulse helps curious viewers understand what is happening in the night sky and how to watch it with realistic expectations. The voice is warm, practical, scientifically careful, and never sensational.");
-        AddSection(sb, 3, "Documentary Voice", $"Language: {language}. Use clear scene-based spoken sentences for narration, timed delivery, captions, and voiceover. Keep the rhythm smooth enough for a short documentary.");
-        AddSection(sb, 4, "Story Overview", $"Shape the piece around this arc: {storyArc}. Let each scene feel like the next natural step in one continuous sky story.");
-        AddSection(sb, 5, "Scene Editorial Briefs", BuildSceneBriefs(scenes, styleContract));
-        AddSection(sb, 6, "Scientific Guardrails", BuildGuardrails(facts, prohibited));
-        AddSection(sb, 7, "Writing Principles", BuildWritingPrinciples(preferred, styleContract));
-        AddSection(sb, 8, "Output Contract", "Return one narration entry for every scene, preserving sceneId and scenePurpose. Each narrationText must be ready for direct voiceover and captions. Include practical observation guidance in the Observation scene. Include exactly this channel ending once, only in the final scene: \"Until next time, keep looking up.\"");
+        AddSection(sb, 1, "Your Role", new RoleSectionBuilder().Build());
+        AddSection(sb, 2, "Astro Pulse Editorial Identity", new EditorialIdentitySectionBuilder().Build());
+        AddSection(sb, 3, "Story Overview", new StoryOverviewSectionBuilder().Build(language, storyArc));
+        AddSection(sb, 4, "Scene Editorial Briefs", new SceneEditorialBriefBuilder().Build(scenes, styleContract));
+        AddSection(sb, 5, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, prohibited));
+        AddSection(sb, 6, "Writing Principles", new WritingPrinciplesSectionBuilder().Build(preferred, prohibited, styleContract));
+        AddSection(sb, 7, "Output Contract", new OutputContractSectionBuilder().Build());
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
 
@@ -149,9 +155,12 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    private static string ResolvePromptQualityPath(NarrationPromptComposerInput input) => string.IsNullOrWhiteSpace(input.PromptQualityPath)
+        ? Path.Combine(Path.GetDirectoryName(input.PromptPreviewPath) ?? string.Empty, "prompt-quality.json")
+        : input.PromptQualityPath;
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
-public sealed record NarrationPromptComposerInput(JsonElement? EditorialContract, JsonElement? CreativeStoryboard, NarrationBriefsV5? NarrationBriefs, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, DocumentaryStyleContract? DocumentaryStyleContract = null);
-public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown, NarrationPromptDiagnostics Diagnostics);
+public sealed record NarrationPromptComposerInput(JsonElement? EditorialContract, JsonElement? CreativeStoryboard, NarrationBriefsV5? NarrationBriefs, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, DocumentaryStyleContract? DocumentaryStyleContract = null, string PromptQualityPath = "", int PromptQualityThreshold = 80);
+public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown, NarrationPromptDiagnostics Diagnostics, PromptQualityContract PromptQuality);
 public sealed record NarrationPromptDiagnostics(string ComposerName, string OrchestrationVersion, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, int SceneCount, int PromptSectionCount, IReadOnlyList<string> ProhibitedInternalPhraseList, IReadOnlyList<string> MissingInputWarnings, bool ReadyForGeneration);
