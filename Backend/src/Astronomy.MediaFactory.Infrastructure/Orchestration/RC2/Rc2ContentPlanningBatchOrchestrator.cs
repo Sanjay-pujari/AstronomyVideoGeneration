@@ -8,6 +8,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     Rc2PipelinePhaseRegistry phaseRegistry,
     SceneIntentBuilder sceneIntentBuilder,
     CreativeStoryboardBuilder creativeStoryboardBuilder,
+    NarrationGeneratorV5 narrationGeneratorV5,
     ILogger<Rc2ContentPlanningBatchOrchestrator> logger)
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -43,6 +44,11 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         {
             var creativeStoryboardResult = await creativeStoryboardBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
             response = ApplyRc2Phase7Response(response, creativeStoryboardResult);
+        }
+        if (IsExplicitRc2NarrationRequest(request, requestedPhases))
+        {
+            var narrationResult = await narrationGeneratorV5.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+            response = ApplyRc2Phase8Response(response, narrationResult);
         }
 
         logger.LogInformation(
@@ -141,6 +147,18 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 : result)
             .ToArray();
 
+        return response with { Steps = steps, Results = results };
+    }
+
+    private static bool IsExplicitRc2NarrationRequest(BatchGenerateFromPlansRequest request, IReadOnlyList<int> requestedPhases)
+        => requestedPhases.Contains(8) && (request.StartPhaseNo == 8 || request.EndPhaseNo == 8);
+
+    private static BatchGenerateFromPlansResponse ApplyRc2Phase8Response(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult)
+    {
+        var generatedFiles = narrationResult.GeneratedFiles;
+        if (generatedFiles.Count == 0) return response;
+        var steps = response.Steps.Concat([new ProductionPhaseResult(8, "Narration Generator V5", ProductionPhaseStatus.Succeeded, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [Combine(response.OutputRoot, "editorial", "editorial-contract.json"), Combine(response.OutputRoot, "creative", "creative-storyboard.json")], generatedFiles, Combine(response.OutputRoot, "narration-v5", "narration-diagnostics.json"), [], [], false)]).ToArray();
+        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution ? execution with { GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() } : result).ToArray();
         return response with { Steps = steps, Results = results };
     }
 
