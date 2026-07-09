@@ -228,16 +228,35 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 
     private static JsonArray BuildManifestFileArray(JsonNode? existing, IReadOnlyList<string> additions)
     {
-        var values = (existing as JsonArray)?.Select(node => node?.GetValue<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToList() ?? [];
+        var values = new List<string>();
+        if (existing is JsonArray existingFiles)
+        {
+            foreach (var node in existingFiles)
+            {
+                var value = node?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(value)) values.Add(value);
+            }
+        }
+
         values.AddRange(additions.Where(File.Exists).Select(NormalizePath));
-        return new JsonArray(values.Distinct(StringComparer.OrdinalIgnoreCase).Select(JsonValue.Create).ToArray<JsonNode?>());
+        var uniqueFiles = values.Distinct(StringComparer.OrdinalIgnoreCase).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray();
+        return new JsonArray(uniqueFiles);
     }
 
     private static JsonArray BuildManifestPhaseArray(JsonNode? existing, int phaseNo)
     {
-        var values = (existing as JsonArray)?.Select(node => node?.GetValue<int>()).ToList() ?? [];
+        var values = new List<int>();
+        if (existing is JsonArray existingPhases)
+        {
+            foreach (var node in existingPhases)
+            {
+                if (node is not null) values.Add(node.GetValue<int>());
+            }
+        }
+
         values.Add(phaseNo);
-        return new JsonArray(values.Distinct().Order().Select(JsonValue.Create).ToArray<JsonNode?>());
+        var uniquePhases = values.Distinct().Order().Select(value => (JsonNode?)JsonValue.Create(value)).ToArray();
+        return new JsonArray(uniquePhases);
     }
 
     private static string Combine(string? root, params string[] parts)
@@ -246,4 +265,3 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     private static string NormalizePath(string path)
         => path.Replace(Path.DirectorySeparatorChar, '/');
 }
-

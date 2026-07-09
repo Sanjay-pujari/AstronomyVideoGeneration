@@ -62,8 +62,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger)
             outputsCreated = new[] { planPath, narrationPath, diagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
-            prohibitedPhraseViolations,
-            missingFactUsageViolations,
+            prohibitedPhraseViolations = prohibitedViolations,
+            missingFactUsageViolations = missingFactViolations,
             language,
             warnings,
             errors
