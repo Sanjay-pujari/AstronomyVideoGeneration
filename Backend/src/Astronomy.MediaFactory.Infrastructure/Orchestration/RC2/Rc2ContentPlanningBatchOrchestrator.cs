@@ -228,6 +228,10 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         var longCount = ManifestInt(longManifest, "generatedSceneCount");
         var shortCount = ManifestInt(shortManifest, "generatedSceneCount");
         var validationErrors = errors.ToList();
+        var longDiagnostics = Combine(outputRoot, "story-frames", "long", "story-frame-diagnostics.json");
+        var shortDiagnostics = Combine(outputRoot, "story-frames", "short", "story-frame-diagnostics.json");
+        var longQualityScore = DiagnosticInt(longDiagnostics, "overallStoryFrameQualityScore");
+        var shortQualityScore = DiagnosticInt(shortDiagnostics, "overallStoryFrameQualityScore");
         var longDimensionsValid = !longRequested || ManifestMatches(longManifest, "long", "landscape", "16:9", 1920, 1080);
         var shortDimensionsValid = !shortRequested || ManifestMatches(shortManifest, "short", "portrait", "9:16", 2160, 3840);
         if (longRequested && !File.Exists(longManifest)) validationErrors.Add("LongVideo requested but story-frames/long is missing.");
@@ -236,7 +240,13 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         if (shortRequested && shortCount == 0) validationErrors.Add("ShortVideo requested but zero short story frames were generated.");
         if (!longDimensionsValid) validationErrors.Add("Long story frames must be landscape 16:9 at 1920x1080.");
         if (!shortDimensionsValid) validationErrors.Add("Short story frames must be portrait 9:16 at 2160x3840.");
-        var computedStatus = validationErrors.Count == 0 && status == ProductionPhaseStatus.Succeeded ? "Succeeded" : "Failed";
+        validationErrors.AddRange(DiagnosticErrors(longDiagnostics));
+        validationErrors.AddRange(DiagnosticErrors(shortDiagnostics));
+        if (longRequested && longQualityScore < 90) validationErrors.Add("Long story frames failed Aurora quality threshold.");
+        if (shortRequested && shortQualityScore < 90) validationErrors.Add("Short story frames failed Aurora quality threshold.");
+        var overallPhaseQualityScore = Math.Min(longRequested ? longQualityScore : 100, shortRequested ? shortQualityScore : 100);
+        var auroraCertificationCandidate = longQualityScore >= 90 && shortQualityScore >= 90 && overallPhaseQualityScore >= 90 && validationErrors.Count == 0;
+        var computedStatus = auroraCertificationCandidate && status == ProductionPhaseStatus.Succeeded ? "Succeeded" : "Failed";
         return new
         {
             phaseNo,
@@ -247,7 +257,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             durationMs = result.DurationMs,
             inputFiles = result.InputFiles,
             outputFiles = result.OutputFiles,
-            diagnosticFiles = result.OutputFiles.Where(path => path.EndsWith("diagnostics.json", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            diagnosticFiles = result.OutputFiles.Where(path => path.EndsWith("diagnostics.json", StringComparison.OrdinalIgnoreCase)).Concat([longDiagnostics, shortDiagnostics]).Where(path => File.Exists(path)).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray(),
             longStoryFramesRequested = longRequested,
             shortStoryFramesRequested = shortRequested,
             longStoryFramesGenerated = longCount > 0,
@@ -256,6 +266,10 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             shortStoryFrameCount = shortCount,
             longDimensionsValid,
             shortDimensionsValid,
+            longQualityScore,
+            shortQualityScore,
+            overallPhaseQualityScore,
+            auroraCertificationCandidate,
             warnings,
             errors = validationErrors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             exceptionType = exception?.GetType().Name,
@@ -265,6 +279,27 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             staleFilesCountedAsCurrentRunOutputs = false,
             validationScope = "Phase 6 story-frame contract validation."
         };
+    }
+
+
+    private static int DiagnosticInt(string path, string name)
+    {
+        var root = ReadManifest(path);
+        if (!root.HasValue) return 0;
+        foreach (var property in root.Value.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out var number)) return number;
+        return 0;
+    }
+    private static IReadOnlyList<string> DiagnosticErrors(string path)
+    {
+        var root = ReadManifest(path);
+        if (!root.HasValue) return [];
+        foreach (var property in root.Value.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "errors", StringComparison.OrdinalIgnoreCase) || property.Value.ValueKind != JsonValueKind.Array) continue;
+            return property.Value.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()).Where(e => !string.IsNullOrWhiteSpace(e)).Select(e => e!).ToArray();
+        }
+        return [];
     }
 
     private static bool ManifestBool(string path, string name) => ReadManifestProperty(path, name) is { ValueKind: JsonValueKind.True };

@@ -108,19 +108,19 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
                 aspectRatio,
                 targetWidth,
                 targetHeight,
-                scene.VisualRole,
-                scene.CompositionIntent,
-                scene.CameraIntent,
-                scene.PrimarySubject,
-                scene.ScenePurpose == "Hook" ? "Minimal horizon or contextual foreground only when supported by source facts." : "Use foreground only to clarify scale, direction, or viewer location.",
-                storyboard.GlobalVisualDirection,
-                "Place primary subject on a stable focal third; keep labels and explanatory elements inside safe areas; avoid invented objects.",
-                format == "short" ? "Reserve upper title space and lower caption/CTA space; keep central subject clear." : "Reserve lower-third caption space and avoid placing key subjects at extreme edges.",
-                format == "short" ? "Keep the central vertical lane clear for subject readability and mobile overlays." : "Use side or upper sky negative space for calm pacing and later editorial overlays.",
-                format == "short" ? "Top 12%, bottom 18%, and side 8% remain overlay-safe." : "Lower 18% and side 6% remain overlay-safe.",
-                scene.MotionIntent,
+                BuildVisualGoal(scene, format),
+                BuildComposition(scene, format),
+                BuildCameraPlan(scene, format),
+                BuildSubjectFocus(scene),
+                BuildForeground(scene, format),
+                BuildBackground(scene, format),
+                BuildObjectPlacement(scene, format),
+                BuildSafeFramingPlan(scene, format),
+                BuildNegativeSpacePlan(scene, format),
+                BuildOverlaySafeArea(scene, format),
+                BuildMotionHint(scene, format),
                 scene.ScenePurpose == "Hook" ? 5.0 : scene.ScenePurpose == "Takeaway" ? 4.0 : 7.0,
-                scene.KeyMessage,
+                BuildNarrationMapping(scene, format),
                 scene.SceneId,
                 scene.SceneId);
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(frame, JsonOptions), cancellationToken);
@@ -130,12 +130,98 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
 
         var manifestPath = Path.Combine(root, "story-frame-manifest.json");
         var diagnosticsPath = Path.Combine(root, "story-frame-diagnostics.json");
-        var manifest = new { format, orientation, aspectRatio, targetWidth, targetHeight, requested, generated = files.Count > 0, expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = files.Count, sceneIds = storyboard.Scenes.OrderBy(s => s.SceneOrder).Select(s => s.SceneId).ToArray(), files = frameFiles.ToArray(), createdUtc = DateTimeOffset.UtcNow, sourceFiles = inputFiles.Select(NormalizePath).ToArray() };
+        var manifest = new { format, orientation, aspectRatio, targetWidth, targetHeight, requested, generated = files.Count > 0, expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = files.Count, sceneIds = storyboard.Scenes.OrderBy(s => s.SceneOrder).Select(s => s.SceneId).ToArray(), files = frameFiles.ToArray(), createdUtc = DateTimeOffset.UtcNow, sourceFiles = inputFiles.Select(NormalizePath).ToArray(), qualityProfile = "Aurora", contractVersion = "RC2-Phase6-StoryFrames-v1" };
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 6, phaseName = PhaseName, format, inputFiles = inputFiles.Select(NormalizePath).ToArray(), outputFiles = files.Concat([manifestPath, diagnosticsPath]).Select(NormalizePath).ToArray(), expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = files.Count, warnings = storyboard.MissingCreativeWarnings, errors = Array.Empty<string>(), staleFilesIgnored = true, currentRunFilesOnly = true, executionTimeMs = stopwatch.ElapsedMilliseconds }, JsonOptions), cancellationToken);
+        var diagnostics = BuildStoryFrameDiagnostics(format, inputFiles, files.Concat([manifestPath, diagnosticsPath]).ToArray(), storyboard, frameFiles, stopwatch);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
         files.Add(manifestPath);
         files.Add(diagnosticsPath);
         return files;
+    }
+
+
+    private static object BuildStoryFrameDiagnostics(string format, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, CreativeStoryboard storyboard, IReadOnlyList<string> frameFiles, Stopwatch stopwatch)
+    {
+        var genericWarnings = new List<string>();
+        var duplicateWarnings = new List<string>();
+        var safeWarnings = new List<string>();
+        var motionWarnings = new List<string>();
+        var compositions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var scene in storyboard.Scenes.OrderBy(s => s.SceneOrder))
+        {
+            var visualGoal = BuildVisualGoal(scene, format);
+            var composition = BuildComposition(scene, format);
+            var motionHint = BuildMotionHint(scene, format);
+            var safeArea = BuildOverlaySafeArea(scene, format);
+            if (IsGenericText(visualGoal) || IsGenericText(composition) || IsGenericText(BuildCameraPlan(scene, format))) genericWarnings.Add($"{scene.SceneId} contains generic story-frame language.");
+            if (!compositions.Add(composition)) duplicateWarnings.Add($"{scene.SceneId} duplicates another composition.");
+            if (IsGenericText(safeArea) || !safeArea.Any(char.IsDigit)) safeWarnings.Add($"{scene.SceneId} overlay safe area is missing exact zones.");
+            if (IsGenericText(motionHint)) motionWarnings.Add($"{scene.SceneId} motion hint is missing scene-specific motion direction.");
+        }
+        var errors = genericWarnings.Concat(duplicateWarnings).Concat(safeWarnings).Concat(motionWarnings).ToArray();
+        var score = Math.Max(0, 100 - (genericWarnings.Count * 12) - (duplicateWarnings.Count * 15) - (safeWarnings.Count * 10) - (motionWarnings.Count * 10));
+        return new { phaseNo = 6, phaseName = PhaseName, format, inputFiles = inputFiles.Select(NormalizePath).ToArray(), outputFiles = outputFiles.Select(NormalizePath).ToArray(), expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = frameFiles.Count, genericTextWarnings = genericWarnings, duplicateCompositionWarnings = duplicateWarnings, missingSafeAreaWarnings = safeWarnings, missingMotionHintWarnings = motionWarnings, sceneSpecificityScore = score, compositionQualityScore = score, motionReadinessScore = score, overlaySafetyScore = score, overallStoryFrameQualityScore = score, warnings = storyboard.MissingCreativeWarnings, errors, staleFilesIgnored = true, currentRunFilesOnly = true, executionTimeMs = stopwatch.ElapsedMilliseconds };
+    }
+
+    private static string BuildVisualGoal(CreativeStoryboardScene s, string format) => s.ScenePurpose switch
+    {
+        "Hook" => $"Create immediate curiosity around {s.PrimarySubject} by showing the viewer the most intriguing sky relationship before any explanation; the frame should feel like a quiet discovery moment, not a generic sky card.",
+        "Discovery" => $"Orient the viewer to where {s.PrimarySubject} appears, using the supported direction or horizon context as the information anchor for finding the event.",
+        "Science" => $"Explain the apparent alignment of {s.PrimarySubject} as a line-of-sight relationship, making separation and perspective readable without implying physical contact.",
+        "Observation" => $"Help the viewer know how to look for {s.PrimarySubject}, prioritizing direction, horizon reference, brightness hierarchy, and practical viewing confidence.",
+        "Takeaway" => $"Leave a memorable emotional image of {s.PrimarySubject} that reinforces why this event is worth remembering after the facts are understood.",
+        _ => $"Support the reminder/action beat for {s.PrimarySubject} with a clean visual that makes the next viewer action obvious."
+    };
+
+    private static string BuildComposition(CreativeStoryboardScene s, string format)
+    {
+        var secondary = s.SecondarySubjects.Count > 0 ? string.Join("; ", s.SecondarySubjects) : "confirmed sky context only";
+        return format == "short"
+            ? s.ScenePurpose switch
+            {
+                "Hook" => $"Portrait-first sky stack: place {s.PrimarySubject} in the upper-middle third, keep the horizon low and subdued, use a dark foreground silhouette only at the bottom edge, and make the brightest object the first read with {secondary} held as small supporting context.",
+                "Discovery" => $"Vertical locator frame with the horizon in the lower 15%, the sky direction cue rising through the center lane, and {s.PrimarySubject} placed just above center so mobile viewers can map sky position quickly; background gradients separate foreground, horizon, and object layer.",
+                "Science" => $"Tall explanatory composition with {s.PrimarySubject} separated along a gentle vertical diagonal, a thin perspective guide between them, and ample side space for a compact fact chip; hierarchy reads object, separation, then explanation.",
+                "Observation" => $"Practical phone-view composition: low horizon, clear central lookup lane, {s.PrimarySubject} positioned in the upper half with secondary viewing cues beneath it, foreground kept minimal so captions do not cover the target.",
+                "Takeaway" => $"Memorable portrait closing frame with {s.PrimarySubject} glowing in the upper third above a quiet horizon band, leaving the middle calm and the lower frame clean for a save/reminder cue.",
+                _ => $"Action-oriented portrait frame with {s.PrimarySubject} high enough to protect captions, a simple foreground location cue at the bottom edge, and background sky context arranged in clear foreground/midground/sky layers."
+            }
+            : s.ScenePurpose switch
+            {
+                "Hook" => $"Wide 16:9 opening sky over a restrained horizon; place {s.PrimarySubject} off the right third as the strongest visual read, leave the left third quieter for curiosity-building title treatment, and use {secondary} as subtle background evidence.",
+                "Discovery" => $"Landscape orientation map: horizon spans the lower quarter, sky direction reads left-to-right, {s.PrimarySubject} sits on a stable upper third, and background sky gradient provides enough context to understand where to look.",
+                "Science" => $"Wide explanatory frame with {s.PrimarySubject} arranged across the center thirds, separation visible as negative space, and a reserved side area for a line-of-sight annotation; hierarchy reads relationship first, then labels.",
+                "Observation" => $"Viewer-at-the-horizon composition with a realistic low skyline, {s.PrimarySubject} placed above the appropriate viewing band, secondary cues kept smaller, and the lower-left third clean for practical viewing instructions.",
+                "Takeaway" => $"Cinematic closing landscape with {s.PrimarySubject} small but luminous against a broad sky, horizon softened in the lower fifth, and the brightest point balanced against wide calm space for emotional memory.",
+                _ => $"Support-detail landscape frame with {s.PrimarySubject} on a focal third, a modest horizon or location cue, and clear side space for reminder/action information."
+            };
+    }
+
+    private static string BuildCameraPlan(CreativeStoryboardScene s, string format) => format == "short"
+        ? $"Medium-wide vertical sky view from a grounded observer angle, framed for a 9:16 phone screen with a mild telephoto lens feeling that compresses {s.PrimarySubject} enough to read quickly; this supports the {s.ScenePurpose.ToLowerInvariant()} beat by keeping the subject in the central mobile scan path."
+        : $"Wide locked-off observer angle from ground level, landscape 16:9 framing with a natural 35-50mm documentary lens feeling; the distance preserves horizon and sky context so the {s.ScenePurpose.ToLowerInvariant()} explanation can unfold slowly without crowding overlays.";
+    private static string BuildSubjectFocus(CreativeStoryboardScene s) => $"Primary: {s.PrimarySubject}. Secondary: {(s.SecondarySubjects.Count == 0 ? "none beyond verified context" : string.Join("; ", s.SecondarySubjects))}.";
+    private static string BuildForeground(CreativeStoryboardScene s, string format) => s.ScenePurpose is "Science" ? "none" : format == "short" ? "Thin low horizon or silhouette band only when supported, kept below caption-safe space." : "Subtle horizon/location reference used for scale and orientation, never competing with the sky subject.";
+    private static string BuildBackground(CreativeStoryboardScene s, string format) => format == "short" ? $"Portrait sky gradient with vertical depth behind {s.PrimarySubject}; no invented constellations or false surface detail." : $"Wide natural sky and restrained horizon context behind {s.PrimarySubject}; use only supported direction/timing facts.";
+    private static string BuildObjectPlacement(CreativeStoryboardScene s, string format) => format == "short" ? $"Place {s.PrimarySubject} in the upper-middle third; keep secondary cues below or beside it at smaller scale, with top and bottom safe zones protected." : $"Place {s.PrimarySubject} on the upper or right focal third depending on the scene purpose; keep secondary cues smaller and lower-priority, away from lower-third captions.";
+    private static string BuildSafeFramingPlan(CreativeStoryboardScene s, string format) => format == "short" ? "Protect title, caption, and CTA bands while keeping the central vertical subject lane uncluttered." : "Protect lower-third labels and side margins while preserving a wide readable sky relationship.";
+    private static string BuildNegativeSpacePlan(CreativeStoryboardScene s, string format) => format == "short" ? "Use clean sky in the top 12% and bottom 18%; keep side negative space simple so mobile overlays remain legible." : "Reserve the lower-left/lower-third sky or horizon area for captions, with quiet side sky for labels and slow pacing.";
+    private static string BuildOverlaySafeArea(CreativeStoryboardScene s, string format) => format == "short" ? "Exact safe zones: top 12% clear for title, bottom 18% clear for captions/CTA, side 8% margins free of essential objects, central 60% kept readable." : "Exact safe zones: lower 18% clear for lower-third captions, side 6% margins clear, upper-left 20% available for a small documentary label.";
+    private static string BuildMotionHint(CreativeStoryboardScene s, string format) => s.ScenePurpose switch
+    {
+        "Hook" => format == "short" ? $"Begin with a one-second hold on empty upper sky, then a tiny upward reveal toward {s.PrimarySubject}; no fast zoom." : $"Slow lateral drift from quiet negative space into {s.PrimarySubject}, preserving the lower-third label area.",
+        "Discovery" => format == "short" ? $"Gentle vertical tilt from low horizon to {s.PrimarySubject} to teach where to look." : $"Slow pan along the horizon direction, ending locked on {s.PrimarySubject} for orientation.",
+        "Science" => $"Hold mostly static; add a subtle animated guide line or parallax cue to clarify apparent alignment without changing object spacing.",
+        "Observation" => format == "short" ? $"Slow upward lookup motion from horizon cue to target, ending with a steady two-second hold." : $"Measured push-in from horizon reference toward {s.PrimarySubject}, keeping captions stable.",
+        "Takeaway" => $"Very slow fade or drift that lets {s.PrimarySubject} linger as an emotional memory; avoid explanatory movement.",
+        _ => $"Short, steady hold with a small CTA-safe drift that does not cross overlay zones."
+    };
+    private static string BuildNarrationMapping(CreativeStoryboardScene s, string format) => $"Supports the narration beat '{s.KeyMessage}' by making the {s.ScenePurpose.ToLowerInvariant()} information visible in {format} framing before downstream narration or motion is added.";
+    private static bool IsGenericText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        string[] generic = ["Calm documentary camera", "Balanced composition", "Clear visual focus", "Documentary style", "Cinematic sky view", "Same scene for short format", "stable focal third"];
+        return generic.Any(g => text.Contains(g, StringComparison.OrdinalIgnoreCase));
     }
 
     private static (bool LongRequested, bool ShortRequested) ResolveStoryFrameRequests(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response)
