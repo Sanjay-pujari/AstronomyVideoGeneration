@@ -36,18 +36,37 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             request.EndPhaseNo,
             requestedPhases.Count == 0 ? "none" : string.Join(',', requestedPhases));
 
-        var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
+        var response = await v4BatchGeneration.GenerateFromPlansAsync(ExpandProductionRangeForRc2PhaseContract(request, requestedPhases), cancellationToken);
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
+        await RewriteEarlyPhaseValidationsAsync(response, requestedPhases, cancellationToken);
+        if (requestedPhases.Contains(4) && CanRunRc2Overlay(response, 4))
+        {
+            response = await ExecuteRc2OverlayPhaseAsync(
+                response,
+                4,
+                "Story Intelligence",
+                [
+                    Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json"),
+                    Combine(response.OutputRoot, "question-engine", "question-answer-set.json")
+                ],
+                string.Empty,
+                async () =>
+                {
+                    var storyGraphResult = await sceneIntentBuilder.BuildAndWriteStoryGraphAsync(request, response, cancellationToken);
+                    response = ApplyRc2Phase4Response(response, storyGraphResult);
+                    return storyGraphResult.GeneratedFiles;
+                },
+                cancellationToken);
+        }
         if (requestedPhases.Contains(5) && CanRunRc2Overlay(response, 5))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
                 response,
                 5,
-                "Editorial Intelligence Foundation",
+                "Editorial Intelligence",
                 [
                     Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"),
-                    Combine(response.OutputRoot, "question-engine", "question-answer-set.json"),
-                    Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.json")
+                    Combine(response.OutputRoot, "editorial", "story-graph.json")
                 ],
                 Combine(response.OutputRoot, "editorial", "editorial-diagnostics.json"),
                 async () =>
@@ -211,8 +230,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 exceptionMessage = exception?.Message,
                 canRetry,
                 reason,
-                diagnosticsPath = NormalizePath(diagnosticsPath),
-                validationScope = "RC2 overlay phase validation; production orchestration result is not overwritten when production phase failed."
+                diagnosticFiles = string.IsNullOrWhiteSpace(diagnosticsPath) || !File.Exists(diagnosticsPath) ? Array.Empty<string>() : new[] { NormalizePath(diagnosticsPath) }
             };
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validationPayload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         return result;
@@ -355,11 +373,44 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             Errors = response.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
 
+    private static BatchGenerateFromPlansRequest ExpandProductionRangeForRc2PhaseContract(BatchGenerateFromPlansRequest request, IReadOnlyList<int> requestedPhases)
+        => requestedPhases.Any(phase => phase is 4 or 5) && (request.EndPhaseNo ?? 21) <= 5
+            ? request with { EndPhaseNo = 6 }
+            : request;
+
+    private static async Task RewriteEarlyPhaseValidationsAsync(BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(response.OutputRoot)) return;
+        var map = new Dictionary<int, (string Name, string[] Inputs, string[] Outputs)>
+        {
+            [1] = ("Run Setup / Plan Selection", [], [Combine(response.OutputRoot, "plan-input", "content-plan-production-request.json"), Combine(response.OutputRoot, "plan-input", "production-pipeline-request.json")]),
+            [2] = ("Domain Intelligence", [Combine(response.OutputRoot, "plan-input", "content-plan-production-request.json")], [Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"), Combine(response.OutputRoot, "plan-input", "production-event-intelligence-diagnostics.json")]),
+            [3] = ("Question / Story Planning", [Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json")], [Combine(response.OutputRoot, "question-engine", "question-answer-set.json"), Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.json"), Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json")])
+        };
+        foreach (var phaseNo in requestedPhases.Where(map.ContainsKey))
+        {
+            var spec = map[phaseNo];
+            var started = DateTimeOffset.UtcNow;
+            var outputs = spec.Outputs.Where(path => File.Exists(path)).ToArray();
+            var errors = spec.Outputs.Except(outputs, StringComparer.OrdinalIgnoreCase).Select(path => $"Expected RC2 output was not created in this run: {NormalizePath(path)}").ToArray();
+            await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, spec.Name, errors.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, spec.Inputs, outputs, string.Empty, [], errors, errors.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", errors.Length > 0, null, cancellationToken);
+        }
+    }
+
+    private static BatchGenerateFromPlansResponse ApplyRc2Phase4Response(BatchGenerateFromPlansResponse response, StoryGraphBuilderResult storyGraphResult)
+    {
+        var generatedFiles = storyGraphResult.GeneratedFiles;
+        var phase4 = new ProductionPhaseResult(4, "Story Intelligence", ProductionPhaseStatus.Succeeded, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json"), Combine(response.OutputRoot, "question-engine", "question-answer-set.json")], generatedFiles, Combine(response.OutputRoot, "validation", "phase-04-validation.json"), [], [], false);
+        var steps = UpsertPhaseResult(response.Steps.OfType<ProductionPhaseResult>().ToArray(), phase4)!.Cast<object>().ToArray();
+        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution ? execution with { GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase4) } : result).ToArray();
+        return response with { Steps = steps, Results = results };
+    }
+
     private static BatchGenerateFromPlansResponse ApplyRc2Phase5Response(BatchGenerateFromPlansResponse response, SceneIntentBuilderResult sceneIntentResult)
     {
         var generatedFiles = sceneIntentResult.GeneratedFiles;
         var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 5
-                ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+                ? phase with { PhaseName = "Editorial Intelligence", OutputFiles = generatedFiles.ToArray() }
                 : step)
             .ToArray();
 
@@ -367,15 +418,14 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         {
             steps = steps.Concat([new ProductionPhaseResult(
                 5,
-                "Editorial Intelligence Foundation",
+                "Editorial Intelligence",
                 ProductionPhaseStatus.Succeeded,
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow,
                 0,
                 [
                     Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"),
-                    Combine(response.OutputRoot, "question-engine", "question-answer-set.json"),
-                    Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.json")
+                    Combine(response.OutputRoot, "editorial", "story-graph.json")
                 ],
                 generatedFiles,
                 Combine(response.OutputRoot, "editorial", "editorial-diagnostics.json"),
@@ -390,7 +440,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 {
                     GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                     PhaseResults = execution.PhaseResults?.Select(phase => phase.PhaseNo == 5
-                            ? phase with { PhaseName = "Editorial Intelligence Foundation", OutputFiles = phase.OutputFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() }
+                            ? phase with { PhaseName = "Editorial Intelligence", OutputFiles = generatedFiles.ToArray() }
                             : phase)
                         .ToArray()
                 }

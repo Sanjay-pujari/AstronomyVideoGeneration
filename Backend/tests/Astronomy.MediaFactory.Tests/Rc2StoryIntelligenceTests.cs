@@ -8,7 +8,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Rc2StoryIntelligenceTests
 {
     [Fact]
-    public async Task Phase6_BuildsStoryGraphAndMultiSceneIntents()
+    public async Task Phase4And5_BuildStoryGraphThenEditorialIntelligence()
     {
         var root = Path.Combine(Path.GetTempPath(), "rc2-story-intelligence-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "plan-input"));
@@ -63,9 +63,12 @@ public sealed class Rc2StoryIntelligenceTests
             Title: "Moon and Jupiter Close Approach",
             OutputRoot: root);
 
-        var result = await new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance).BuildAndWriteDiagnosticsAsync(request, response, CancellationToken.None);
+        var builder = new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance);
+        var storyResult = await builder.BuildAndWriteStoryGraphAsync(request, response, CancellationToken.None);
+        var result = await builder.BuildAndWriteDiagnosticsAsync(request, response, CancellationToken.None);
 
-        Assert.Contains(result.GeneratedFiles, path => path.EndsWith(Path.Combine("editorial", "story-graph.json"), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(storyResult.GeneratedFiles, path => path.EndsWith(Path.Combine("editorial", "story-graph.json"), StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.GeneratedFiles, path => path.EndsWith(Path.Combine("editorial", "story-graph.json"), StringComparison.OrdinalIgnoreCase));
         using var storyGraph = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "editorial", "story-graph.json")));
         Assert.Equal("AstroPulse-StoryGraph-v1", storyGraph.RootElement.GetProperty("storyGraphVersion").GetString());
         Assert.Equal(4, storyGraph.RootElement.GetProperty("scenes").GetArrayLength());
@@ -83,10 +86,10 @@ public sealed class Rc2StoryIntelligenceTests
         Assert.Equal(4, contractStoryGraph.GetProperty("sceneCount").GetInt32());
 
         using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "editorial", "editorial-diagnostics.json")));
-        Assert.True(diagnostics.RootElement.GetProperty("storyGraphCreated").GetBoolean());
+        Assert.True(diagnostics.RootElement.GetProperty("storyGraphConsumed").GetBoolean());
         Assert.Equal(4, diagnostics.RootElement.GetProperty("storySceneCount").GetInt32());
         Assert.Equal(4, diagnostics.RootElement.GetProperty("sceneIntentCount").GetInt32());
-        Assert.Contains(diagnostics.RootElement.GetProperty("subPhases").EnumerateArray(), phase => phase.GetString() == "6.2A Story Graph Builder");
+        Assert.DoesNotContain(diagnostics.RootElement.GetProperty("subPhases").EnumerateArray(), phase => phase.GetString()!.Contains("Story Graph Builder", StringComparison.OrdinalIgnoreCase));
     }
 }
 

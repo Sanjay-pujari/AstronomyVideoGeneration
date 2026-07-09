@@ -9,11 +9,11 @@ public sealed class Rc2PipelinePhaseRegistry
 
     public IReadOnlyList<Rc2PipelinePhaseDefinition> PhaseDefinitions { get; } =
     [
-        new(1, "Load Plan"),
-        new(2, "Build ProductionEventIntelligence"),
-        new(3, "Generate QuestionAnswerSet"),
-        new(4, "Validate Questions"),
-        new(5, "Editorial Intelligence Foundation"),
+        new(1, "Run Setup / Plan Selection"),
+        new(2, "Domain Intelligence"),
+        new(3, "Question / Story Planning"),
+        new(4, "Story Intelligence"),
+        new(5, "Editorial Intelligence"),
         new(6, "Creative Intelligence / Story Frames"),
         new(7, "Narration Studio V5"),
         new(8, "Format-Aware Scene Asset Generation")
