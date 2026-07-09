@@ -161,6 +161,18 @@ public sealed class Rc2CreativeStoryboardTests
         Assert.Equal("9:16", shortFrame.RootElement.GetProperty("aspectRatio").GetString());
         Assert.Equal(2160, shortFrame.RootElement.GetProperty("targetWidth").GetInt32());
         Assert.Equal(3840, shortFrame.RootElement.GetProperty("targetHeight").GetInt32());
+        Assert.Contains("Portrait-first", shortFrame.RootElement.GetProperty("composition").GetString());
+        Assert.Contains("Exact safe zones", shortFrame.RootElement.GetProperty("overlaySafeArea").GetString());
+        Assert.Contains("upward reveal", shortFrame.RootElement.GetProperty("motionHint").GetString());
+
+        using var shortManifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "story-frames", "short", "story-frame-manifest.json")));
+        Assert.Equal("Aurora", shortManifest.RootElement.GetProperty("qualityProfile").GetString());
+        Assert.Equal("RC2-Phase6-StoryFrames-v1", shortManifest.RootElement.GetProperty("contractVersion").GetString());
+
+        using var shortDiagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "story-frames", "short", "story-frame-diagnostics.json")));
+        Assert.Equal(100, shortDiagnostics.RootElement.GetProperty("overallStoryFrameQualityScore").GetInt32());
+        Assert.Empty(shortDiagnostics.RootElement.GetProperty("genericTextWarnings").EnumerateArray());
+        Assert.Empty(shortDiagnostics.RootElement.GetProperty("duplicateCompositionWarnings").EnumerateArray());
     }
 }
 
