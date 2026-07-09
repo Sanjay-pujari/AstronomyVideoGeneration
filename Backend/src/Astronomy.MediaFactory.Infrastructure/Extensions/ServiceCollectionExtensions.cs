@@ -534,6 +534,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<SceneIntentBuilder>();
         services.AddScoped<CreativeStoryboardBuilder>();
         services.AddScoped<NarrationPromptComposer>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries.DocumentaryVocabulary>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries.DocumentaryTransitionLibrary>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries.DocumentaryFactTransformer>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors.DocumentaryStyleDirector>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors.IDocumentaryStyleDirector>(sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors.DocumentaryStyleDirector>());
         services.AddScoped<IPromptComposer<NarrationPromptComposerInput, NarrationPromptComposerOutput>>(sp => sp.GetRequiredService<NarrationPromptComposer>());
         services.AddScoped<NarrationGeneratorV5>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();

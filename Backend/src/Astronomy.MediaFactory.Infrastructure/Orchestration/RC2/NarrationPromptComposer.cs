@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Contracts;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
@@ -46,8 +47,9 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         var prohibitedPhrases = FindStringArray(input.EditorialContract, "prohibitedPhrases").Concat(ProhibitedInternalPhrases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var preferredPhrases = FindStringArray(input.EditorialContract, "preferredPhrases");
         var scenes = input.NarrationBriefs?.Briefs.OrderBy(b => b.SceneOrder).ToArray() ?? [];
+        var styleContract = input.DocumentaryStyleContract;
 
-        var prompt = BuildPrompt(language, storyArc, requiredFacts, prohibitedPhrases, preferredPhrases, scenes);
+        var prompt = BuildPrompt(language, storyArc, requiredFacts, prohibitedPhrases, preferredPhrases, scenes, styleContract);
         var outputFiles = new[] { input.PromptPreviewPath, input.PromptDiagnosticsPath };
         var diagnostics = new NarrationPromptDiagnostics(
             ComposerName,
@@ -72,16 +74,16 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         return output;
     }
 
-    private static string BuildPrompt(string language, string storyArc, IReadOnlyList<NarrationFactV5> facts, IReadOnlyList<string> prohibited, IReadOnlyList<string> preferred, IReadOnlyList<NarrationBriefV5> scenes)
+    private static string BuildPrompt(string language, string storyArc, IReadOnlyList<NarrationFactV5> facts, IReadOnlyList<string> prohibited, IReadOnlyList<string> preferred, IReadOnlyList<NarrationBriefV5> scenes, DocumentaryStyleContract? styleContract)
     {
         var sb = new StringBuilder();
         AddSection(sb, 1, "Your Role", "You are a senior documentary narration writer for an astronomy video. Write natural spoken narration that feels calm, precise, cinematic, and human.");
         AddSection(sb, 2, "Astro Pulse Editorial Identity", "Astro Pulse helps curious viewers understand what is happening in the night sky and how to watch it with realistic expectations. The voice is warm, practical, scientifically careful, and never sensational.");
         AddSection(sb, 3, "Documentary Voice", $"Language: {language}. Use clear scene-based spoken sentences for narration, timed delivery, captions, and voiceover. Keep the rhythm smooth enough for a short documentary.");
         AddSection(sb, 4, "Story Overview", $"Shape the piece around this arc: {storyArc}. Let each scene feel like the next natural step in one continuous sky story.");
-        AddSection(sb, 5, "Scene Editorial Briefs", BuildSceneBriefs(scenes));
+        AddSection(sb, 5, "Scene Editorial Briefs", BuildSceneBriefs(scenes, styleContract));
         AddSection(sb, 6, "Scientific Guardrails", BuildGuardrails(facts, prohibited));
-        AddSection(sb, 7, "Writing Principles", BuildWritingPrinciples(preferred));
+        AddSection(sb, 7, "Writing Principles", BuildWritingPrinciples(preferred, styleContract));
         AddSection(sb, 8, "Output Contract", "Return one narration entry for every scene, preserving sceneId and scenePurpose. Each narrationText must be ready for direct voiceover and captions. Include practical observation guidance in the Observation scene. Include exactly this channel ending once, only in the final scene: \"Until next time, keep looking up.\"");
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
@@ -95,8 +97,21 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         return details + "\n\n" + blocked;
     }
 
-    private static string BuildWritingPrinciples(IReadOnlyList<string> preferred) => "Write in natural documentary prose, not labels or checklists. Weave details into sentences only when they help the moment. Use gentle transitions, concrete sky language, and realistic observing advice." + (preferred.Count == 0 ? string.Empty : $"\nWriting rhythm: {string.Join(", ", preferred)}.");
-    private static string BuildSceneBriefs(IReadOnlyList<NarrationBriefV5> scenes) => scenes.Count == 0 ? "No scene briefs were supplied." : string.Join("\n\n", scenes.Select(s => $"Scene {s.SceneOrder}: {s.SceneId} ({s.ScenePurpose})\n- Scene purpose: {s.SceneGoal}\n- Audience promise: {RewriteAudiencePromise(s.AudienceTakeaway)}\n- Natural details to weave in: {FormatFacts(s.FactsToMention)}\n- Do not state or imply: {FormatAvoidance(s.FactsToAvoid)}\n- Lead naturally into: {s.ConnectorToNext}\n- Writing rhythm: {s.Tone}; {s.Pacing}; {s.TargetLength}. {RewriteInstructions(s.GenerationInstructions)}"));
+    private static string BuildWritingPrinciples(IReadOnlyList<string> preferred, DocumentaryStyleContract? styleContract)
+    {
+        var phrases = styleContract?.VocabularyRules.Count > 0 ? styleContract.VocabularyRules : preferred;
+        var rhythm = styleContract is null ? string.Empty : $"\nDocumentary rhythm for every scene: {styleContract.DocumentaryRhythm.Observe} → {styleContract.DocumentaryRhythm.Wonder} → {styleContract.DocumentaryRhythm.Understand} → {styleContract.DocumentaryRhythm.Continue}.";
+        return "Write in natural documentary prose, not labels or checklists. Weave details into sentences only when they help the moment. Use gentle transitions, concrete sky language, and realistic observing advice." + rhythm + (phrases.Count == 0 ? string.Empty : $"\nApproved documentary phrasing palette: {string.Join(", ", phrases)}.");
+    }
+
+    private static string BuildSceneBriefs(IReadOnlyList<NarrationBriefV5> scenes, DocumentaryStyleContract? styleContract) => scenes.Count == 0 ? "No scene briefs were supplied." : string.Join("\n\n", scenes.Select(s =>
+    {
+        var style = styleContract?.SceneStyles.FirstOrDefault(scene => string.Equals(scene.SceneId, s.SceneId, StringComparison.OrdinalIgnoreCase));
+        var styleLines = style is null ? string.Empty : $"\n- Documentary opening: {style.OpeningStyle}\n- Documentary development: {style.DevelopmentStyle}\n- Documentary closing: {style.ClosingStyle}\n- Semantic transition: {style.TransitionStyle}\n- Fact transformations: {FormatList(style.FactTransformations)}";
+        return $"Scene {s.SceneOrder}: {s.SceneId} ({s.ScenePurpose})\n- Editorial objective: {RewriteInstructions(s.SceneGoal)}\n- Audience promise: {RewriteAudiencePromise(s.AudienceTakeaway)}\n- Natural details to weave in: {FormatFacts(s.FactsToMention)}\n- Do not state or imply: {FormatAvoidance(s.FactsToAvoid)}\n- Lead naturally into: {s.ConnectorToNext}\n- Writing rhythm: {s.Tone}; {s.Pacing}; {s.TargetLength}. {RewriteInstructions(s.GenerationInstructions)}{styleLines}";
+    }));
+
+    private static string FormatList(IReadOnlyList<string> values) => values.Count == 0 ? "none supplied" : string.Join("; ", values);
     private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "none supplied" : string.Join("; ", facts.Select(NormalizeFact));
 
     public static string NormalizeFact(NarrationFactV5 fact)
@@ -137,6 +152,6 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
-public sealed record NarrationPromptComposerInput(JsonElement? EditorialContract, JsonElement? CreativeStoryboard, NarrationBriefsV5? NarrationBriefs, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath);
+public sealed record NarrationPromptComposerInput(JsonElement? EditorialContract, JsonElement? CreativeStoryboard, NarrationBriefsV5? NarrationBriefs, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, DocumentaryStyleContract? DocumentaryStyleContract = null);
 public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown, NarrationPromptDiagnostics Diagnostics);
 public sealed record NarrationPromptDiagnostics(string ComposerName, string OrchestrationVersion, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, int SceneCount, int PromptSectionCount, IReadOnlyList<string> ProhibitedInternalPhraseList, IReadOnlyList<string> MissingInputWarnings, bool ReadyForGeneration);

@@ -1,10 +1,13 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
-public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer? promptComposer = null)
+public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer? promptComposer = null, DocumentaryStyleDirector? styleDirector = null)
 {
     private const string PhaseName = "Narration Generator V5";
     private const string ChannelEnding = "Until next time, keep looking up.";
@@ -26,6 +29,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
         var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
         var llmRequestPath = Path.Combine(narrationRoot, "llm-request.json");
+        var styleRoot = Path.Combine(narrationRoot, "style");
+        Directory.CreateDirectory(styleRoot);
+        var styleContractPath = Path.Combine(styleRoot, "documentary-style-contract.json");
+        var styleDiagnosticsPath = Path.Combine(styleRoot, "documentary-style-diagnostics.json");
 
         var contract = ReadFirstJson(editorialPath);
         var storyboard = ReadFirstJson(storyboardPath);
@@ -47,9 +54,28 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(briefsPath, JsonSerializer.Serialize(narrationBriefs, JsonOptions), cancellationToken);
+
+        var styleStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var styleWarnings = new List<string>();
+        var styleErrors = new List<string>();
+        var typedEditorialContract = ReadTypedJson<EditorialContract>(editorialPath);
+        var typedStoryboard = ReadTypedJson<CreativeStoryboard>(storyboardPath);
+        if (typedEditorialContract is null) styleErrors.Add("Documentary Style Director could not read editorial/editorial-contract.json.");
+        if (typedStoryboard is null) styleErrors.Add("Documentary Style Director could not read creative/creative-storyboard.json.");
+        var director = styleDirector ?? new DocumentaryStyleDirector(new DocumentaryVocabulary(), new DocumentaryTransitionLibrary(), new DocumentaryFactTransformer(), NullLogger<DocumentaryStyleDirector>.Instance);
+        var styleContract = typedEditorialContract is not null && typedStoryboard is not null
+            ? await director.BuildAsync(typedEditorialContract, typedStoryboard, narrationBriefs, cancellationToken)
+            : null;
+        styleStopwatch.Stop();
+        if (styleContract is not null) await File.WriteAllTextAsync(styleContractPath, JsonSerializer.Serialize(styleContract, JsonOptions), cancellationToken);
+        var styleDiagnostics = styleContract is not null
+            ? director.BuildDiagnostics(styleContract, styleStopwatch.Elapsed, styleWarnings, styleErrors)
+            : new Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Diagnostics.DocumentaryStyleDiagnostics(0, 0, 0, 0, styleWarnings, styleErrors, styleStopwatch.Elapsed.ToString("c"), DocumentaryStyleDirector.Version);
+        await File.WriteAllTextAsync(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
+
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath], promptPreviewPath, promptDiagnosticsPath), cancellationToken);
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, "NarrationStudio", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "Write Astro Pulse narration as natural documentary voiceover.", promptComposerOutput.PromptPreviewMarkdown, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(promptPreviewPath)], DateTime.UtcNow, language, briefs.Length);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [editorialPath, storyboardPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract), cancellationToken);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v1", Rc2PipelinePhaseRegistry.OrchestrationVersion, "NarrationStudio", "local-documentary-composer-v1", 0.7m, 0.9m, 1800, "Write Astro Pulse narration as natural documentary voiceover.", promptComposerOutput.PromptPreviewMarkdown, [NormalizePath(editorialPath), NormalizePath(storyboardPath), NormalizePath(briefsPath), NormalizePath(styleContractPath), NormalizePath(promptPreviewPath)], DateTime.UtcNow, language, briefs.Length);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -88,9 +114,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(editorialPath), exists = File.Exists(editorialPath) },
                 new { path = NormalizePath(storyboardPath), exists = File.Exists(storyboardPath) },
                 new { path = NormalizePath(planPath), exists = File.Exists(planPath) },
-                new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) }
+                new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) },
+                new { path = NormalizePath(styleContractPath), exists = File.Exists(styleContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -108,6 +135,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             observationGuidanceScore = fullText.Contains("open horizon", StringComparison.OrdinalIgnoreCase) || fullText.Contains("look", StringComparison.OrdinalIgnoreCase) ? 95 : 60,
             flowScore = narrationScenes.Length == briefs.Length ? 95 : 50,
             overallDocumentaryScore = errors.Length == 0 ? 92 : 55,
+            documentaryStyleDirectorExecuted = styleContract is not null,
+            documentaryStyleContractPath = NormalizePath(styleContractPath),
+            documentaryStyleDiagnosticsPath = NormalizePath(styleDiagnosticsPath),
             promptComposerExecuted = true,
             llmRequestCreated = File.Exists(llmRequestPath),
             llmGenerationExecuted,
@@ -121,7 +151,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Generator V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath]);
     }
 
     private static NarrationPlanV5Scene BuildPlanScene(JsonElement scene, int index, IReadOnlyList<NarrationFactV5> facts)
@@ -212,6 +242,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string Humanize(string value) => string.Concat(value.Select((c, i) => i > 0 && char.IsUpper(c) ? " " + c : c.ToString()));
     private static string FallbackPurpose(int index) => index switch { 0 => "Hook", 1 => "Discovery", 2 => "Science", 3 => "Observation", _ => "Takeaway" };
     private static JsonElement? ReadFirstJson(string path) { if (!File.Exists(path)) return null; using var doc = JsonDocument.Parse(File.ReadAllText(path)); return doc.RootElement.Clone(); }
+    private static T? ReadTypedJson<T>(string path) { if (!File.Exists(path)) return default; return JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOptions); }
     private static IReadOnlyList<JsonElement> ReadArray(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return []; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Array) return p.Value.EnumerateArray().Select(i => i.Clone()).ToArray(); return []; }
     private static IReadOnlyList<string> FindStringArray(JsonElement? element, string name) => ReadArray(element, name).Select(ValueToString).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToArray();
     private static int? GetInt(JsonElement? element, string name) => int.TryParse(GetString(element, name), out var value) ? value : null;
