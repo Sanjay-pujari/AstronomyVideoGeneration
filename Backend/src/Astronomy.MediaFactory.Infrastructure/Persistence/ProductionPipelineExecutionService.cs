@@ -480,8 +480,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private static string BuildNarrationV5DiagnosticsPath(ProductionPhaseContext context)
         => Path.Combine(BuildNarrationV5Root(context), "narration-diagnostics.json");
 
-    private static string BuildNarrationV5WriterBriefPath(ProductionPhaseContext context)
-        => Path.Combine(BuildNarrationV5Root(context), "writer-brief", "writer-brief-contract.json");
+    private static string BuildNarrationV5NarrativeBriefPath(ProductionPhaseContext context)
+        => Path.Combine(BuildNarrationV5Root(context), "narrative-brief", "narrative-brief-contract.json");
 
     private static string BuildNarrationV5LongPath(ProductionPhaseContext context)
         => Path.Combine(BuildNarrationV5Root(context), "long", "narration.json");
@@ -495,7 +495,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static void ValidatePhase7NarrationV5FilesGenerated(ProductionPhaseContext context)
     {
         RequireFile(BuildNarrationV5Path(context), "Narration Studio V5 narration output");
-        RequireFile(BuildNarrationV5WriterBriefPath(context), "Narration Studio V5 writer brief contract");
+        RequireFile(BuildNarrationV5NarrativeBriefPath(context), "Narration Studio V5 narrative brief contract");
         RequireFile(BuildNarrationV5LongPath(context), "Narration Studio V5 long narration output");
         RequireFile(BuildNarrationV5ShortPath(context), "Narration Studio V5 short narration output");
         RequireFile(BuildNarrationV5DiagnosticsPath(context), "Narration Studio V5 diagnostics output");
