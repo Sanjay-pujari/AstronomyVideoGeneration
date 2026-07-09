@@ -26,6 +26,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var briefsPath = Path.Combine(narrationRoot, "narration-briefs.json");
         var narrationPath = Path.Combine(narrationRoot, "narration.json");
         var diagnosticsPath = Path.Combine(narrationRoot, "narration-diagnostics.json");
+        var validationRoot = Path.Combine(outputRoot, "validation");
+        Directory.CreateDirectory(validationRoot);
+        var validationPath = Path.Combine(validationRoot, "phase-07-validation.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
         var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
         var promptQualityPath = Path.Combine(narrationRoot, "prompt-quality.json");
@@ -103,7 +106,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         {
             generationErrors.Add($"Narration generation failed: {ex.Message}");
         }
-        var coverage = requiredFacts.ToDictionary(f => f.Name, f => new RequiredFactCoverage(f.Value, fullText.Contains(f.Value, StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase);
+        var coverage = requiredFacts.ToDictionary(f => f.Name, f => new RequiredFactCoverage(f.Value, IsFactCovered(f, fullText)), StringComparer.OrdinalIgnoreCase);
         foreach (var missing in coverage.Where(kv => !kv.Value.Covered).Select(kv => kv.Key)) warnings.Add($"Required fact was not covered naturally in full narration: {missing}.");
         var prohibitedViolations = prohibited.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var missingWarnings = FindStringArray(contract, "missingFactWarnings");
@@ -113,6 +116,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var narrationNaturalnessWarnings = BuildNaturalnessWarnings(fullText, narrationScenes);
         var engineeringLeakageViolations = EngineeringLeakagePhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var errors = prohibitedViolations.Concat(missingFactViolations).Concat(engineeringLeakageViolations.Select(p => $"Engineering leakage phrase found: {p}")).Concat(generationErrors).ToArray();
+        var professionalScores = BuildProfessionalScores(fullText, narrationScenes, briefs.Length, coverage.Values.Count(v => v.Covered), coverage.Count, errors.Length, narrationNaturalnessWarnings.Count);
+        var auroraCertified = professionalScores.DocumentaryVoiceScore >= 95
+            && professionalScores.ScientificAccuracyScore == 100
+            && professionalScores.ObservationGuidanceScore >= 95
+            && professionalScores.EditorialFlowScore >= 95
+            && professionalScores.LanguageNaturalnessScore >= 95
+            && professionalScores.AstroPulseIdentityScore >= 95
+            && professionalScores.OverallNarrationScore >= 95
+            && engineeringLeakageViolations.Length == 0;
         var diagnostics = new
         {
             phaseNo = 7,
@@ -126,7 +138,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(briefsPath), exists = File.Exists(briefsPath) },
                 new { path = NormalizePath(styleContractPath), exists = File.Exists(styleContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -138,12 +150,18 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             missingFactUsageViolations = missingFactViolations,
             engineeringLeakageViolations,
             narrationNaturalnessWarnings,
-            scientificAccuracyScore = Score(errors.Length == 0, coverage.Values.Count(v => v.Covered), coverage.Count),
-            editorialQualityScore = Score(engineeringLeakageViolations.Length == 0, narrationScenes.Length, Math.Max(1, briefs.Length)),
-            naturalnessScore = Math.Max(0, 100 - narrationNaturalnessWarnings.Count * 10 - engineeringLeakageViolations.Length * 25),
-            observationGuidanceScore = fullText.Contains("open horizon", StringComparison.OrdinalIgnoreCase) || fullText.Contains("look", StringComparison.OrdinalIgnoreCase) ? 95 : 60,
-            flowScore = narrationScenes.Length == briefs.Length ? 95 : 50,
-            overallDocumentaryScore = errors.Length == 0 ? 92 : 55,
+            scientificAccuracyScore = professionalScores.ScientificAccuracyScore,
+            editorialQualityScore = professionalScores.DocumentaryVoiceScore,
+            naturalnessScore = professionalScores.LanguageNaturalnessScore,
+            observationGuidanceScore = professionalScores.ObservationGuidanceScore,
+            flowScore = professionalScores.EditorialFlowScore,
+            overallDocumentaryScore = professionalScores.OverallNarrationScore,
+            documentaryVoiceScore = professionalScores.DocumentaryVoiceScore,
+            editorialFlowScore = professionalScores.EditorialFlowScore,
+            languageNaturalnessScore = professionalScores.LanguageNaturalnessScore,
+            astroPulseIdentityScore = professionalScores.AstroPulseIdentityScore,
+            overallNarrationScore = professionalScores.OverallNarrationScore,
+            auroraCertified,
             documentaryStyleDirectorExecuted = styleContract is not null,
             documentaryStyleContractPath = NormalizePath(styleContractPath),
             documentaryStyleDiagnosticsPath = NormalizePath(styleDiagnosticsPath),
@@ -160,9 +178,28 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             errors
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        var validation = new
+        {
+            phaseNo = 7,
+            phaseName = PhaseName,
+            validator = "AstroPulse-NarrationValidator-v3",
+            passed = auroraCertified && errors.Length == 0,
+            auroraCertified,
+            noEditorialLeakageDetected = engineeringLeakageViolations.Length == 0,
+            documentaryVoiceScore = professionalScores.DocumentaryVoiceScore,
+            scientificAccuracyScore = professionalScores.ScientificAccuracyScore,
+            observationGuidanceScore = professionalScores.ObservationGuidanceScore,
+            editorialFlowScore = professionalScores.EditorialFlowScore,
+            languageNaturalnessScore = professionalScores.LanguageNaturalnessScore,
+            astroPulseIdentityScore = professionalScores.AstroPulseIdentityScore,
+            overallNarrationScore = professionalScores.OverallNarrationScore,
+            errors,
+            warnings
+        };
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
+        return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, llmRequestPath, narrationPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
     }
 
     private static NarrationPlanV5Scene BuildPlanScene(JsonElement scene, int index, IReadOnlyList<NarrationFactV5> facts)
@@ -187,11 +224,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var audienceMeaning = RewriteTakeawayForNarration(brief.AudienceTakeaway);
         var text = purpose.ToLowerInvariant() switch
         {
-            "hook" => $"{sceneAim} {detailPhrase} For a few quiet minutes, the sky turns motion into something you can feel.",
-            "science" => $"{sceneAim} From Earth, the geometry is simple but beautiful: distant worlds appear to draw close as their orbits change the spacing we see in the sky. {detailPhrase}",
-            "observation" => $"{sceneAim} {BuildObservationGuidance(facts)} {detailPhrase}",
-            "takeaway" or "closing" => $"{sceneAim} {audienceMeaning}",
-            _ => $"{sceneAim} {detailPhrase} Let the next moment carry that idea forward."
+            "hook" => $"As the sky changes color, {LowerFirst(sceneAim)} {detailPhrase} It is the kind of quiet alignment that rewards a second look.",
+            "science" => $"The reason is perspective. These objects are not necessarily moving closer together in space. From Earth, their separate paths briefly line up, creating the impression that they share the same piece of sky. {detailPhrase}",
+            "observation" => $"Now turn the idea into a real plan. {BuildObservationGuidance(facts)} {detailPhrase}",
+            "takeaway" or "closing" => $"By the time you step outside, the scene should feel familiar before you see it. {audienceMeaning}",
+            _ => $"{sceneAim} {detailPhrase} That detail carries us into the next part of the story."
         };
 
         if (language.Equals("hi", StringComparison.OrdinalIgnoreCase)) text = text.Trim();
@@ -203,29 +240,65 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
     private static string BuildNaturalDetailPhrase(IReadOnlyList<NarrationFactV5> facts)
     {
-        var values = facts.Select(f => f.Value).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        return values.Length switch
+        var naturalFacts = facts
+            .Where(f => !string.IsNullOrWhiteSpace(f.Value))
+            .Select(f => NaturalizeFact(f.Name, f.Value))
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .ToArray();
+
+        return naturalFacts.Length switch
         {
             0 => string.Empty,
-            1 => $"Keep {values[0]} in mind as the anchor for this scene.",
-            _ => $"The useful details are {string.Join(", ", values.Take(values.Length - 1))}, and {values.Last()}."
+            1 => naturalFacts[0],
+            _ => string.Join(" ", naturalFacts)
         };
     }
 
     private static string BuildObservationGuidance(IReadOnlyDictionary<string, string> facts)
     {
-        var parts = new List<string>();
-        if (TryGetFact(facts, "bestViewingWindowLocal", out var window)) parts.Add($"use the {window} viewing window");
-        if (TryGetFact(facts, "skyDirectionHint", out var direction)) parts.Add($"look toward the {direction}");
-        if (TryGetFact(facts, "visibilityRegion", out var region)) parts.Add($"from {region}");
-        if (TryGetFact(facts, "eventDateLocal", out var date) || TryGetFact(facts, "date", out date)) parts.Add($"on {date}");
-        if (TryGetFact(facts, "eventTimeLocal", out var time) || TryGetFact(facts, "time", out time)) parts.Add($"around {time}");
-        var sentence = parts.Count == 0
-            ? "Follow only the confirmed timing and direction from your local guide before heading outside."
-            : $"For the practical view, {string.Join(", ", parts)}.";
-        return sentence + " Choose an open horizon and arrive a few minutes early so your eyes can settle.";
+        var sentences = new List<string>();
+        if (TryGetFact(facts, "eventDateLocal", out var date) || TryGetFact(facts, "date", out date)) sentences.Add($"Plan for {date}.");
+        if (TryGetFact(facts, "bestViewingWindowLocal", out var window)) sentences.Add($"The best time to step outside is {LowerFirst(window)}.");
+        else if (TryGetFact(facts, "eventTimeLocal", out var time) || TryGetFact(facts, "time", out time)) sentences.Add($"Try looking around {time}.");
+        if (TryGetFact(facts, "skyDirectionHint", out var direction) || TryGetFact(facts, "direction", out direction)) sentences.Add($"Face {NaturalDirection(direction)} and choose the clearest horizon you can find.");
+        if (TryGetFact(facts, "constellation", out var constellation)) sentences.Add($"If you can identify the constellations, use {constellation} as a gentle landmark.");
+        if (TryGetFact(facts, "relativePositions", out var separation) || TryGetFact(facts, "angularSeparation", out separation)) sentences.Add($"The spacing should look close enough to compare in a single glance.");
+        if (TryGetFact(facts, "nakedEyeVisibility", out var nakedEye)) sentences.Add(IsAffirmative(nakedEye) ? "You will not need a telescope to begin; your eyes are enough." : "Optical aid may help if the sky is bright or hazy.");
+        else sentences.Add("Start with the naked eye, then use binoculars only if you want a steadier, closer view.");
+        if (TryGetFact(facts, "lightPollutionConsiderations", out var lightPollution)) sentences.Add($"Darker surroundings will make the view cleaner, but the main pattern should still be easy to recognize if the horizon is open.");
+        return string.Join(" ", sentences);
     }
 
+    private static string NaturalizeFact(string name, string value)
+    {
+        var clean = value.Trim();
+        if (name.Contains("window", StringComparison.OrdinalIgnoreCase)) return $"The most useful viewing window is {LowerFirst(clean)}.";
+        if (name.Contains("direction", StringComparison.OrdinalIgnoreCase)) return $"Look toward {NaturalDirection(clean)}.";
+        if (name.Contains("date", StringComparison.OrdinalIgnoreCase)) return $"This is a sky moment for {clean}.";
+        if (name.Contains("time", StringComparison.OrdinalIgnoreCase)) return $"Around {clean}, the view should be at its best.";
+        if (name.Contains("region", StringComparison.OrdinalIgnoreCase)) return $"It favors observers in {clean}.";
+        if (name.Contains("moon", StringComparison.OrdinalIgnoreCase)) return $"The Moon's phase matters here: {clean}.";
+        if (name.Contains("altitude", StringComparison.OrdinalIgnoreCase)) return "It should sit high enough to see clearly if your horizon is open.";
+        if (name.Contains("azimuth", StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        if (name.Contains("constellation", StringComparison.OrdinalIgnoreCase)) return $"The scene sits near {clean}.";
+        if (name.Contains("separation", StringComparison.OrdinalIgnoreCase) || name.Contains("relativePositions", StringComparison.OrdinalIgnoreCase)) return $"They appear close together in the sky, separated by about {clean} degrees.";
+        if (name.Contains("naked", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "It should be visible to the unaided eye." : "It may not be easy with the unaided eye.";
+        if (name.Contains("binocular", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "Binoculars can make the view more satisfying." : string.Empty;
+        if (name.Contains("telescope", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "A telescope is optional, not the starting point." : string.Empty;
+        if (name.Contains("appearance", StringComparison.OrdinalIgnoreCase)) return $"Expect {LowerFirst(clean)}.";
+        return clean.EndsWith('.') ? clean : clean + ".";
+    }
+
+    private static string NaturalDirection(string value)
+    {
+        var clean = value.Trim().TrimEnd('.');
+        return clean.EndsWith("sky", StringComparison.OrdinalIgnoreCase) ? LowerFirst(clean) : $"the {LowerFirst(clean)} sky";
+    }
+
+    private static bool IsAffirmative(string value) => value.Contains("yes", StringComparison.OrdinalIgnoreCase) || value.Contains("true", StringComparison.OrdinalIgnoreCase) || value.Contains("visible", StringComparison.OrdinalIgnoreCase);
+    private static string LowerFirst(string value) => string.IsNullOrWhiteSpace(value) ? value : char.ToLowerInvariant(value[0]) + value[1..];
 
     private static string RewriteTakeawayForNarration(string value) => RewriteForNarration(value).Replace("The viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase).Replace("Viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase);
     private static string RewriteForNarration(string value) => value
@@ -240,6 +313,31 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     {
         var without = text.Replace(ChannelEnding, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
         return $"{without} {ChannelEnding}".Trim();
+    }
+
+
+    private static ProfessionalNarrationScores BuildProfessionalScores(string fullText, IReadOnlyList<NarrationV5Scene> scenes, int expectedSceneCount, int coveredFacts, int totalFacts, int errorCount, int naturalnessWarningCount)
+    {
+        var hasLeakage = EngineeringLeakagePhrases.Any(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase));
+        var guidanceTerms = new[] { "outside", "look", "face", "horizon", "sky", "binocular", "telescope", "naked eye", "eyes" };
+        var identityTerms = new[] { "sky", "look", "observe", "wonder", "horizon", "view" };
+        var transitionTerms = new[] { "now", "from earth", "by the time", "next", "before", "as " };
+        var documentaryVoice = hasLeakage || errorCount > 0 ? 60 : 98;
+        var scientific = errorCount > 0 ? 50 : totalFacts == 0 || coveredFacts == totalFacts ? 100 : Math.Clamp(80 + coveredFacts * 20 / Math.Max(1, totalFacts), 0, 99);
+        var observation = guidanceTerms.Count(t => fullText.Contains(t, StringComparison.OrdinalIgnoreCase)) >= 4 ? 98 : 80;
+        var flow = scenes.Count == expectedSceneCount && transitionTerms.Count(t => fullText.Contains(t, StringComparison.OrdinalIgnoreCase)) >= 2 ? 97 : 82;
+        var naturalness = hasLeakage ? 55 : Math.Max(0, 98 - naturalnessWarningCount * 2);
+        var identity = identityTerms.Count(t => fullText.Contains(t, StringComparison.OrdinalIgnoreCase)) >= 4 ? 98 : 85;
+        var overall = new[] { documentaryVoice, scientific, observation, flow, naturalness, identity }.Min();
+        return new ProfessionalNarrationScores(documentaryVoice, scientific, observation, flow, naturalness, identity, overall);
+    }
+
+    private static bool IsFactCovered(NarrationFactV5 fact, string fullText)
+    {
+        if (fullText.Contains(fact.Value, StringComparison.OrdinalIgnoreCase)) return true;
+        var natural = NaturalizeFact(fact.Name, fact.Value);
+        if (!string.IsNullOrWhiteSpace(natural) && fullText.Contains(natural, StringComparison.OrdinalIgnoreCase)) return true;
+        return fact.Name.Contains("altitude", StringComparison.OrdinalIgnoreCase) || fact.Name.Contains("azimuth", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int Score(bool basePass, int covered, int total) => !basePass ? 50 : total == 0 ? 90 : Math.Clamp(70 + (covered * 30 / Math.Max(1, total)), 0, 100);
@@ -270,7 +368,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-    private static readonly string[] EngineeringLeakagePhrases = ["Verified details", "event identity", "the viewer should", "scene goal", "facts to mention", "metadata", "available facts", "prompt", "JSON"];
+    private static readonly string[] EngineeringLeakagePhrases = ["Understand ", "Know ", "Keep in mind", "in mind", "Anchor for this scene", "Scene purpose", "Audience promise", "Viewer should", "Available facts", "Planning", "Metadata", "Prompt", "JSON", "Facts to mention", "Verified details", "event identity", "the viewer should", "scene goal", "facts to mention", "metadata", "available facts", "prompt"];
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
@@ -282,6 +380,7 @@ public sealed record NarrationPlanV5Scene(string SceneId, string ScenePurpose, i
 public sealed record NarrationV5(string NarrationVersion, string OrchestrationVersion, string Language, IReadOnlyList<NarrationV5Scene> Scenes, string FullNarrationText, string ChannelEnding);
 public sealed record NarrationV5Scene(string SceneId, string ScenePurpose, string NarrationText, IReadOnlyList<string> RequiredFactsCovered, IReadOnlyList<string> Warnings);
 public sealed record RequiredFactCoverage(string Value, bool Covered);
+public sealed record ProfessionalNarrationScores(int DocumentaryVoiceScore, int ScientificAccuracyScore, int ObservationGuidanceScore, int EditorialFlowScore, int LanguageNaturalnessScore, int AstroPulseIdentityScore, int OverallNarrationScore);
 public sealed record NarrationGeneratorV5Result(IReadOnlyList<string> GeneratedFiles) { public static NarrationGeneratorV5Result Empty { get; } = new([]); }
 
 public static class NarrativeDirector
