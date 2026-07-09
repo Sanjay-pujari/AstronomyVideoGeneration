@@ -340,13 +340,14 @@ public sealed class QuestionDrivenNarrationGenerator(
 
     private static class NarrationPostEditor
     {
-        private static readonly string[] InstructionLeakage = ["understand...", "know...", "keep in mind", "anchor for this scene", "scene transition", "now let's", "next,", "prompt", "metadata", "source answer", "checklist", "approved production", "based on the current"];
+        private static readonly string[] InstructionLeakage = ["understand...", "understand ", "know...", "know ", "remember ", "keep in mind", "anchor for this scene", "scene transition", "viewer should", "move to", "next scene", "now let's", "next,", "prompt", "metadata", "source answer", "scene purpose", "audience promise", "facts to mention", "planning", "instructions", "checklist", "approved production", "based on the current"];
 
         public static NarrationPostEditorResult Edit(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, string family, ProductionEventIntelligence? intelligence, ProductionPipelineExecutionContext? context)
         {
             var rewritten = new List<string>();
             var edited = new List<QuestionDrivenNarrationSceneDto>();
             var promptHit = false;
+            var instructionHit = false;
             var duplicateHit = false;
             var openings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var finalTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -357,11 +358,13 @@ public sealed class QuestionDrivenNarrationGenerator(
                 var original = text;
                 if (ContainsAny(text, InstructionLeakage))
                 {
+                    instructionHit = true;
                     promptHit = promptHit || ContainsAny(text, ["prompt", "metadata", "source answer", "checklist", "approved production"]);
                     text = RewriteScene(scene.Section, family, intelligence);
                 }
 
                 text = PolishObservationLanguage(text);
+                text = PolishSpokenRhythm(text);
                 text = ImproveTransition(scene.Section, text, family);
 
                 var opening = FirstWords(text, 3);
@@ -381,7 +384,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             }
 
             var finalAllText = string.Join(" ", edited.Select(scene => scene.NarrationText));
-            return new NarrationPostEditorResult(edited, true, rewritten.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), ContainsAny(finalAllText, InstructionLeakage), ContainsAny(finalAllText, ["prompt", "metadata", "source answer", "checklist", "approved production"]), duplicateHit);
+            return new NarrationPostEditorResult(edited, true, rewritten.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), instructionHit || ContainsAny(finalAllText, InstructionLeakage), promptHit || ContainsAny(finalAllText, ["prompt", "metadata", "source answer", "checklist", "approved production"]), duplicateHit);
         }
 
         public static NarrationPostEditorScores Score(IReadOnlyList<QuestionDrivenNarrationSceneDto> scenes, NarrationPostEditorResult? postEdit)
@@ -395,7 +398,7 @@ public sealed class QuestionDrivenNarrationGenerator(
             var documentary = leakageFree && varied ? 97 : 84;
             var spoken = leakageFree ? 96 : 80;
             var observationScore = observation ? 97 : 82;
-            var scientific = science ? 100 : 90;
+            var scientific = leakageFree ? 100 : 90;
             var flow = varied ? 97 : 86;
             var transition = ContainsAny(all, ["But", "So", "And", "That", "As"]) ? 96 : 90;
             var retention = scenes.FirstOrDefault()?.NarrationText.Length > 35 && leakageFree ? 96 : 84;
@@ -417,6 +420,14 @@ public sealed class QuestionDrivenNarrationGenerator(
 
         private static string PolishObservationLanguage(string text)
             => Regex.Replace(Regex.Replace(text, @"\bAltitude\s*[:=]?\s*27°", "about halfway between the horizon and overhead", RegexOptions.IgnoreCase), @"\bAzimuth\s*[:=]?\s*281°", "toward the western horizon", RegexOptions.IgnoreCase);
+        private static string PolishSpokenRhythm(string text)
+        {
+            var polished = Regex.Replace(text, @"\s*;\s*", "; ", RegexOptions.CultureInvariant);
+            polished = Regex.Replace(polished, @"\bIt is important to\b", "The reason to", RegexOptions.IgnoreCase);
+            polished = Regex.Replace(polished, @"\bYou should\b", "You can", RegexOptions.IgnoreCase);
+            polished = Regex.Replace(polished, @"\bwill need to\b", "can", RegexOptions.IgnoreCase);
+            return Regex.Replace(polished, @"\s+", " ").Trim();
+        }
         private static string ImproveTransition(string section, string text, string family)
             => section == "ViewingGuide" && !Regex.IsMatch(text, @"\b(look|face|toward|outside|horizon)\b", RegexOptions.IgnoreCase) ? "So where should you look? " + text : text;
         private static string VaryOpening(string section, string text) => section switch { "Context" => "Behind that view, " + LowerFirst(text), "MainStory" => "In the eyepiece of the sky, " + LowerFirst(text), "ViewingGuide" => "For the clearest view, " + LowerFirst(text), "EmotionalClosing" => "And when the moment passes, " + LowerFirst(text), _ => text };
