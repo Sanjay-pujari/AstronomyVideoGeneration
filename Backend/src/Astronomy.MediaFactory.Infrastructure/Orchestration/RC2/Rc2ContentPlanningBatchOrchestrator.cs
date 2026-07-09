@@ -37,6 +37,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             requestedPhases.Count == 0 ? "none" : string.Join(',', requestedPhases));
 
         var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
+        response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
         if (requestedPhases.Contains(6) && CanRunRc2Overlay(response, 6))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
@@ -97,6 +98,8 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 cancellationToken);
         }
 
+        response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
+
         logger.LogInformation(
             "RC2 content planning orchestration completed. Success={Success}; SelectedPlanCount={SelectedPlanCount}; FailedPlans={FailedPlans}; LastCompletedPhaseNo={LastCompletedPhaseNo}; LastFailedPhaseNo={LastFailedPhaseNo}; OutputRoot={OutputRoot}",
             response.Success,
@@ -109,6 +112,43 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         return response;
     }
 
+    private static BatchGenerateFromPlansResponse ValidateManualPlanExecutionResponse(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases)
+    {
+        if (!request.PlanId.HasValue) return response;
+
+        var failurePhaseNo = ResolveManualFailurePhaseNo(request, response, requestedPhases);
+        var errors = new List<string>();
+        var warnings = new List<BatchGenerateFromPlansWarning>();
+
+        if (response.SelectedPlanCount == 0)
+        {
+            errors.Add("Manual planId was provided but no executable plan was selected.");
+            warnings.Add(new BatchGenerateFromPlansWarning(request.PlanId.Value.ToString("D"), false, false, "Manual planId was provided but no executable plan was selected."));
+        }
+
+        if (response.Success && string.IsNullOrWhiteSpace(response.OutputRoot))
+        {
+            errors.Add("Manual planId execution did not resolve an OutputRoot.");
+        }
+
+        if (errors.Count == 0) return response;
+
+        return response with
+        {
+            Success = false,
+            FailedPlans = Math.Max(1, response.FailedPlans),
+            LastFailedPhaseNo = response.LastFailedPhaseNo ?? failurePhaseNo,
+            LastCompletedPhaseNo = response.LastCompletedPhaseNo is null ? null : Math.Min(response.LastCompletedPhaseNo.Value, failurePhaseNo - 1),
+            Warnings = response.Warnings.Concat(warnings).ToArray(),
+            Errors = response.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+        };
+    }
+
+    private static int ResolveManualFailurePhaseNo(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases)
+        => request.StartPhaseNo
+            ?? response.StartPhaseNo
+            ?? response.RequestedStartPhase
+            ?? requestedPhases.DefaultIfEmpty(1).Min();
 
     private async Task<BatchGenerateFromPlansResponse> ExecuteRc2OverlayPhaseAsync(
         BatchGenerateFromPlansResponse response,

@@ -279,6 +279,46 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.Contains(manifest.RootElement.GetProperty("filesGeneratedThisRun").EnumerateArray(), file => file.GetString()!.EndsWith("narration-v5/narration.json", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task GenerateFromPlansAsync_ManualPlanIdWithNoSelectedPlan_FailsRc2Response()
+    {
+        var planId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var baseResponse = new BatchGenerateFromPlansResponse(
+            Success: true,
+            DryRun: false,
+            RequestedTitleCount: 0,
+            SelectedPlanCount: 0,
+            MaxPlans: 1,
+            SelectedPlans: [],
+            Steps: [],
+            Warnings: [],
+            Errors: [],
+            UseProductionPipeline: true,
+            UsedPlaceholderVisuals: false,
+            RequestedPlanId: planId,
+            ManualPlanExecution: true,
+            OutputRoot: null,
+            LastCompletedPhaseNo: null,
+            LastFailedPhaseNo: null);
+
+        var response = await new Rc2ContentPlanningBatchOrchestrator(
+            new StubBatchGenerationService(baseResponse),
+            new Rc2PipelinePhaseRegistry(),
+            new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance),
+            new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
+            new NarrationGeneratorV5(NullLogger<NarrationGeneratorV5>.Instance),
+            NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
+            .GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(2026, "US", UseProductionPipeline: true, PlanId: planId, StartPhaseNo: 6, EndPhaseNo: 8), CancellationToken.None);
+
+        Assert.False(response.Success);
+        Assert.Equal(0, response.SelectedPlanCount);
+        Assert.Null(response.OutputRoot);
+        Assert.Null(response.LastCompletedPhaseNo);
+        Assert.Equal(6, response.LastFailedPhaseNo);
+        Assert.Contains(response.Warnings, warning => warning.Reason == "Manual planId was provided but no executable plan was selected.");
+        Assert.Contains("Manual planId was provided but no executable plan was selected.", response.Errors);
+    }
+
     private static BatchGenerateFromPlansResponse BuildBaseResponse(string root)
     {
         var planId = Guid.NewGuid();
