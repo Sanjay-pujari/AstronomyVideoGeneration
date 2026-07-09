@@ -7,16 +7,16 @@ namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
 public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
 {
-    private const string PhaseName = "Editorial Intelligence Foundation";
+    private const string PhaseName = "Editorial Intelligence";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public async Task<SceneIntentBuilderResult> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Editorial Intelligence Foundation executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
+        logger.LogInformation("Editorial Intelligence executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
 
         if (string.IsNullOrWhiteSpace(response.OutputRoot))
         {
-            logger.LogWarning("Editorial Intelligence Foundation skipped diagnostics because RC2 response did not include an OutputRoot.");
+            logger.LogWarning("Editorial Intelligence skipped diagnostics because RC2 response did not include an OutputRoot.");
             return SceneIntentBuilderResult.Empty;
         }
 
@@ -37,13 +37,12 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         var sceneIntentsPath = Path.Combine(diagnosticsRoot, "scene-intents.json");
         var editorialContractPath = Path.Combine(diagnosticsRoot, "editorial-contract.json");
         var diagnosticsPath = Path.Combine(diagnosticsRoot, "editorial-diagnostics.json");
-        var storyGraph = BuildStoryGraph(request, response, planInput, intelligence, questionAnswerSet, observationMetadata, sceneElements);
+        var storyGraph = ReadStoryGraph(storyGraphPath) ?? throw new InvalidOperationException("Phase 5 Editorial Intelligence requires Phase 4 output editorial/story-graph.json.");
         var intents = storyGraph.Scenes.Select(scene => BuildIntent(request, storyGraph, observationMetadata, scene)).ToArray();
-        var inputFiles = new[] { productionIntelligencePath, questionAnswerSetPath, scenePlanPath, observationMetadataPath, storyGraphPath, sceneIntentsPath };
+        var inputFiles = new[] { productionIntelligencePath, storyGraphPath };
         var contract = BuildEditorialContract(request, response, observationMetadata, storyGraph, intents);
         var allWarnings = observationMetadata.MissingFactWarnings.Concat(storyGraph.MissingFactWarnings).Concat(intents.SelectMany(intent => intent.MissingFactWarnings)).Concat(contract.MissingFactWarnings).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         await File.WriteAllTextAsync(observationMetadataPath, JsonSerializer.Serialize(observationMetadata, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(storyGraphPath, JsonSerializer.Serialize(storyGraph, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(sceneIntentsPath, JsonSerializer.Serialize(intents, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(editorialContractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken);
 
@@ -55,14 +54,13 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             subPhases = new[]
             {
                 "5.1 Observation Metadata Builder",
-                "5.2A Story Graph Builder",
-                "5.2B Scene Intent Builder",
+                "5.2 Scene Intent Builder",
                 "5.3 Editorial Contract Builder",
                 "5.4 Editorial Diagnostics"
             },
             inputs = inputFiles.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
-            outputs = new[] { NormalizePath(observationMetadataPath), NormalizePath(storyGraphPath), NormalizePath(sceneIntentsPath), NormalizePath(editorialContractPath), NormalizePath(diagnosticsPath) },
-            storyGraphCreated = File.Exists(storyGraphPath),
+            outputs = new[] { NormalizePath(observationMetadataPath), NormalizePath(sceneIntentsPath), NormalizePath(editorialContractPath), NormalizePath(diagnosticsPath) },
+            storyGraphConsumed = File.Exists(storyGraphPath),
             storySceneCount = storyGraph.Scenes.Count,
             sceneIntentCount = intents.Length,
             missingFactWarningCount = allWarnings.Length,
@@ -73,8 +71,28 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
 
-        logger.LogInformation("Editorial Intelligence Foundation wrote observation metadata, {SceneIntentCount} scene intents, and diagnostics to {DiagnosticsPath}.", intents.Length, diagnosticsPath);
-        return new SceneIntentBuilderResult(intents, [observationMetadataPath, storyGraphPath, sceneIntentsPath, editorialContractPath, diagnosticsPath]);
+        logger.LogInformation("Editorial Intelligence wrote observation metadata, {SceneIntentCount} scene intents, and diagnostics to {DiagnosticsPath}.", intents.Length, diagnosticsPath);
+        return new SceneIntentBuilderResult(intents, [observationMetadataPath, sceneIntentsPath, editorialContractPath, diagnosticsPath]);
+    }
+
+    public async Task<StoryGraphBuilderResult> BuildAndWriteStoryGraphAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(response.OutputRoot)) return StoryGraphBuilderResult.Empty;
+        var outputRoot = response.OutputRoot!;
+        var planInput = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "content-plan-production-request.json"));
+        var intelligence = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json"));
+        var questionAnswerSetPath = Path.Combine(outputRoot, "question-engine", "question-answer-set.json");
+        var scenePlanPath = Path.Combine(outputRoot, "question-engine", "question-driven-scene-plan.enriched.json");
+        if (!File.Exists(scenePlanPath)) scenePlanPath = Path.Combine(outputRoot, "question-engine", "question-driven-scene-plan.json");
+        var questionAnswerSet = ReadFirstJson(questionAnswerSetPath);
+        var scenePlan = ReadFirstJson(scenePlanPath);
+        var observationMetadata = BuildObservationMetadata(planInput, intelligence);
+        var storyGraph = BuildStoryGraph(request, response, planInput, intelligence, questionAnswerSet, observationMetadata, ReadSceneElements(scenePlan));
+        var editorialRoot = Path.Combine(outputRoot, "editorial");
+        Directory.CreateDirectory(editorialRoot);
+        var storyGraphPath = Path.Combine(editorialRoot, "story-graph.json");
+        await File.WriteAllTextAsync(storyGraphPath, JsonSerializer.Serialize(storyGraph, JsonOptions), cancellationToken);
+        return new StoryGraphBuilderResult(storyGraph, [storyGraphPath]);
     }
 
     private static ObservationMetadata BuildObservationMetadata(JsonElement? planInput, JsonElement? intelligence)
@@ -333,6 +351,12 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             _ => null
         };
     }
+    private static StoryGraph? ReadStoryGraph(string path)
+    {
+        if (!File.Exists(path)) return null;
+        return JsonSerializer.Deserialize<StoryGraph>(File.ReadAllText(path), JsonOptions);
+    }
+
     private static JsonElement? ReadFirstJson(string path) { if (!File.Exists(path)) return null; using var doc = JsonDocument.Parse(File.ReadAllText(path)); return doc.RootElement.Clone(); }
     private static List<JsonElement> ReadSceneElements(JsonElement? scenePlan)
     {
@@ -498,6 +522,11 @@ public sealed record EditorialContractObservationFacts(
     EditorialContractFact LightPollution);
 
 public sealed record EditorialChannelIdentity(string ChannelName, string DefaultEnding);
+
+public sealed record StoryGraphBuilderResult(StoryGraph? StoryGraph, IReadOnlyList<string> GeneratedFiles)
+{
+    public static StoryGraphBuilderResult Empty { get; } = new(null, []);
+}
 
 public sealed record SceneIntentBuilderResult(IReadOnlyList<SceneIntent> SceneIntents, IReadOnlyList<string> GeneratedFiles)
 {
