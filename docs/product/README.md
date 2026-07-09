@@ -41,6 +41,7 @@ graph TD
 | [ThumbnailEngine](./ThumbnailEngine.md) | Produces platform thumbnails. Current implementation emphasizes deterministic local collage/text rendering; RC3 target adds AI variants, CTR scoring, and experimentation. |
 | [GalleryEngine](./GalleryEngine.md) | Produces supporting image sets and future educational carousels that explain observation context and information hierarchy. |
 | [NarrationEngine](./NarrationEngine.md) | Converts scene plans and questions into narration scripts, SSML/TTS packages, subtitles, and future voice-personalized narration. |
+| [ChronicleEditorialEngine](./ChronicleEditorialEngine.md) | Provides the domain-independent editorial workflow that turns verified knowledge contracts into documentary narration only. |
 | [ObservationGuide](./ObservationGuide.md) | Normalizes direction, time, equipment, visibility, difficulty, and regional guidance into viewer-safe observing instructions. |
 | [SkyGuide](./SkyGuide.md) | Plans daily, weekly, monthly, and yearly sky-guide products, including Stellarium-backed observation planning. |
 | [ScenePlanner](./ScenePlanner.md) | Converts story/event context into scene sequence, question structure, visual intent, and render requirements. |
