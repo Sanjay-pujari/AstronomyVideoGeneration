@@ -345,9 +345,9 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         {
             var bg = beat.RenderMode == "AccurateSkyGuideScene" ? Color.FromRgb(5, 10, 22) : Color.FromRgb((byte)(8 + beat.BeatNo * 11), (byte)(16 + beat.BeatNo * 7), (byte)(34 + beat.BeatNo * 13));
             ctx.Fill(bg);
-            DrawStars(ctx, beat.BeatNo);
-            if (beat.RenderMode == "AccurateSkyGuideScene") DrawSkyGuide(ctx, beat);
-            else DrawCinematicForeground(ctx, beat);
+            DrawStars(ctx, beat.BeatNo, width, height);
+            if (beat.RenderMode == "AccurateSkyGuideScene") DrawSkyGuide(ctx, beat, width, height);
+            else DrawCinematicForeground(ctx, beat, width, height);
             var font = ResolveOverlayFont(34, FontStyle.Bold);
             ctx.DrawText(TruncateForOverlay(beat.OverlayText, 54), font, Color.FromRgba(235, 240, 248, 225), new PointF(Math.Min(90, width / 20), height - 205));
             if (!string.IsNullOrWhiteSpace(beat.SupportingText)) ctx.DrawText(TruncateForOverlay(beat.SupportingText!, 70), ResolveOverlayFont(26, FontStyle.Regular), Color.FromRgba(190, 220, 245, 205), new PointF(Math.Min(90, width / 20), height - 158));
@@ -355,8 +355,8 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         await image.SaveAsPngAsync(path, new PngEncoder(), ct);
     }
 
-    private static void DrawStars(IImageProcessingContext ctx, int seed) { for (var i = 0; i < 180; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(58 + (i % 6) * 27)), new EllipsePolygon((i * 137 + seed * 61) % width, (i * 73 + seed * 89) % Math.Max(1, height - 260), 1 + i % 3)); }
-    private static void DrawCinematicForeground(IImageProcessingContext ctx, SceneAssetsV3Beat beat)
+    private static void DrawStars(IImageProcessingContext ctx, int seed, int width, int height) { for (var i = 0; i < 180; i++) ctx.Fill(Color.FromRgba(255, 255, 255, (byte)(58 + (i % 6) * 27)), new EllipsePolygon((i * 137 + seed * 61) % width, (i * 73 + seed * 89) % Math.Max(1, height - 260), 1 + i % 3)); }
+    private static void DrawCinematicForeground(IImageProcessingContext ctx, SceneAssetsV3Beat beat, int width, int height)
     {
         ctx.Fill(Color.FromRgb(6, 8, 12), new RectangularPolygon(0, height - 250, width, 250));
         var first = new PointF(820 + beat.BeatNo * 8, 360 + beat.BeatNo * 9);
@@ -365,14 +365,14 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         ctx.Fill(Color.FromRgb(235, 242, 255), new EllipsePolygon(second, 11));
         ctx.DrawLine(Color.FromRgba(120, 210, 255, 150), 3, first, second);
     }
-    private void DrawSkyGuide(IImageProcessingContext ctx, SceneAssetsV3Beat beat)
+    private void DrawSkyGuide(IImageProcessingContext ctx, SceneAssetsV3Beat beat, int width, int height)
     {
         var label = ResolveOverlayFont(25, FontStyle.Regular);
         var title = ResolveOverlayFont(36, FontStyle.Bold);
         ctx.Fill(Color.FromRgb(4, 12, 32));
-        ctx.Fill(Color.FromRgba(18, 36, 58, 150), new RectangularPolygon(0, 520, Width, 560));
+        ctx.Fill(Color.FromRgba(18, 36, 58, 150), new RectangularPolygon(0, 520, width, height - 520));
         for (var i = 0; i < 260; i++) ctx.Fill(Color.FromRgba(245, 250, 255, (byte)(50 + i % 150)), new EllipsePolygon((i * 149 + 97) % width, (i * 83 + 41) % 760, 1 + i % 3));
-        ctx.Fill(Color.FromRgba(10, 16, 22, 245), new RectangularPolygon(0, 810, Width, 270));
+        ctx.Fill(Color.FromRgba(10, 16, 22, 245), new RectangularPolygon(0, height - 270, width, 270));
         ctx.DrawLine(Color.FromRgb(95, 135, 155), 3, new PointF(120, 812), new PointF(1800, 812));
         ctx.DrawLine(Color.FromRgba(80, 130, 160, 120), 1, new PointF(260, 740), new PointF(1660, 740));
         ctx.DrawLine(Color.FromRgba(80, 130, 160, 90), 1, new PointF(460, 580), new PointF(1460, 580));
