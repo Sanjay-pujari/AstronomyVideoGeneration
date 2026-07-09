@@ -210,6 +210,7 @@ public sealed class Rc2NarrationV5OrchestrationTests
         var expectedFiles = new[]
         {
             Path.Combine(root, "narration-v5", "narration-plan.json"),
+            Path.Combine(root, "narration-v5", "narration-briefs.json"),
             Path.Combine(root, "narration-v5", "narration.json"),
             Path.Combine(root, "narration-v5", "narration-diagnostics.json")
         };
@@ -230,8 +231,25 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.All(diagnostics.RootElement.GetProperty("inputs").EnumerateArray(), input => Assert.True(input.GetProperty("exists").GetBoolean()));
         Assert.All(diagnostics.RootElement.GetProperty("outputsCreated").EnumerateArray(), output => Assert.True(output.GetProperty("exists").GetBoolean()));
         Assert.True(diagnostics.RootElement.GetProperty("requiredFactCoverage").TryGetProperty("bestViewingWindowLocal", out _));
+        Assert.True(diagnostics.RootElement.GetProperty("narrativeDirectorExecuted").GetBoolean());
+        Assert.Equal(2, diagnostics.RootElement.GetProperty("narrationBriefCount").GetInt32());
+        Assert.True(diagnostics.RootElement.TryGetProperty("factsDistributedByScene", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("repeatedFactWarnings", out _));
+        Assert.True(diagnostics.RootElement.TryGetProperty("narrationNaturalnessWarnings", out _));
         Assert.True(diagnostics.RootElement.TryGetProperty("warnings", out _));
         Assert.True(diagnostics.RootElement.TryGetProperty("errors", out _));
+
+        using var briefs = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "narration-briefs.json")));
+        Assert.Equal(2, briefs.RootElement.GetProperty("briefs").GetArrayLength());
+        Assert.True(briefs.RootElement.GetProperty("briefs")[1].TryGetProperty("generationInstructions", out _));
+
+        using var narration = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "narration.json")));
+        var fullNarrationText = narration.RootElement.GetProperty("fullNarrationText").GetString()!;
+        Assert.DoesNotContain("Verified details", fullNarrationText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Before dawn", fullNarrationText);
+        Assert.Contains("Eastern sky", fullNarrationText);
+        Assert.Contains("open horizon", fullNarrationText);
+        Assert.Contains("Until next time, keep looking up.", fullNarrationText);
 
         using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "phase-manifest.json")));
         Assert.Contains(manifest.RootElement.GetProperty("phases").EnumerateArray(), phase => phase.GetProperty("phaseNo").GetInt32() == 8 && phase.GetProperty("phaseName").GetString() == "Narration Generator V5");
