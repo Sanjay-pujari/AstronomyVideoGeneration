@@ -150,10 +150,17 @@ public sealed class Rc2CreativeStoryboardTests
         Assert.Contains(storyboard.RootElement.GetProperty("scenes")[0].GetProperty("prohibitedVisualChoices").EnumerateArray(), choice => choice.GetString() == "fantasy sky");
 
         using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "creative", "creative-diagnostics.json")));
-        Assert.Equal(7, diagnostics.RootElement.GetProperty("phaseNo").GetInt32());
-        Assert.Equal("Creative Intelligence Foundation", diagnostics.RootElement.GetProperty("phaseName").GetString());
+        Assert.Equal(6, diagnostics.RootElement.GetProperty("phaseNo").GetInt32());
+        Assert.Equal("Creative Intelligence / Story Frames", diagnostics.RootElement.GetProperty("phaseName").GetString());
         Assert.Equal(4, diagnostics.RootElement.GetProperty("creativeSceneCount").GetInt32());
-        Assert.Contains(diagnostics.RootElement.GetProperty("subPhases").EnumerateArray(), phase => phase.GetString() == "7.1 Creative Storyboard Builder");
+        Assert.Contains(diagnostics.RootElement.GetProperty("subPhases").EnumerateArray(), phase => phase.GetString() == "6.1 Creative Storyboard Builder");
+        Assert.True(File.Exists(Path.Combine(root, "story-frames", "short", "story-frame-manifest.json")));
+        using var shortFrame = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "story-frames", "short", "scene-001.json")));
+        Assert.Equal("short", shortFrame.RootElement.GetProperty("format").GetString());
+        Assert.Equal("portrait", shortFrame.RootElement.GetProperty("orientation").GetString());
+        Assert.Equal("9:16", shortFrame.RootElement.GetProperty("aspectRatio").GetString());
+        Assert.Equal(2160, shortFrame.RootElement.GetProperty("targetWidth").GetInt32());
+        Assert.Equal(3840, shortFrame.RootElement.GetProperty("targetHeight").GetInt32());
     }
 }
 

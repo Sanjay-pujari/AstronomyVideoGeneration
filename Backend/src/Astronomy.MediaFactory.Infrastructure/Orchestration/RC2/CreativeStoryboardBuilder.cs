@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,7 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
 
     public async Task<CreativeStoryboardBuilderResult> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         logger.LogInformation("Creative Intelligence / Story Frames executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return CreativeStoryboardBuilderResult.Empty;
 
@@ -44,6 +46,13 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         Directory.CreateDirectory(creativeRoot);
         var storyboardPath = Path.Combine(creativeRoot, "creative-storyboard.json");
         var diagnosticsPath = Path.Combine(creativeRoot, "creative-diagnostics.json");
+        var longRoot = Path.Combine(outputRoot, "story-frames", "long");
+        var shortRoot = Path.Combine(outputRoot, "story-frames", "short");
+        if (request.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs && request.OverwriteExisting)
+        {
+            if (Directory.Exists(longRoot)) Directory.Delete(longRoot, recursive: true);
+            if (Directory.Exists(shortRoot)) Directory.Delete(shortRoot, recursive: true);
+        }
 
         var contract = ReadFirstJson(editorialContractPath);
         var storyGraph = ReadFirstJson(storyGraphPath);
@@ -52,22 +61,96 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
 
         await File.WriteAllTextAsync(storyboardPath, JsonSerializer.Serialize(storyboard, JsonOptions), cancellationToken);
         var inputs = new[] { editorialContractPath, storyGraphPath, sceneIntentsPath };
+        var requested = ResolveStoryFrameRequests(request, response);
+        var storyFrameFiles = new List<string>();
+        if (requested.LongRequested) storyFrameFiles.AddRange(await WriteStoryFramesAsync(outputRoot, "long", "landscape", "16:9", 1920, 1080, requested.LongRequested, storyboard, inputs, stopwatch, cancellationToken));
+        if (requested.ShortRequested) storyFrameFiles.AddRange(await WriteStoryFramesAsync(outputRoot, "short", "portrait", "9:16", 2160, 3840, requested.ShortRequested, storyboard, inputs, stopwatch, cancellationToken));
         var diagnostics = new
         {
             phaseNo = 6,
             phaseName = PhaseName,
             orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
-            subPhases = new[] { "6.1 Creative Storyboard Builder", "6.6 Creative Diagnostics" },
+            subPhases = new[] { "6.1 Creative Storyboard Builder", "6.2 Long Story Frame Planner", "6.3 Short Story Frame Planner", "6.6 Creative Diagnostics" },
             inputs = inputs.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
-            outputs = new[] { NormalizePath(storyboardPath), NormalizePath(diagnosticsPath) },
+            outputFiles = new[] { NormalizePath(storyboardPath), NormalizePath(diagnosticsPath) }.Concat(storyFrameFiles.Select(NormalizePath)).ToArray(),
             creativeSceneCount = storyboard.Scenes.Count,
             missingCreativeWarningCount = storyboard.MissingCreativeWarnings.Count,
-            missingCreativeWarnings = storyboard.MissingCreativeWarnings
+            missingCreativeWarnings = storyboard.MissingCreativeWarnings,
+            longStoryFramesRequested = requested.LongRequested,
+            shortStoryFramesRequested = requested.ShortRequested,
+            currentRunFilesOnly = true,
+            executionTimeMs = stopwatch.ElapsedMilliseconds
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
 
         logger.LogInformation("Creative Intelligence / Story Frames wrote {CreativeSceneCount} creative storyboard scenes and diagnostics to {DiagnosticsPath}.", storyboard.Scenes.Count, diagnosticsPath);
-        return new CreativeStoryboardBuilderResult(storyboard, [storyboardPath, diagnosticsPath]);
+        return new CreativeStoryboardBuilderResult(storyboard, new[] { storyboardPath, diagnosticsPath }.Concat(storyFrameFiles).ToArray());
+    }
+
+
+    private static async Task<IReadOnlyList<string>> WriteStoryFramesAsync(string outputRoot, string format, string orientation, string aspectRatio, int targetWidth, int targetHeight, bool requested, CreativeStoryboard storyboard, IReadOnlyList<string> inputFiles, Stopwatch stopwatch, CancellationToken cancellationToken)
+    {
+        var root = Path.Combine(outputRoot, "story-frames", format);
+        Directory.CreateDirectory(root);
+        var files = new List<string>();
+        var frameFiles = new List<string>();
+        foreach (var scene in storyboard.Scenes.OrderBy(s => s.SceneOrder))
+        {
+            var fileName = $"scene-{scene.SceneOrder:000}.json";
+            var path = Path.Combine(root, fileName);
+            var frame = new StoryFrame(
+                $"{format}-frame-{scene.SceneOrder:000}",
+                scene.SceneId,
+                scene.SceneOrder,
+                scene.ScenePurpose,
+                format,
+                orientation,
+                aspectRatio,
+                targetWidth,
+                targetHeight,
+                scene.VisualRole,
+                scene.CompositionIntent,
+                scene.CameraIntent,
+                scene.PrimarySubject,
+                scene.ScenePurpose == "Hook" ? "Minimal horizon or contextual foreground only when supported by source facts." : "Use foreground only to clarify scale, direction, or viewer location.",
+                storyboard.GlobalVisualDirection,
+                "Place primary subject on a stable focal third; keep labels and explanatory elements inside safe areas; avoid invented objects.",
+                format == "short" ? "Reserve upper title space and lower caption/CTA space; keep central subject clear." : "Reserve lower-third caption space and avoid placing key subjects at extreme edges.",
+                format == "short" ? "Keep the central vertical lane clear for subject readability and mobile overlays." : "Use side or upper sky negative space for calm pacing and later editorial overlays.",
+                format == "short" ? "Top 12%, bottom 18%, and side 8% remain overlay-safe." : "Lower 18% and side 6% remain overlay-safe.",
+                scene.MotionIntent,
+                scene.ScenePurpose == "Hook" ? 5.0 : scene.ScenePurpose == "Takeaway" ? 4.0 : 7.0,
+                scene.KeyMessage,
+                scene.SceneId,
+                scene.SceneId);
+            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(frame, JsonOptions), cancellationToken);
+            files.Add(path);
+            frameFiles.Add(fileName);
+        }
+
+        var manifestPath = Path.Combine(root, "story-frame-manifest.json");
+        var diagnosticsPath = Path.Combine(root, "story-frame-diagnostics.json");
+        var manifest = new { format, orientation, aspectRatio, targetWidth, targetHeight, requested, generated = files.Count > 0, expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = files.Count, sceneIds = storyboard.Scenes.OrderBy(s => s.SceneOrder).Select(s => s.SceneId).ToArray(), files = frameFiles.ToArray(), createdUtc = DateTimeOffset.UtcNow, sourceFiles = inputFiles.Select(NormalizePath).ToArray() };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 6, phaseName = PhaseName, format, inputFiles = inputFiles.Select(NormalizePath).ToArray(), outputFiles = files.Concat([manifestPath, diagnosticsPath]).Select(NormalizePath).ToArray(), expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = files.Count, warnings = storyboard.MissingCreativeWarnings, errors = Array.Empty<string>(), staleFilesIgnored = true, currentRunFilesOnly = true, executionTimeMs = stopwatch.ElapsedMilliseconds }, JsonOptions), cancellationToken);
+        files.Add(manifestPath);
+        files.Add(diagnosticsPath);
+        return files;
+    }
+
+    private static (bool LongRequested, bool ShortRequested) ResolveStoryFrameRequests(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response)
+    {
+        var completions = response.RequestedOutputCompletion ?? response.Results?.OfType<ContentPlanProductionExecutionResult>().SelectMany(r => r.RequestedOutputCompletion ?? []).ToArray();
+        bool Requested(string outputType) => completions?.Any(c => c.Requested && string.Equals(c.OutputType, outputType, StringComparison.OrdinalIgnoreCase)) == true;
+        var longRequested = Requested("LongVideo");
+        var shortRequested = Requested("ShortVideo");
+        foreach (var format in response.SelectedPlans.Select(p => p.PlannedFormat).Where(f => !string.IsNullOrWhiteSpace(f)))
+        {
+            if (format!.Contains("long", StringComparison.OrdinalIgnoreCase)) longRequested = true;
+            if (format.Contains("short", StringComparison.OrdinalIgnoreCase)) shortRequested = true;
+        }
+        if (!longRequested && !shortRequested) return (true, true);
+        return (longRequested, shortRequested);
     }
 
     private static CreativeStoryboard BuildStoryboard(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, JsonElement? contract, JsonElement? storyGraph, JsonElement? sceneIntents)
@@ -221,3 +304,5 @@ public sealed record CreativeStoryboardBuilderResult(CreativeStoryboard? Storybo
 {
     public static CreativeStoryboardBuilderResult Empty { get; } = new(null, []);
 }
+
+public sealed record StoryFrame(string FrameId, string SceneId, int SceneOrder, string ScenePurpose, string Format, string Orientation, string AspectRatio, int TargetWidth, int TargetHeight, string VisualGoal, string Composition, string CameraPlan, string SubjectFocus, string Foreground, string Background, string ObjectPlacement, string NegativeSpacePlan, string OverlaySafeArea, string MotionHint, double EstimatedDurationSeconds, string NarrationMapping, string SourceSceneIntentId, string SourceCreativeSceneId);

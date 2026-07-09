@@ -193,26 +193,109 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         var validationPath = Combine(outputRoot, "validation", $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles.Select(NormalizePath).ToArray(), outputFiles.Select(NormalizePath).ToArray(), NormalizePath(validationPath), warnings, errors, canRetry, reason);
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        object validationPayload = phaseNo == 6
+            ? BuildPhase6ValidationPayload(outputRoot, phaseNo, phaseName, status, started, finished, result, warnings, errors, exception, canRetry, reason)
+            : new
+            {
+                phaseNo,
+                phaseName,
+                status = status.ToString(),
+                startedUtc = started,
+                finishedUtc = finished,
+                durationMs = result.DurationMs,
+                inputFiles = result.InputFiles,
+                outputFiles = result.OutputFiles,
+                warnings,
+                errors,
+                exceptionType = exception?.GetType().Name,
+                exceptionMessage = exception?.Message,
+                canRetry,
+                reason,
+                diagnosticsPath = NormalizePath(diagnosticsPath),
+                validationScope = "RC2 overlay phase validation; production orchestration result is not overwritten when production phase failed."
+            };
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validationPayload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        return result;
+    }
+
+
+    private static object BuildPhase6ValidationPayload(string? outputRoot, int phaseNo, string phaseName, ProductionPhaseStatus status, DateTimeOffset started, DateTimeOffset finished, ProductionPhaseResult result, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, Exception? exception, bool canRetry, string reason)
+    {
+        var longManifest = Combine(outputRoot, "story-frames", "long", "story-frame-manifest.json");
+        var shortManifest = Combine(outputRoot, "story-frames", "short", "story-frame-manifest.json");
+        var longRequested = ManifestBool(longManifest, "requested");
+        var shortRequested = ManifestBool(shortManifest, "requested");
+        var longCount = ManifestInt(longManifest, "generatedSceneCount");
+        var shortCount = ManifestInt(shortManifest, "generatedSceneCount");
+        var validationErrors = errors.ToList();
+        var longDimensionsValid = !longRequested || ManifestMatches(longManifest, "long", "landscape", "16:9", 1920, 1080);
+        var shortDimensionsValid = !shortRequested || ManifestMatches(shortManifest, "short", "portrait", "9:16", 2160, 3840);
+        if (longRequested && !File.Exists(longManifest)) validationErrors.Add("LongVideo requested but story-frames/long is missing.");
+        if (shortRequested && !File.Exists(shortManifest)) validationErrors.Add("ShortVideo requested but story-frames/short is missing.");
+        if (longRequested && longCount == 0) validationErrors.Add("LongVideo requested but zero long story frames were generated.");
+        if (shortRequested && shortCount == 0) validationErrors.Add("ShortVideo requested but zero short story frames were generated.");
+        if (!longDimensionsValid) validationErrors.Add("Long story frames must be landscape 16:9 at 1920x1080.");
+        if (!shortDimensionsValid) validationErrors.Add("Short story frames must be portrait 9:16 at 2160x3840.");
+        var computedStatus = validationErrors.Count == 0 && status == ProductionPhaseStatus.Succeeded ? "Succeeded" : "Failed";
+        return new
         {
             phaseNo,
             phaseName,
-            status = status.ToString(),
+            status = computedStatus,
             startedUtc = started,
             finishedUtc = finished,
             durationMs = result.DurationMs,
             inputFiles = result.InputFiles,
             outputFiles = result.OutputFiles,
+            diagnosticFiles = result.OutputFiles.Where(path => path.EndsWith("diagnostics.json", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            longStoryFramesRequested = longRequested,
+            shortStoryFramesRequested = shortRequested,
+            longStoryFramesGenerated = longCount > 0,
+            shortStoryFramesGenerated = shortCount > 0,
+            longStoryFrameCount = longCount,
+            shortStoryFrameCount = shortCount,
+            longDimensionsValid,
+            shortDimensionsValid,
             warnings,
-            errors,
+            errors = validationErrors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             exceptionType = exception?.GetType().Name,
             exceptionMessage = exception?.Message,
-            canRetry,
+            canRetry = canRetry || validationErrors.Count > 0,
             reason,
-            diagnosticsPath = NormalizePath(diagnosticsPath),
-            validationScope = "RC2 overlay phase validation; production orchestration result is not overwritten when production phase failed."
-        }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
-        return result;
+            staleFilesCountedAsCurrentRunOutputs = false,
+            validationScope = "Phase 6 story-frame contract validation."
+        };
+    }
+
+    private static bool ManifestBool(string path, string name) => ReadManifestProperty(path, name) is { ValueKind: JsonValueKind.True };
+    private static int ManifestInt(string path, string name) => ReadManifestProperty(path, name) is { ValueKind: JsonValueKind.Number } value && value.TryGetInt32(out var number) ? number : 0;
+    private static bool ManifestMatches(string path, string format, string orientation, string aspectRatio, int width, int height)
+    {
+        var root = ReadManifest(path);
+        if (!root.HasValue) return false;
+        return string.Equals(GetManifestString(root.Value, "format"), format, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(GetManifestString(root.Value, "orientation"), orientation, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(GetManifestString(root.Value, "aspectRatio"), aspectRatio, StringComparison.OrdinalIgnoreCase)
+            && ManifestInt(path, "targetWidth") == width
+            && ManifestInt(path, "targetHeight") == height;
+    }
+    private static JsonElement? ReadManifestProperty(string path, string name)
+    {
+        var root = ReadManifest(path);
+        if (!root.HasValue) return null;
+        foreach (var property in root.Value.EnumerateObject()) if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value.Clone();
+        return null;
+    }
+    private static JsonElement? ReadManifest(string path)
+    {
+        if (!File.Exists(path)) return null;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        return doc.RootElement.Clone();
+    }
+    private static string? GetManifestString(JsonElement root, string name)
+    {
+        foreach (var property in root.EnumerateObject()) if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value.GetString();
+        return null;
     }
 
     private static BatchGenerateFromPlansResponse UpsertResponsePhase(BatchGenerateFromPlansResponse response, ProductionPhaseResult phase)
