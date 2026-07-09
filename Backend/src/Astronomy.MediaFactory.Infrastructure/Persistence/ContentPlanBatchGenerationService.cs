@@ -51,6 +51,8 @@ public sealed class ContentPlanBatchGenerationService(
         var languageMismatch = await ResolveLanguageMismatchSiblingAsync(request, cancellationToken);
         var effectivePlanId = languageMismatch.SelectedPlanId ?? request.PlanId;
         var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, requestedLanguage, cancellationToken);
+        if (effectivePlanId.HasValue)
+            candidates = await EnsureExactPlanCandidateAsync(candidates, effectivePlanId.Value, cancellationToken);
 
         IReadOnlyList<BatchGenerateFromPlansWarning> recoveryWarnings = request.DryRun
             ? Array.Empty<BatchGenerateFromPlansWarning>()
@@ -335,6 +337,20 @@ public sealed class ContentPlanBatchGenerationService(
             .Where(p => p.RegionId == regionId && p.Language == language)
             .Where(p => p.ScheduledUtc.HasValue && p.ScheduledUtc.Value >= yearStart && p.ScheduledUtc.Value < yearEnd)
             .ToArrayAsync(cancellationToken);
+    }
+
+    private async Task<ContentGenerationPlan[]> EnsureExactPlanCandidateAsync(ContentGenerationPlan[] candidates, Guid requestedPlanId, CancellationToken cancellationToken)
+    {
+        if (candidates.Any(p => p.Id == requestedPlanId)) return candidates;
+
+        var exactPlan = await db.ContentGenerationPlans
+            .Include(p => p.AstronomyEventIntelligence)
+                .ThenInclude(e => e!.Objects)
+            .FirstOrDefaultAsync(p => p.Id == requestedPlanId, cancellationToken);
+
+        if (exactPlan is null) return candidates;
+
+        return candidates.Concat([exactPlan]).ToArray();
     }
 
     private async Task<LanguageMismatchPlanResolution> ResolveLanguageMismatchSiblingAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -857,11 +873,20 @@ public sealed class ContentPlanBatchGenerationService(
 
         if (selectedIds.Contains(plan.Id)) return;
         var manualPlanExecution = exactPlanIdMode;
+        if (manualPlanExecution)
+        {
+            selected.Add(plan);
+            selectedIds.Add(plan.Id);
+            if (plan.AstronomyEventIntelligence?.AutoGenerateAllowed == false)
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, true, BuildAutoGenerateBypassReason(plan, requestedPlanId.ToString("D"), exactPlanIdMode, useProductionPipeline, allowCompletedPlanRerun)));
+            return;
+        }
+
         var statusAllowed = IsStatusRunnable(plan, allowedStatuses) || (allowCompletedPlanRerun && IsProductionCompleted(plan));
         if (!statusAllowed
             || (IsProductionRunning(plan) && !CanRecoverRunningPlan(plan, recoveryMode, runningPlanRecoveryStaleAfter))
-            || (!manualPlanExecution && !IsAstronomyEventRunnable(plan, allowManualValidationAutoGenerateBypass: false))
-            || (!manualPlanExecution && onlyHighPriority && !IsHighPriority(plan)))
+            || (!IsAstronomyEventRunnable(plan, allowManualValidationAutoGenerateBypass: false))
+            || (onlyHighPriority && !IsHighPriority(plan)))
         {
             warnings.Add(new BatchGenerateFromPlansWarning(requestedPlanId.ToString("D"), true, false, BuildExclusionReason(
                 plan,

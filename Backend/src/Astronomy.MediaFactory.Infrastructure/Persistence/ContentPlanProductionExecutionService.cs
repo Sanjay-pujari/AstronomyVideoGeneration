@@ -57,6 +57,9 @@ public sealed class ContentPlanProductionExecutionService(
         var endPhaseNo = resolvedRange.EndPhaseNo;
         var executionContext = BuildExecutionContext(plan, intelligence, productionRequest, request);
         var outputRoot = BuildPlanOutputRoot(productionRequest);
+        if (string.IsNullOrWhiteSpace(outputRoot))
+            throw new InvalidOperationException($"OutputRoot could not be resolved for content generation plan '{plan.Id:D}'.");
+
         logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
         var warnings = new List<string>(productionRequest.Warnings);
         if (resolvedRange.DependencyExpansionApplied)
