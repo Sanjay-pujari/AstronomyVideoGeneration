@@ -94,7 +94,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (!contract.HasValue) warnings.Add("Missing input file editorial/editorial-contract.json.");
         if (!storyboard.HasValue) warnings.Add("Missing input file creative/creative-storyboard.json.");
 
-        var language = FirstNonEmpty(GetString(contract, "language"), GetString(storyboard, "language"), request.Language, "en")!;
+        var languageRequested = FirstNonEmpty(request.Language, GetString(contract, "language"), GetString(storyboard, "language"));
+        var (language, languageProfileFound, languageProfileFallbackUsed) = ResolveNarrationLanguage(languageRequested);
         var requiredFacts = ReadRequiredFacts(contract);
         var prohibited = FindStringArray(contract, "prohibitedPhrases");
         var preferred = FindStringArray(contract, "preferredPhrases");
@@ -112,6 +113,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var editorialBriefContract = interpreter.Interpret(knowledgeContract, FindStringArray(contract, "missingFactWarnings"));
         var editorialBriefDiagnostics = interpreter.BuildDiagnostics(editorialBriefContract, rawNarrationBriefs, knowledgeContract);
         var requestedFormats = ResolveRequestedNarrationFormats(outputRoot, request, response);
+        ValidateRequiredInputsForPhase7(outputRoot, requestedFormats, contract, storyboard, validationPath, languageRequested, language, languageProfileFound, languageProfileFallbackUsed);
         var producerNotesContract = ProducerNotesComposer.Compose(editorialBriefContract, knowledgeContract, requestedFormats);
         var producerNotesDiagnostics = ProducerNotesComposer.BuildDiagnostics(producerNotesContract);
         var narrationBriefs = producerNotesContract.ToNarrationBriefs(Rc2PipelinePhaseRegistry.OrchestrationVersion);
@@ -209,6 +211,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 }
                 var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "narration-context", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, visualInstructionLeakageDetected = false, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
                 await File.WriteAllTextAsync(documentaryScriptDiagnosticsPath, JsonSerializer.Serialize(documentaryScriptDiagnostics, JsonOptions), cancellationToken);
+                if (generatedByFormat.Count == 0) throw new InvalidOperationException("Phase 7 cannot generate narration because requested narration formats resolved to an empty collection.");
                 narration = generatedByFormat.TryGetValue("long", out var longNarration) ? longNarration : generatedByFormat.Values.First();
                 narrationScenes = narration.Scenes.ToArray();
                 fullText = string.Join("\n\n", generatedByFormat.Values.Select(n => n.FullNarrationText));
@@ -401,6 +404,26 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             phaseNo = 7,
             phaseName = PhaseName,
             orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            pipelineVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            phaseRegistryName = nameof(Rc2PipelinePhaseRegistry),
+            chronicleCorePhaseMapUsed = true,
+            legacyPhaseMapUsed = false,
+            documentaryContractLongFound = File.Exists(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")),
+            documentaryContractShortFound = File.Exists(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")),
+            editorialContractFound = File.Exists(editorialPath),
+            documentaryBeatCountLong = CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")),
+            documentaryBeatCountShort = CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")),
+            narrationContextGenerated = File.Exists(narrationContextPath),
+            llmInvoked = llmGenerationExecuted,
+            longNarrationGenerated = File.Exists(longNarrationPath),
+            shortNarrationGenerated = File.Exists(shortNarrationPath),
+            languageRequested,
+            languageResolved = language,
+            languageProfileFound,
+            languageProfileFallbackUsed,
+            missingRequiredArtifacts = Array.Empty<string>(),
+            emptyRequiredCollections = Array.Empty<string>(),
+            unsafeSequenceOperationPrevented = true,
             inputs = new[]
             {
                 new { path = NormalizePath(editorialPath), exists = File.Exists(editorialPath) },
@@ -671,6 +694,39 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var represented = beats.Count(b => b.VerifiedFacts.Count == 0 || b.VerifiedFacts.Any(f => fullText.Contains(f.Value, StringComparison.OrdinalIgnoreCase)));
         return Math.Clamp(70 + represented * 30 / beats.Length, 0, 100);
     }
+
+
+    private static (string Language, bool ProfileFound, bool FallbackUsed) ResolveNarrationLanguage(string? requested)
+    {
+        var value = (requested ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(value)) return ("en", true, false);
+        if (value.Equals("hi", StringComparison.OrdinalIgnoreCase) || value.Equals("hi-IN", StringComparison.OrdinalIgnoreCase) || value.Equals("Hindi", StringComparison.OrdinalIgnoreCase)) return ("hi", true, false);
+        if (value.Equals("en", StringComparison.OrdinalIgnoreCase) || value.Equals("en-US", StringComparison.OrdinalIgnoreCase) || value.Equals("English", StringComparison.OrdinalIgnoreCase)) return ("en", true, false);
+        return (value.ToLowerInvariant(), false, true);
+    }
+
+    private static void ValidateRequiredInputsForPhase7(string outputRoot, IReadOnlyList<string> requestedFormats, JsonElement? contract, JsonElement? storyboard, string validationPath, string? languageRequested, string languageResolved, bool languageProfileFound, bool languageProfileFallbackUsed)
+    {
+        var missing = new List<string>();
+        var empty = new List<string>();
+        void Require(string relative) { if (!File.Exists(Path.Combine(outputRoot, relative))) missing.Add(relative.Replace('\\','/')); }
+        Require(Path.Combine("editorial", "editorial-contract.json"));
+        Require(Path.Combine("creative", "creative-storyboard.json"));
+        if (requestedFormats.Contains("long", StringComparer.OrdinalIgnoreCase)) Require(Path.Combine("creative", "documentary-contract.long.json"));
+        if (requestedFormats.Contains("short", StringComparer.OrdinalIgnoreCase)) Require(Path.Combine("creative", "documentary-contract.short.json"));
+        if (contract is null) missing.Add("editorial/editorial-contract.json");
+        if (storyboard is null) missing.Add("creative/creative-storyboard.json");
+        if (requestedFormats.Contains("long", StringComparer.OrdinalIgnoreCase) && CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")) == 0) empty.Add("creative/documentary-contract.long.json:beats");
+        if (requestedFormats.Contains("short", StringComparer.OrdinalIgnoreCase) && CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")) == 0) empty.Add("creative/documentary-contract.short.json:beats");
+        if (string.IsNullOrWhiteSpace(languageResolved)) empty.Add("language");
+        if (missing.Count == 0 && empty.Count == 0) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
+        File.WriteAllText(validationPath, JsonSerializer.Serialize(new { phaseNo = 7, phaseName = PhaseName, status = "Failed", pipelineVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion, phaseRegistryName = nameof(Rc2PipelinePhaseRegistry), chronicleCorePhaseMapUsed = true, legacyPhaseMapUsed = false, languageRequested, languageResolved, languageProfileFound, languageProfileFallbackUsed, missingRequiredArtifacts = missing.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), emptyRequiredCollections = empty.ToArray(), unsafeSequenceOperationPrevented = true, error = missing.Count > 0 ? $"Phase 7 cannot start because {missing[0]} was not found. Run Documentary Architect before Narration Studio V5." : $"Phase 7 cannot start because required collection {empty[0]} is empty." }, JsonOptions));
+        if (missing.Count > 0) throw new InvalidOperationException($"Phase 7 cannot start because {missing[0]} was not found. Run Documentary Architect before Narration Studio V5.");
+        throw new InvalidOperationException($"Phase 7 cannot start because required collection {empty[0]} is empty.");
+    }
+
+    private static int CountDocumentaryBeats(string path) => ReadArray(ReadFirstJson(path), "beats").Count;
 
     private static StoryFrameSource LoadStoryFrames(string outputRoot, string format)
     {

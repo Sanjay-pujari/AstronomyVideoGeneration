@@ -81,8 +81,12 @@ public sealed partial class ProductionPipelineExecutionService(
         var productionIntelligence = intelligenceAdapter.Normalize(request);
         var strategy = strategyResolver.Resolve(productionIntelligence.EventType, productionIntelligence.Title);
         var executionContext = BuildProductionExecutionContext(request, eventIdResolution.EventId ?? Guid.Empty, outputRoot, productionIntelligence, strategy);
-        var startPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 20);
-        var endPhaseNo = Math.Clamp(request.EndPhaseNo ?? 20, startPhaseNo, 20);
+        var requestedStartPhaseNo = Math.Clamp(request.StartPhaseNo ?? 1, 1, 20);
+        var requestedEndPhaseNo = Math.Clamp(request.EndPhaseNo ?? 20, requestedStartPhaseNo, 20);
+        var startPhaseNo = requestedStartPhaseNo;
+        var endPhaseNo = requestedEndPhaseNo;
+        if (requestedStartPhaseNo == 7 && requestedEndPhaseNo == 7 && !Phase7ChronicleCoreArtifactsExist(outputRoot))
+            startPhaseNo = 4;
         var phaseResults = new List<ProductionPhaseResult>();
         var deletedFilesDueToOverwrite = new List<string>();
         var deletedDirectoriesDueToOverwrite = new List<string>();
@@ -164,9 +168,9 @@ public sealed partial class ProductionPipelineExecutionService(
         (1, "Load Plan", PhaseLoadPlanAsync),
         (2, "Build ProductionEventIntelligence", PhaseBuildProductionIntelligenceAsync),
         (3, "Generate QuestionAnswerSet", PhaseGenerateQuestionsAsync),
-        (4, "Validate Questions", PhaseValidateQuestionsAsync),
-        (5, "Generate Scene Plan", PhaseGenerateScenePlanAsync),
-        (6, "Enrich Scene Plan", PhaseEnrichScenePlanAsync),
+        (4, "Story Intelligence", PhaseChronicleStoryIntelligenceAsync),
+        (5, "Editorial Intelligence", PhaseChronicleEditorialIntelligenceAsync),
+        (6, "Creative Intelligence / Story Frames", PhaseChronicleDocumentaryArchitectAsync),
         (7, "Narration Studio V5", PhaseGenerateNarrationPlanAsync),
         (8, "Format-Aware Scene Asset Generation", PhaseGenerateSceneImagesAsync),
         (9, "Generate Long Scene Images", PhaseValidateLongSceneImagesAsync),
@@ -433,9 +437,33 @@ public sealed partial class ProductionPipelineExecutionService(
         return response.GeneratedFiles.Concat([enrichedPath]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    private async Task<IReadOnlyList<string>> PhaseChronicleStoryIntelligenceAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var builder = new SceneIntentBuilder(Microsoft.Extensions.Logging.Abstractions.NullLogger<SceneIntentBuilder>.Instance);
+        var (request, response) = BuildRc2OverlayRequestResponse(context, 4, 4);
+        var result = await builder.BuildAndWriteStoryGraphAsync(request, response, cancellationToken);
+        return result.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseChronicleEditorialIntelligenceAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var builder = new SceneIntentBuilder(Microsoft.Extensions.Logging.Abstractions.NullLogger<SceneIntentBuilder>.Instance);
+        var (request, response) = BuildRc2OverlayRequestResponse(context, 5, 5);
+        var result = await builder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+        return result.GeneratedFiles;
+    }
+
+    private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
+        var builder = new CreativeStoryboardBuilder(Microsoft.Extensions.Logging.Abstractions.NullLogger<CreativeStoryboardBuilder>.Instance);
+        var (request, response) = BuildRc2OverlayRequestResponse(context, 6, 6);
+        var result = await builder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+        return result.GeneratedFiles;
+    }
+
     private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        RequireFile(BuildEnrichedScenePlanPath(context), "Enriched question-driven scene plan");
+        ValidatePhase7ChronicleCoreInputs(context);
 
         var generator = narrationGeneratorV5 ?? new NarrationGeneratorV5(Microsoft.Extensions.Logging.Abstractions.NullLogger<NarrationGeneratorV5>.Instance);
         var request = new BatchGenerateFromPlansRequest(
@@ -469,6 +497,70 @@ public sealed partial class ProductionPipelineExecutionService(
             .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context)])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+
+    private static (BatchGenerateFromPlansRequest Request, BatchGenerateFromPlansResponse Response) BuildRc2OverlayRequestResponse(ProductionPhaseContext context, int startPhaseNo, int endPhaseNo)
+    {
+        var request = new BatchGenerateFromPlansRequest(
+            Year: (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
+            RegionId: context.Request.RegionId,
+            Language: context.Request.Language,
+            DryRun: false,
+            UseProductionPipeline: true,
+            StartPhaseNo: startPhaseNo,
+            EndPhaseNo: endPhaseNo,
+            PlanId: context.Request.PlanId,
+            EnableSceneAssetsV3: context.PipelineRequest.EnableSceneAssetsV3);
+        var response = new BatchGenerateFromPlansResponse(
+            Success: true,
+            DryRun: false,
+            RequestedTitleCount: 1,
+            SelectedPlanCount: 1,
+            MaxPlans: 1,
+            SelectedPlans: Array.Empty<BatchGenerateFromPlansSelectedPlan>(),
+            Steps: Array.Empty<object>(),
+            Warnings: Array.Empty<BatchGenerateFromPlansWarning>(),
+            Errors: Array.Empty<string>(),
+            UseProductionPipeline: true,
+            PlanId: context.Request.PlanId,
+            Title: context.Request.Title,
+            OutputRoot: context.OutputRoot);
+        return (request, response);
+    }
+
+    private static bool Phase7ChronicleCoreArtifactsExist(string outputRoot)
+    {
+        var required = new[]
+        {
+            Path.Combine(outputRoot, "editorial", "story-graph.json"),
+            Path.Combine(outputRoot, "editorial", "scene-intents.json"),
+            Path.Combine(outputRoot, "editorial", "editorial-contract.json"),
+            Path.Combine(outputRoot, "editorial", "observation-metadata.json"),
+            Path.Combine(outputRoot, "creative", "documentary-contract.long.json"),
+            Path.Combine(outputRoot, "creative", "documentary-contract.short.json"),
+            Path.Combine(outputRoot, "creative", "documentary-architecture-diagnostics.json"),
+            Path.Combine(outputRoot, "creative", "creative-storyboard.json")
+        };
+        return required.All(File.Exists);
+    }
+
+    private static void ValidatePhase7ChronicleCoreInputs(ProductionPhaseContext context)
+    {
+        var required = new[]
+        {
+            Path.Combine(context.OutputRoot, "editorial", "story-graph.json"),
+            Path.Combine(context.OutputRoot, "editorial", "scene-intents.json"),
+            Path.Combine(context.OutputRoot, "editorial", "editorial-contract.json"),
+            Path.Combine(context.OutputRoot, "editorial", "observation-metadata.json"),
+            Path.Combine(context.OutputRoot, "creative", "documentary-contract.long.json"),
+            Path.Combine(context.OutputRoot, "creative", "documentary-contract.short.json"),
+            Path.Combine(context.OutputRoot, "creative", "documentary-architecture-diagnostics.json"),
+            Path.Combine(context.OutputRoot, "creative", "creative-storyboard.json")
+        };
+        var missing = required.Where(path => !File.Exists(path)).Select(path => NormalizePath(Path.GetRelativePath(context.OutputRoot, path))).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException($"Phase 7 cannot start because {missing[0]} was not found. Run Chronicle Core Story Intelligence, Editorial Intelligence, and Documentary Architect before Narration Studio V5. Missing artifacts: {string.Join(", ", missing)}.");
     }
 
     private static string BuildNarrationV5Root(ProductionPhaseContext context)
@@ -13452,6 +13544,14 @@ public sealed partial class ProductionPipelineExecutionService(
             startedUtc = started,
             finishedUtc = finished,
             durationMs = result.DurationMs,
+            pipelineVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            phaseRegistryName = nameof(Rc2PipelinePhaseRegistry),
+            resolvedPhaseImplementations = PhaseDefinitions().Select(p => new { phaseNo = p.No, phaseName = ResolvePhaseName(context, p.No, p.Name), implementation = p.Action.Method.Name }).ToArray(),
+            dependencyExpansionApplied = context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.Rebuild || context.PipelineRequest.RequestedStartPhaseNo != context.StartPhaseNo,
+            legacyPhaseMapUsed = false,
+            chronicleCorePhaseMapUsed = true,
+            requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo,
+            expandedStartPhase = context.StartPhaseNo,
             sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!),
             sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)),
             selectedEventType = context.ProductionEventIntelligence.EventType,

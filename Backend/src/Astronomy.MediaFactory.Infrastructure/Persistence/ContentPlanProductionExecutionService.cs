@@ -612,9 +612,10 @@ public sealed class ContentPlanProductionExecutionService(
     private static IReadOnlyList<int> ResolvePrerequisitePhases(int phaseNo)
         => phaseNo switch
         {
-            5 => [3],
+            4 => [3],
+            5 => [4],
             6 => [5],
-            7 => [6, 3],
+            7 => [4, 5, 6],
             8 => [3, 6, 7],
             9 => [8],
             10 => [3, 5, 6, 7, 8, 9],
