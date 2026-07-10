@@ -39,28 +39,18 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     public NarrationPromptComposerOutput Compose(NarrationPromptComposerInput input)
     {
         var missing = new List<string>();
-        if (!input.EditorialContract.HasValue) missing.Add("Missing input file editorial/editorial-contract.json.");
-        if (!input.CreativeStoryboard.HasValue) missing.Add("Missing input file creative/creative-storyboard.json.");
-        if (input.NarrationBriefs is null || input.NarrationBriefs.Briefs.Count == 0) missing.Add("Missing or empty input file narration-v5/narration-briefs.json.");
+        if (input.NarrationContext.Formats.Count == 0 || input.NarrationContext.Formats.All(f => f.Beats.Count == 0)) missing.Add("Missing or empty input file narration-v5/narration-context.json.");
 
-        var language = FirstNonEmpty(GetString(input.EditorialContract, "language"), GetString(input.CreativeStoryboard, "language"), input.NarrationBriefs?.Language, "en")!;
-        var storyArc = FirstNonEmpty(GetString(input.CreativeStoryboard, "storyArc"), "Hook → Discovery → Science → Observation → Takeaway")!;
-        var requiredFacts = ReadFacts(input.EditorialContract, "requiredNarrationFacts");
-        var prohibitedPhrases = FindStringArray(input.EditorialContract, "prohibitedPhrases").Concat(ProhibitedInternalPhrases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var preferredPhrases = FindStringArray(input.EditorialContract, "preferredPhrases");
-        var scenes = input.NarrationBriefs?.Briefs.OrderBy(b => b.SceneOrder).ToArray() ?? [];
-        if (scenes.Length > 0)
-        {
-            requiredFacts = scenes.SelectMany(s => s.FactsToMention)
-                .GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
-                .ToArray();
-        }
-        var styleContract = input.DocumentaryStyleContract;
-
-        var prompt = BuildPrompt(language, storyArc, requiredFacts, prohibitedPhrases, preferredPhrases, scenes, styleContract);
+        var contextFacts = input.NarrationContext.Formats
+            .SelectMany(f => f.Beats)
+            .SelectMany(b => b.VerifiedFacts)
+            .GroupBy(f => f.FactKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new NarrationFactV5(g.First().FactKey, g.First().Value))
+            .ToArray();
+        var prompt = BuildPrompt(input.NarrationContext, contextFacts);
         prompt = new PromptLanguageCleaner().Clean(prompt);
-        var quality = new PromptQualityEvaluator().Evaluate(prompt, scenes.Length, input.PromptQualityThreshold);
+        var sceneCount = input.NarrationContext.Formats.Sum(f => f.Beats.Count);
+        var quality = new PromptQualityEvaluator().Evaluate(prompt, sceneCount, input.PromptQualityThreshold);
         var promptQualityPath = ResolvePromptQualityPath(input);
         var outputFiles = new[] { input.PromptPreviewPath, input.PromptDiagnosticsPath, promptQualityPath };
         var diagnostics = new NarrationPromptDiagnostics(
@@ -68,7 +58,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
             Rc2PipelinePhaseRegistry.OrchestrationVersion,
             input.InputFiles.Select(NormalizePath).ToArray(),
             outputFiles.Select(NormalizePath).ToArray(),
-            scenes.Length,
+            sceneCount,
             PromptSections.Length,
             ProhibitedInternalPhrases,
             missing.Concat(quality.Warnings).ToArray(),
@@ -88,18 +78,21 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         return output;
     }
 
-    private static string BuildPrompt(string language, string storyArc, IReadOnlyList<NarrationFactV5> facts, IReadOnlyList<string> prohibited, IReadOnlyList<string> preferred, IReadOnlyList<NarrationBriefV5> scenes, DocumentaryStyleContract? styleContract)
+    private static string BuildPrompt(NarrationContextDocument context, IReadOnlyList<NarrationFactV5> facts)
     {
         var sb = new StringBuilder();
-        AddSection(sb, 1, "Your Role", new RoleSectionBuilder().Build());
-        AddSection(sb, 2, "Astro Pulse Editorial Identity", new EditorialIdentitySectionBuilder().Build());
-        AddSection(sb, 3, "Documentary Outline", new StoryOverviewSectionBuilder().Build(language, storyArc));
-        AddSection(sb, 4, "Scene Fact Cards", new SceneEditorialBriefBuilder().Build(scenes, styleContract));
-        AddSection(sb, 5, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, prohibited));
-        AddSection(sb, 6, "Astro Pulse Voice Profile", new WritingPrinciplesSectionBuilder().Build(preferred, prohibited, styleContract));
-        AddSection(sb, 7, "Output Contract", new OutputContractSectionBuilder().Build());
+        AddSection(sb, 1, "Your Role", "Perform the supplied narration context only. Write narration, not production instructions. Do not expose labels, data formats, internal identifiers, or visual-production language.");
+        AddSection(sb, 2, "Narration Context", FormatNarrationContext(context));
+        AddSection(sb, 3, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, ProhibitedInternalPhrases));
+        AddSection(sb, 4, "Output Contract", new OutputContractSectionBuilder().Build());
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
+
+    private static string FormatNarrationContext(NarrationContextDocument context)
+        => string.Join("\n\n", context.Formats.Select(format => $"Format: {format.Format}\n" + string.Join("\n", format.Beats.Select((beat, index) =>
+            $"Beat {index + 1}: knowledge goal: {beat.KnowledgeGoal} audience outcome: {beat.AudienceOutcome} editorial intent: {beat.EditorialIntent} facts: {FormatVerifiedFacts(beat.VerifiedFacts)} constraints: {FormatList(beat.ScientificConstraints)} observation objective: {beat.ObservationObjective ?? "none"} transition goal: {beat.TransitionGoal} tone: {beat.Tone} rhythm: {beat.NarrativeRhythm} success criteria: {FormatList(beat.SuccessCriteria)} notes: {beat.OptionalProducerNotes ?? "none"}"))));
+
+    private static string FormatVerifiedFacts(IReadOnlyList<NarrationVerifiedFact> facts) => facts.Count == 0 ? "none" : string.Join("; ", facts.Select(f => $"{NormalizeFactName(f.FactKey)} — {f.Value}"));
 
     private static void AddSection(StringBuilder sb, int number, string title, string body) => sb.AppendLine($"## {number}. {title}").AppendLine(body.Trim()).AppendLine();
 
@@ -168,6 +161,6 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
-public sealed record NarrationPromptComposerInput(JsonElement? EditorialContract, JsonElement? CreativeStoryboard, NarrationBriefsV5? NarrationBriefs, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, DocumentaryStyleContract? DocumentaryStyleContract = null, string PromptQualityPath = "", int PromptQualityThreshold = 80);
+public sealed record NarrationPromptComposerInput(NarrationContextDocument NarrationContext, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, string PromptQualityPath = "", int PromptQualityThreshold = 80);
 public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown, NarrationPromptDiagnostics Diagnostics, PromptQualityContract PromptQuality);
 public sealed record NarrationPromptDiagnostics(string ComposerName, string OrchestrationVersion, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, int SceneCount, int PromptSectionCount, IReadOnlyList<string> ProhibitedInternalPhraseList, IReadOnlyList<string> MissingInputWarnings, bool ReadyForGeneration);

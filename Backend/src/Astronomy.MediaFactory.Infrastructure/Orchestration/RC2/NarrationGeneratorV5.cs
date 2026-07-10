@@ -169,13 +169,20 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             new DocumentaryPerformerSceneFactCards(longSceneFactCards, shortSceneFactCards),
             styleContract?.VoiceProfile ?? "Premium astronomy documentary: confident, elegant, natural, human, curious, educational, and calm.",
             Rc2PipelinePhaseRegistry.OrchestrationVersion);
-        await File.WriteAllTextAsync(narrationContextPath, JsonSerializer.Serialize(narrationContext, JsonOptions), cancellationToken);
+        var narrationContextJson = JsonSerializer.Serialize(narrationContext, JsonOptions);
+        await File.WriteAllTextAsync(narrationContextPath, narrationContextJson, cancellationToken);
+        logger.LogInformation("Phase 7 NarrationContext before prompt generation: {NarrationContext}", narrationContextJson);
         var narrationContextPurityFailures = NarrationContextPurityValidator.Validate(narrationContext).ToArray();
+        if (narrationContextPurityFailures.Length > 0)
+        {
+            await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 7, phaseName = PhaseName, status = "Failed", errors = narrationContextPurityFailures }, JsonOptions), cancellationToken);
+            throw new InvalidOperationException("NarrationContext purity validation failed before prompt generation: " + string.Join(" | ", narrationContextPurityFailures));
+        }
 
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath), cancellationToken);
         var performerPrompt = "You are the Documentary Performer, not the documentary designer.\n\nThe documentary already exists. Your only responsibility is to perform the supplied narration contexts naturally, in beat order, as a premium astronomy documentary narrator.\n\nNever change educational goals, audience outcomes, verified facts, beat order, or documentary structure. Never invent science. Never invent observing guidance. Never narrate production notes. Never narrate visual instructions. Never expose implementation details, prompts, JSON, schemas, contracts, diagnostics, or internal labels.\n\nFor every beat, satisfy its knowledge goal, preserve its audience outcome, represent allocated verified facts, obey scientific constraints, and use only the supplied transition goal. Avoid mechanical transitions such as Next, Now, or Moving on unless the context explicitly requires them.\n\nWrite with the confidence and elegance of a premium astronomy documentary: natural, human, curious, educational, and calm. Avoid Wikipedia, textbook, AI assistant, bullet-point, marketing, and clickbait language.";
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, performerPrompt, JsonSerializer.Serialize(narrationContext, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, performerPrompt, narrationContextJson, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -193,7 +200,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                     var contexts = narrationContext.Formats.FirstOrDefault(f => f.Format.Equals(format, StringComparison.OrdinalIgnoreCase))?.Beats ?? [];
                     llmRequestCounts[format] = 1;
                     var outline = GetString(storyboard, "storyArc") ?? "Hook → Discovery → Science → Observation → Takeaway";
-                    var documentaryScript = LlmDocumentaryTranscriptionist.Transcribe(contexts, cards, styleContract?.VoiceProfile ?? "CalmDocumentary", outline);
+                    var documentaryScript = LlmDocumentaryTranscriptionist.Transcribe(contexts, format, language, outline);
                     var scriptPath = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortDocumentaryScriptPath : longDocumentaryScriptPath;
                     await File.WriteAllTextAsync(scriptPath, JsonSerializer.Serialize(documentaryScript, JsonOptions), cancellationToken);
                     var scenesForFormat = RunChronicleEditorialEngine(llmRequest, documentaryScript, format).ToArray();
@@ -1194,8 +1201,8 @@ public sealed record DocumentaryTranscriptionistInput(string DocumentaryOutline,
 public sealed record DocumentaryPerformerSceneFactCards(SceneFactCardSet Long, SceneFactCardSet Short);
 public sealed record NarrationContextDocument(string ContractVersion, string OrchestrationVersion, IReadOnlyList<NarrationFormatContext> Formats);
 public sealed record NarrationFormatContext(string Format, IReadOnlyList<NarrationContextBeat> Beats);
-public sealed record NarrationVerifiedFact(string FactKey, string Value, string? SemanticPurpose, string? SourceBeatId, string? Unit = null);
-public sealed record NarrationContextBeat(int SceneNumber, string SceneId, string DocumentaryBeatId, IReadOnlyList<string> SourceSemanticBeatIds, string NarrativeRole, string KnowledgeGoal, string AudienceOutcome, string EditorialIntent, IReadOnlyList<NarrationVerifiedFact> VerifiedFacts, IReadOnlyList<string> ScientificConstraints, string TransitionGoal, string DesiredTone, string NarrativeRhythm, IReadOnlyList<string> SuccessCriteria, string? OptionalProducerNotes);
+public sealed record NarrationVerifiedFact(string FactKey, string Value, string? SemanticPurpose, string? Unit = null);
+public sealed record NarrationContextBeat(string KnowledgeGoal, string AudienceOutcome, string EditorialIntent, IReadOnlyList<NarrationVerifiedFact> VerifiedFacts, IReadOnlyList<string> ScientificConstraints, string? ObservationObjective, string TransitionGoal, string Tone, string NarrativeRhythm, IReadOnlyList<string> SuccessCriteria, string? OptionalProducerNotes);
 public sealed record DocumentaryScript(string ContractVersion, string Format, string Title, string Language, IReadOnlyList<DocumentaryScriptScene> Scenes, [property: JsonPropertyName("fullScript")] string FullScriptText);
 public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, [property: JsonPropertyName("narration")] string NarrationText, string TransitionToNext, [property: JsonPropertyName("requiredFactsUsed")] IReadOnlyList<string> RequiredFactsPreserved, IReadOnlyList<string> MustNotSay, string ObservationGuidance)
 {
@@ -1227,44 +1234,36 @@ public static class NarrationContextBuilder
 
     private static IReadOnlyList<NarrationContextBeat> BuildBeats(string format, JsonElement? contract, JsonElement? styleContract, SceneFactCardSet cards, string voiceProfile)
     {
-        var contractScenes = ReadArray(contract, "beats").Concat(ReadArray(contract, "scenes")).OrderBy(e => GetInt(e, "beatOrder") ?? GetInt(e, "sceneOrder") ?? 0).ToArray();
-        var frameMap = cards.Cards.ToDictionary(c => c.SceneId, c => c, StringComparer.OrdinalIgnoreCase);
-        return contractScenes.Select((beat, index) =>
+        var contractBeats = ReadArray(contract, "beats").OrderBy(e => GetInt(e, "beatOrder") ?? 0).ToArray();
+        return contractBeats.Select(beat =>
         {
-            var sceneId = FirstNonEmpty(GetString(beat, "sceneId"), GetString(beat, "id"), GetString(beat, "beatId"), $"{format}-scene-{index + 1:000}")!;
-            frameMap.TryGetValue(sceneId, out var frame);
-            var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), sceneId)!;
             var warnings = new List<string>();
             string Field(string name, string fallback)
             {
                 var value = GetString(beat, name);
-                if (!string.IsNullOrWhiteSpace(value)) return Clean(value!);
-                warnings.Add($"Fallback used for missing Documentary Contract field {name} on {beatId}.");
+                if (!string.IsNullOrWhiteSpace(value) && !ContainsForbiddenVisualLanguage(value)) return Clean(value!);
                 return fallback;
             }
-            var facts = ReadAllocatedFacts(beat, beatId, warnings);
-            var tone = Clean(FirstNonEmpty(GetString(beat, "desiredTone"), voiceProfile, "Confident, elegant, natural, human, curious, educational, and calm.")!);
+            var facts = ReadAllocatedFacts(beat, warnings);
+            var tone = Clean(FirstNonEmpty(GetString(beat, "tone"), GetString(beat, "desiredTone"), voiceProfile, "Confident, elegant, natural, human, curious, educational, and calm.")!);
             var rhythm = Clean(FirstNonEmpty(GetString(beat, "narrativeRhythm"), format.Equals("short", StringComparison.OrdinalIgnoreCase) ? "compressed documentary beat" : "measured documentary beat")!);
+            var observationObjective = FirstNonEmpty(GetString(beat, "observationObjective"), GetString(beat, "scientificObjective"));
             return new NarrationContextBeat(
-                GetInt(beat, "sceneNumber") ?? frame?.SceneOrder ?? GetInt(beat, "beatOrder") ?? index + 1,
-                sceneId,
-                beatId,
-                ReadStringArray(beat, "sourceSemanticBeatIds"),
-                Field("narrativeRole", "Documentary beat."),
                 Field("knowledgeGoal", "Make the verified sky event understandable."),
                 Field("audienceOutcome", "The audience understands what matters and what can be safely said."),
                 Field("editorialIntent", "Perform this beat with factual restraint."),
                 facts,
-                ReadStringArray(beat, "scientificConstraints").Concat(new[]{ GetString(beat, "scientificObjective") }.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => Clean(v!))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                ReadStringArray(beat, "scientificConstraints").Where(v => !ContainsForbiddenVisualLanguage(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                string.IsNullOrWhiteSpace(observationObjective) || ContainsForbiddenVisualLanguage(observationObjective) ? null : Clean(observationObjective!),
                 Field("transitionGoal", "Flow naturally into the next beat."),
                 tone,
                 rhythm,
-                ReadStringArray(beat, "successCriteria"),
+                ReadStringArray(beat, "successCriteria").Where(v => !ContainsForbiddenVisualLanguage(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 warnings.Count == 0 ? null : string.Join(" ", warnings));
         }).ToArray();
     }
 
-    private static IReadOnlyList<NarrationVerifiedFact> ReadAllocatedFacts(JsonElement beat, string beatId, List<string> warnings)
+    private static IReadOnlyList<NarrationVerifiedFact> ReadAllocatedFacts(JsonElement beat, List<string> warnings)
     {
         var allocated = FindProperty(beat, "allocatedFacts");
         if (allocated is null) return [];
@@ -1281,16 +1280,16 @@ public static class NarrationContextBuilder
 
         void AddFact(string key, JsonElement valueElement)
         {
-            if (string.IsNullOrWhiteSpace(key)) return;
+            if (string.IsNullOrWhiteSpace(key) || ContainsForbiddenVisualLanguage(key)) return;
             var status = GetString(valueElement, "status") ?? (valueElement.ValueKind == JsonValueKind.Object ? null : "allocated");
             if (!string.Equals(status, "allocated", StringComparison.OrdinalIgnoreCase)) return;
             var value = FirstNonEmpty(GetString(valueElement, "value"), ValueToString(valueElement));
-            if (string.IsNullOrWhiteSpace(value) || value.Equals("null", StringComparison.OrdinalIgnoreCase)) return;
-            if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) { warnings.Add($"Omitted non-speakable serialized fact {key} on {beatId}."); return; }
+            if (string.IsNullOrWhiteSpace(value) || value.Equals("null", StringComparison.OrdinalIgnoreCase) || ContainsForbiddenVisualLanguage(value) || LooksLikeInternalId(value)) return;
+            if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) { warnings.Add($"Omitted non-speakable serialized fact."); return; }
             var safe = NarrationSafeFactFormatter.Format(key, value!, GetString(valueElement, "unit"), out var warning);
             if (!string.IsNullOrWhiteSpace(warning)) warnings.Add(warning!);
             if (safe is null) return;
-            facts.Add(new NarrationVerifiedFact(key, safe, GetString(valueElement, "semanticPurpose"), GetString(valueElement, "sourceBeatId") ?? GetString(valueElement, "sourceSemanticBeat") ?? beatId, GetString(valueElement, "unit")));
+            facts.Add(new NarrationVerifiedFact(key, safe, GetString(valueElement, "semanticPurpose"), GetString(valueElement, "unit")));
         }
     }
 
@@ -1329,21 +1328,22 @@ public static class NarrationSafeFactFormatter
 public static class NarrationContextPurityValidator
 {
     private static readonly Regex IsoRegex = new("\\b\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly string[] Forbidden = ["visual-only", "frame for", "source facts attached", "landscape composition", "portrait composition", "label-safe", "camera", "motion", "slow reveal", "steady hold", "visual comprehension", "render", "safe area", "primary subject"];
+    private static readonly string[] Forbidden = ["visual", "visual-only", "frame", "source facts attached", "landscape", "portrait", "label", "camera", "composition", "motion", "render", "safe area", "safeArea", "framing", "lighting", "image prompt", "prompt", "raw timestamp", "sceneId", "beatId", "sourceSemanticBeatIds"];
     public static IReadOnlyList<string> Validate(NarrationContextDocument context)
     {
         var failures = new List<string>();
         foreach (var beat in context.Formats.SelectMany(f => f.Beats))
         {
-            Check(beat.KnowledgeGoal, "knowledgeGoal"); Check(beat.AudienceOutcome, "audienceOutcome"); Check(beat.EditorialIntent, "editorialIntent"); Check(beat.TransitionGoal, "transitionGoal"); Check(beat.OptionalProducerNotes, "optionalProducerNotes");
+            Check(beat.KnowledgeGoal, "knowledgeGoal"); Check(beat.AudienceOutcome, "audienceOutcome"); Check(beat.EditorialIntent, "editorialIntent"); Check(beat.ObservationObjective, "observationObjective"); Check(beat.TransitionGoal, "transitionGoal"); Check(beat.Tone, "tone"); Check(beat.NarrativeRhythm, "narrativeRhythm"); Check(beat.OptionalProducerNotes, "optionalProducerNotes");
             foreach (var c in beat.ScientificConstraints) Check(c, "scientificConstraints");
-            foreach (var fact in beat.VerifiedFacts) { Check(fact.Value, "verifiedFacts"); if (Regex.IsMatch(fact.Value, "\\b(long|short)-beat-\\d+\\b", RegexOptions.IgnoreCase)) failures.Add($"Internal beat ID leaked into speakable fact {fact.FactKey} for {beat.SceneId}."); }
+            foreach (var c in beat.SuccessCriteria) Check(c, "successCriteria");
+            foreach (var fact in beat.VerifiedFacts) { Check(fact.FactKey, "verifiedFacts.factKey"); Check(fact.Value, "verifiedFacts"); Check(fact.SemanticPurpose, "verifiedFacts.semanticPurpose"); if (Regex.IsMatch(fact.Value, "\\b(long|short)-beat-\\d+\\b", RegexOptions.IgnoreCase)) failures.Add($"Internal beat ID leaked into speakable fact {fact.FactKey}."); }
             void Check(string? value, string field)
             {
                 if (string.IsNullOrWhiteSpace(value)) return;
-                foreach (var term in Forbidden) if (value.Contains(term, StringComparison.OrdinalIgnoreCase)) failures.Add($"Narration context purity failure in {field} for {beat.SceneId}: '{term}'.");
-                if (IsoRegex.IsMatch(value)) failures.Add($"Raw ISO timestamp leaked into {field} for {beat.SceneId}.");
-                if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) failures.Add($"Serialized JSON leaked into {field} for {beat.SceneId}.");
+                foreach (var term in Forbidden) if (value.Contains(term, StringComparison.OrdinalIgnoreCase)) failures.Add($"Narration context purity failure in {field}: '{term}'.");
+                if (IsoRegex.IsMatch(value)) failures.Add($"Raw ISO timestamp leaked into {field}.");
+                if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) failures.Add($"Serialized JSON leaked into {field}.");
             }
         }
         return failures.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -1473,84 +1473,56 @@ public static class RawNarrativeGenerator
 
 public static class LlmDocumentaryTranscriptionist
 {
-    public static DocumentaryScript Transcribe(IReadOnlyList<NarrationContextBeat> contexts, SceneFactCardSet cardSet, string toneProfile, string outline)
+    public static DocumentaryScript Transcribe(IReadOnlyList<NarrationContextBeat> contexts, string format, string language, string outline)
     {
-        var contextByScene = contexts.ToDictionary(c => c.SceneId, StringComparer.OrdinalIgnoreCase);
-        var orderedCards = cardSet.Cards.OrderBy(s => s.SceneOrder).ToArray();
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var isShort = cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase);
+        var orderedContexts = contexts.ToArray();
+        var isShort = format.Equals("short", StringComparison.OrdinalIgnoreCase);
         var title = isShort ? "Tonight's Sky in One Look" : "A Quiet Alignment in the Evening Sky";
-        var sceneFacts = orderedCards.Select((scene, index) =>
+        var scenes = orderedContexts.Select((context, index) =>
         {
-            var allFacts = scene.Facts.Concat(scene.Observations).Concat(scene.Visibility).Concat(scene.Timing).Concat(scene.Location).Concat(scene.Objects).Concat(scene.Science).Concat(scene.RequiredMentions)
-                .Select(CleanFact).Where(v => !string.IsNullOrWhiteSpace(v) && !LooksLikePlanningText(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var factsForScene = allFacts.Where(f => used.Add(NormalizeFactKey(f))).ToArray();
-            if (factsForScene.Length == 0) factsForScene = allFacts.Take(1).ToArray();
-            var observations = scene.Observations.Where(v => !LooksLikePlanningText(v)).Select(CleanFact).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            return new { Card = scene, Index = index, Facts = factsForScene, Observations = observations };
-        }).ToArray();
-        var scenes = sceneFacts.Select(item =>
-        {
-            contextByScene.TryGetValue(item.Card.SceneId, out var context);
             var narration = isShort
-                ? BuildShortScene(context, item.Card, item.Index, orderedCards.Length, item.Facts, item.Observations)
-                : BuildLongScene(context, item.Card, item.Index, orderedCards.Length, item.Facts, item.Observations, outline);
-            var transition = context?.TransitionGoal ?? (item.Index < orderedCards.Length - 1 ? BuildTransition(isShort, item.Index) : string.Empty);
-            return new DocumentaryScriptScene(item.Card.SceneId, item.Card.SceneOrder, RemoveAdjacentDuplicateSentences(CleanScript(narration)), transition, item.Facts, item.Card.ForbiddenClaims, string.Join(" ", item.Observations));
+                ? BuildShortScene(context, index, orderedContexts.Length)
+                : BuildLongScene(context, index, orderedContexts.Length, outline);
+            var transition = context.TransitionGoal;
+            var facts = context.VerifiedFacts.Select(f => f.Value).ToArray();
+            return new DocumentaryScriptScene($"{format}-narration-{index + 1:000}", index + 1, RemoveAdjacentDuplicateSentences(CleanScript(narration)), transition, facts, [], context.ObservationObjective ?? string.Empty);
         }).ToArray();
         var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
-        return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", cardSet.Format, title, cardSet.Language, scenes, fullScript);
+        return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", format, title, language, scenes, fullScript);
     }
 
-
-    private static string BuildLongScene(NarrationContextBeat? context, SceneFactCard scene, int index, int total, IReadOnlyList<string> facts, IReadOnlyList<string> observations, string outline)
+    private static string BuildLongScene(NarrationContextBeat context, int index, int total, string outline)
     {
-        var coreFacts = context?.VerifiedFacts.Count > 0 ? context.VerifiedFacts.Select(f => f.Value).ToArray() : facts;
+        var coreFacts = context.VerifiedFacts.Select(f => f.Value).ToArray();
         var core = string.Join(" ", coreFacts.Take(index == 0 ? 3 : 5));
-        var goal = context?.KnowledgeGoal ?? "what this sky event means";
-        var outcome = context?.AudienceOutcome ?? "the audience can read the sky with confidence";
+        var goal = context.KnowledgeGoal;
+        var outcome = context.AudienceOutcome;
         if (index == 0) return CleanScript($"As the sky darkens, this moment begins with a simple question: {LowerFirst(goal)} {core} The reward is not spectacle alone; it is the calm recognition that {LowerFirst(outcome)}");
         if (index == total - 1) return CleanScript($"The documentary closes where observation begins: with attention. {core} Hold the view for a moment, and let the night leave you with a clearer sense that {LowerFirst(outcome)}");
-        if (observations.Count > 0 || coreFacts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"The practical detail is quiet, but important. {string.Join(" ", coreFacts.Take(4))} Use only the confirmed guidance, start with the open sky, and give your eyes time to settle.");
+        if (!string.IsNullOrWhiteSpace(context.ObservationObjective) || coreFacts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"The practical detail is quiet, but important. {string.Join(" ", coreFacts.Take(4))} Use only the confirmed guidance, start with the open sky, and give your eyes time to settle.");
         return CleanScript($"The explanation stays grounded in real celestial geometry. {core} From Earth, immense motions become readable as position, timing, and direction.");
     }
 
-    private static string BuildShortScene(NarrationContextBeat? context, SceneFactCard scene, int index, int total, IReadOnlyList<string> facts, IReadOnlyList<string> observations)
+    private static string BuildShortScene(NarrationContextBeat context, int index, int total)
     {
-        var coreFacts = context?.VerifiedFacts.Count > 0 ? context.VerifiedFacts.Select(f => f.Value).ToArray() : facts;
+        var coreFacts = context.VerifiedFacts.Select(f => f.Value).ToArray();
         var core = string.Join(" ", coreFacts.Take(index == 0 ? 2 : 3));
-        if (index == 0) return CleanScript($"Begin with the visible sky. {core}");
+        if (index == 0) return CleanScript($"Begin with narration. {LowerFirst(context.KnowledgeGoal)} {core}");
         if (index == total - 1) return CleanScript($"Step outside, face the indicated sky, and let your eyes find the pattern. {core}");
         if (coreFacts.Any(f => ContainsAny(f, "separation", "orbit", "perspective", "geometry", "degree"))) return CleanScript($"The science is perspective made visible. {core}");
         return CleanScript($"Keep the observation calm and direct. {core}");
     }
 
-    private static string BuildTransition(bool isShort, int index) => isShort
-        ? (index == 0 ? "The same view also carries the science." : "The science points back to the observing action.")
-        : (index == 0 ? "The visible pattern then opens into the science behind it." : "The explanation naturally returns to where and how to look.");
-
     private static string LowerFirst(string value) => string.IsNullOrWhiteSpace(value) ? value : char.ToLowerInvariant(value[0]) + value[1..];
     private static string NormalizeFactKey(string value) => Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
     private static bool ContainsAny(string? value, params string[] keywords) => !string.IsNullOrWhiteSpace(value) && keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-
     private static string RemoveAdjacentDuplicateSentences(string value)
     {
         var sentences = Regex.Split(value, @"(?<=[.!?])\s+").Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
         var kept = new List<string>();
-        foreach (var sentence in sentences)
-        {
-            if (kept.Count == 0 || !NormalizeFactKey(kept[^1]).Equals(NormalizeFactKey(sentence), StringComparison.OrdinalIgnoreCase)) kept.Add(sentence.Trim());
-        }
+        foreach (var sentence in sentences) if (kept.Count == 0 || !NormalizeFactKey(kept[^1]).Equals(NormalizeFactKey(sentence), StringComparison.OrdinalIgnoreCase)) kept.Add(sentence.Trim());
         return string.Join(" ", kept);
     }
-
-    private static string CleanFact(string value)
-    {
-        var cleaned = Regex.Replace(value ?? string.Empty, @"^[A-Za-z0-9_ -]+:\s*", string.Empty, RegexOptions.CultureInvariant).Trim();
-        return cleaned.TrimEnd('.') + ".";
-    }
-
-    private static bool LooksLikePlanningText(string value) => value.Contains("prompt", StringComparison.OrdinalIgnoreCase) || value.Contains("metadata", StringComparison.OrdinalIgnoreCase) || value.Contains("warning", StringComparison.OrdinalIgnoreCase) || value.Contains("the story", StringComparison.OrdinalIgnoreCase) || value.Contains("audience", StringComparison.OrdinalIgnoreCase) || value.Contains("viewer", StringComparison.OrdinalIgnoreCase) || value.Contains("confirmed detail", StringComparison.OrdinalIgnoreCase) || value.Contains("peak date/time", StringComparison.OrdinalIgnoreCase);
     private static string CleanScript(string value) => Regex.Replace(value, "\\s{2,}", " ", RegexOptions.CultureInvariant).Trim();
 }
 
