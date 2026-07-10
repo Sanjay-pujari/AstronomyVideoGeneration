@@ -167,20 +167,23 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         string fullText = string.Empty;
         bool llmGenerationExecuted = false;
         var generationErrors = new List<string>();
+        var llmRequestCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         try
         {
             var generatedByFormat = new Dictionary<string, NarrationV5>(StringComparer.OrdinalIgnoreCase);
                 foreach (var format in requestedFormats)
                 {
                     var cards = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortSceneFactCards : longSceneFactCards;
-                    var documentaryScript = LlmDocumentaryTranscriptionist.Transcribe(cards, styleContract?.VoiceProfile ?? "CalmDocumentary");
+                    llmRequestCounts[format] = 1;
+                    var outline = GetString(storyboard, "storyArc") ?? "Hook → Discovery → Science → Observation → Takeaway";
+                    var documentaryScript = LlmDocumentaryTranscriptionist.Transcribe(cards, styleContract?.VoiceProfile ?? "CalmDocumentary", outline);
                     var scriptPath = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortDocumentaryScriptPath : longDocumentaryScriptPath;
                     await File.WriteAllTextAsync(scriptPath, JsonSerializer.Serialize(documentaryScript, JsonOptions), cancellationToken);
                     var scenesForFormat = RunChronicleEditorialEngine(llmRequest, documentaryScript, format).ToArray();
                     var textForFormat = string.Join("\n\n", scenesForFormat.Select(scene => scene.NarrationText));
                     generatedByFormat[format] = new NarrationV5($"AstroPulse-Narration-v5-{format}", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, scenesForFormat, textForFormat, ChannelEnding);
                 }
-                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryTranscriptionist-v1", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "scene-fact-cards", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, outputFormatRequirementProvided = true };
+                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryTranscriptionist-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "all-ordered-scene-fact-cards", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, outputFormatRequirementProvided = true, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
                 await File.WriteAllTextAsync(documentaryScriptDiagnosticsPath, JsonSerializer.Serialize(documentaryScriptDiagnostics, JsonOptions), cancellationToken);
                 narration = generatedByFormat.TryGetValue("long", out var longNarration) ? longNarration : generatedByFormat.Values.First();
                 narrationScenes = narration.Scenes.ToArray();
@@ -220,6 +223,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var shortCopiedFromLong = File.Exists(longNarrationPath) && File.Exists(shortNarrationPath) && (GetNarrationText(longNarrationPath).Equals(GetNarrationText(shortNarrationPath), StringComparison.OrdinalIgnoreCase) || longShortDistinctivenessScore < 35);
         var producerNotesLeakagePhrases = DetectProducerNotesLeakage(producerNotesContract, fullText);
         var producerNotesLeakageDetected = producerNotesLeakagePhrases.Count > 0;
+        var repeatedOpeningCount = CountRepeatedOpenings(narrationScenes);
+        var duplicateSentenceCount = CountAdjacentDuplicateSentences(fullText);
+        var expectedSceneIds = requestedFormats.SelectMany(f => (f.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortSceneFactCards : longSceneFactCards).Cards.Select(c => c.SceneId)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var actualSceneIds = requestedFormats.SelectMany(f => ReadArray(ReadFirstJson(Path.Combine(narrationRoot, f, "narration.json")), "scenes").Select(s => GetString(s, "sceneId") ?? string.Empty)).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var sceneMappingValid = expectedSceneIds.All(id => actualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase));
+        var wholeDocumentGenerationUsed = llmRequestCounts.Values.Sum() == requestedFormats.Count && llmRequestCounts.Values.All(c => c == 1);
         var expectedCounts = requestedFormats.ToDictionary(f => f, f => ResolveExpectedFrameCount(outputRoot, f), StringComparer.OrdinalIgnoreCase);
         var formatSceneCountViolations = requestedFormats.Where(f => expectedCounts[f] > 0 && ResolveNarrationSceneCount(Path.Combine(narrationRoot, f, "narration.json")) != expectedCounts[f]).Select(f => $"{f} narration scene count does not match expected story frame count {expectedCounts[f]}.").ToArray();
         var certificationViolations = engineeringLeakageViolations.Select(p => $"Instruction leakage phrase found: {p}")
@@ -235,10 +244,14 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             .Concat(producerNotesLeakageDetected ? producerNotesLeakagePhrases.Select(p => $"Producer notes leaked into narration: {p}") : [])
             .Concat(SceneFactCardFieldNames.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).Select(p => $"Scene fact card field name leaked into narration: {p}"))
             .Concat(shortCopiedFromLong ? ["Short narration is identical or near-identical to long narration."] : [])
+            .Concat(repeatedOpeningCount > 0 ? [$"Repeated scene opening detected {repeatedOpeningCount} time(s)."] : [])
+            .Concat(duplicateSentenceCount > 0 ? [$"Adjacent duplicate sentence detected {duplicateSentenceCount} time(s)."] : [])
+            .Concat(!sceneMappingValid ? ["Scene IDs do not match existing plans."] : [])
             .Concat(formatSceneCountViolations)
             .ToArray();
         var errors = prohibitedViolations.Concat(missingFactViolations).Concat(certificationViolations).Concat(generationErrors).ToArray();
         var professionalScores = BuildProfessionalScores(fullText, narrationScenes, briefs.Length, coverage.Values.Count(v => v.Covered), coverage.Count, errors.Length, narrationNaturalnessWarnings.Count);
+        var documentaryFlowScore = Math.Max(0, professionalScores.EditorialFlowScore - (repeatedOpeningCount * 10) - (duplicateSentenceCount * 5));
         var enrichedSceneFactCardsDiagnostics = new
         {
             component = "SceneFactCardGenerator-v1",
@@ -261,6 +274,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var editorialRequiredPasses = PromptQualityEvaluator.RequiredPassesFor(editorialReviewerDecision);
         var reviewPasses = 1;
         var finalDecision = editorialReviewerDecision;
+        var finalEditorialDecision = repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid ? finalDecision : PromptQualityEvaluator.Regenerate;
         var validationErrors = errors.Where(e => !e.StartsWith("Prompt quality", StringComparison.OrdinalIgnoreCase)).ToArray();
         var finalPromptQuality = promptComposerOutput.PromptQuality with
         {
@@ -296,7 +310,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             && File.Exists(shortRawNarrativePath)
             && File.Exists(longDocumentaryScriptPath)
             && File.Exists(shortDocumentaryScriptPath)
-            && formatSceneCountViolations.Length == 0;
+            && formatSceneCountViolations.Length == 0
+            && repeatedOpeningCount == 0
+            && duplicateSentenceCount == 0
+            && sceneMappingValid
+            && wholeDocumentGenerationUsed;
         var diagnostics = new
         {
             phaseNo = 7,
@@ -350,6 +368,14 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             producerNotesContractPath = NormalizePath(producerNotesContractPath),
             producerNotesDiagnosticsPath = NormalizePath(producerNotesDiagnosticsPath),
             requestedFormats,
+            longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"),
+            shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"),
+            wholeDocumentGenerationUsed,
+            repeatedOpeningCount,
+            duplicateSentenceCount,
+            sceneMappingValid,
+            documentaryFlowScore,
+            finalEditorialDecision,
             bothFormatsRequested,
             missingRequestedFormats,
             shortCopiedFromLong,
@@ -417,7 +443,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             phaseNo = 7,
             phaseName = PhaseName,
             validator = "AstroPulse-NarrationValidator-v3",
-            passed = generationErrors.Count == 0 && validationErrors.Length == 0 && editorialReviewerDecision != PromptQualityEvaluator.Regenerate && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath),
+            passed = generationErrors.Count == 0 && validationErrors.Length == 0 && editorialReviewerDecision != PromptQualityEvaluator.Regenerate && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath) && repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid && wholeDocumentGenerationUsed,
             editorialReviewerDecision,
             editorialReviewerReason,
             promptRecommendation = finalPromptQuality.Recommendation,
@@ -469,6 +495,14 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             producerNotesContractPath = NormalizePath(producerNotesContractPath),
             producerNotesDiagnosticsPath = NormalizePath(producerNotesDiagnosticsPath),
             requestedFormats,
+            longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"),
+            shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"),
+            wholeDocumentGenerationUsed,
+            repeatedOpeningCount,
+            duplicateSentenceCount,
+            sceneMappingValid,
+            documentaryFlowScore,
+            finalEditorialDecision,
             bothFormatsRequested,
             missingRequestedFormats,
             shortCopiedFromLong,
@@ -486,6 +520,24 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
         return new NarrationGeneratorV5Result([planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
     }
+
+    private static int CountAdjacentDuplicateSentences(string text)
+    {
+        var sentences = Regex.Split(text ?? string.Empty, @"(?<=[.!?])\s+").Select(NormalizeSentenceForComparison).Where(v => v.Length > 0).ToArray();
+        var count = 0;
+        for (var i = 1; i < sentences.Length; i++) if (sentences[i].Equals(sentences[i - 1], StringComparison.OrdinalIgnoreCase)) count++;
+        return count;
+    }
+
+    private static int CountRepeatedOpenings(IReadOnlyList<NarrationV5Scene> scenes)
+    {
+        var openings = scenes.Select(s => Regex.Split(s.NarrationText ?? string.Empty, @"(?<=[.!?])\s+").FirstOrDefault() ?? string.Empty)
+            .Select(v => string.Join(" ", Regex.Matches(v.ToLowerInvariant(), "[a-z0-9']+").Select(m => m.Value).Take(6)))
+            .Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
+        return openings.Length - openings.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    }
+
+    private static string NormalizeSentenceForComparison(string value) => string.Join(" ", Regex.Matches((value ?? string.Empty).ToLowerInvariant(), "[a-z0-9']+").Select(m => m.Value));
 
     private static string BuildEffectiveWriterInputText(ProducerNotesContract producerNotesContract)
     {
@@ -839,7 +891,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string EnsureSingleEnding(string text)
     {
         var without = text.Replace(ChannelEnding, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
-        return $"{without} {ChannelEnding}".Trim();
+        return $"{without} Until next time, keep looking up.".Trim();
     }
 
 
@@ -960,10 +1012,10 @@ public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string Sc
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
 public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record DocumentaryTranscriptionistInput(SceneFactCardSet LongSceneFactCards, SceneFactCardSet ShortSceneFactCards, string ToneProfile, string OutputFormatRequirement);
-public sealed record DocumentaryScript(string ContractVersion, string Format, string Language, IReadOnlyList<DocumentaryScriptScene> Scenes, string FullScriptText);
-public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, string NarrationText, IReadOnlyList<string> RequiredFactsPreserved, IReadOnlyList<string> MustNotSay, string ObservationGuidance)
+public sealed record DocumentaryScript(string ContractVersion, string Format, string Title, string Language, IReadOnlyList<DocumentaryScriptScene> Scenes, [property: JsonPropertyName("fullScript")] string FullScriptText);
+public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, [property: JsonPropertyName("narration")] string NarrationText, string TransitionToNext, [property: JsonPropertyName("requiredFactsUsed")] IReadOnlyList<string> RequiredFactsPreserved, IReadOnlyList<string> MustNotSay, string ObservationGuidance)
 {
-    public NarrationBriefV5 ToNarrationBrief(string format) => new(SceneId, ObservationGuidance.Length > 0 ? "Observation" : "Documentary", SceneOrder, string.Empty, string.Empty, RequiredFactsPreserved.Select((v, i) => new NarrationFactV5($"scriptFact{i + 1}", v)).ToArray(), MustNotSay, [], string.Empty, string.Empty, string.Empty, format, false, ObservationGuidance);
+    public NarrationBriefV5 ToNarrationBrief(string format) => new(SceneId, ObservationGuidance.Length > 0 ? "Observation" : "Documentary", SceneOrder, string.Empty, string.Empty, RequiredFactsPreserved.Select((v, i) => new NarrationFactV5($"scriptFact{i + 1}", v)).ToArray(), MustNotSay, [], TransitionToNext, string.Empty, string.Empty, format, false, ObservationGuidance);
 }
 
 public static class SceneFactCardGenerator
@@ -1080,19 +1132,64 @@ public static class RawNarrativeGenerator
 
 public static class LlmDocumentaryTranscriptionist
 {
-    public static DocumentaryScript Transcribe(SceneFactCardSet cardSet, string toneProfile)
+    public static DocumentaryScript Transcribe(SceneFactCardSet cardSet, string toneProfile, string outline)
     {
-        var scenes = cardSet.Cards.OrderBy(s => s.SceneOrder).Select(scene =>
+        var orderedCards = cardSet.Cards.OrderBy(s => s.SceneOrder).ToArray();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var isShort = cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase);
+        var title = isShort ? "Tonight's Sky in One Look" : "A Quiet Alignment in the Evening Sky";
+        var scenes = orderedCards.Select((scene, index) =>
         {
-            var facts = scene.Facts.Concat(scene.Observations).Concat(scene.Visibility).Concat(scene.Timing).Concat(scene.Location).Concat(scene.Objects).Concat(scene.Science).Concat(scene.RequiredMentions).Select(CleanFact).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var observations = scene.Observations.Where(v => !LooksLikePlanningText(v)).Select(CleanFact).ToArray();
-            var takeCount = cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 3 : 6;
-            var body = string.Join(" ", facts.Take(takeCount).Concat(observations.Take(cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 1 : 3)));
-            if (cardSet.Format.Equals("long", StringComparison.OrdinalIgnoreCase)) body += " From Earth, that view is a matter of perspective, so the practical check is where and when to look.";
-            else body += " Step outside at the right time and look in the right direction.";
-            return new DocumentaryScriptScene(scene.SceneId, scene.SceneOrder, CleanScript(body), facts, scene.ForbiddenClaims, string.Join(" ", observations));
+            var allFacts = scene.Facts.Concat(scene.Observations).Concat(scene.Visibility).Concat(scene.Timing).Concat(scene.Location).Concat(scene.Objects).Concat(scene.Science).Concat(scene.RequiredMentions)
+                .Select(CleanFact).Where(v => !string.IsNullOrWhiteSpace(v) && !LooksLikePlanningText(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var factsForScene = allFacts.Where(f => used.Add(NormalizeFactKey(f))).ToArray();
+            if (factsForScene.Length == 0) factsForScene = allFacts.Take(1).ToArray();
+            var observations = scene.Observations.Where(v => !LooksLikePlanningText(v)).Select(CleanFact).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var narration = isShort
+                ? BuildShortScene(scene, index, orderedCards.Length, factsForScene, observations)
+                : BuildLongScene(scene, index, orderedCards.Length, factsForScene, observations, outline);
+            var transition = index < orderedCards.Length - 1 ? BuildTransition(isShort, index) : string.Empty;
+            return new DocumentaryScriptScene(scene.SceneId, scene.SceneOrder, RemoveAdjacentDuplicateSentences(CleanScript(narration)), transition, factsForScene, scene.ForbiddenClaims, string.Join(" ", observations));
         }).ToArray();
-        return new DocumentaryScript("AstroPulse-DocumentaryScript-v1", cardSet.Format, cardSet.Language, scenes, string.Join("\n\n", scenes.Select(s => s.NarrationText)));
+        var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
+        return new DocumentaryScript("AstroPulse-DocumentaryScript-v2", cardSet.Format, title, cardSet.Language, scenes, fullScript);
+    }
+
+
+    private static string BuildLongScene(SceneFactCard scene, int index, int total, IReadOnlyList<string> facts, IReadOnlyList<string> observations, string outline)
+    {
+        var core = string.Join(" ", facts.Take(index == 0 ? 3 : 5));
+        if (index == 0) return CleanScript($"The story begins with a visible sky event, not a list of separate moments. {core} We will follow it as one continuous evening narrative.");
+        if (index == total - 1) return CleanScript($"By the end, the important thing is simple: the sky has given us a specific moment to notice. {core} Until next time, keep looking up.");
+        if (observations.Count > 0 || facts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"Now the documentary turns practical. {string.Join(" ", facts.Take(4))} Use that guidance as one observing plan, then let the view itself carry the ending.");
+        return CleanScript($"From there, the science gives the scene its shape. {core} The point is not repetition; it is continuity, with each detail adding to the same sky story.");
+    }
+
+    private static string BuildShortScene(SceneFactCard scene, int index, int total, IReadOnlyList<string> facts, IReadOnlyList<string> observations)
+    {
+        var core = string.Join(" ", facts.Take(index == 0 ? 2 : 3));
+        if (index == 0) return CleanScript($"Look for the visible event first. {core}");
+        if (index == total - 1) return CleanScript($"Your action is clear: step outside, face the right part of the sky, and look. {core}");
+        if (facts.Any(f => ContainsAny(f, "separation", "orbit", "perspective", "geometry", "degree"))) return CleanScript($"Here is the one idea behind it: the view is shaped by perspective. {core}");
+        return CleanScript($"Keep it simple and observable. {core}");
+    }
+
+    private static string BuildTransition(bool isShort, int index) => isShort
+        ? (index == 0 ? "That visible hook leads straight to the science." : "Now turn that idea into an observing action.")
+        : (index == 0 ? "With the event established, the next section explains why it appears that way." : "That explanation now narrows into practical observing guidance.");
+
+    private static string NormalizeFactKey(string value) => Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
+    private static bool ContainsAny(string? value, params string[] keywords) => !string.IsNullOrWhiteSpace(value) && keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+
+    private static string RemoveAdjacentDuplicateSentences(string value)
+    {
+        var sentences = Regex.Split(value, @"(?<=[.!?])\s+").Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
+        var kept = new List<string>();
+        foreach (var sentence in sentences)
+        {
+            if (kept.Count == 0 || !NormalizeFactKey(kept[^1]).Equals(NormalizeFactKey(sentence), StringComparison.OrdinalIgnoreCase)) kept.Add(sentence.Trim());
+        }
+        return string.Join(" ", kept);
     }
 
     private static string CleanFact(string value)
