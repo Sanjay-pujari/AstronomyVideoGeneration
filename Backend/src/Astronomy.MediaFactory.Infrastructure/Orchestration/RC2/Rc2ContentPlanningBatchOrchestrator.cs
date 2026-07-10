@@ -260,11 +260,28 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         if (!shortDimensionsValid) validationErrors.Add("Short story frames must be portrait 9:16 at 2160x3840.");
         validationErrors.AddRange(DiagnosticErrors(longDiagnostics));
         validationErrors.AddRange(DiagnosticErrors(shortDiagnostics));
+        var longContractPath = Combine(outputRoot, "creative", "documentary-contract.long.json");
+        var shortContractPath = Combine(outputRoot, "creative", "documentary-contract.short.json");
+        var architectureDiagnostics = Combine(outputRoot, "creative", "documentary-architecture-diagnostics.json");
+        if (longRequested && !File.Exists(longContractPath)) validationErrors.Add("LongVideo requested but creative/documentary-contract.long.json is missing.");
+        if (shortRequested && !File.Exists(shortContractPath)) validationErrors.Add("ShortVideo requested but creative/documentary-contract.short.json is missing.");
+        if (DiagnosticBool(architectureDiagnostics, "sharedMutableBeatCollectionUsed")) validationErrors.Add("Long and short formats shared a mutable beat collection.");
+        if (DiagnosticBool(architectureDiagnostics, "fixedSceneCountUsed")) validationErrors.Add("Fixed scene count was used during Phase 6 contract generation.");
+        if (DiagnosticBool(architectureDiagnostics, "oneSemanticBeatToOneFrameForced")) validationErrors.Add("One-semantic-beat-to-one-frame generation was forced.");
+        if (DiagnosticBool(architectureDiagnostics, "legacyFallbackUsed")) validationErrors.Add("Legacy fallback was used for Phase 6 generation.");
+        if (DiagnosticArrayHasValues(longDiagnostics, "narrationLeakageWarnings") || DiagnosticArrayHasValues(shortDiagnostics, "narrationLeakageWarnings")) validationErrors.Add("Narration leaked into Phase 6 visual planning.");
         if (longRequested && longQualityScore < 90) validationErrors.Add("Long story frames failed Aurora quality threshold.");
         if (shortRequested && shortQualityScore < 90) validationErrors.Add("Short story frames failed Aurora quality threshold.");
-        var overallPhaseQualityScore = Math.Min(longRequested ? longQualityScore : 100, shortRequested ? shortQualityScore : 100);
-        var auroraCertificationCandidate = longQualityScore >= 90 && shortQualityScore >= 90 && overallPhaseQualityScore >= 90 && validationErrors.Count == 0;
-        var computedStatus = auroraCertificationCandidate && status == ProductionPhaseStatus.Succeeded ? "Succeeded" : "Failed";
+        var requestedFormatCount = (longRequested ? 1 : 0) + (shortRequested ? 1 : 0);
+        var overallPhaseQualityScore = validationErrors.Count == 0
+            ? requestedFormatCount == 0 ? 100 : (int)Math.Round(((longRequested ? longQualityScore : 0) + (shortRequested ? shortQualityScore : 0)) / (double)requestedFormatCount)
+            : Math.Min(99, Math.Max(0, requestedFormatCount == 0 ? 0 : (int)Math.Round(((longRequested ? longQualityScore : 0) + (shortRequested ? shortQualityScore : 0)) / (double)requestedFormatCount) - 25));
+        var computedStatus = status == ProductionPhaseStatus.Succeeded && validationErrors.Count == 0 ? "Succeeded" : "Failed";
+        var authoritativeContracts = (!longRequested || File.Exists(longContractPath)) && (!shortRequested || File.Exists(shortContractPath));
+        var frameGenerationPathValid = DiagnosticBool(longDiagnostics, "generatedFromDocumentaryContract") && DiagnosticBool(shortDiagnostics, "generatedFromDocumentaryContract");
+        var narrationLeakageFree = !DiagnosticArrayHasValues(longDiagnostics, "narrationLeakageWarnings") && !DiagnosticArrayHasValues(shortDiagnostics, "narrationLeakageWarnings");
+        var auroraCertificationCandidate = computedStatus == "Succeeded" && authoritativeContracts && frameGenerationPathValid && narrationLeakageFree && longQualityScore >= (longRequested ? 90 : 0) && shortQualityScore >= (shortRequested ? 90 : 0) && overallPhaseQualityScore >= 90;
+        var authoritativeReason = computedStatus == "Succeeded" ? "Validation passed." : validationErrors.FirstOrDefault() ?? reason;
         return new
         {
             phaseNo,
@@ -292,8 +309,8 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             errors = validationErrors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             exceptionType = exception?.GetType().Name,
             exceptionMessage = exception?.Message,
-            canRetry = canRetry || validationErrors.Count > 0,
-            reason,
+            canRetry = canRetry,
+            reason = authoritativeReason,
             staleFilesCountedAsCurrentRunOutputs = false,
             validationScope = "Phase 6 story-frame contract validation."
         };
@@ -308,6 +325,25 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out var number)) return number;
         return 0;
     }
+
+    private static bool DiagnosticBool(string path, string name)
+    {
+        var root = ReadManifest(path);
+        if (!root.HasValue) return false;
+        foreach (var property in root.Value.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) return property.Value.ValueKind == JsonValueKind.True;
+        return false;
+    }
+
+    private static bool DiagnosticArrayHasValues(string path, string name)
+    {
+        var root = ReadManifest(path);
+        if (!root.HasValue) return false;
+        foreach (var property in root.Value.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.Array) return property.Value.GetArrayLength() > 0;
+        return false;
+    }
+
     private static IReadOnlyList<string> DiagnosticErrors(string path)
     {
         var root = ReadManifest(path);
