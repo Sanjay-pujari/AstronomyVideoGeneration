@@ -157,8 +157,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         var composer = promptComposer ?? new NarrationPromptComposer();
         var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [producerNotesContractPath, knowledgeContractPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
-        var transcriptionistInput = new DocumentaryTranscriptionistInput(longSceneFactCards, shortSceneFactCards, styleContract?.VoiceProfile ?? "CalmDocumentary", "Return documentary-script JSON with sceneId, sceneOrder, and narrationText for each scene. Use fact cards as verified notes only. They are not narration. Do not repeat field names, labels, producer notes, or metadata. Long script is richer, slower, and more explanatory; short script is tighter, faster, and action-led.");
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v4", "LLMDocumentaryTranscriptionist", "local-documentary-transcriptionist-v2", 0.7m, 0.9m, 1800, "Use the fact cards as verified notes, not narration. Transform only the facts into natural spoken documentary language. Preserve facts. Invent nothing. Do not repeat field names, labels, headings, producer-note phrases, raw metadata, or ISO timestamps. Long script: richer, slower, more explanatory. Short script: tighter, faster, stronger hook/action.", JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
+        var writerPrompt = "You are the lead documentary narrator for Astro Pulse. The production team has already completed all research, planning, and editorial work. The Scene Fact Cards below are verified facts. Do not quote them. Do not expose them. Do not explain the production process. Your only task is to transform these verified facts into natural spoken documentary narration. Imagine the recording light has just turned red. Speak naturally. Do not sound like you are reading notes. Sound like you are recording the final documentary.";
+        var transcriptionistInput = new DocumentaryTranscriptionistInput(longSceneFactCards, shortSceneFactCards, styleContract?.VoiceProfile ?? "CalmDocumentary", writerPrompt);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v4", "LLMDocumentaryTranscriptionist", "local-documentary-transcriptionist-v2", 0.7m, 0.9m, 1800, writerPrompt, JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -622,6 +623,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var text = RemoveLeakage(scene.NarrationText);
         text = NaturalizeIsoDates(text);
         text = FixDuplicatedPhrases(text);
+        text = RemoveDocumentaryRepetition(text);
         text = ImproveSpokenRhythm(text);
         return scene with { NarrationText = text };
     }
@@ -638,7 +640,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (!ContainsAny(text, "eye", "binocular", "telescope") && TryGetFact(facts, "nakedEyeVisibility", out var nakedEye) && IsAffirmative(nakedEye)) text += " Start with your eyes; equipment is optional.";
         else if (!ContainsAny(text, "eye", "binocular", "telescope") && (TryGetFact(facts, "binocularGuidance", out var equipment) || TryGetFact(facts, "telescopeGuidance", out equipment))) text += $" For equipment, {LowerFirst(NaturalizeIsoDates(equipment))}";
         if (!ContainsAny(text, "matter", "matters", "rare", "special", "because")) text += " It matters because these ordinary-looking positions reveal the larger motion of the solar system.";
-        return scene with { NarrationText = ImproveSpokenRhythm(FixDuplicatedPhrases(NaturalizeIsoDates(RemoveLeakage(text)))) };
+        return scene with { NarrationText = ImproveSpokenRhythm(RemoveDocumentaryRepetition(FixDuplicatedPhrases(NaturalizeIsoDates(RemoveLeakage(text))))) };
     }
 
     private static string BuildClosingMeaning(IReadOnlyDictionary<string, string> facts)
@@ -750,6 +752,60 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         return CleanNarration(cleaned);
     }
 
+    private static string RemoveDocumentaryRepetition(string text)
+    {
+        var sentences = SplitNarrationSentences(text);
+        if (sentences.Count <= 1) return CleanNarration(text);
+
+        var seenDates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenObjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenTransitions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIntroductions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenObservationCues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var edited = new List<string>();
+
+        foreach (var sentence in sentences)
+        {
+            var current = RemoveRepeatedMatches(sentence, MonthDateRegex, seenDates);
+            current = RemoveRepeatedMatches(current, CelestialObjectRegex, seenObjects);
+            current = RemoveRepeatedOpening(current, ConversationalTransitionRegex, seenTransitions);
+            current = RemoveRepeatedOpening(current, IntroductoryPhraseRegex, seenIntroductions);
+            current = RemoveRepeatedOpening(current, ObservationCueRegex, seenObservationCues);
+            current = CleanNarration(current.Trim(' ', ',', ';', ':'));
+            if (!string.IsNullOrWhiteSpace(current)) edited.Add(EnsureSentencePunctuation(current));
+        }
+
+        return CleanNarration(string.Join(" ", edited));
+    }
+
+    private static IReadOnlyList<string> SplitNarrationSentences(string text)
+        => Regex.Matches(text ?? string.Empty, @"[^.!?]+[.!?]?", RegexOptions.CultureInvariant)
+            .Select(m => m.Value.Trim())
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .ToArray();
+
+    private static string RemoveRepeatedMatches(string sentence, Regex regex, HashSet<string> seen)
+    {
+        return regex.Replace(sentence, match =>
+        {
+            var key = match.Value.Trim();
+            if (seen.Add(key)) return match.Value;
+            return string.Empty;
+        });
+    }
+
+    private static string RemoveRepeatedOpening(string sentence, Regex regex, HashSet<string> seen)
+    {
+        var match = regex.Match(sentence);
+        if (!match.Success) return sentence;
+        var key = match.Groups[1].Value.Trim();
+        if (seen.Add(key)) return sentence;
+        return sentence[match.Length..].TrimStart(' ', ',', '—', '-');
+    }
+
+    private static string EnsureSentencePunctuation(string sentence)
+        => Regex.IsMatch(sentence, @"[.!?]\s*$", RegexOptions.CultureInvariant) ? sentence : sentence + ".";
+
     private static string ImproveSpokenRhythm(string text)
     {
         var cleaned = CleanNarration(text);
@@ -855,6 +911,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static readonly Regex IsoDateTimeRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RawUtcRegex = new(@"\b(?:UTC|Z\s*time|Coordinated Universal Time)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DuplicatedTransformedPhraseRegex = new(@"\b(?:around around|face the look toward|(?<dir>look toward|face|turn toward)\s+(?:the\s+)?\k<dir>)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex MonthDateRegex = new(@"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s+\d{4})?\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CelestialObjectRegex = new(@"\b(?:Mercury|Venus|Mars|Jupiter|Saturn|Uranus|Neptune|Moon|Sun|Pleiades|Orion|Sirius|Regulus|Spica|Antares)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ConversationalTransitionRegex = new(@"^\s*((?:But why|So where|Now that|A few simple observations|From Earth|By the time|Before you look|As twilight deepens)\b[^,.!?]*[,.!?]?)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex IntroductoryPhraseRegex = new(@"^\s*((?:This is|The important point is|The most useful|What you should see is|It matters because|In a slower view)\b[^,.!?]*[,.!?]?)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ObservationCueRegex = new(@"^\s*((?:Look toward|Face|Turn toward|Step outside|Start with your eyes|Use the stated time range|Choose the clearest horizon)\b[^,.!?]*[,.!?]?)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static int CalculateDistinctivenessScore(string longText, string shortText)
     {
