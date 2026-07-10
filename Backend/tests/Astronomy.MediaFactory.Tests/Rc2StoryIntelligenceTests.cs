@@ -76,10 +76,17 @@ public sealed class Rc2StoryIntelligenceTests
         Assert.Equal("Discovery", storyGraph.RootElement.GetProperty("scenes")[1].GetProperty("scenePurpose").GetString());
         Assert.Equal("Science", storyGraph.RootElement.GetProperty("scenes")[2].GetProperty("scenePurpose").GetString());
         Assert.Equal("Observation", storyGraph.RootElement.GetProperty("scenes")[3].GetProperty("scenePurpose").GetString());
+        Assert.True(storyGraph.RootElement.GetProperty("requiredObservationFacts").TryGetProperty("visibilityRegion", out _));
+        Assert.False(storyGraph.RootElement.GetProperty("requiredObservationFacts").TryGetProperty("visibility", out _));
+        Assert.Contains("relativePositions", storyGraph.RootElement.GetProperty("scenes")[2].GetProperty("requiredFactKeys").EnumerateArray().Select(f => f.GetString()));
 
         using var sceneIntents = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "editorial", "scene-intents.json")));
         Assert.Equal(4, sceneIntents.RootElement.GetArrayLength());
         Assert.DoesNotContain(sceneIntents.RootElement.EnumerateArray(), scene => scene.GetProperty("scenePurpose").GetString() == "Editorial");
+        Assert.True(sceneIntents.RootElement[0].TryGetProperty("allocatedFacts", out var hookFacts));
+        Assert.False(hookFacts.TryGetProperty("viewingWindow", out _));
+        Assert.True(sceneIntents.RootElement[2].GetProperty("allocatedFacts").TryGetProperty("relativePositions", out _));
+        Assert.False(sceneIntents.RootElement[2].GetProperty("allocatedFacts").TryGetProperty("viewingWindow", out _));
 
         using var contract = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "editorial", "editorial-contract.json")));
         Assert.True(contract.RootElement.TryGetProperty("storyGraph", out var contractStoryGraph));
@@ -89,6 +96,10 @@ public sealed class Rc2StoryIntelligenceTests
         Assert.True(diagnostics.RootElement.GetProperty("storyGraphConsumed").GetBoolean());
         Assert.Equal(4, diagnostics.RootElement.GetProperty("storySceneCount").GetInt32());
         Assert.Equal(4, diagnostics.RootElement.GetProperty("sceneIntentCount").GetInt32());
+        Assert.Equal("event-observation-science", diagnostics.RootElement.GetProperty("narrativeArchetype").GetString());
+        Assert.Equal(4, diagnostics.RootElement.GetProperty("semanticBeatCount").GetInt32());
+        Assert.False(diagnostics.RootElement.GetProperty("fixedTemplateUsed").GetBoolean());
+        Assert.Empty(diagnostics.RootElement.GetProperty("duplicateFactAllocationWarnings").EnumerateArray());
         Assert.DoesNotContain(diagnostics.RootElement.GetProperty("subPhases").EnumerateArray(), phase => phase.GetString()!.Contains("Story Graph Builder", StringComparison.OrdinalIgnoreCase));
     }
 }

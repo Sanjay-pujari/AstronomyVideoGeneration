@@ -39,9 +39,10 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         var diagnosticsPath = Path.Combine(diagnosticsRoot, "editorial-diagnostics.json");
         var storyGraph = ReadStoryGraph(storyGraphPath) ?? throw new InvalidOperationException("Phase 5 Editorial Intelligence requires Phase 4 output editorial/story-graph.json.");
         var intents = storyGraph.Scenes.Select(scene => BuildIntent(request, storyGraph, observationMetadata, scene)).ToArray();
+        var phase5Validation = ValidateSceneIntents(intents);
         var inputFiles = new[] { productionIntelligencePath, storyGraphPath };
         var contract = BuildEditorialContract(request, response, observationMetadata, storyGraph, intents);
-        var allWarnings = observationMetadata.MissingFactWarnings.Concat(storyGraph.MissingFactWarnings).Concat(intents.SelectMany(intent => intent.MissingFactWarnings)).Concat(contract.MissingFactWarnings).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var allWarnings = observationMetadata.MissingFactWarnings.Concat(storyGraph.MissingFactWarnings).Concat(intents.SelectMany(intent => intent.MissingFactWarnings)).Concat(contract.MissingFactWarnings).Concat(phase5Validation).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         await File.WriteAllTextAsync(observationMetadataPath, JsonSerializer.Serialize(observationMetadata, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(sceneIntentsPath, JsonSerializer.Serialize(intents, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(editorialContractPath, JsonSerializer.Serialize(contract, JsonOptions), cancellationToken);
@@ -67,7 +68,17 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             missingFactWarnings = allWarnings,
             questionAnswerSetLoaded = questionAnswerSet.HasValue,
             scenePlanLoaded = scenePlan.HasValue,
-            productionEventIntelligenceLoaded = intelligence.HasValue
+            productionEventIntelligenceLoaded = intelligence.HasValue,
+            narrativeArchetype = storyGraph.NarrativeArchetype,
+            sourceQuestionCount = storyGraph.SourceQuestionCount,
+            semanticBeatCount = storyGraph.SemanticBeatCount,
+            mergedQuestionCount = storyGraph.MergedQuestionCount,
+            splitQuestionCount = storyGraph.SplitQuestionCount,
+            globalFactCount = storyGraph.RequiredObservationFacts.Count,
+            allocatedFactCountByScene = intents.ToDictionary(i => i.SceneId, i => i.AllocatedFacts.Count),
+            duplicateFactAllocationWarnings = DuplicateFactWarnings(intents),
+            misclassifiedFactWarnings = MisclassifiedFactWarnings(storyGraph, intents),
+            fixedTemplateUsed = IsFixedUniversalTemplate(storyGraph.Scenes)
         };
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
 
@@ -140,13 +151,18 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         var eventType = FirstNonEmpty(GetString(planInput, "eventType"), GetString(intelligence, "eventType"), response.SelectedPlans.FirstOrDefault()?.ContentCategoryCode, "Unknown")!;
         var eventName = FirstNonEmpty(GetString(planInput, "title"), GetString(intelligence, "title"), response.Title, response.SelectedPlans.FirstOrDefault()?.Title, "Unknown")!;
         var warnings = new List<string>();
-        if (sourceScenes.Count < 5) warnings.Add($"Scene plan contains {sourceScenes.Count} scene(s); expected up to 5 canonical story scenes. Created only available scenes.");
+        var globalFacts = BuildRequiredObservationFacts(metadata);
+        var sourceQuestionCount = sourceScenes.Select(s => FirstNonEmpty(GetString(s, "questionId"), GetString(s, "sourceQuestionId"), GetString(s, "keyQuestion"), GetString(s, "question"))).Where(q => !string.IsNullOrWhiteSpace(q)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var beats = DeriveSemanticBeats(sourceScenes, eventType, eventName, metadata, warnings);
+        var fixedTemplateUsed = IsFixedUniversalTemplate(beats);
+        if (fixedTemplateUsed) warnings.Add("Story graph validation failed: fixed universal six-node template detected.");
+        if (beats.Any(b => b.ScenePurpose.Equals("Science", StringComparison.OrdinalIgnoreCase) && b.RequiredFactKeys.Any(IsTimingOrOrientationKey) && !b.RequiredFactKeys.Any(IsScienceKey))) warnings.Add("Story graph validation failed: Science beat was assigned timing/orientation as its primary purpose.");
+        if (globalFacts.TryGetValue("Visibility", out var visibility) && LooksLikeRegion(visibility)) warnings.Add("Story graph validation failed: region identifier was classified as Visibility.");
 
-        var scenes = sourceScenes.Select((scene, index) => BuildStoryGraphScene(scene, index, eventName, metadata, warnings)).ToArray();
+        var scenes = beats.Select((beat, index) => beat with { SceneOrder = index + 1 }).ToArray();
         var transitions = scenes.Where((_, index) => index < scenes.Length - 1)
             .Select((scene, index) => new StoryGraphTransition(scene.SceneId, scenes[index + 1].SceneId, scene.TransitionToNext))
             .ToArray();
-        var requiredFacts = BuildRequiredObservationFacts(metadata);
 
         warnings.AddRange(metadata.MissingFactWarnings);
         return new StoryGraph(
@@ -159,65 +175,79 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
             BuildStoryArc(scenes),
             scenes,
             transitions,
-            requiredFacts,
-            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+            globalFacts,
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            NarrativeArchetype(eventType, sourceScenes.Count, metadata),
+            sourceQuestionCount,
+            scenes.Length,
+            Math.Max(0, sourceScenes.Count - scenes.Length),
+            CountSplitQuestions(sourceScenes));
     }
 
-    private static StoryGraphScene BuildStoryGraphScene(JsonElement scene, int index, string eventName, ObservationMetadata metadata, List<string> warnings)
+    private static IReadOnlyList<StoryGraphScene> DeriveSemanticBeats(IReadOnlyList<JsonElement> sourceScenes, string eventType, string eventName, ObservationMetadata metadata, List<string> warnings)
     {
-        var fallbackPurpose = FallbackPurpose(index);
-        var sourcePurpose = FirstNonEmpty(GetString(scene, "scenePurpose"), GetString(scene, "purpose"), GetString(scene, "sceneType"), GetString(scene, "segment"));
-        var purpose = IsSpecificPurpose(sourcePurpose) ? NormalizePurpose(sourcePurpose!) : fallbackPurpose;
-        if (!string.IsNullOrWhiteSpace(sourcePurpose) && !IsSpecificPurpose(sourcePurpose)) warnings.Add($"Source scene purpose '{sourcePurpose}' for scene {index + 1} was generic or unknown; used fallback purpose {fallbackPurpose}.");
+        var beats = new List<StoryGraphScene>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var scene in sourceScenes)
+        {
+            var keyQuestion = FirstNonEmpty(GetString(scene, "keyQuestion"), GetString(scene, "question"), GetString(scene, "sourceQuestionText"));
+            var sourcePurpose = FirstNonEmpty(GetString(scene, "scenePurpose"), GetString(scene, "purpose"), GetString(scene, "sceneType"), GetString(scene, "segment"));
+            var message = FirstNonEmpty(GetString(scene, "keyMessage"), GetString(scene, "viewerTakeaway"), GetString(scene, "takeaway"), GetString(scene, "sourceAnswer"), GetString(scene, "answer"));
+            var purpose = NormalizePurpose(sourcePurpose) ?? InferNarrativeRole(keyQuestion, message, eventType, beats.Count == 0);
+            var normalized = NormalizeQuestion(keyQuestion ?? message ?? purpose);
+            if (!seen.Add(purpose + ":" + normalized)) { warnings.Add($"Merged overlapping audience question into {purpose} beat: {keyQuestion ?? message ?? "unknown"}."); continue; }
+            beats.Add(BuildStoryGraphScene(scene, beats.Count, eventName, metadata, warnings, purpose));
+        }
+        if (beats.Count == 0)
+        {
+            beats.Add(BuildSyntheticBeat("beat-hook", "Hook", eventName, metadata));
+            if (HasTiming(metadata)) beats.Add(BuildSyntheticBeat("beat-timing", "Timing", eventName, metadata));
+            if (HasScience(metadata)) beats.Add(BuildSyntheticBeat("beat-science", "Science", eventName, metadata));
+            if (HasObservation(metadata)) beats.Add(BuildSyntheticBeat("beat-observation", "Observation", eventName, metadata));
+            beats.Add(BuildSyntheticBeat("beat-closing", "Closing", eventName, metadata));
+        }
+        return beats;
+    }
 
-        var sceneId = FirstNonEmpty(GetString(scene, "sceneId"), GetString(scene, "id"), GetString(scene, "sourceSceneId"), $"scene-{index + 1:000}")!;
+    private static StoryGraphScene BuildStoryGraphScene(JsonElement scene, int index, string eventName, ObservationMetadata metadata, List<string> warnings, string purpose)
+    {
+        var sceneId = FirstNonEmpty(GetString(scene, "sceneId"), GetString(scene, "id"), GetString(scene, "sourceSceneId"), $"beat-{index + 1:000}")!;
         var questionId = FirstNonEmpty(GetString(scene, "questionId"), GetString(scene, "sourceQuestionId"), GetString(scene, "sourceQuestion"));
         var keyQuestion = FirstNonEmpty(GetString(scene, "keyQuestion"), GetString(scene, "question"), GetString(scene, "sourceQuestionText"));
         var keyMessage = FirstNonEmpty(GetString(scene, "keyMessage"), GetString(scene, "viewerTakeaway"), GetString(scene, "takeaway"), GetString(scene, "sourceAnswer"), GetString(scene, "answer"), $"Explain the {purpose.ToLowerInvariant()} of {eventName} using only supported observation metadata.")!;
-        var requiredFacts = BuildRequiredObservationFacts(metadata);
-        var transition = FirstNonEmpty(GetString(scene, "transitionToNext"), index < 4 ? $"Move from {purpose} to {FallbackPurpose(index + 1)}." : "Close the story without adding unsupported facts.")!;
-
-        return new StoryGraphScene(
-            sceneId,
-            purpose,
-            index + 1,
-            questionId,
-            FirstNonEmpty(GetString(scene, "sourceSceneId"), sceneId),
-            keyQuestion,
-            keyMessage,
-            requiredFacts,
-            FirstNonEmpty(GetString(scene, "narrationRole"), GetString(scene, "narrationIntent"), $"Narrate the {purpose.ToLowerInvariant()} beat with factual restraint.")!,
-            FirstNonEmpty(GetString(scene, "visualRole"), GetString(scene, "visualIntent"), $"Visualize the {purpose.ToLowerInvariant()} beat for {eventName}.")!,
-            FirstNonEmpty(GetString(scene, "motionRole"), GetString(scene, "motionIntent"), "Support comprehension with calm editorial motion.")!,
-            transition);
+        var requiredKeys = RequiredKeysForPurpose(purpose, metadata);
+        if (requiredKeys.Count == 0) warnings.Add($"Story graph validation failed: unsupported empty {purpose} beat would have no fact ownership.");
+        var optionalKeys = OptionalKeysForPurpose(purpose, metadata).Except(requiredKeys, StringComparer.OrdinalIgnoreCase).ToArray();
+        var transition = FirstNonEmpty(GetString(scene, "transitionToNext"), $"Move from {purpose} to the next audience need without repeating the complete fact bundle.")!;
+        return new StoryGraphScene(sceneId, purpose, index + 1, questionId, FirstNonEmpty(GetString(scene, "sourceSceneId"), sceneId), keyQuestion, keyMessage, requiredKeys, optionalKeys, AudienceOutcome(purpose), purpose, transition, FirstNonEmpty(GetString(scene, "narrationRole"), GetString(scene, "narrationIntent"), $"Narrate the {purpose.ToLowerInvariant()} beat with factual restraint.")!, FirstNonEmpty(GetString(scene, "visualRole"), GetString(scene, "visualIntent"), $"Visualize the {purpose.ToLowerInvariant()} beat for {eventName}.")!, FirstNonEmpty(GetString(scene, "motionRole"), GetString(scene, "motionIntent"), "Support comprehension with calm editorial motion.")!, transition);
     }
 
     private static SceneIntent BuildIntent(BatchGenerateFromPlansRequest request, StoryGraph storyGraph, ObservationMetadata metadata, StoryGraphScene scene)
     {
-        var observation = string.Equals(scene.ScenePurpose, "Observation", StringComparison.OrdinalIgnoreCase);
-        var eventDate = FirstNonEmpty(metadata.Timing.PeakUtc, metadata.Timing.StartUtc, metadata.Timing.ScheduledUtc);
-
+        var requiredKeys = scene.RequiredFactKeys.Count > 0 ? scene.RequiredFactKeys : RequiredKeysForPurpose(scene.ScenePurpose, metadata);
+        var optionalKeys = scene.OptionalFactKeys;
+        var allocated = AllocateFacts(requiredKeys.Concat(optionalKeys).Distinct(StringComparer.OrdinalIgnoreCase), metadata);
         var required = new SceneIntentRequiredFacts(
-            Fact("EventDate", eventDate, observation),
-            Fact("BestViewingTime", FirstNonEmpty(metadata.Fields.BestViewingWindowLocal, metadata.Timing.PeakLocal, metadata.Timing.ScheduledLocal), observation),
-            Fact("ViewingWindow", FirstNonEmpty(metadata.Fields.BestViewingWindowLocal, FormatWindow(metadata.DerivedFacts.EventWindowUtc)), observation),
-            Fact("Direction", metadata.Fields.SkyDirectionHint, observation),
-            Fact("Altitude", null, false),
-            Fact("Constellation", null, false),
-            Fact("Brightness", null, false),
-            Fact("MoonInterference", metadata.Fields.MoonInterference, false),
-            Fact("Visibility", metadata.Fields.VisibilityRegion, false),
-            Fact("RelativePositions", metadata.DerivedFacts.AngularSeparation, false));
+            Fact("EventDate", allocated.GetValueOrDefault("EventDate"), IsOwnedBy(scene.ScenePurpose, "EventDate")),
+            Fact("BestViewingTime", allocated.GetValueOrDefault("BestViewingTime"), IsOwnedBy(scene.ScenePurpose, "BestViewingTime")),
+            Fact("ViewingWindow", allocated.GetValueOrDefault("ViewingWindow"), IsOwnedBy(scene.ScenePurpose, "ViewingWindow")),
+            Fact("Direction", allocated.GetValueOrDefault("Direction"), IsOwnedBy(scene.ScenePurpose, "Direction")),
+            Fact("Altitude", allocated.GetValueOrDefault("Altitude"), false),
+            Fact("Constellation", allocated.GetValueOrDefault("Constellation"), false),
+            Fact("Brightness", allocated.GetValueOrDefault("Brightness"), false),
+            Fact("MoonInterference", allocated.GetValueOrDefault("MoonInterference"), IsOwnedBy(scene.ScenePurpose, "MoonInterference")),
+            Fact("Visibility", allocated.GetValueOrDefault("Visibility"), IsOwnedBy(scene.ScenePurpose, "Visibility")),
+            Fact("RelativePositions", allocated.GetValueOrDefault("RelativePositions"), IsOwnedBy(scene.ScenePurpose, "RelativePositions")));
 
-        var warnings = MissingWarnings(required).ToArray();
-        var observationFacts = ToObservationFacts(required);
-        return new SceneIntent(scene.SceneId, scene.ScenePurpose, request.Language, storyGraph.EventType, storyGraph.EventName, required, observationFacts,
+        var missingRequired = requiredKeys.Where(key => !allocated.ContainsKey(key) || string.IsNullOrWhiteSpace(allocated[key])).ToArray();
+        var warnings = MissingWarnings(required).Concat(missingRequired.Select(f => $"Missing required fact for {scene.ScenePurpose}: {f}."));
+        return new SceneIntent(scene.SceneId, scene.ScenePurpose, request.Language, storyGraph.EventType, storyGraph.EventName, required, allocated,
+            requiredKeys.ToArray(), optionalKeys.ToArray(), missingRequired,
             scene.NarrationRole,
             scene.VisualRole,
-            ["Do not invent missing facts.", "Use observation-metadata.json as the factual source for observation details.", "Use editorial/story-graph.json as the story structure source.", "Surface missing metadata as warnings."],
-            "Clear, accurate, practical, and wonder-driven", warnings);
+            ["Do not invent missing facts.", "Use only allocatedFacts for this scene's narration facts.", "Use observation-metadata.json only to verify allocated fact values.", "Do not move timing/orientation facts into Science unless explaining physical geometry."],
+            "Clear, accurate, practical, and wonder-driven", warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
-
 
     private static EditorialContract BuildEditorialContract(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, ObservationMetadata metadata, StoryGraph storyGraph, IReadOnlyList<SceneIntent> intents)
     {
@@ -275,7 +305,7 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
 
         var requiredNarrationFacts = intents.SelectMany(intent => new[] { intent.RequiredFacts.EventDate, intent.RequiredFacts.BestViewingTime, intent.RequiredFacts.ViewingWindow, intent.RequiredFacts.Direction, intent.RequiredFacts.MoonInterference, intent.RequiredFacts.Visibility, intent.RequiredFacts.RelativePositions }).Where(f => !f.IsMissing).GroupBy(f => f.Name).Select(g => g.First()).ToArray();
         var requiredVisualFacts = storyGraph.RequiredObservationFacts.Select(f => new EditorialContractFact(f.Value, false, "editorial/story-graph.json"))
-            .Concat(intents.SelectMany(intent => intent.ObservationFacts.Select(f => new EditorialContractFact(f.Value, false, "editorial/observation-metadata.json"))))
+            .Concat(intents.SelectMany(intent => intent.AllocatedFacts.Select(f => new EditorialContractFact(f.Value, false, "editorial/observation-metadata.json"))))
             .ToArray();
 
         warnings.AddRange(metadata.MissingFactWarnings);
@@ -318,7 +348,7 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         return $"{window.StartUtc ?? "unknown"} to {window.EndUtc ?? "unknown"}";
     }
     private static SceneIntentFact Fact(string name, string? value, bool highPriority) => new(name, string.IsNullOrWhiteSpace(value) ? null : value, highPriority ? "High" : "Normal", string.IsNullOrWhiteSpace(value));
-    private static IEnumerable<string> MissingWarnings(SceneIntentRequiredFacts facts) => new[] { facts.EventDate, facts.BestViewingTime, facts.ViewingWindow, facts.Direction, facts.Altitude, facts.Constellation, facts.Brightness, facts.MoonInterference, facts.Visibility, facts.RelativePositions }.Where(f => f.IsMissing).Select(f => $"Missing metadata for {f.Name}.");
+    private static IEnumerable<string> MissingWarnings(SceneIntentRequiredFacts facts) => new[] { facts.EventDate, facts.BestViewingTime, facts.ViewingWindow, facts.Direction, facts.Altitude, facts.Constellation, facts.Brightness, facts.MoonInterference, facts.Visibility, facts.RelativePositions }.Where(f => f.IsMissing && string.Equals(f.Priority, "High", StringComparison.OrdinalIgnoreCase)).Select(f => $"Missing metadata for {f.Name}.");
     private static IReadOnlyDictionary<string, string> ToObservationFacts(SceneIntentRequiredFacts facts) => new[] { facts.EventDate, facts.BestViewingTime, facts.ViewingWindow, facts.Direction, facts.Altitude, facts.Constellation, facts.Brightness, facts.MoonInterference, facts.Visibility, facts.RelativePositions }.Where(f => !f.IsMissing && f.Value is not null).ToDictionary(f => f.Name, f => f.Value!);
     private static IReadOnlyDictionary<string, string> BuildRequiredObservationFacts(ObservationMetadata metadata)
     {
@@ -328,14 +358,14 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         AddFact(facts, "ViewingWindow", FirstNonEmpty(metadata.Fields.BestViewingWindowLocal, FormatWindow(metadata.DerivedFacts.EventWindowUtc)));
         AddFact(facts, "Direction", metadata.Fields.SkyDirectionHint);
         AddFact(facts, "MoonInterference", metadata.Fields.MoonInterference);
-        AddFact(facts, "Visibility", metadata.Fields.VisibilityRegion);
+        AddFact(facts, "VisibilityRegion", metadata.Fields.VisibilityRegion);
         AddFact(facts, "RelativePositions", metadata.DerivedFacts.AngularSeparation);
         return facts;
     }
     private static void AddFact(Dictionary<string, string> facts, string name, string? value) { if (!string.IsNullOrWhiteSpace(value)) facts[name] = value; }
     private static string BuildStoryArc(IReadOnlyList<StoryGraphScene> scenes) => scenes.Count == 0 ? "No source scenes available from question-driven scene plan." : string.Join(" → ", scenes.OrderBy(s => s.SceneOrder).Select(s => s.ScenePurpose));
-    private static string FallbackPurpose(int index) => index switch { 0 => "Hook", 1 => "Discovery", 2 => "Science", 3 => "Observation", 4 => "Takeaway", _ => "SupportingDetail" };
-    private static bool IsSpecificPurpose(string? purpose) => NormalizePurpose(purpose) is "Hook" or "Discovery" or "Science" or "Observation" or "Takeaway" or "SupportingDetail";
+    private static string FallbackPurpose(int index) => index switch { 0 => "Hook", 1 => "Timing", 2 => "Science", 3 => "Observation", 4 => "Closing", _ => "Significance" };
+    private static bool IsSpecificPurpose(string? purpose) => NormalizePurpose(purpose) is "Hook" or "Discovery" or "Timing" or "Orientation" or "Science" or "Observation" or "Significance" or "Closing" or "Takeaway" or "SupportingDetail";
     private static string? NormalizePurpose(string? purpose)
     {
         if (string.IsNullOrWhiteSpace(purpose)) return null;
@@ -344,13 +374,105 @@ public sealed class SceneIntentBuilder(ILogger<SceneIntentBuilder> logger)
         {
             "hook" => "Hook",
             "discovery" => "Discovery",
-            "science" => "Science",
+            "timing" or "date" or "viewingwindow" => "Timing",
+            "orientation" or "direction" or "location" => "Orientation",
+            "science" or "explanation" => "Science",
             "observation" or "viewing" or "observing" => "Observation",
-            "takeaway" or "summary" or "closing" => "Takeaway",
-            "supportingdetail" or "detail" => "SupportingDetail",
+            "significance" or "importance" => "Significance",
+            "takeaway" or "summary" or "closing" => "Closing",
+            "supportingdetail" or "detail" => "Significance",
             _ => null
         };
     }
+    private static StoryGraphScene BuildSyntheticBeat(string id, string purpose, string eventName, ObservationMetadata metadata)
+        => new(id, purpose, 1, null, id, null, $"Cover the {purpose.ToLowerInvariant()} need for {eventName}.", RequiredKeysForPurpose(purpose, metadata), OptionalKeysForPurpose(purpose, metadata), AudienceOutcome(purpose), purpose, $"Transition from {purpose} without duplicating global facts.", $"Narrate the {purpose.ToLowerInvariant()} beat with factual restraint.", $"Visualize the {purpose.ToLowerInvariant()} beat for {eventName}.", "Support comprehension with calm editorial motion.", $"Transition from {purpose} without duplicating global facts.");
+    private static string InferNarrativeRole(string? question, string? message, string eventType, bool first)
+    {
+        if (first) return "Hook";
+        var text = ((question ?? "") + " " + (message ?? "")).ToLowerInvariant();
+        if (text.Contains("when") || text.Contains("date") || text.Contains("time") || text.Contains("window") || text.Contains("peak")) return "Timing";
+        if (text.Contains("where") || text.Contains("direction") || text.Contains("look") || text.Contains("region") || text.Contains("location")) return "Orientation";
+        if (text.Contains("why") || text.Contains("how does") || text.Contains("science") || text.Contains("happen") || text.Contains("separation") || text.Contains("orbit")) return "Science";
+        if (text.Contains("see") || text.Contains("observe") || text.Contains("binocular") || text.Contains("telescope") || text.Contains("conditions")) return "Observation";
+        if (text.Contains("matter") || text.Contains("important") || text.Contains("rare") || text.Contains("significance")) return "Significance";
+        if (text.Contains("takeaway") || text.Contains("next") || text.Contains("action")) return "Closing";
+        return eventType.Contains("Event", StringComparison.OrdinalIgnoreCase) ? "Significance" : "Science";
+    }
+    private static IReadOnlyList<string> RequiredKeysForPurpose(string purpose, ObservationMetadata metadata) => purpose switch
+    {
+        "Hook" => metadata.ObjectFacts.SecondaryObjects.Count > 0 ? ["PrimaryObjects", "SecondaryObjects"] : ["PrimaryObjects"],
+        "Timing" => ["EventDate", "ViewingWindow"],
+        "Orientation" => ["Direction", "VisibilityRegion"],
+        "Science" => ["RelativePositions"],
+        "Observation" => ["BestViewingTime", "Direction", "MoonInterference"],
+        "Significance" => ["PrimaryObjects", "RelativePositions"],
+        "Closing" or "Takeaway" => ["BestViewingTime"],
+        "Discovery" => ["PrimaryObjects", "EventDate"],
+        _ => ["PrimaryObjects"]
+    };
+    private static IReadOnlyList<string> OptionalKeysForPurpose(string purpose, ObservationMetadata metadata) => purpose switch
+    {
+        "Hook" => ["EventDate"],
+        "Timing" => ["StartUtc", "PeakUtc", "EndUtc", "BestViewingTime"],
+        "Orientation" => ["Altitude", "Azimuth", "Constellation"],
+        "Science" => ["PrimaryObjects", "SecondaryObjects"],
+        "Observation" => ["Visibility", "Brightness", "MoonIlluminationPercent"],
+        "Closing" or "Takeaway" => ["Direction"],
+        _ => []
+    };
+    private static IReadOnlyDictionary<string,string> AllocateFacts(IEnumerable<string> keys, ObservationMetadata metadata)
+    {
+        var facts = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in keys) AddFact(facts, key, FactValueForKey(key, metadata));
+        return facts;
+    }
+    private static string? FactValueForKey(string key, ObservationMetadata metadata) => key switch
+    {
+        "PrimaryObjects" => metadata.ObjectFacts.PrimaryObjects.Count == 0 ? null : string.Join(", ", metadata.ObjectFacts.PrimaryObjects),
+        "SecondaryObjects" => metadata.ObjectFacts.SecondaryObjects.Count == 0 ? null : string.Join(", ", metadata.ObjectFacts.SecondaryObjects),
+        "EventDate" => FirstNonEmpty(metadata.Timing.PeakUtc, metadata.Timing.StartUtc, metadata.Timing.ScheduledUtc),
+        "StartUtc" => metadata.Timing.StartUtc,
+        "PeakUtc" => metadata.Timing.PeakUtc,
+        "EndUtc" => metadata.Timing.EndUtc,
+        "BestViewingTime" => FirstNonEmpty(metadata.Fields.BestViewingWindowLocal, metadata.Timing.PeakLocal, metadata.Timing.ScheduledLocal),
+        "ViewingWindow" => FirstNonEmpty(metadata.Fields.BestViewingWindowLocal, FormatWindow(metadata.DerivedFacts.EventWindowUtc)),
+        "Direction" => metadata.Fields.SkyDirectionHint,
+        "VisibilityRegion" => metadata.Fields.VisibilityRegion,
+        "MoonInterference" => metadata.Fields.MoonInterference,
+        "MoonIlluminationPercent" => metadata.Fields.MoonIlluminationPercent,
+        "RelativePositions" => metadata.DerivedFacts.AngularSeparation,
+        "Visibility" => null,
+        _ => null
+    };
+    private static bool IsOwnedBy(string purpose, string key) => purpose switch
+    {
+        "Timing" => key is "EventDate" or "ViewingWindow" or "BestViewingTime",
+        "Orientation" => key is "Direction",
+        "Science" => key is "RelativePositions",
+        "Observation" => key is "BestViewingTime" or "Direction" or "MoonInterference" or "Visibility",
+        _ => false
+    };
+    private static string AudienceOutcome(string purpose) => purpose switch { "Timing" => "Know when the event occurs and when to watch.", "Orientation" => "Know where to look and which region/location context applies.", "Science" => "Understand the physical or perspective explanation.", "Observation" => "Know how to identify and observe the objects.", "Significance" => "Understand why the subject matters.", "Closing" or "Takeaway" => "Leave with a clear observation action or takeaway.", _ => "Understand why this subject is worth watching." };
+    private static string NormalizeQuestion(string value) => new(value.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+    private static bool HasTiming(ObservationMetadata m) => FirstNonEmpty(m.Timing.StartUtc, m.Timing.PeakUtc, m.Fields.BestViewingWindowLocal) is not null;
+    private static bool HasScience(ObservationMetadata m) => FirstNonEmpty(m.ObjectFacts.AngularSeparationDegrees) is not null;
+    private static bool HasObservation(ObservationMetadata m) => FirstNonEmpty(m.Fields.SkyDirectionHint, m.Fields.MoonInterference) is not null;
+    private static bool IsTimingOrOrientationKey(string key) => key is "EventDate" or "ViewingWindow" or "BestViewingTime" or "Direction" or "VisibilityRegion";
+    private static bool IsScienceKey(string key) => key is "RelativePositions" or "AngularSeparation";
+    private static bool LooksLikeRegion(string value) => value.Contains("United States", StringComparison.OrdinalIgnoreCase) || value.Contains("Region", StringComparison.OrdinalIgnoreCase) || value.Length == 2;
+    private static string NarrativeArchetype(string eventType, int sourceSceneCount, ObservationMetadata metadata) => eventType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) ? "event-observation-science" : sourceSceneCount > 0 ? "question-led-semantic" : "metadata-led-semantic";
+    private static int CountSplitQuestions(IReadOnlyList<JsonElement> scenes) => scenes.Count(s => (GetString(s, "keyQuestion") ?? GetString(s, "question") ?? "").Contains(" and ", StringComparison.OrdinalIgnoreCase));
+    private static bool IsFixedUniversalTemplate(IReadOnlyList<StoryGraphScene> scenes) => string.Join("→", scenes.Select(s => s.ScenePurpose)) == "Hook→Discovery→Science→Observation→Takeaway→SupportingDetail";
+    private static IReadOnlyList<string> DuplicateFactWarnings(IReadOnlyList<SceneIntent> intents) => intents.Count > 1 && intents.Select(i => string.Join('|', i.AllocatedFacts.Keys.OrderBy(k => k))).Distinct().Count() == 1 ? ["Phase 5 validation failed: identical allocated fact sets appear across all scene intents."] : [];
+    private static IReadOnlyList<string> MisclassifiedFactWarnings(StoryGraph storyGraph, IReadOnlyList<SceneIntent> intents)
+    {
+        var warnings = new List<string>();
+        if (storyGraph.RequiredObservationFacts.TryGetValue("Visibility", out var v) && LooksLikeRegion(v)) warnings.Add("Visibility contains a region identifier; use VisibilityRegion for location/region values.");
+        foreach (var i in intents.Where(i => i.ScenePurpose == "Science" && !i.AllocatedFacts.ContainsKey("RelativePositions") && (i.AllocatedFacts.ContainsKey("EventDate") || i.AllocatedFacts.ContainsKey("ViewingWindow")))) warnings.Add($"Science scene {i.SceneId} lacks scientific facts but contains timing facts.");
+        return warnings;
+    }
+    private static IReadOnlyList<string> ValidateSceneIntents(IReadOnlyList<SceneIntent> intents) => DuplicateFactWarnings(intents).Concat(MisclassifiedFactWarnings(new StoryGraph("","","","","","","",[],[],new Dictionary<string,string>(),[] ,"",0,0,0,0), intents)).ToArray();
+
     private static StoryGraph? ReadStoryGraph(string path)
     {
         if (!File.Exists(path)) return null;
@@ -449,7 +571,12 @@ public sealed record StoryGraph(
     IReadOnlyList<StoryGraphScene> Scenes,
     IReadOnlyList<StoryGraphTransition> Transitions,
     IReadOnlyDictionary<string, string> RequiredObservationFacts,
-    IReadOnlyList<string> MissingFactWarnings);
+    IReadOnlyList<string> MissingFactWarnings,
+    string NarrativeArchetype,
+    int SourceQuestionCount,
+    int SemanticBeatCount,
+    int MergedQuestionCount,
+    int SplitQuestionCount);
 
 public sealed record StoryGraphScene(
     string SceneId,
@@ -459,7 +586,11 @@ public sealed record StoryGraphScene(
     string? SourceSceneId,
     string? KeyQuestion,
     string KeyMessage,
-    IReadOnlyDictionary<string, string> RequiredFacts,
+    IReadOnlyList<string> RequiredFactKeys,
+    IReadOnlyList<string> OptionalFactKeys,
+    string AudienceOutcome,
+    string NarrativeRole,
+    string TransitionIntent,
     string NarrationRole,
     string VisualRole,
     string MotionRole,
