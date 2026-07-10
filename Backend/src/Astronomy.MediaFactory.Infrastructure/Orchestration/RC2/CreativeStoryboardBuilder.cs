@@ -187,7 +187,7 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
     private static string ExpectedAudienceBenefit(DocumentaryBeat b)=>$"Viewers can {EducationalOutcome(b.AudienceOutcome).TrimEnd('.').ToLowerInvariant()} with less confusion.";
     private static string EducationalFactValue(string value)=>value.Trim().Trim('"');
     private static string EducationalOutcome(string value)=>value.Replace("Viewer ", "", StringComparison.OrdinalIgnoreCase).Replace("viewer ", "", StringComparison.OrdinalIgnoreCase).Trim();
-    private static string EducationalAction(string value)=>value.EndsWith('.',StringComparison.Ordinal) ? value : value + ".";
+    private static string EducationalAction(string value)=>value.EndsWith(".",StringComparison.Ordinal) ? value : value + ".";
     private static bool IsMissingFactValue(string value)=>string.IsNullOrWhiteSpace(value)||value.Contains("isMissing",StringComparison.OrdinalIgnoreCase)||value.Contains("legacy" + "-required",StringComparison.OrdinalIgnoreCase)||string.Equals(value,"null",StringComparison.OrdinalIgnoreCase);
 
     private static double ConfidenceFor(DocumentaryBeat b)
