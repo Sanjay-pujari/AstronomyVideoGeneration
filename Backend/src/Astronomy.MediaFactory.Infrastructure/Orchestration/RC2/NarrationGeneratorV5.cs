@@ -870,9 +870,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var facts = brief.FactsToMention.ToDictionary(f => f.Name, f => f.Value, StringComparer.OrdinalIgnoreCase);
         var text = scene.NarrationText;
         if (!ContainsAny(text, "happening", "watch", "see")) text += " You are watching a real sky alignment unfold, not just a date on a calendar.";
-        if (!ContainsAny(text, "when", "time", "outside", "window")) text += " Use the stated time range as your cue for when to step outside.";
+        if (!ContainsAny(text, "when", "time", "outside", "window")) text += " Let the timing guide when you step outside.";
         if (!ContainsAny(text, "where", "look", "face", "toward", "horizon")) text += " Look toward the clearest part of the indicated sky and keep the horizon open.";
-        if (!ContainsAny(text, "see", "view", "appear", "expect")) text += " What you should see is the main pattern standing out against the sky.";
+        if (!ContainsAny(text, "see", "view", "appear", "expect")) text += " The main pattern should stand out gently against the sky.";
         if (!ContainsAny(text, "eye", "binocular", "telescope") && TryGetFact(facts, "nakedEyeVisibility", out var nakedEye) && IsAffirmative(nakedEye)) text += " Start with your eyes; equipment is optional.";
         else if (!ContainsAny(text, "eye", "binocular", "telescope") && (TryGetFact(facts, "binocularGuidance", out var equipment) || TryGetFact(facts, "telescopeGuidance", out equipment))) text += $" For equipment, {LowerFirst(NaturalizeIsoDates(equipment))}";
         if (!ContainsAny(text, "matter", "matters", "rare", "special", "because")) text += " It matters because these ordinary-looking positions reveal the larger motion of the solar system.";
@@ -1063,7 +1063,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static bool IsAffirmative(string value) => value.Contains("yes", StringComparison.OrdinalIgnoreCase) || value.Contains("true", StringComparison.OrdinalIgnoreCase) || value.Contains("visible", StringComparison.OrdinalIgnoreCase);
     private static string LowerFirst(string value) => string.IsNullOrWhiteSpace(value) ? value : char.ToLowerInvariant(value[0]) + value[1..];
 
-    private static string RewriteTakeawayForNarration(string value) => RewriteForNarration(value).Replace("The viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase).Replace("Viewer should", "By the end, you can", StringComparison.OrdinalIgnoreCase);
+    private static string RewriteTakeawayForNarration(string value) => RewriteForNarration(value).Replace("The viewer should", "Afterward, you can", StringComparison.OrdinalIgnoreCase).Replace("Viewer should", "Afterward, you can", StringComparison.OrdinalIgnoreCase);
     private static string RewriteForNarration(string value) => value
         .Replace("Narrate", "Notice", StringComparison.OrdinalIgnoreCase)
         .Replace("scene goal", "the heart of this moment", StringComparison.OrdinalIgnoreCase)
@@ -1483,9 +1483,8 @@ public static class LlmDocumentaryTranscriptionist
             var narration = isShort
                 ? BuildShortScene(context, index, orderedContexts.Length)
                 : BuildLongScene(context, index, orderedContexts.Length, outline);
-            var transition = context.TransitionGoal;
             var facts = context.VerifiedFacts.Select(f => f.Value).ToArray();
-            return new DocumentaryScriptScene($"{format}-narration-{index + 1:000}", index + 1, RemoveAdjacentDuplicateSentences(CleanScript(narration)), transition, facts, [], context.ObservationObjective ?? string.Empty);
+            return new DocumentaryScriptScene($"{format}-narration-{index + 1:000}", index + 1, RemoveAdjacentDuplicateSentences(CleanScript(narration)), string.Empty, facts, [], BuildObservationLine(context));
         }).ToArray();
         var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
         return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", format, title, language, scenes, fullScript);
@@ -1493,27 +1492,91 @@ public static class LlmDocumentaryTranscriptionist
 
     private static string BuildLongScene(NarrationContextBeat context, int index, int total, string outline)
     {
-        var coreFacts = context.VerifiedFacts.Select(f => f.Value).ToArray();
-        var core = string.Join(" ", coreFacts.Take(index == 0 ? 3 : 5));
-        if (index == 0) return CleanScript($"As the sky darkens, a quiet question rises with it. {core} What looks simple from the ground is often a deeper geometry unfolding in plain sight.");
-        if (index == total - 1) return CleanScript($"The night leaves its answer softly. {core} For a moment, distance, timing, and darkness seem to gather into one shared sense of wonder.");
-        if (!string.IsNullOrWhiteSpace(context.ObservationObjective) || coreFacts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"The useful detail is quiet, but important. {string.Join(" ", coreFacts.Take(4))} Begin with the open sky, then give your eyes time to settle.");
-        return CleanScript($"The explanation stays grounded in real celestial geometry. {core} From Earth, distant orbits become readable as position, timing, and direction.");
+        var facts = context.VerifiedFacts.ToArray();
+        var naturalFacts = NaturalFactSentences(facts).Take(index == 0 ? 3 : 4).ToArray();
+        var factText = string.Join(" ", naturalFacts);
+        if (index == 0)
+        {
+            return CleanScript($"As daylight fades, the evening sky begins with a quiet invitation. {factText} At first it may look like a simple pairing, but the beauty of it lies in perspective: distant worlds sharing the same line of sight from here on Earth.");
+        }
+
+        if (index == total - 1)
+        {
+            return CleanScript($"When the night settles, the reward is not only the view itself. {factText} It is the feeling of having read a small piece of the sky correctly, and of knowing that even an ordinary evening can reveal the motion of worlds. Until next time, keep looking up.");
+        }
+
+        if (IsObservationMoment(context, facts))
+        {
+            var observation = BuildObservationLine(context);
+            return CleanScript($"The practical part is wonderfully simple. {factText} {observation} Give your eyes a little time to settle, and let the brightest points of the pattern emerge without hurry.");
+        }
+
+        return CleanScript($"The explanation is quieter than the spectacle. {factText} Nothing has moved close together in space; the alignment belongs to our viewpoint. From the ground, separate orbits can briefly arrange themselves into a pattern that feels almost deliberately placed.");
     }
 
     private static string BuildShortScene(NarrationContextBeat context, int index, int total)
     {
-        var coreFacts = context.VerifiedFacts.Select(f => f.Value).ToArray();
-        var core = string.Join(" ", coreFacts.Take(index == 0 ? 2 : 3));
-        if (index == 0) return CleanScript($"Tonight, the sky offers a small mystery. {core}");
-        if (index == total - 1) return CleanScript($"Step outside, turn toward the open sky, and let your eyes find the pattern. {core}");
-        if (coreFacts.Any(f => ContainsAny(f, "separation", "orbit", "perspective", "geometry", "degree"))) return CleanScript($"The science is perspective made visible. {core}");
-        return CleanScript($"The moment is best met calmly. {core}");
+        var facts = context.VerifiedFacts.ToArray();
+        var factText = string.Join(" ", NaturalFactSentences(facts).Take(index == 0 ? 2 : 3));
+        if (index == 0) return CleanScript($"Tonight, the sky offers a small mystery. {factText} Two distant worlds can appear close simply because we are seeing them from the same small place on Earth.");
+        if (index == total - 1) return CleanScript($"Step outside calmly and let the sky do the work. {factText} A few minutes of looking up can turn a familiar horizon into something memorable. Until next time, keep looking up.");
+        if (IsObservationMoment(context, facts)) return CleanScript($"Look for the clearest open sky. {factText} Start with your eyes; binoculars can wait unless they are genuinely useful.");
+        return CleanScript($"The wonder is in the geometry. {factText} What appears close overhead may still be separated by immense distances.");
+    }
+
+    private static IReadOnlyList<string> NaturalFactSentences(IReadOnlyList<NarrationVerifiedFact> facts)
+        => facts.Select(NaturalFactSentence).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static string NaturalFactSentence(NarrationVerifiedFact fact)
+    {
+        var name = fact.FactKey ?? string.Empty;
+        var value = NaturalizeDateText((fact.Value ?? string.Empty).Trim(' ', '.'));
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        if (ContainsAny(name, "window")) return $"The most useful time to look is {LowerFirst(value)}.";
+        if (ContainsAny(name, "direction", "skyDirection")) return value.StartsWith("look", StringComparison.OrdinalIgnoreCase) || value.StartsWith("face", StringComparison.OrdinalIgnoreCase) ? EnsureSentence(value) : $"Look toward {LowerFirst(value)}.";
+        if (ContainsAny(name, "date")) return value.StartsWith("on ", StringComparison.OrdinalIgnoreCase) ? EnsureSentence(value) : $"On {value}, the timing is especially favorable.";
+        if (ContainsAny(name, "time")) return $"Around {LowerFirst(value)}, the view should be at its best.";
+        if (ContainsAny(name, "region", "visibility")) return $"The event favors observers in {value}.";
+        if (ContainsAny(name, "separation", "relativePositions")) return Regex.IsMatch(value, "\\d") ? $"In the sky, the pair appears separated by about {value}." : $"In the sky, the pair appears {LowerFirst(value)}.";
+        if (ContainsAny(name, "naked")) return IsAffirmative(value) ? "No telescope is needed to begin; the unaided eye is enough." : "The unaided eye may not be enough everywhere.";
+        if (ContainsAny(name, "binocular")) return IsAffirmative(value) ? "Binoculars can add clarity, but they are not the first step." : string.Empty;
+        if (ContainsAny(name, "telescope")) return IsAffirmative(value) ? "A telescope is optional rather than essential." : string.Empty;
+        if (ContainsAny(name, "moon")) return $"The Moon also shapes the view: {LowerFirst(value)}.";
+        if (ContainsAny(name, "appearance")) return $"Expect {LowerFirst(value)}.";
+        return EnsureSentence(value);
+    }
+
+    private static string BuildObservationLine(NarrationContextBeat context)
+    {
+        var factSentences = NaturalFactSentences(context.VerifiedFacts).Where(v => ContainsAny(v, "look", "horizon", "time", "evening", "morning", "eye", "binocular", "telescope", "observers")).Take(2).ToArray();
+        if (factSentences.Length > 0) return string.Join(" ", factSentences);
+        var objective = NaturalizeDateText(context.ObservationObjective ?? string.Empty).Trim(' ', '.');
+        return string.IsNullOrWhiteSpace(objective) ? "If skies remain clear, choose an open horizon and begin with the unaided eye." : EnsureSentence(objective.Replace("Use the stated time range", "Use the evening timing", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsObservationMoment(NarrationContextBeat context, IReadOnlyList<NarrationVerifiedFact> facts)
+        => !string.IsNullOrWhiteSpace(context.ObservationObjective) || facts.Any(f => ContainsAny(f.FactKey, "window", "direction", "visibility", "region", "time", "date", "naked", "binocular", "telescope"));
+
+    private static string NaturalizeDateText(string text)
+    {
+        var spoken = Regex.Replace(text, @"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b", match =>
+        {
+            var raw = match.Value.Replace('T', ' ');
+            if (DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
+            {
+                var date = dto.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+                return match.Value.Length > 10 ? $"{date} at {dto.ToString("h:mm tt", CultureInfo.InvariantCulture)}" : date;
+            }
+            return match.Value;
+        }, RegexOptions.CultureInvariant);
+        return Regex.Replace(spoken, @"\s*,?\s*UTC\b", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
     }
 
     private static string LowerFirst(string value) => string.IsNullOrWhiteSpace(value) ? value : char.ToLowerInvariant(value[0]) + value[1..];
     private static string NormalizeFactKey(string value) => Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
     private static bool ContainsAny(string? value, params string[] keywords) => !string.IsNullOrWhiteSpace(value) && keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    private static bool IsAffirmative(string value) => ContainsAny(value, "yes", "true", "visible", "enough", "recommended", "help", "useful", "won't need", "not needed", "optional");
+    private static string EnsureSentence(string value) => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().TrimEnd('.') + ".";
     private static string RemoveAdjacentDuplicateSentences(string value)
     {
         var sentences = Regex.Split(value, @"(?<=[.!?])\s+").Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
