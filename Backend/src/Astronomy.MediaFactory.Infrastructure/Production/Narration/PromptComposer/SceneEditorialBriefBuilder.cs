@@ -7,7 +7,7 @@ public sealed class SceneEditorialBriefBuilder
 {
     public string Build(IReadOnlyList<NarrationBriefV5> scenes, DocumentaryStyleContract? styleContract)
     {
-        if (scenes.Count == 0) return "No private producer notes were supplied.";
+        if (scenes.Count == 0) return "No scene fact cards were supplied.";
         return string.Join("\n\n", scenes.OrderBy(s => s.SceneOrder).Select(s => BuildScene(s, styleContract)));
     }
 
@@ -18,10 +18,10 @@ public sealed class SceneEditorialBriefBuilder
         var atmosphere = style is null ? string.Empty : string.Join(" ", new[] { style.OpeningStyle, style.DevelopmentStyle, style.ClosingStyle, style.TransitionStyle }.Select(Clean).Where(v => !string.IsNullOrWhiteSpace(v)));
         var factLanguage = style is null || style.FactTransformations.Count == 0 ? string.Empty : " " + string.Join(" ", style.FactTransformations.Select(Clean));
         var formatCue = scene.TargetLength.Equals("short", StringComparison.OrdinalIgnoreCase)
-            ? "This is the short cut, so favor a faster hook, tighter pacing, and direct observing action without reusing the long narration."
-            : "This is the long cut, so give the writer room for richer explanation, slower spoken rhythm, and stronger science context.";
+            ? "Short cut performance: faster hook, tighter pacing, and direct observing action without reusing the long narration."
+            : "Long cut performance: richer explanation, slower spoken rhythm, and stronger science context.";
 
-        return Clean($"These are confidential producer notes for a professional documentary writer, not lines for the script. {scene.SceneGoal} {scene.AudienceTakeaway} Work from these confirmed sky details: {facts} {scene.GenerationInstructions} The delivery can stay {scene.Tone}, with continuity shaped by {scene.ConnectorToNext}. {formatCue} {atmosphere}{factLanguage} The writer must create fresh spoken narration and must not quote or paraphrase these notes.");
+        return Clean($"Scene {scene.SceneOrder}: {scene.SceneId}. Chronicle scene role: {scene.ScenePurpose}. Confirmed sky details: {facts}. Performance continuity: {scene.ConnectorToNext}. Delivery: {scene.Tone}. {formatCue} {atmosphere}{factLanguage}");
     }
 
     private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "only broad confirmed context" : string.Join("; ", facts.Select(f => $"{NarrationPromptComposer.NormalizeFactName(f.Name)} is {Clean(f.Value)}"));
