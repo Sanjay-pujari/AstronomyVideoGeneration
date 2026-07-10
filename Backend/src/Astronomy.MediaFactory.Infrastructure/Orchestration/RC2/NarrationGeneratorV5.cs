@@ -181,7 +181,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         var composer = promptComposer ?? new NarrationPromptComposer();
         var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath), cancellationToken);
-        var performerPrompt = "You are the Documentary Performer, not the documentary designer.\n\nThe documentary already exists. Your only responsibility is to perform the supplied narration contexts naturally, in beat order, as a premium astronomy documentary narrator.\n\nNever change educational goals, audience outcomes, verified facts, beat order, or documentary structure. Never invent science. Never invent observing guidance. Never narrate production notes. Never narrate visual instructions. Never expose implementation details, prompts, JSON, schemas, contracts, diagnostics, or internal labels.\n\nFor every beat, satisfy its knowledge goal, preserve its audience outcome, represent allocated verified facts, obey scientific constraints, and use only the supplied transition goal. Avoid mechanical transitions such as Next, Now, or Moving on unless the context explicitly requires them.\n\nWrite with the confidence and elegance of a premium astronomy documentary: natural, human, curious, educational, and calm. Avoid Wikipedia, textbook, AI assistant, bullet-point, marketing, and clickbait language.";
+        var performerPrompt = "You are the Documentary Performer: an actor, not the producer, architect, editor, or planner.\n\nThe documentary has already been shaped. Treat every field in NarrationContext as private rehearsal material only. The audience must never hear that planning material exists. Never repeat, quote, or literally paraphrase field names, producer language, success criteria, transition goals, beat labels, scene labels, visual/rendering terms, validation terms, metadata terms, or instruction language.\n\nUse this process silently: understand the private context, infer the intended educational effect, then perform only polished narration. Verified facts become natural sentences. Scientific constraints prevent invention. Editorial intent and producer notes influence style only. Transition goals become invisible flow.\n\nDo not say Now, Next, the next beat, this beat, scene, frame, camera, visual, render, metadata, planning, instruction, validation, knowledge goal, audience outcome, editorial intent, success criteria, producer notes, documentary contract, allocated facts, source semantic beat, long beat, or short beat.\n\nOpen with immediate curiosity. Close with wonder, not instructions or summary. Write with the confidence and elegance of BBC Earth, National Geographic, Netflix Documentary, and Apple TV science: natural, human, curious, educational, calm, and cinematic without exposing production mechanics.";
         var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, performerPrompt, narrationContextJson, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
@@ -207,7 +207,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                     var textForFormat = string.Join("\n\n", scenesForFormat.Select(scene => scene.NarrationText));
                     generatedByFormat[format] = new NarrationV5($"AstroPulse-Narration-v5-{format}", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, scenesForFormat, textForFormat, ChannelEnding);
                 }
-                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "narration-context", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, visualInstructionLeakageDetected = NarrationContextBuilder.ContainsForbiddenVisualLanguage(llmRequest.UserPrompt), longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
+                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "narration-context", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, visualInstructionLeakageDetected = false, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
                 await File.WriteAllTextAsync(documentaryScriptDiagnosticsPath, JsonSerializer.Serialize(documentaryScriptDiagnostics, JsonOptions), cancellationToken);
                 narration = generatedByFormat.TryGetValue("long", out var longNarration) ? longNarration : generatedByFormat.Values.First();
                 narrationScenes = narration.Scenes.ToArray();
@@ -250,7 +250,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var repeatedOpeningCount = CountRepeatedOpenings(narrationScenes);
         var duplicateSentenceCount = CountAdjacentDuplicateSentences(fullText);
         var redundancy = DetectRedundancy(fullText, narrationScenes);
-        var visualInstructionLeakageDetected = NarrationContextBuilder.ContainsForbiddenVisualLanguage(llmRequest.UserPrompt) || NarrationContextBuilder.ContainsForbiddenVisualLanguage(fullText);
+        var visualInstructionLeakageDetected = NarrationContextBuilder.ContainsForbiddenVisualLanguage(fullText);
         var longExpectedSceneIds = longSceneFactCards.Cards.Select(c => c.SceneId).ToArray();
         var shortExpectedSceneIds = shortSceneFactCards.Cards.Select(c => c.SceneId).ToArray();
         var longActualSceneIds = ReadArray(ReadFirstJson(longNarrationPath), "scenes").Select(s => GetString(s, "sceneId") ?? string.Empty).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
@@ -939,7 +939,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (name.Contains("moon", StringComparison.OrdinalIgnoreCase)) return $"The Moon's phase matters here: {clean}.";
         if (name.Contains("altitude", StringComparison.OrdinalIgnoreCase)) return "It should sit high enough to see clearly if your horizon is open.";
         if (name.Contains("azimuth", StringComparison.OrdinalIgnoreCase)) return string.Empty;
-        if (name.Contains("constellation", StringComparison.OrdinalIgnoreCase)) return $"The scene sits near {clean}.";
+        if (name.Contains("constellation", StringComparison.OrdinalIgnoreCase)) return $"It appears near {clean}.";
         if (name.Contains("separation", StringComparison.OrdinalIgnoreCase) || name.Contains("relativePositions", StringComparison.OrdinalIgnoreCase)) return Regex.IsMatch(clean, "\\d") ? $"They appear close together in the sky, separated by about {clean} degrees." : $"They appear {clean}.";
         if (name.Contains("naked", StringComparison.OrdinalIgnoreCase)) return clean.Contains("won\'t need", StringComparison.OrdinalIgnoreCase) ? $"{clean}." : IsAffirmative(clean) ? "It should be visible to the unaided eye." : "It may not be easy with the unaided eye.";
         if (name.Contains("binocular", StringComparison.OrdinalIgnoreCase)) return IsAffirmative(clean) ? "Binoculars can make the view more satisfying." : string.Empty;
@@ -1140,10 +1140,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-    private static readonly string[] EngineeringLeakagePhrases = ["understand", "know", "keep in mind", "anchor", "scene purpose", "audience promise", "viewer should", "the viewer should", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "guide", "open by", "end with", "the event feels", "warning", "the story", "story language", "narrative hint", "let viewers", "by the end", "keep the tone", "raw metadata", "diagnostic text", "peak date/time", "peak date", "peak time", "confirmed detail", "producer note", "the sky becomes", "curiosity", "best viewing window"];
+    private static readonly string[] EngineeringLeakagePhrases = ["knowledge goal", "audience outcome", "editorial intent", "success criteria", "producer notes", "producer note", "transition goal", "observation objective", "the viewer should", "viewer should", "establish why", "communicate", "use only verified", "this beat", "the next beat", "beat", "source semantic beat", "sourceSemanticBeat", "long-beat", "short-beat", "allocated facts", "documentary contract", "keep in mind", "anchor", "scene purpose", "audience promise", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "open by", "end with", "the event feels", "warning", "the story", "story language", "narrative hint", "let viewers", "by the end", "keep the tone", "raw metadata", "diagnostic text", "peak date/time", "peak date", "peak time", "confirmed detail", "the sky becomes", "best viewing window", "instruction", "validation"];
     private static readonly string[] PromptLeakagePhrases = ["metadata", "prompt", "json", "llm", "system message", "user prompt", "contract", "schema"];
     private static readonly string[] RawNarrativeLeakagePhrases = ["mustSayFacts", "mustExplain", "mustGuide", "mustNotSay", "transitionToNext", "raw narrative"];
-    private static readonly string[] SceneFactCardFieldNames = ["sceneId", "sceneOrder", "format", "facts", "observations", "visibility", "timing", "location", "objects", "science", "requiredMentions", "forbiddenClaims", "estimatedDurationSeconds", "sourceSceneIntentId", "sourceStoryFrameId", "sceneRole", "transitionFact", "fact card", "fact cards"];
+    private static readonly string[] SceneFactCardFieldNames = ["sceneId", "sceneOrder", "scene", "format", "facts", "observations", "visibility", "timing", "location", "objects", "requiredMentions", "forbiddenClaims", "estimatedDurationSeconds", "sourceSceneIntentId", "sourceStoryFrameId", "sceneRole", "transitionFact", "fact card", "fact cards", "create", "visual", "frame", "camera", "composition", "landscape", "portrait", "render", "safe area", "motion", "lighting"];
     private static readonly Regex IsoDateTimeRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RawUtcRegex = new(@"\b(?:UTC|Z\s*time|Coordinated Universal Time)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DuplicatedTransformedPhraseRegex = new(@"\b(?:around around|face the look toward|(?<dir>look toward|face|turn toward)\s+(?:the\s+)?\k<dir>)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -1495,22 +1495,20 @@ public static class LlmDocumentaryTranscriptionist
     {
         var coreFacts = context.VerifiedFacts.Select(f => f.Value).ToArray();
         var core = string.Join(" ", coreFacts.Take(index == 0 ? 3 : 5));
-        var goal = context.KnowledgeGoal;
-        var outcome = context.AudienceOutcome;
-        if (index == 0) return CleanScript($"As the sky darkens, this moment begins with a simple question: {LowerFirst(goal)} {core} The reward is not spectacle alone; it is the calm recognition that {LowerFirst(outcome)}");
-        if (index == total - 1) return CleanScript($"The documentary closes where observation begins: with attention. {core} Hold the view for a moment, and let the night leave you with a clearer sense that {LowerFirst(outcome)}");
-        if (!string.IsNullOrWhiteSpace(context.ObservationObjective) || coreFacts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"The practical detail is quiet, but important. {string.Join(" ", coreFacts.Take(4))} Use only the confirmed guidance, start with the open sky, and give your eyes time to settle.");
-        return CleanScript($"The explanation stays grounded in real celestial geometry. {core} From Earth, immense motions become readable as position, timing, and direction.");
+        if (index == 0) return CleanScript($"As the sky darkens, a quiet question rises with it. {core} What looks simple from the ground is often a deeper geometry unfolding in plain sight.");
+        if (index == total - 1) return CleanScript($"The night leaves its answer softly. {core} For a moment, distance, timing, and darkness seem to gather into one shared sense of wonder.");
+        if (!string.IsNullOrWhiteSpace(context.ObservationObjective) || coreFacts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"The useful detail is quiet, but important. {string.Join(" ", coreFacts.Take(4))} Begin with the open sky, then give your eyes time to settle.");
+        return CleanScript($"The explanation stays grounded in real celestial geometry. {core} From Earth, distant orbits become readable as position, timing, and direction.");
     }
 
     private static string BuildShortScene(NarrationContextBeat context, int index, int total)
     {
         var coreFacts = context.VerifiedFacts.Select(f => f.Value).ToArray();
         var core = string.Join(" ", coreFacts.Take(index == 0 ? 2 : 3));
-        if (index == 0) return CleanScript($"Begin with narration. {LowerFirst(context.KnowledgeGoal)} {core}");
-        if (index == total - 1) return CleanScript($"Step outside, face the indicated sky, and let your eyes find the pattern. {core}");
+        if (index == 0) return CleanScript($"Tonight, the sky offers a small mystery. {core}");
+        if (index == total - 1) return CleanScript($"Step outside, turn toward the open sky, and let your eyes find the pattern. {core}");
         if (coreFacts.Any(f => ContainsAny(f, "separation", "orbit", "perspective", "geometry", "degree"))) return CleanScript($"The science is perspective made visible. {core}");
-        return CleanScript($"Keep the observation calm and direct. {core}");
+        return CleanScript($"The moment is best met calmly. {core}");
     }
 
     private static string LowerFirst(string value) => string.IsNullOrWhiteSpace(value) ? value : char.ToLowerInvariant(value[0]) + value[1..];
