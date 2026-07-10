@@ -53,7 +53,7 @@ public sealed class NarrationContextPurityTests
     [Fact]
     public void OrdinaryUseOfUnderstand_DoesNotFailPurityValidation()
     {
-        var context = new NarrationContextDocument("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat(1, "scene-001", "long-beat-001", [], "Science", "Help the audience understand apparent alignment.", "The audience can understand the geometry safely.", "Explain the idea clearly.", [new NarrationVerifiedFact("PrimaryObjects", "Jupiter.", null, null)], [], "Connect to the next idea.", "calm", "measured", [], null)])]);
+        var context = new NarrationContextDocument("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat("Help the audience understand apparent alignment.", "The audience can understand the geometry safely.", "Explain the idea clearly.", [new NarrationVerifiedFact("PrimaryObjects", "Jupiter.", null)], [], null, "Connect to the next idea.", "calm", "measured", [], null)])]);
 
         var failures = NarrationContextPurityValidator.Validate(context);
 
@@ -61,5 +61,5 @@ public sealed class NarrationContextPurityTests
     }
 
     private static NarrationContextDocument ContextWithFact(string key, string value) =>
-        new("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat(1, "scene-001", "long-beat-001", [], "Hook", "Notice the event.", "The audience recognizes it.", "Open cleanly.", [new NarrationVerifiedFact(key, value, null, null)], [], "Continue.", "calm", "measured", [], null)])]);
+        new("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat("Notice the event.", "The audience recognizes it.", "Open cleanly.", [new NarrationVerifiedFact(key, value, null)], [], null, "Continue.", "calm", "measured", [], null)])]);
 }
