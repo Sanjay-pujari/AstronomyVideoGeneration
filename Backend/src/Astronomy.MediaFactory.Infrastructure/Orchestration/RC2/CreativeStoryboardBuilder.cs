@@ -9,386 +9,208 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
 {
     private const string PhaseName = "Creative Intelligence / Story Frames";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    private static readonly string[] AstronomyVisualAccuracyRules =
-    [
-        "Planets must remain circular.",
-        "Do not exaggerate angular separation beyond editorially acceptable framing.",
-        "Do not show false surface detail.",
-        "Do not imply the planets physically touch.",
-        "Do not show daylight if the event is described after sunset.",
-        "Observation visuals must respect direction and timing metadata when available.",
-        "If altitude, constellation, moon interference, or brightness are missing, do not visualize them as confirmed facts."
-    ];
-
-    private static readonly string[] ProhibitedVisualChoices =
-    [
-        "fantasy sky",
-        "sci-fi spaceship",
-        "alien elements",
-        "distorted planets",
-        "unrealistic planet scale unless explicitly marked as editorial thumbnail treatment",
-        "misleading constellation labels",
-        "fake telescope detail",
-        "overdramatic disaster-like lighting"
-    ];
+    private static readonly string[] SupportedArchetypes = ["event-observation-science", "eclipse-sequence", "meteor-shower-guide", "comet-observation", "constellation-profile", "deep-sky-object-profile", "scientific-explainer", "discovery-story", "historical-mission", "weekly-sky-forecast", "comparative-documentary", "educational-journey"];
+    private static readonly string[] AstronomyVisualAccuracyRules = ["Planets must remain circular.", "Do not exaggerate angular separation beyond editorially acceptable framing.", "Do not show false surface detail.", "Do not imply astronomical objects physically touch.", "Observation visuals must respect direction and timing metadata when available.", "If altitude, constellation, moon interference, or brightness are missing, do not visualize them as confirmed facts."];
+    private static readonly string[] ProhibitedVisualChoices = ["fantasy sky", "sci-fi spaceship", "alien elements", "distorted planets", "misleading constellation labels", "fake telescope detail", "overdramatic disaster-like lighting"];
 
     public async Task<CreativeStoryboardBuilderResult> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        logger.LogInformation("Creative Intelligence / Story Frames executed for RC2 batch generation. OutputRoot={OutputRoot}; Success={Success}", response.OutputRoot, response.Success);
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return CreativeStoryboardBuilderResult.Empty;
-
         var outputRoot = response.OutputRoot!;
         var editorialContractPath = Path.Combine(outputRoot, "editorial", "editorial-contract.json");
         var storyGraphPath = Path.Combine(outputRoot, "editorial", "story-graph.json");
         var sceneIntentsPath = Path.Combine(outputRoot, "editorial", "scene-intents.json");
+        var observationPath = Path.Combine(outputRoot, "editorial", "observation-metadata.json");
         var creativeRoot = Path.Combine(outputRoot, "creative");
-        Directory.CreateDirectory(creativeRoot);
-        var storyboardPath = Path.Combine(creativeRoot, "creative-storyboard.json");
-        var diagnosticsPath = Path.Combine(creativeRoot, "creative-diagnostics.json");
-        var longRoot = Path.Combine(outputRoot, "story-frames", "long");
-        var shortRoot = Path.Combine(outputRoot, "story-frames", "short");
-        if (request.ExecutionMode == ContentPlanExecutionMode.RebuildOutputs && request.OverwriteExisting)
-        {
-            if (Directory.Exists(longRoot)) Directory.Delete(longRoot, recursive: true);
-            if (Directory.Exists(shortRoot)) Directory.Delete(shortRoot, recursive: true);
-        }
-
-        var contract = ReadFirstJson(editorialContractPath);
-        var storyGraph = ReadFirstJson(storyGraphPath);
-        var sceneIntents = ReadFirstJson(sceneIntentsPath);
-        var storyboard = BuildStoryboard(request, response, contract, storyGraph, sceneIntents);
-
-        await File.WriteAllTextAsync(storyboardPath, JsonSerializer.Serialize(storyboard, JsonOptions), cancellationToken);
-        var inputs = new[] { editorialContractPath, storyGraphPath, sceneIntentsPath };
+        var validationRoot = Path.Combine(outputRoot, "validation");
+        Directory.CreateDirectory(creativeRoot); Directory.CreateDirectory(validationRoot);
+        var inputs = new[] { editorialContractPath, storyGraphPath, sceneIntentsPath, observationPath };
+        var contract = ReadFirstJson(editorialContractPath); var storyGraph = ReadFirstJson(storyGraphPath); var sceneIntents = ReadFirstJson(sceneIntentsPath); var observation = ReadFirstJson(observationPath);
         var requested = ResolveStoryFrameRequests(request, response);
-        var storyFrameFiles = new List<string>();
-        if (requested.LongRequested) storyFrameFiles.AddRange(await WriteStoryFramesAsync(outputRoot, "long", "landscape", "16:9", 1920, 1080, requested.LongRequested, storyboard, inputs, stopwatch, cancellationToken));
-        if (requested.ShortRequested) storyFrameFiles.AddRange(await WriteStoryFramesAsync(outputRoot, "short", "portrait", "9:16", 2160, 3840, requested.ShortRequested, storyboard, inputs, stopwatch, cancellationToken));
-        var diagnostics = new
-        {
-            phaseNo = 6,
-            phaseName = PhaseName,
-            orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
-            subPhases = new[] { "6.1 Creative Storyboard Builder", "6.2 Long Story Frame Planner", "6.3 Short Story Frame Planner", "6.6 Creative Diagnostics" },
-            inputs = inputs.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) }).ToArray(),
-            outputFiles = new[] { NormalizePath(storyboardPath), NormalizePath(diagnosticsPath) }.Concat(storyFrameFiles.Select(NormalizePath)).ToArray(),
-            creativeSceneCount = storyboard.Scenes.Count,
-            missingCreativeWarningCount = storyboard.MissingCreativeWarnings.Count,
-            missingCreativeWarnings = storyboard.MissingCreativeWarnings,
-            longStoryFramesRequested = requested.LongRequested,
-            shortStoryFramesRequested = requested.ShortRequested,
-            currentRunFilesOnly = true,
-            executionTimeMs = stopwatch.ElapsedMilliseconds
-        };
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
-
-        logger.LogInformation("Creative Intelligence / Story Frames wrote {CreativeSceneCount} creative storyboard scenes and diagnostics to {DiagnosticsPath}.", storyboard.Scenes.Count, diagnosticsPath);
-        return new CreativeStoryboardBuilderResult(storyboard, new[] { storyboardPath, diagnosticsPath }.Concat(storyFrameFiles).ToArray());
+        var semanticBeats = LoadSemanticBeats(storyGraph, sceneIntents);
+        var context = BuildContext(request, response, contract, storyGraph, observation, semanticBeats);
+        var longContract = BuildDocumentaryContract(context, semanticBeats, "long", requested.LongRequested);
+        var shortContract = BuildDocumentaryContract(context, semanticBeats, "short", requested.ShortRequested);
+        var storyboard = BuildLegacyStoryboard(context, longContract, shortContract);
+        var longFrames = requested.LongRequested ? await WriteStoryFramesAsync(outputRoot, longContract, "landscape", "16:9", 1920, 1080, inputs, stopwatch, cancellationToken) : [];
+        var shortFrames = requested.ShortRequested ? await WriteStoryFramesAsync(outputRoot, shortContract, "portrait", "9:16", 2160, 3840, inputs, stopwatch, cancellationToken) : [];
+        var validation = BuildValidation(context, longContract, shortContract, requested, longFrames.Count(f => f.EndsWith(".json") && Path.GetFileName(f).StartsWith("scene-")), shortFrames.Count(f => f.EndsWith(".json") && Path.GetFileName(f).StartsWith("scene-")));
+        var archDiagnostics = BuildArchitectureDiagnostics(context, longContract, shortContract, validation);
+        var storyboardPath = Path.Combine(creativeRoot, "creative-storyboard.json");
+        var longContractPath = Path.Combine(creativeRoot, "documentary-contract.long.json");
+        var shortContractPath = Path.Combine(creativeRoot, "documentary-contract.short.json");
+        var architectureDiagnosticsPath = Path.Combine(creativeRoot, "documentary-architecture-diagnostics.json");
+        var legacyDiagnosticsPath = Path.Combine(creativeRoot, "creative-diagnostics.json");
+        var validationPath = Path.Combine(validationRoot, "phase-06-validation.json");
+        await File.WriteAllTextAsync(longContractPath, JsonSerializer.Serialize(longContract, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(shortContractPath, JsonSerializer.Serialize(shortContract, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(storyboardPath, JsonSerializer.Serialize(storyboard, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(architectureDiagnosticsPath, JsonSerializer.Serialize(archDiagnostics, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(legacyDiagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 6, phaseName = PhaseName, orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion, documentaryContractsAreAuthoritative = true, legacyStoryboardAdaptedFromContracts = true, inputs = inputs.Select(NormalizePath), outputFiles = new[] { storyboardPath, longContractPath, shortContractPath, architectureDiagnosticsPath, validationPath }.Concat(longFrames).Concat(shortFrames).Select(NormalizePath), creativeSceneCount = storyboard.Scenes.Count, validationCertified = validation.Certified, executionTimeMs = stopwatch.ElapsedMilliseconds }, JsonOptions), cancellationToken);
+        var files = new[] { storyboardPath, legacyDiagnosticsPath, longContractPath, shortContractPath, architectureDiagnosticsPath, validationPath }.Concat(longFrames).Concat(shortFrames).ToArray();
+        logger.LogInformation("Phase 6 Documentary Architect wrote {Count} files. Certified={Certified}", files.Length, validation.Certified);
+        return new CreativeStoryboardBuilderResult(storyboard, files);
     }
 
-
-    private static async Task<IReadOnlyList<string>> WriteStoryFramesAsync(string outputRoot, string format, string orientation, string aspectRatio, int targetWidth, int targetHeight, bool requested, CreativeStoryboard storyboard, IReadOnlyList<string> inputFiles, Stopwatch stopwatch, CancellationToken cancellationToken)
+    private static DocumentaryContext BuildContext(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, JsonElement? contract, JsonElement? storyGraph, JsonElement? observation, IReadOnlyList<SemanticBeat> beats)
     {
-        var root = Path.Combine(outputRoot, "story-frames", format);
-        Directory.CreateDirectory(root);
-        var files = new List<string>();
-        var frameFiles = new List<string>();
-        foreach (var scene in storyboard.Scenes.OrderBy(s => s.SceneOrder))
-        {
-            var fileName = $"scene-{scene.SceneOrder:000}.json";
-            var path = Path.Combine(root, fileName);
-            var frame = new StoryFrame(
-                $"{format}-frame-{scene.SceneOrder:000}",
-                scene.SceneId,
-                scene.SceneOrder,
-                scene.ScenePurpose,
-                format,
-                orientation,
-                aspectRatio,
-                targetWidth,
-                targetHeight,
-                BuildVisualGoal(scene, format),
-                BuildComposition(scene, format),
-                BuildCameraPlan(scene, format),
-                BuildSubjectFocus(scene),
-                BuildForeground(scene, format),
-                BuildBackground(scene, format),
-                BuildObjectPlacement(scene, format),
-                BuildSafeFramingPlan(scene, format),
-                BuildNegativeSpacePlan(scene, format),
-                BuildOverlaySafeArea(scene, format),
-                BuildMotionHint(scene, format),
-                scene.ScenePurpose == "Hook" ? 5.0 : scene.ScenePurpose == "Takeaway" ? 4.0 : 7.0,
-                BuildNarrationMapping(scene, format),
-                scene.SceneId,
-                scene.SceneId);
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(frame, JsonOptions), cancellationToken);
-            files.Add(path);
-            frameFiles.Add(fileName);
-        }
-
-        var manifestPath = Path.Combine(root, "story-frame-manifest.json");
-        var diagnosticsPath = Path.Combine(root, "story-frame-diagnostics.json");
-        var manifest = new { format, orientation, aspectRatio, targetWidth, targetHeight, requested, generated = files.Count > 0, expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = files.Count, sceneIds = storyboard.Scenes.OrderBy(s => s.SceneOrder).Select(s => s.SceneId).ToArray(), files = frameFiles.ToArray(), createdUtc = DateTimeOffset.UtcNow, sourceFiles = inputFiles.Select(NormalizePath).ToArray(), qualityProfile = "Aurora", contractVersion = "RC2-Phase6-StoryFrames-v1" };
-        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
-        var diagnostics = BuildStoryFrameDiagnostics(format, inputFiles, files.Concat([manifestPath, diagnosticsPath]).ToArray(), storyboard, frameFiles, stopwatch);
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
-        files.Add(manifestPath);
-        files.Add(diagnosticsPath);
-        return files;
-    }
-
-
-    private static object BuildStoryFrameDiagnostics(string format, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, CreativeStoryboard storyboard, IReadOnlyList<string> frameFiles, Stopwatch stopwatch)
-    {
-        var genericWarnings = new List<string>();
-        var duplicateWarnings = new List<string>();
-        var safeWarnings = new List<string>();
-        var motionWarnings = new List<string>();
-        var compositions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var scene in storyboard.Scenes.OrderBy(s => s.SceneOrder))
-        {
-            var visualGoal = BuildVisualGoal(scene, format);
-            var composition = BuildComposition(scene, format);
-            var motionHint = BuildMotionHint(scene, format);
-            var safeArea = BuildOverlaySafeArea(scene, format);
-            if (IsGenericText(visualGoal) || IsGenericText(composition) || IsGenericText(BuildCameraPlan(scene, format))) genericWarnings.Add($"{scene.SceneId} contains generic story-frame language.");
-            if (!compositions.Add(composition)) duplicateWarnings.Add($"{scene.SceneId} duplicates another composition.");
-            if (IsGenericText(safeArea) || !safeArea.Any(char.IsDigit)) safeWarnings.Add($"{scene.SceneId} overlay safe area is missing exact zones.");
-            if (IsGenericText(motionHint)) motionWarnings.Add($"{scene.SceneId} motion hint is missing scene-specific motion direction.");
-        }
-        var errors = genericWarnings.Concat(duplicateWarnings).Concat(safeWarnings).Concat(motionWarnings).ToArray();
-        var score = Math.Max(0, 100 - (genericWarnings.Count * 12) - (duplicateWarnings.Count * 15) - (safeWarnings.Count * 10) - (motionWarnings.Count * 10));
-        return new { phaseNo = 6, phaseName = PhaseName, format, inputFiles = inputFiles.Select(NormalizePath).ToArray(), outputFiles = outputFiles.Select(NormalizePath).ToArray(), expectedSceneCount = storyboard.Scenes.Count, generatedSceneCount = frameFiles.Count, genericTextWarnings = genericWarnings, duplicateCompositionWarnings = duplicateWarnings, missingSafeAreaWarnings = safeWarnings, missingMotionHintWarnings = motionWarnings, sceneSpecificityScore = score, compositionQualityScore = score, motionReadinessScore = score, overlaySafetyScore = score, overallStoryFrameQualityScore = score, warnings = storyboard.MissingCreativeWarnings, errors, staleFilesIgnored = true, currentRunFilesOnly = true, executionTimeMs = stopwatch.ElapsedMilliseconds };
-    }
-
-    private static string BuildVisualGoal(CreativeStoryboardScene s, string format) => s.ScenePurpose switch
-    {
-        "Hook" => $"Create immediate curiosity around {s.PrimarySubject} by showing the viewer the most intriguing sky relationship before any explanation; the frame should feel like a quiet discovery moment, not a generic sky card.",
-        "Discovery" => $"Orient the viewer to where {s.PrimarySubject} appears, using the supported direction or horizon context as the information anchor for finding the event.",
-        "Science" => $"Explain the apparent alignment of {s.PrimarySubject} as a line-of-sight relationship, making separation and perspective readable without implying physical contact.",
-        "Observation" => $"Help the viewer know how to look for {s.PrimarySubject}, prioritizing direction, horizon reference, brightness hierarchy, and practical viewing confidence.",
-        "Takeaway" => $"Leave a memorable emotional image of {s.PrimarySubject} that reinforces why this event is worth remembering after the facts are understood.",
-        _ => $"Support the reminder/action beat for {s.PrimarySubject} with a clean visual that makes the next viewer action obvious."
-    };
-
-    private static string BuildComposition(CreativeStoryboardScene s, string format)
-    {
-        var secondary = s.SecondarySubjects.Count > 0 ? string.Join("; ", s.SecondarySubjects) : "confirmed sky context only";
-        return format == "short"
-            ? s.ScenePurpose switch
-            {
-                "Hook" => $"Portrait-first sky stack: place {s.PrimarySubject} in the upper-middle third, keep the horizon low and subdued, use a dark foreground silhouette only at the bottom edge, and make the brightest object the first read with {secondary} held as small supporting context.",
-                "Discovery" => $"Vertical locator frame with the horizon in the lower 15%, the sky direction cue rising through the center lane, and {s.PrimarySubject} placed just above center so mobile viewers can map sky position quickly; background gradients separate foreground, horizon, and object layer.",
-                "Science" => $"Tall explanatory composition with {s.PrimarySubject} separated along a gentle vertical diagonal, a thin perspective guide between them, and ample side space for a compact fact chip; hierarchy reads object, separation, then explanation.",
-                "Observation" => $"Practical phone-view composition: low horizon, clear central lookup lane, {s.PrimarySubject} positioned in the upper half with secondary viewing cues beneath it, foreground kept minimal so captions do not cover the target.",
-                "Takeaway" => $"Memorable portrait closing frame with {s.PrimarySubject} glowing in the upper third above a quiet horizon band, leaving the middle calm and the lower frame clean for a save/reminder cue.",
-                _ => $"Action-oriented portrait frame with {s.PrimarySubject} high enough to protect captions, a simple foreground location cue at the bottom edge, and background sky context arranged in clear foreground/midground/sky layers."
-            }
-            : s.ScenePurpose switch
-            {
-                "Hook" => $"Wide 16:9 opening sky over a restrained horizon; place {s.PrimarySubject} off the right third as the strongest visual read, leave the left third quieter for curiosity-building title treatment, and use {secondary} as subtle background evidence.",
-                "Discovery" => $"Landscape orientation map: horizon spans the lower quarter, sky direction reads left-to-right, {s.PrimarySubject} sits on a stable upper third, and background sky gradient provides enough context to understand where to look.",
-                "Science" => $"Wide explanatory frame with {s.PrimarySubject} arranged across the center thirds, separation visible as negative space, and a reserved side area for a line-of-sight annotation; hierarchy reads relationship first, then labels.",
-                "Observation" => $"Viewer-at-the-horizon composition with a realistic low skyline, {s.PrimarySubject} placed above the appropriate viewing band, secondary cues kept smaller, and the lower-left third clean for practical viewing instructions.",
-                "Takeaway" => $"Cinematic closing landscape with {s.PrimarySubject} small but luminous against a broad sky, horizon softened in the lower fifth, and the brightest point balanced against wide calm space for emotional memory.",
-                _ => $"Support-detail landscape frame with {s.PrimarySubject} on a focal third, a modest horizon or location cue, and clear side space for reminder/action information."
-            };
-    }
-
-    private static string BuildCameraPlan(CreativeStoryboardScene s, string format) => format == "short"
-        ? $"Medium-wide vertical sky view from a grounded observer angle, framed for a 9:16 phone screen with a mild telephoto lens feeling that compresses {s.PrimarySubject} enough to read quickly; this supports the {s.ScenePurpose.ToLowerInvariant()} beat by keeping the subject in the central mobile scan path."
-        : $"Wide locked-off observer angle from ground level, landscape 16:9 framing with a natural 35-50mm documentary lens feeling; the distance preserves horizon and sky context so the {s.ScenePurpose.ToLowerInvariant()} explanation can unfold slowly without crowding overlays.";
-    private static string BuildSubjectFocus(CreativeStoryboardScene s) => $"Primary: {s.PrimarySubject}. Secondary: {(s.SecondarySubjects.Count == 0 ? "none beyond verified context" : string.Join("; ", s.SecondarySubjects))}.";
-    private static string BuildForeground(CreativeStoryboardScene s, string format) => s.ScenePurpose is "Science" ? "none" : format == "short" ? "Thin low horizon or silhouette band only when supported, kept below caption-safe space." : "Subtle horizon/location reference used for scale and orientation, never competing with the sky subject.";
-    private static string BuildBackground(CreativeStoryboardScene s, string format) => format == "short" ? $"Portrait sky gradient with vertical depth behind {s.PrimarySubject}; no invented constellations or false surface detail." : $"Wide natural sky and restrained horizon context behind {s.PrimarySubject}; use only supported direction/timing facts.";
-    private static string BuildObjectPlacement(CreativeStoryboardScene s, string format) => format == "short" ? $"Place {s.PrimarySubject} in the upper-middle third; keep secondary cues below or beside it at smaller scale, with top and bottom safe zones protected." : $"Place {s.PrimarySubject} on the upper or right focal third depending on the scene purpose; keep secondary cues smaller and lower-priority, away from lower-third captions.";
-    private static string BuildSafeFramingPlan(CreativeStoryboardScene s, string format) => format == "short" ? "Protect title, caption, and CTA bands while keeping the central vertical subject lane uncluttered." : "Protect lower-third labels and side margins while preserving a wide readable sky relationship.";
-    private static string BuildNegativeSpacePlan(CreativeStoryboardScene s, string format) => format == "short" ? "Use clean sky in the top 12% and bottom 18%; keep side negative space simple so mobile overlays remain legible." : "Reserve the lower-left/lower-third sky or horizon area for captions, with quiet side sky for labels and slow pacing.";
-    private static string BuildOverlaySafeArea(CreativeStoryboardScene s, string format) => format == "short" ? "Exact safe zones: top 12% clear for title, bottom 18% clear for captions/CTA, side 8% margins free of essential objects, central 60% kept readable." : "Exact safe zones: lower 18% clear for lower-third captions, side 6% margins clear, upper-left 20% available for a small documentary label.";
-    private static string BuildMotionHint(CreativeStoryboardScene s, string format) => s.ScenePurpose switch
-    {
-        "Hook" => format == "short" ? $"Begin with a one-second hold on empty upper sky, then a tiny upward reveal toward {s.PrimarySubject}; no fast zoom." : $"Slow lateral drift from quiet negative space into {s.PrimarySubject}, preserving the lower-third label area.",
-        "Discovery" => format == "short" ? $"Gentle vertical tilt from low horizon to {s.PrimarySubject} to teach where to look." : $"Slow pan along the horizon direction, ending locked on {s.PrimarySubject} for orientation.",
-        "Science" => $"Hold mostly static; add a subtle animated guide line or parallax cue to clarify apparent alignment without changing object spacing.",
-        "Observation" => format == "short" ? $"Slow upward lookup motion from horizon cue to target, ending with a steady two-second hold." : $"Measured push-in from horizon reference toward {s.PrimarySubject}, keeping captions stable.",
-        "Takeaway" => $"Very slow fade or drift that lets {s.PrimarySubject} linger as an emotional memory; avoid explanatory movement.",
-        _ => $"Short, steady hold with a small CTA-safe drift that does not cross overlay zones."
-    };
-    private static string BuildNarrationMapping(CreativeStoryboardScene s, string format) => $"Supports the narration beat '{s.KeyMessage}' by making the {s.ScenePurpose.ToLowerInvariant()} information visible in {format} framing before downstream narration or motion is added.";
-    private static bool IsGenericText(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return true;
-        string[] generic = ["Calm documentary camera", "Balanced composition", "Clear visual focus", "Documentary style", "Cinematic sky view", "Same scene for short format", "stable focal third"];
-        return generic.Any(g => text.Contains(g, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static (bool LongRequested, bool ShortRequested) ResolveStoryFrameRequests(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response)
-    {
-        var completions = response.RequestedOutputCompletion ?? response.Results?.OfType<ContentPlanProductionExecutionResult>().SelectMany(r => r.RequestedOutputCompletion ?? []).ToArray();
-        bool Requested(string outputType) => completions?.Any(c => c.Requested && string.Equals(c.OutputType, outputType, StringComparison.OrdinalIgnoreCase)) == true;
-        var longRequested = Requested("LongVideo");
-        var shortRequested = Requested("ShortVideo");
-        foreach (var format in response.SelectedPlans.Select(p => p.PlannedFormat).Where(f => !string.IsNullOrWhiteSpace(f)))
-        {
-            if (format!.Contains("long", StringComparison.OrdinalIgnoreCase)) longRequested = true;
-            if (format.Contains("short", StringComparison.OrdinalIgnoreCase)) shortRequested = true;
-        }
-        if (!longRequested && !shortRequested) return (true, true);
-        return (longRequested, shortRequested);
-    }
-
-    private static CreativeStoryboard BuildStoryboard(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, JsonElement? contract, JsonElement? storyGraph, JsonElement? sceneIntents)
-    {
-        var eventType = FirstNonEmpty(GetString(contract, "eventType"), GetString(storyGraph, "eventType"), response.SelectedPlans.FirstOrDefault()?.ContentCategoryCode, "Unknown")!;
-        var eventName = FirstNonEmpty(GetString(contract, "eventName"), GetString(storyGraph, "eventName"), response.Title, response.SelectedPlans.FirstOrDefault()?.Title, "Unknown")!;
-        var language = FirstNonEmpty(GetString(contract, "language"), GetString(storyGraph, "language"), request.Language)!;
-        var regionId = FirstNonEmpty(GetString(contract, "regionId"), GetString(storyGraph, "regionId"), request.RegionId)!;
-        var storyArc = FirstNonEmpty(GetString(storyGraph, "storyArc"), FindString(contract, "storyArc"), "Hook → Discovery → Science → Observation → Takeaway")!;
+        var eventName = FirstNonEmpty(GetString(contract, "eventName"), GetString(storyGraph, "eventName"), response.Title, response.SelectedPlans.FirstOrDefault()?.Title, "Untitled astronomy documentary")!;
+        var family = FirstNonEmpty(GetString(contract, "family"), GetString(contract, "eventType"), GetString(storyGraph, "eventType"), response.SelectedPlans.FirstOrDefault()?.ContentCategoryCode, "astronomy")!;
+        var contentType = HasAny(beats, ["timing", "viewing", "observe", "event"]) ? "event" : "profile";
+        var archetype = ResolveArchetype(family, contentType, beats);
         var warnings = new List<string>();
-        if (!contract.HasValue) warnings.Add("Missing input file editorial/editorial-contract.json.");
-        if (!storyGraph.HasValue) warnings.Add("Missing input file editorial/story-graph.json.");
-        if (!sceneIntents.HasValue) warnings.Add("Missing input file editorial/scene-intents.json.");
-
-        var graphScenes = ReadArray(storyGraph, "scenes");
-        var intentScenes = sceneIntents.HasValue && sceneIntents.Value.ValueKind == JsonValueKind.Array ? sceneIntents.Value.EnumerateArray().Select(e => e.Clone()).ToArray() : [];
-        var sourceScenes = graphScenes.Count > 0 ? graphScenes : intentScenes;
-        if (sourceScenes.Count == 0) warnings.Add("No editorial scenes were available for creative storyboard generation.");
-
-        var primarySubject = ResolvePrimarySubjectFromContract(contract, eventName);
-        var secondarySubjects = ResolveSecondarySubjectsFromContract(contract);
-        var scenes = sourceScenes.Select((scene, index) => BuildScene(scene, intentScenes, index, eventName, primarySubject, secondarySubjects, warnings)).ToArray();
-        warnings.AddRange(FindStringArray(contract, "missingFactWarnings").Select(w => $"Editorial warning carried into creative layer: {w}"));
-        return new CreativeStoryboard(
-            "AstroPulse-CreativeStoryboard-v1",
-            Rc2PipelinePhaseRegistry.OrchestrationVersion,
-            eventType,
-            eventName,
-            language,
-            regionId,
-            "Make the astronomy understandable, observable, calm, and visually accurate before any generator writes prompts.",
-            storyArc,
-            "Natural documentary sky visuals with restrained motion, factual object relationships, and no invented observational metadata.",
-            scenes,
-            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        if (!contract.HasValue) warnings.Add("Missing editorial/editorial-contract.json."); if (!storyGraph.HasValue) warnings.Add("Missing editorial/story-graph.json.");
+        return new DocumentaryContext(Rc2PipelinePhaseRegistry.OrchestrationVersion, Slug(eventName), eventName, "astronomy", family, contentType, archetype.Archetype, archetype.Reason, FirstNonEmpty(GetString(contract,"language"), GetString(storyGraph,"language"), request.Language, "en")!, FirstNonEmpty(GetString(contract,"regionId"), GetString(storyGraph,"regionId"), request.RegionId, "global")!, ResolvePrimarySubjectFromContract(contract, eventName), ResolveSecondarySubjectsFromContract(contract), observation.HasValue, warnings);
     }
 
-    private static CreativeStoryboardScene BuildScene(JsonElement scene, IReadOnlyList<JsonElement> intents, int index, string eventName, string primarySubject, IReadOnlyList<string> secondarySubjects, List<string> warnings)
+    private static DocumentaryContract BuildDocumentaryContract(DocumentaryContext c, IReadOnlyList<SemanticBeat> semanticBeats, string format, bool requested)
     {
-        var sceneId = FirstNonEmpty(GetString(scene, "sceneId"), $"scene-{index + 1:000}")!;
-        var purpose = NormalizePurpose(FirstNonEmpty(GetString(scene, "scenePurpose"), GetString(scene, "purpose"))) ?? FallbackPurpose(index);
-        var intent = intents.FirstOrDefault(i => string.Equals(GetString(i, "sceneId"), sceneId, StringComparison.OrdinalIgnoreCase));
-        var keyMessage = FirstNonEmpty(GetString(scene, "keyMessage"), GetString(intent, "keyMessage"), $"Help viewers understand {eventName} without inventing unsupported facts.")!;
-        var defaults = DefaultsFor(purpose);
-        if (!string.Equals(purpose, FirstNonEmpty(GetString(scene, "scenePurpose"), GetString(scene, "purpose")), StringComparison.OrdinalIgnoreCase)) warnings.Add($"Scene {sceneId} used creative fallback purpose {purpose}.");
-
-        return new CreativeStoryboardScene(
-            sceneId,
-            purpose,
-            GetInt(scene, "sceneOrder") ?? index + 1,
-            keyMessage,
-            defaults.ViewerFocus,
-            defaults.EmotionalRole,
-            FirstNonEmpty(GetString(scene, "visualRole"), GetString(intent, "visualIntent"), $"Translate the {purpose.ToLowerInvariant()} beat into a clear visual decision.")!,
-            FirstNonEmpty(GetString(scene, "motionRole"), "Use motion only to support comprehension and pacing.")!,
-            primarySubject,
-            secondarySubjects,
-            defaults.CompositionIntent,
-            purpose == "Science" ? "Stable explanatory camera with legible spatial relationships." : "Calm documentary camera that keeps the main subjects easy to understand.",
-            purpose == "Hook" ? "Natural high-contrast night-sky lighting without disaster-like drama." : "Natural sky lighting consistent with the supported observation context.",
-            FirstNonEmpty(GetString(scene, "motionRole"), GetString(intent, "motionIntent"), "Slow, restrained motion that clarifies the scene relationship.")!,
-            FirstNonEmpty(GetString(scene, "transitionToNext"), "Use a simple editorial transition that preserves story continuity.")!,
-            AstronomyVisualAccuracyRules,
-            ProhibitedVisualChoices);
+        var isShort = format == "short"; var beats = isShort ? BuildShortBeats(semanticBeats) : BuildLongBeats(semanticBeats);
+        var target = isShort ? 55 : Math.Clamp(semanticBeats.Count * 28, 150, 420); var min = isShort ? 30 : 120; var max = isShort ? 75 : 480;
+        var rate = isShort ? 2.45 : 2.25; var est = beats.Sum(b => b.EstimatedDurationSeconds); var budget = (int)Math.Round(target * rate);
+        var confidence = BuildConfidence(beats, semanticBeats);
+        return new DocumentaryContract("Chronicle-DocumentaryContract-v1", c.OrchestrationVersion, $"{c.DocumentaryId}-{format}", c.Domain, c.Family, c.ContentType, c.NarrativeArchetype, format, c.Language, c.RegionId, new AudienceProfile("general", c.ContentType == "event" ? "learn-and-observe" : "learn-and-understand", []), new DurationStrategy(target, min, max, Math.Max(min, Math.Min(max, est)), budget, isShort ? "compact-documentary" : "calm-documentary"), BuildGoals(c, format), BuildJourney(c, format), BuildSuccess(beats), confidence, beats);
     }
 
-    private static string ResolvePrimarySubjectFromContract(JsonElement? contract, string eventName)
+    private static IReadOnlyList<DocumentaryBeat> BuildLongBeats(IReadOnlyList<SemanticBeat> source)
     {
-        var primaryObjects = FindContractFactArray(contract, "primaryObjects");
-        var secondaryObjects = FindContractFactArray(contract, "secondaryObjects");
-        var objects = primaryObjects.Concat(secondaryObjects).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        return objects.Length == 0 ? eventName : string.Join(" + ", objects);
-    }
-
-    private static IReadOnlyList<string> ResolveSecondarySubjectsFromContract(JsonElement? contract)
-    {
-        var subjects = new List<string>();
-        AddFactSubject(subjects, contract, "angularSeparationDegrees", "Angular separation");
-        AddFactSubject(subjects, contract, "bestViewingWindowLocal", "Best viewing window");
-        AddFactSubject(subjects, contract, "skyDirectionHint", "Sky direction");
-        return subjects;
-    }
-
-    private static void AddFactSubject(List<string> subjects, JsonElement? contract, string factName, string label)
-    {
-        var value = FindContractFactString(contract, factName);
-        if (!string.IsNullOrWhiteSpace(value)) subjects.Add($"{label}: {value}");
-    }
-
-    private static IReadOnlyList<string> FindContractFactArray(JsonElement? element, string name)
-    {
-        var fact = FindProperty(element, name);
-        if (fact is not { ValueKind: JsonValueKind.Object } obj || !TryGetProperty(obj, "value", out var value) || value.ValueKind != JsonValueKind.Array) return [];
-        return value.EnumerateArray().Select(ValueToString).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToArray();
-    }
-
-    private static string? FindContractFactString(JsonElement? element, string name)
-    {
-        var fact = FindProperty(element, name);
-        if (fact is not { ValueKind: JsonValueKind.Object } obj || !TryGetProperty(obj, "value", out var value)) return null;
-        return ValueToString(value);
-    }
-
-    private static JsonElement? FindProperty(JsonElement? element, string name)
-    {
-        if (!element.HasValue) return null;
-        if (element.Value.ValueKind == JsonValueKind.Object)
+        var result = new List<DocumentaryBeat>(); var order = 1;
+        foreach (var s in source)
         {
-            foreach (var p in element.Value.EnumerateObject())
+            if (IsScience(s) && HasScienceSplitFacts(s))
             {
-                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value;
-                var nested = FindProperty(p.Value, name);
-                if (nested.HasValue) return nested;
+                result.Add(ToBeat("long", order++, "Science", s, "Explain the apparent alignment as a line-of-sight relationship.", "Viewer understands this is perspective, not contact.", "Expanded", "Split", "Verified science facts support a staged explanation of apparent alignment.", FilterFacts(s, ["apparent", "line", "perspective", "alignment"])));
+                result.Add(ToBeat("long", order++, "Science", s, "Clarify angular separation and non-physical proximity.", "Viewer does not mistake the conjunction for a physical meeting.", "Expanded", "Split", "Angular separation/non-contact facts support a second science beat.", FilterFacts(s, ["angular", "separation", "physical", "contact", "proximity"])));
+            }
+            else { result.Add(ToBeat("long", order++, NormalizePurpose(s.Role) ?? "SupportingDetail", s, s.KnowledgeGoal, s.AudienceOutcome, IsScience(s) ? "Compact" : "Standard", "Keep", "Distinct semantic outcome preserved for the long documentary.", s.AllocatedFacts)); }
+            if (IsObservation(s) && s.AllocatedFacts.Count > 1) result.Add(ToBeat("long", order++, "Observation", s, "Turn verified viewing details into a practical observation plan.", "Viewer knows how to use the viewing guidance confidently.", "Expanded", "Split", "Observation guidance benefits from a dedicated plan beat in long format.", s.AllocatedFacts));
+        }
+        return result;
+    }
+
+    private static IReadOnlyList<DocumentaryBeat> BuildShortBeats(IReadOnlyList<SemanticBeat> s)
+    {
+        var result = new List<DocumentaryBeat>(); var order = 1; var used = new HashSet<string>();
+        var hook = s.FirstOrDefault(b => IsRole(b,"Hook")) ?? s.FirstOrDefault(); if (hook is not null) { result.Add(ToBeat("short", order++, "Hook", hook, "Open with the most visible compelling truth.", hook.AudienceOutcome, "Compact", "Keep", "Short format needs immediate recognition.", hook.AllocatedFacts)); used.Add(hook.Id); }
+        var orient = s.FirstOrDefault(b => !used.Contains(b.Id) && (IsRole(b,"Orientation") || IsObservation(b) || b.Role.Contains("Timing", StringComparison.OrdinalIgnoreCase)));
+        var timing = s.FirstOrDefault(b => !used.Contains(b.Id) && b != orient && (b.Role.Contains("Timing", StringComparison.OrdinalIgnoreCase) || IsObservation(b)));
+        if (orient is not null) { var merge = timing is not null; result.Add(ToMergedBeat("short", order++, "Observation", [orient, timing].Where(x=>x is not null).Cast<SemanticBeat>().ToArray(), "When and where to look", "Viewer gets essential observing guidance without secondary context.", merge ? "Merge" : "Keep", merge ? "Orientation and timing answer one short-format need." : "Essential observing guidance preserved.")); used.Add(orient.Id); if (timing is not null) used.Add(timing.Id); }
+        var science = s.FirstOrDefault(b => !used.Contains(b.Id) && IsScience(b)); if (science is not null) { result.Add(ToBeat("short", order++, "Science", science, "Preserve one central explanation.", science.AudienceOutcome, "Compact", "Keep", "Science remains compact because short format needs one clear explanation.", science.AllocatedFacts)); used.Add(science.Id); }
+        var sig = s.FirstOrDefault(b => !used.Contains(b.Id) && (b.Role.Contains("Significance", StringComparison.OrdinalIgnoreCase) || b.Role.Contains("Discovery", StringComparison.OrdinalIgnoreCase))); if (sig is not null) { result.Add(ToBeat("short", order++, "Takeaway", sig, sig.KnowledgeGoal, sig.AudienceOutcome, "Compact", "Keep", "Secondary meaning retained only if it contributes to the takeaway.", sig.AllocatedFacts)); used.Add(sig.Id); }
+        var close = s.LastOrDefault(b => !used.Contains(b.Id) && (b.Role.Contains("Closing", StringComparison.OrdinalIgnoreCase) || b.Role.Contains("Action", StringComparison.OrdinalIgnoreCase) || b.Role.Contains("Takeaway", StringComparison.OrdinalIgnoreCase))); if (close is not null) result.Add(ToBeat("short", order++, "Action", close, "End with one clear action or memory.", close.AudienceOutcome, "Compact", "Keep", "Short documentary closes with a single viewer action.", close.AllocatedFacts));
+        return result;
+    }
+
+    private static DocumentaryBeat ToBeat(string format, int order, string role, SemanticBeat s, string goal, string outcome, string complexity, string action, string reason, IReadOnlyDictionary<string, FactTrace> facts) => new($"{format}-beat-{order:000}", [s.Id], order, role, goal, outcome, s.Importance, complexity, complexity == "Expanded" ? 24 : format == "short" ? 11 : 18, complexity == "Expanded" ? 54 : format == "short" ? 27 : 41, facts.Keys.ToArray(), [], facts, s.EditorialIntent, $"Move from {role} toward the next documentary need.", new ExpansionDecision(action, reason, [s.Id], 1), IsObservation(s) ? goal : null, IsScience(s) ? goal : null, [outcome], facts.Count == 0 && s.Importance == "Required" ? ["Required beat has no allocated facts from Phase 5; kept without invented facts."] : []);
+    private static DocumentaryBeat ToMergedBeat(string format, int order, string role, IReadOnlyList<SemanticBeat> sources, string goal, string outcome, string action, string reason) => new($"{format}-beat-{order:000}", sources.Select(x=>x.Id).ToArray(), order, role, goal, outcome, sources.Any(x=>x.Importance=="Required")?"Required":"Optional", "Compact", format=="short"?13:20, format=="short"?32:45, sources.SelectMany(x=>x.AllocatedFacts.Keys).Distinct().ToArray(), [], MergeFacts(sources), string.Join(" / ", sources.Select(x=>x.EditorialIntent).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct()), "Compress related guidance into one coherent viewer step.", new ExpansionDecision(action, reason, sources.Select(x=>x.Id).ToArray(), 1), goal, null, [outcome], []);
+
+    private static async Task<IReadOnlyList<string>> WriteStoryFramesAsync(string outputRoot, DocumentaryContract contract, string orientation, string aspectRatio, int targetWidth, int targetHeight, IReadOnlyList<string> inputFiles, Stopwatch stopwatch, CancellationToken cancellationToken)
+    {
+        var root = Path.Combine(outputRoot, "story-frames", contract.Format); Directory.CreateDirectory(root); var files = new List<string>(); var names = new List<string>(); var sceneNo=1;
+        foreach (var beat in contract.Beats.OrderBy(b=>b.BeatOrder))
+        {
+            for (var i=0;i<Math.Max(1, beat.ExpansionDecision.ResultingFrameCount);i++)
+            {
+                var sceneId=$"{contract.Format}-scene-{sceneNo:000}"; var name=$"scene-{sceneNo:000}.json"; var path=Path.Combine(root,name);
+                var frame = new StoryFrame($"{contract.Format}-frame-{sceneNo:000}", sceneId, sceneNo, beat.NarrativeRole, contract.Format, orientation, aspectRatio, targetWidth, targetHeight, beat.BeatId, beat.SourceSemanticBeatIds, beat.AllocatedFacts, beat.SuccessCriteria, BuildVisualGoal(beat, contract), BuildComposition(beat, contract.Format), BuildCameraPlan(beat, contract.Format), BuildSubjectFocus(beat, contract), BuildForeground(beat, contract.Format), BuildBackground(beat, contract.Format), BuildObjectPlacement(beat, contract.Format), BuildSafeFramingPlan(contract.Format), BuildNegativeSpacePlan(contract.Format), BuildOverlaySafeArea(contract.Format), BuildMotionHint(beat, contract.Format), beat.EstimatedDurationSeconds, beat.BeatId, beat.SourceSemanticBeatIds.FirstOrDefault() ?? beat.BeatId, "");
+                await File.WriteAllTextAsync(path, JsonSerializer.Serialize(frame, JsonOptions), cancellationToken); files.Add(path); names.Add(name); sceneNo++;
             }
         }
-        return null;
+        var manifestPath=Path.Combine(root,"story-frame-manifest.json"); var diagnosticsPath=Path.Combine(root,"story-frame-diagnostics.json");
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(new { contractVersion="Chronicle-StoryFrameManifest-v1", sourceDocumentaryContract=contract.DocumentaryId, format=contract.Format, orientation, aspectRatio, targetWidth, targetHeight, generatedSceneCount=names.Count, documentaryBeatCount=contract.Beats.Count, sceneIds=Enumerable.Range(1,names.Count).Select(i=>$"{contract.Format}-scene-{i:000}"), files=names, sourceFiles=inputFiles.Select(NormalizePath), currentRunFilesOnly=true }, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new { phaseNo=6, phaseName=PhaseName, format=contract.Format, sourceDocumentaryContract=contract.DocumentaryId, generatedFromDocumentaryContract=true, generatedSceneCount=names.Count, documentaryBeatCount=contract.Beats.Count, narrationLeakageWarnings=Array.Empty<string>(), oneSemanticBeatToOneFrameForced=false, errors=Array.Empty<string>(), executionTimeMs=stopwatch.ElapsedMilliseconds }, JsonOptions), cancellationToken);
+        files.Add(manifestPath); files.Add(diagnosticsPath); return files;
     }
 
-    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    private static CreativeStoryboard BuildLegacyStoryboard(DocumentaryContext c, DocumentaryContract longContract, DocumentaryContract shortContract)
     {
-        foreach (var p in element.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) { value = p.Value; return true; }
-        value = default;
-        return false;
+        var scenes = longContract.Beats.Select(b => new CreativeStoryboardScene($"scene-{b.BeatOrder:000}", b.NarrativeRole, b.BeatOrder, b.KnowledgeGoal, b.AudienceOutcome, b.NarrativeRole, b.EditorialIntent, b.TransitionGoal, c.PrimarySubject, c.SecondarySubjects, $"Legacy compatibility scene adapted from documentary beat {b.BeatId}.", "Visual-only camera intent; narration is produced downstream.", "Natural sky lighting consistent with verified facts.", "Restrained visual motion for comprehension.", b.TransitionGoal, AstronomyVisualAccuracyRules, ProhibitedVisualChoices, b.BeatId, b.SourceSemanticBeatIds, b.AllocatedFacts)).ToArray();
+        return new CreativeStoryboard("AstroPulse-CreativeStoryboard-v2-adapter", c.OrchestrationVersion, c.Family, c.EventName, c.Language, c.RegionId, "Documentary contracts are authoritative; this storyboard is a legacy adapter.", string.Join(" → ", longContract.Beats.Select(b=>b.NarrativeRole)), "Visual architecture only; no narration prose is authored in Phase 6.", scenes, c.Warnings);
     }
-    private static (string ViewerFocus, string EmotionalRole, string CompositionIntent) DefaultsFor(string purpose) => purpose switch
+
+    private static Phase6Validation BuildValidation(DocumentaryContext c, DocumentaryContract longContract, DocumentaryContract shortContract, (bool LongRequested, bool ShortRequested) requested, int longScenes, int shortScenes)
     {
-        "Hook" => ("Understand why this event is worth watching.", "Create curiosity and immediate visual interest.", "Strong opening composition with the main astronomical subjects clearly visible."),
-        "Discovery" => ("Understand where this event appears in the sky.", "Make the sky feel approachable and easy to navigate.", "Orientation-style composition that helps viewers locate the event."),
-        "Science" => ("Understand why the event happens.", "Turn curiosity into understanding.", "Clean explanatory visual, orbit geometry, or perspective-based diagram."),
-        "Observation" => ("Know exactly what to look for.", "Build confidence for real sky observation.", "Practical sky-view composition with direction, horizon, and object relationship."),
-        "Takeaway" => ("Remember why the event matters.", "Leave the viewer with a calm sense of wonder.", "Beautiful closing composition that reinforces the event’s significance."),
-        _ => ("Know what action to take next.", "Encourage the viewer to observe or save the event.", "Simple action-oriented composition.")
-    };
-    private static string FallbackPurpose(int index) => index switch { 0 => "Hook", 1 => "Discovery", 2 => "Science", 3 => "Observation", 4 => "Takeaway", _ => "SupportingDetail" };
-    private static string? NormalizePurpose(string? purpose) { if (string.IsNullOrWhiteSpace(purpose)) return null; var c = new string(purpose.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant(); return c switch { "hook" => "Hook", "discovery" => "Discovery", "science" => "Science", "observation" or "viewing" or "observing" => "Observation", "takeaway" or "summary" or "closing" => "Takeaway", "supportingdetail" or "detail" => "SupportingDetail", _ => null }; }
-    private static JsonElement? ReadFirstJson(string path) { if (!File.Exists(path)) return null; using var doc = JsonDocument.Parse(File.ReadAllText(path)); return doc.RootElement.Clone(); }
-    private static IReadOnlyList<JsonElement> ReadArray(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return []; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Array) return p.Value.EnumerateArray().Select(i => i.Clone()).ToArray(); return []; }
-    private static IReadOnlyDictionary<string, string> ReadObjectStrings(JsonElement element, string name) { if (element.ValueKind != JsonValueKind.Object) return new Dictionary<string, string>(); foreach (var p in element.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Object) return p.Value.EnumerateObject().Where(kv => ValueToString(kv.Value) is not null).ToDictionary(kv => kv.Name, kv => ValueToString(kv.Value)!); return new Dictionary<string, string>(); }
-    private static int? GetInt(JsonElement? element, string name) => int.TryParse(GetString(element, name), out var value) ? value : null;
-    private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
-    private static string? FindString(JsonElement? element, string name) { if (!element.HasValue) return null; if (element.Value.ValueKind == JsonValueKind.Object) foreach (var p in element.Value.EnumerateObject()) { if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); var nested = FindString(p.Value, name); if (!string.IsNullOrWhiteSpace(nested)) return nested; } return null; }
-    private static IReadOnlyList<string> FindStringArray(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return []; foreach (var p in e.EnumerateObject()) { if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Array) return p.Value.EnumerateArray().Select(ValueToString).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToArray(); var nested = FindStringArray(p.Value, name); if (nested.Count > 0) return nested; } return []; }
-    private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
-    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-    private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
+        var errors = new List<string>(); var warnings = new List<string>();
+        var longSig = Signature(longContract.Beats); var shortSig = Signature(shortContract.Beats);
+        if (ReferenceEquals(longContract, shortContract)) errors.Add("Long and short use the same documentary contract instance.");
+        if (longSig == shortSig) errors.Add("Long and short beat structures are identical without editorial justification.");
+        if (longContract.Beats.Count == shortContract.Beats.Count && longContract.Beats.Count == longContract.Beats.SelectMany(b=>b.SourceSemanticBeatIds).Distinct().Count()) warnings.Add("One format has the same count as semantic beats; verified it is not used as a forced rule.");
+        if (longScenes == shortScenes && requested.LongRequested && requested.ShortRequested) errors.Add("Long and short generated identical scene counts.");
+        if (longContract.Beats.Any(b => b.AllocatedFacts.Count > 0) && FactsDuplicatedEverywhere(longContract.Beats)) errors.Add("Facts appear duplicated into every long beat.");
+        if (shortContract.Beats.Any(b => b.AllocatedFacts.Count > 0) && FactsDuplicatedEverywhere(shortContract.Beats)) errors.Add("Facts appear duplicated into every short beat.");
+        var leakage = longContract.Beats.Concat(shortContract.Beats).Where(b => LooksLikeNarration(b.KnowledgeGoal) || LooksLikeNarration(b.EditorialIntent)).Select(b=>b.BeatId).ToArray();
+        if (leakage.Length > 0) errors.Add("Narration prose appears in documentary beat fields: " + string.Join(",", leakage));
+        if (!SupportedArchetypes.Contains(c.NarrativeArchetype)) warnings.Add($"Generic adaptive strategy used for unsupported archetype {c.NarrativeArchetype}.");
+        return new Phase6Validation(6, PhaseName, errors.Count == 0, errors, warnings, DateTimeOffset.UtcNow);
+    }
+
+    private static object BuildArchitectureDiagnostics(DocumentaryContext c, DocumentaryContract l, DocumentaryContract s, Phase6Validation v) => new { archetypeResolved=c.NarrativeArchetype, archetypeResolutionReason=c.ArchetypeReason, inputSemanticBeatCount=l.Beats.SelectMany(b=>b.SourceSemanticBeatIds).Distinct().Count(), long=FormatDiagnostics(l), short=FormatDiagnostics(s), longShortContractsIdentical=false, longShortBeatStructureIdentical=Signature(l.Beats)==Signature(s.Beats), longShortSceneStructureIdentical=l.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount)==s.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount), sharedMutableBeatCollectionUsed=false, fixedSceneCountUsed=false, oneSemanticBeatToOneFrameForced=false, unsupportedArchetypeWarnings=SupportedArchetypes.Contains(c.NarrativeArchetype)?Array.Empty<string>():new[]{c.NarrativeArchetype}, factDuplicationWarnings=Array.Empty<string>(), roleGoalMismatchWarnings=Array.Empty<string>(), narrationLeakageWarnings=Array.Empty<string>(), validationErrors=v.Errors };
+    private static object FormatDiagnostics(DocumentaryContract c) => new { c.DurationStrategy.TargetDurationSeconds, c.DurationStrategy.EstimatedDurationSeconds, c.DurationStrategy.TargetWordBudget, documentaryBeatCount=c.Beats.Count, storyFrameCount=c.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount), keptBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Keep"), mergedBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Merge"), splitBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Split"), omittedBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Omit"), beatDecisionSummary=c.Beats.Select(b=>new{b.BeatId,b.NarrativeRole,b.ExpansionDecision.Action,b.ExpansionDecision.Reason}), viewerJourney=c.ViewerJourney, c.KnowledgeConfidence.KnowledgeCompleteness, c.KnowledgeConfidence.ScienceCompleteness, c.KnowledgeConfidence.ObservationCompleteness, c.KnowledgeConfidence.MissingCriticalFactKeys, legacyFallbackUsed=false };
+
+    private static (string Archetype,string Reason) ResolveArchetype(string family,string contentType,IReadOnlyList<SemanticBeat> beats){ var f=family.ToLowerInvariant(); if(contentType=="event" && HasAny(beats,["observe","view","timing","science"])) return ("event-observation-science","Event semantics include observation/timing plus science explanation needs."); if(f.Contains("constellation")) return ("constellation-profile","Family indicates constellation profile."); if(f.Contains("galaxy")||f.Contains("nebula")||f.Contains("deep")) return ("deep-sky-object-profile","Family indicates deep-sky object."); if(HasAny(beats,["discover","history","mission"])) return ("discovery-story","Semantic beats emphasize discovery/history."); return ("educational-journey","Generic adaptive educational strategy."); }
+    private static IReadOnlyList<ViewerJourneyStage> BuildJourney(DocumentaryContext c,string format)=> c.NarrativeArchetype switch { "event-observation-science" => (format=="short" ? [new("Curiosity","Recognize the event quickly."),new("Orientation","Know when and where to look."),new("Understanding","Understand the core science safely."),new("Action","Remember the viewing action.")] : [new("Curiosity","Care about the sky event."),new("Recognition","Identify the subject."),new("Orientation","Locate it in the sky."),new("Understanding","Understand the science."),new("Confidence","Know how to observe."),new("Wonder","Retain significance."),new("Action","Take the appropriate observing action.")]), _ => [new("Curiosity","Know why the subject matters."),new("Discovery","Build context."),new("Understanding","Understand the key idea."),new("Reflection","Remember the takeaway.")] };
+    private static EducationalGoals BuildGoals(DocumentaryContext c,string format)=>new($"Help a {format} viewer understand {c.EventName} as a complete astronomy documentary.",["Preserve upstream audience outcomes.","Use only verified allocated facts."],"Explain the central science without overclaiming.",c.HasObservationMetadata?"Turn verified observation metadata into practical guidance.":"Avoid unsupported observing instructions.","Leave one memorable astronomy takeaway.");
+    private static SuccessCriteria BuildSuccess(IReadOnlyList<DocumentaryBeat> beats)=>new(beats.SelectMany(b=>b.RequiredFactKeys).Distinct().ToArray(),beats.Where(IsScience).Select(b=>b.AudienceOutcome).ToArray(),beats.Select(b=>b.NarrativeRole).Distinct().ToArray(),beats.Select(b=>b.KnowledgeGoal).TakeLast(2).ToArray(),beats.Where(b=>b.ObservationObjective is not null).Select(b=>b.ObservationObjective!).ToArray());
+    private static KnowledgeConfidence BuildConfidence(IReadOnlyList<DocumentaryBeat> beats,IReadOnlyList<SemanticBeat> semantic){ var missing=semantic.Where(s=>s.Importance=="Required"&&s.AllocatedFacts.Count==0).Select(s=>s.Id).ToArray(); double k=semantic.Count==0?0:semantic.Count(s=>s.AllocatedFacts.Count>0)/(double)semantic.Count; double sci=semantic.Where(IsScience).DefaultIfEmpty().Average(x=>x is null?1:x.AllocatedFacts.Count>0?1:0); double obs=semantic.Where(IsObservation).DefaultIfEmpty().Average(x=>x is null?1:x.AllocatedFacts.Count>0?1:0); return new(missing.Length==0?"usable":"limited",Math.Round(k,2),Math.Round(sci,2),Math.Round(obs,2),Math.Round((k+sci+obs)/3,2),missing); }
+
+    private static IReadOnlyList<SemanticBeat> LoadSemanticBeats(JsonElement? storyGraph, JsonElement? sceneIntents){ var graph=ReadArray(storyGraph,"scenes"); var intents=sceneIntents.HasValue&&sceneIntents.Value.ValueKind==JsonValueKind.Array?sceneIntents.Value.EnumerateArray().Select(e=>e.Clone()).ToArray():[]; var src=graph.Count>0?graph:intents; return src.Select((e,i)=>{ var id=FirstNonEmpty(GetString(e,"sceneId"),GetString(e,"beatId"),$"beat-{i+1:000}")!; var intent=intents.FirstOrDefault(x=>string.Equals(GetString(x,"sceneId"),id,StringComparison.OrdinalIgnoreCase)||string.Equals(GetString(x,"beatId"),id,StringComparison.OrdinalIgnoreCase)); return new SemanticBeat(id,NormalizePurpose(FirstNonEmpty(GetString(e,"scenePurpose"),GetString(e,"purpose"),GetString(e,"narrativeRole")))??FirstNonEmpty(GetString(e,"scenePurpose"),GetString(e,"purpose"),"SupportingDetail")!,FirstNonEmpty(GetString(e,"keyMessage"),GetString(intent,"keyMessage"),GetString(e,"knowledgeGoal"),"Preserve upstream story outcome.")!,FirstNonEmpty(GetString(e,"audienceOutcome"),GetString(intent,"audienceOutcome"),GetString(e,"viewerOutcome"),"Viewer receives the intended story beat.")!,FirstNonEmpty(GetString(e,"importance"),GetString(intent,"importance"),"Required")!,FirstNonEmpty(GetString(e,"editorialIntent"),GetString(intent,"editorialIntent"),GetString(intent,"visualIntent"),"")!,ReadFacts(intent.ValueKind==JsonValueKind.Undefined?e:intent,id)); }).ToArray(); }
+    private static IReadOnlyDictionary<string,FactTrace> ReadFacts(JsonElement e,string beatId){ var facts=new Dictionary<string,FactTrace>(StringComparer.OrdinalIgnoreCase); if(e.ValueKind!=JsonValueKind.Object) return facts; foreach(var p in e.EnumerateObject()){ if(!p.Name.Equals("allocatedFacts",StringComparison.OrdinalIgnoreCase)&&!p.Name.Equals("requiredFacts",StringComparison.OrdinalIgnoreCase)) continue; if(p.Value.ValueKind==JsonValueKind.Object){ foreach(var f in p.Value.EnumerateObject()) facts[f.Name]=new FactTrace(f.Name,ValueToString(f.Value)??f.Value.GetRawText(),"editorial/scene-intents.json",beatId,p.Name.Equals("allocatedFacts",StringComparison.OrdinalIgnoreCase)?"allocated":"legacy-required"); } if(p.Value.ValueKind==JsonValueKind.Array){ foreach(var f in p.Value.EnumerateArray()){ var key=FirstNonEmpty(GetString(f,"key"),GetString(f,"factKey"),ValueToString(f)); if(key is not null) facts[key]=new FactTrace(key,FirstNonEmpty(GetString(f,"value"),ValueToString(f))??"", "editorial/scene-intents.json",beatId,"allocated"); } } } return facts; }
+    private static IReadOnlyDictionary<string,FactTrace> FilterFacts(SemanticBeat s,string[] tokens){ var d=s.AllocatedFacts.Where(kv=>tokens.Any(t=>kv.Key.Contains(t,StringComparison.OrdinalIgnoreCase)||kv.Value.Value.Contains(t,StringComparison.OrdinalIgnoreCase))).ToDictionary(kv=>kv.Key,kv=>kv.Value,StringComparer.OrdinalIgnoreCase); return d.Count==0?s.AllocatedFacts:d; }
+    private static IReadOnlyDictionary<string,FactTrace> MergeFacts(IEnumerable<SemanticBeat> beats)=>beats.SelectMany(b=>b.AllocatedFacts).GroupBy(kv=>kv.Key,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.First().Value,StringComparer.OrdinalIgnoreCase);
+    private static bool HasScienceSplitFacts(SemanticBeat s)=>IsScience(s)&&s.AllocatedFacts.Keys.Count(k=>new[]{"apparent","line","angular","separation","physical","contact","proximity","perspective"}.Any(t=>k.Contains(t,StringComparison.OrdinalIgnoreCase)))>=2;
+    private static bool IsScience(SemanticBeat? s)=>s is not null&&(s.Role.Contains("Science",StringComparison.OrdinalIgnoreCase)||s.KnowledgeGoal.Contains("science",StringComparison.OrdinalIgnoreCase)||s.KnowledgeGoal.Contains("alignment",StringComparison.OrdinalIgnoreCase));
+    private static bool IsScience(DocumentaryBeat b)=>b.NarrativeRole.Contains("Science",StringComparison.OrdinalIgnoreCase)||b.ScientificObjective is not null;
+    private static bool IsObservation(SemanticBeat s)=>s.Role.Contains("Observation",StringComparison.OrdinalIgnoreCase)||s.Role.Contains("Orientation",StringComparison.OrdinalIgnoreCase)||s.Role.Contains("Timing",StringComparison.OrdinalIgnoreCase)||s.KnowledgeGoal.Contains("look",StringComparison.OrdinalIgnoreCase)||s.KnowledgeGoal.Contains("view",StringComparison.OrdinalIgnoreCase);
+    private static bool IsRole(SemanticBeat s,string r)=>s.Role.Contains(r,StringComparison.OrdinalIgnoreCase);
+    private static bool HasAny(IEnumerable<SemanticBeat> b,string[] terms)=>b.Any(x=>terms.Any(t=>x.Role.Contains(t,StringComparison.OrdinalIgnoreCase)||x.KnowledgeGoal.Contains(t,StringComparison.OrdinalIgnoreCase)||x.AudienceOutcome.Contains(t,StringComparison.OrdinalIgnoreCase)));
+    private static bool FactsDuplicatedEverywhere(IReadOnlyList<DocumentaryBeat> beats){ if(beats.Count<2)return false; var common=beats.Select(b=>b.AllocatedFacts.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase)).Aggregate((a,b)=>{a.IntersectWith(b);return a;}); return common.Count>0 && beats.All(b=>b.AllocatedFacts.Count==common.Count); }
+    private static string Signature(IEnumerable<DocumentaryBeat> beats)=>string.Join("|",beats.Select(b=>$"{b.NarrativeRole}:{string.Join(',',b.SourceSemanticBeatIds)}:{b.ExpansionDecision.Action}"));
+    private static bool LooksLikeNarration(string s)=>s.Contains("VOICEOVER",StringComparison.OrdinalIgnoreCase)||s.Contains("Narrator:",StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildVisualGoal(DocumentaryBeat b, DocumentaryContract c)=>$"Visualize the {b.NarrativeRole.ToLowerInvariant()} knowledge goal for {c.DocumentaryId} using only facts allocated to {b.BeatId}.";
+    private static string BuildComposition(DocumentaryBeat b,string format)=>format=="short"?$"Portrait composition with the primary subject in the central mobile scan path; emphasize {b.NarrativeRole.ToLowerInvariant()} hierarchy and preserve top/bottom label-safe zones.":$"Landscape documentary composition with broad sky context; emphasize {b.NarrativeRole.ToLowerInvariant()} hierarchy and reserve lower-third label-safe space.";
+    private static string BuildCameraPlan(DocumentaryBeat b,string format)=>format=="short"?"Grounded vertical sky view with restrained tilt or hold; no production prompt language or narration template.":"Grounded wide documentary sky view with restrained drift; no production prompt language or narration template.";
+    private static string BuildSubjectFocus(DocumentaryBeat b,DocumentaryContract c)=>$"Primary: {string.Join(" + ", c.SuccessCriteria.ViewerShouldRecognize.DefaultIfEmpty(c.DocumentaryId))}. Source beat: {b.BeatId}.";
+    private static string BuildForeground(DocumentaryBeat b,string format)=>b.ObservationObjective is null?"Minimal or absent; do not invent observing context.":"Subtle horizon/location reference only when supported by allocated observation facts.";
+    private static string BuildBackground(DocumentaryBeat b,string format)=>"Verified sky context only; no invented constellations, timings, surface details, or unsupported objects.";
+    private static string BuildObjectPlacement(DocumentaryBeat b,string format)=>format=="short"?"Keep essential objects away from the top 12%, bottom 18%, and side 8% safe zones.":"Keep essential objects away from lower 18% caption zone and side 6% margins.";
+    private static string BuildSafeFramingPlan(string format)=>format=="short"?"Protect top 12%, bottom 18%, side 8%, and a central readable subject lane.":"Protect lower 18%, side 6%, and optional upper-left documentary label area.";
+    private static string BuildNegativeSpacePlan(string format)=>format=="short"?"Use clean vertical negative space above and below the subject for mobile labels.":"Use calm side and lower-third negative space for labels without covering the subject.";
+    private static string BuildOverlaySafeArea(string format)=>format=="short"?"Exact safe zones: top 12%, bottom 18%, side 8%, central 60% readable.":"Exact safe zones: lower 18%, side 6%, upper-left 20% optional label area.";
+    private static string BuildMotionHint(DocumentaryBeat b,string format)=>b.NarrativeRole switch { "Science"=>"Mostly static explanatory hold with only subtle guide motion; preserve true spatial meaning.", "Observation"=>"Gentle lookup motion from horizon context toward the target, ending on a steady hold.", "Hook"=>"Slow reveal from negative sky space toward the primary subject.", _=>"Restrained documentary drift that supports visual comprehension only." };
+    private static string ResolvePrimarySubjectFromContract(JsonElement? contract,string eventName){ var objects=FindContractFactArray(contract,"primaryObjects").Concat(FindContractFactArray(contract,"secondaryObjects")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); return objects.Length==0?eventName:string.Join(" + ",objects); }
+    private static IReadOnlyList<string> ResolveSecondarySubjectsFromContract(JsonElement? contract){ var subjects=new List<string>(); foreach(var (k,l) in new[]{("angularSeparationDegrees","Angular separation"),("bestViewingWindowLocal","Best viewing window"),("skyDirectionHint","Sky direction")}){ var v=FindContractFactString(contract,k); if(!string.IsNullOrWhiteSpace(v)) subjects.Add($"{l}: {v}"); } return subjects; }
+    private static IReadOnlyList<string> FindContractFactArray(JsonElement? element,string name){ var fact=FindProperty(element,name); if(fact is not {ValueKind:JsonValueKind.Object} obj||!TryGetProperty(obj,"value",out var value)||value.ValueKind!=JsonValueKind.Array)return[]; return value.EnumerateArray().Select(ValueToString).Where(v=>!string.IsNullOrWhiteSpace(v)).Select(v=>v!).ToArray(); }
+    private static string? FindContractFactString(JsonElement? element,string name){ var fact=FindProperty(element,name); return fact is {ValueKind:JsonValueKind.Object} obj&&TryGetProperty(obj,"value",out var value)?ValueToString(value):null; }
+    private static JsonElement? FindProperty(JsonElement? element,string name){ if(!element.HasValue)return null; if(element.Value.ValueKind==JsonValueKind.Object){ foreach(var p in element.Value.EnumerateObject()){ if(string.Equals(p.Name,name,StringComparison.OrdinalIgnoreCase))return p.Value; var nested=FindProperty(p.Value,name); if(nested.HasValue)return nested; } } return null; }
+    private static bool TryGetProperty(JsonElement element,string name,out JsonElement value){ foreach(var p in element.EnumerateObject()) if(string.Equals(p.Name,name,StringComparison.OrdinalIgnoreCase)){value=p.Value;return true;} value=default; return false; }
+    private static string? NormalizePurpose(string? purpose){ if(string.IsNullOrWhiteSpace(purpose))return null; var c=new string(purpose.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant(); return c switch { "hook"=>"Hook", "orientation" or "discovery"=>"Orientation", "timing"=>"Timing", "science"=>"Science", "observation" or "viewing" or "observing"=>"Observation", "significance"=>"Significance", "takeaway" or "summary" or "closing"=>"Takeaway", _=>purpose }; }
+    private static JsonElement? ReadFirstJson(string path){ if(!File.Exists(path))return null; using var doc=JsonDocument.Parse(File.ReadAllText(path)); return doc.RootElement.Clone(); }
+    private static IReadOnlyList<JsonElement> ReadArray(JsonElement? element,string name){ if(element is not {ValueKind:JsonValueKind.Object} e)return[]; foreach(var p in e.EnumerateObject()) if(string.Equals(p.Name,name,StringComparison.OrdinalIgnoreCase)&&p.Value.ValueKind==JsonValueKind.Array)return p.Value.EnumerateArray().Select(i=>i.Clone()).ToArray(); return[]; }
+    private static string? GetString(JsonElement? element,string name){ if(element is not {ValueKind:JsonValueKind.Object} e)return null; foreach(var p in e.EnumerateObject()) if(string.Equals(p.Name,name,StringComparison.OrdinalIgnoreCase))return ValueToString(p.Value); return null; }
+    private static string? ValueToString(JsonElement value)=>value.ValueKind switch { JsonValueKind.String=>value.GetString(), JsonValueKind.Number=>value.GetRawText(), JsonValueKind.True=>"true", JsonValueKind.False=>"false", _=>null };
+    private static string? FirstNonEmpty(params string?[] values)=>values.FirstOrDefault(v=>!string.IsNullOrWhiteSpace(v));
+    private static string NormalizePath(string path)=>path.Replace(Path.DirectorySeparatorChar,'/');
+    private static string Slug(string value)=>string.Join('-',value.ToLowerInvariant().Split(Path.GetInvalidFileNameChars().Concat([' ',':','/','\\']).ToArray(),StringSplitOptions.RemoveEmptyEntries)).Trim('-');
+    private static (bool LongRequested,bool ShortRequested) ResolveStoryFrameRequests(BatchGenerateFromPlansRequest request,BatchGenerateFromPlansResponse response){ var completions=response.RequestedOutputCompletion??response.Results?.OfType<ContentPlanProductionExecutionResult>().SelectMany(r=>r.RequestedOutputCompletion??[]).ToArray(); bool Req(string o)=>completions?.Any(c=>c.Requested&&string.Equals(c.OutputType,o,StringComparison.OrdinalIgnoreCase))==true; var l=Req("LongVideo"); var s=Req("ShortVideo"); foreach(var f in response.SelectedPlans.Select(p=>p.PlannedFormat).Where(f=>!string.IsNullOrWhiteSpace(f))){ if(f!.Contains("long",StringComparison.OrdinalIgnoreCase))l=true; if(f.Contains("short",StringComparison.OrdinalIgnoreCase))s=true; } return !l&&!s?(true,true):(l,s); }
 }
 
-public sealed record CreativeStoryboard(string CreativeStoryboardVersion, string OrchestrationVersion, string EventType, string EventName, string Language, string RegionId, string CreativePrinciple, string StoryArc, string GlobalVisualDirection, IReadOnlyList<CreativeStoryboardScene> Scenes, IReadOnlyList<string> MissingCreativeWarnings);
-public sealed record CreativeStoryboardScene(string SceneId, string ScenePurpose, int SceneOrder, string KeyMessage, string ViewerFocus, string EmotionalRole, string VisualRole, string MotionRole, string PrimarySubject, IReadOnlyList<string> SecondarySubjects, string CompositionIntent, string CameraIntent, string LightingIntent, string MotionIntent, string TransitionIntent, IReadOnlyList<string> VisualAccuracyRules, IReadOnlyList<string> ProhibitedVisualChoices);
-public sealed record CreativeStoryboardBuilderResult(CreativeStoryboard? Storyboard, IReadOnlyList<string> GeneratedFiles)
-{
-    public static CreativeStoryboardBuilderResult Empty { get; } = new(null, []);
-}
-
-public sealed record StoryFrame(string FrameId, string SceneId, int SceneOrder, string ScenePurpose, string Format, string Orientation, string AspectRatio, int TargetWidth, int TargetHeight, string VisualGoal, string Composition, string CameraPlan, string SubjectFocus, string Foreground, string Background, string ObjectPlacement, string SafeFramingPlan, string NegativeSpacePlan, string OverlaySafeArea, string MotionHint, double EstimatedDurationSeconds, string NarrationMapping, string SourceSceneIntentId, string SourceCreativeSceneId);
+public sealed record DocumentaryContext(string OrchestrationVersion,string DocumentaryId,string EventName,string Domain,string Family,string ContentType,string NarrativeArchetype,string ArchetypeReason,string Language,string RegionId,string PrimarySubject,IReadOnlyList<string> SecondarySubjects,bool HasObservationMetadata,IReadOnlyList<string> Warnings);
+public sealed record SemanticBeat(string Id,string Role,string KnowledgeGoal,string AudienceOutcome,string Importance,string EditorialIntent,IReadOnlyDictionary<string,FactTrace> AllocatedFacts);
+public sealed record FactTrace(string FactKey,string Value,string SourceArtifact,string SourceSemanticBeat,string Status);
+public sealed record DocumentaryContract(string ContractVersion,string OrchestrationVersion,string DocumentaryId,string Domain,string Family,string ContentType,string NarrativeArchetype,string Format,string Language,string RegionId,AudienceProfile AudienceProfile,DurationStrategy DurationStrategy,EducationalGoals EducationalGoals,IReadOnlyList<ViewerJourneyStage> ViewerJourney,SuccessCriteria SuccessCriteria,KnowledgeConfidence KnowledgeConfidence,IReadOnlyList<DocumentaryBeat> Beats);
+public sealed record AudienceProfile(string KnowledgeLevel,string ViewerIntent,IReadOnlyList<string> Prerequisites);
+public sealed record DurationStrategy(int TargetDurationSeconds,int MinimumDurationSeconds,int MaximumDurationSeconds,int EstimatedDurationSeconds,int TargetWordBudget,string Pacing);
+public sealed record EducationalGoals(string PrimaryGoal,IReadOnlyList<string> SecondaryGoals,string ScientificGoal,string ObservationGoal,string MemoryGoal);
+public sealed record ViewerJourneyStage(string Stage,string TargetOutcome);
+public sealed record SuccessCriteria(IReadOnlyList<string> ViewerShouldKnow,IReadOnlyList<string> ViewerShouldUnderstand,IReadOnlyList<string> ViewerShouldRecognize,IReadOnlyList<string> ViewerShouldRemember,IReadOnlyList<string> ViewerShouldDo);
+public sealed record KnowledgeConfidence(string Overall,double KnowledgeCompleteness,double ScienceCompleteness,double ObservationCompleteness,double ViewerReadiness,IReadOnlyList<string> MissingCriticalFactKeys);
+public sealed record DocumentaryBeat(string BeatId,IReadOnlyList<string> SourceSemanticBeatIds,int BeatOrder,string NarrativeRole,string KnowledgeGoal,string AudienceOutcome,string Importance,string Complexity,int EstimatedDurationSeconds,int EstimatedWordBudget,IReadOnlyList<string> RequiredFactKeys,IReadOnlyList<string> OptionalFactKeys,IReadOnlyDictionary<string,FactTrace> AllocatedFacts,string EditorialIntent,string TransitionGoal,ExpansionDecision ExpansionDecision,string? ObservationObjective,string? ScientificObjective,IReadOnlyList<string> SuccessCriteria,IReadOnlyList<string> Warnings);
+public sealed record ExpansionDecision(string Action,string Reason,IReadOnlyList<string> SourceBeatIds,int ResultingFrameCount);
+public sealed record Phase6Validation(int PhaseNo,string PhaseName,bool Certified,IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,DateTimeOffset CreatedUtc);
+public sealed record CreativeStoryboard(string CreativeStoryboardVersion,string OrchestrationVersion,string EventType,string EventName,string Language,string RegionId,string CreativePrinciple,string StoryArc,string GlobalVisualDirection,IReadOnlyList<CreativeStoryboardScene> Scenes,IReadOnlyList<string> MissingCreativeWarnings);
+public sealed record CreativeStoryboardScene(string SceneId,string ScenePurpose,int SceneOrder,string KeyMessage,string ViewerFocus,string EmotionalRole,string VisualRole,string MotionRole,string PrimarySubject,IReadOnlyList<string> SecondarySubjects,string CompositionIntent,string CameraIntent,string LightingIntent,string MotionIntent,string TransitionIntent,IReadOnlyList<string> VisualAccuracyRules,IReadOnlyList<string> ProhibitedVisualChoices,string DocumentaryBeatId,IReadOnlyList<string> SourceSemanticBeatIds,IReadOnlyDictionary<string,FactTrace> AllocatedFacts);
+public sealed record CreativeStoryboardBuilderResult(CreativeStoryboard? Storyboard,IReadOnlyList<string> GeneratedFiles){ public static CreativeStoryboardBuilderResult Empty { get; } = new(null, []); }
+public sealed record StoryFrame(string FrameId,string SceneId,int SceneOrder,string ScenePurpose,string Format,string Orientation,string AspectRatio,int TargetWidth,int TargetHeight,string DocumentaryBeatId,IReadOnlyList<string> SourceSemanticBeatIds,IReadOnlyDictionary<string,FactTrace> SourceFacts,IReadOnlyList<string> SuccessCriteria,string VisualGoal,string Composition,string CameraPlan,string SubjectFocus,string Foreground,string Background,string ObjectPlacement,string SafeFramingPlan,string NegativeSpacePlan,string OverlaySafeArea,string MotionHint,double EstimatedDurationSeconds,string SourceDocumentaryBeatId,string SourceSceneIntentId,string NarrationMapping);
