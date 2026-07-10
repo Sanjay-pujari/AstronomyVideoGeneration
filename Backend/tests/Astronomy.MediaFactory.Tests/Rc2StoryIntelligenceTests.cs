@@ -146,10 +146,21 @@ public sealed class Rc2CreativeStoryboardTests
         """);
 
         var request = new BatchGenerateFromPlansRequest(2026, "US", StartPhaseNo: 1, EndPhaseNo: 7);
-        var response = new BatchGenerateFromPlansResponse(true, true, 1, 1, 1,
-        [
-            new BatchGenerateFromPlansSelectedPlan(Guid.NewGuid(), "Moon and Jupiter Close Approach", "PlanetaryConjunction", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1, null)
-        ], [], [], [], "Moon and Jupiter Close Approach", root);
+        var response = new BatchGenerateFromPlansResponse(
+            Success: true,
+            DryRun: true,
+            RequestedTitleCount: 1,
+            SelectedPlanCount: 1,
+            MaxPlans: 1,
+            SelectedPlans:
+            [
+                new BatchGenerateFromPlansSelectedPlan(Guid.NewGuid(), "Moon and Jupiter Close Approach", "PlanetaryConjunction", "Short", "US", "en", DateTimeOffset.Parse("2026-07-09T12:00:00Z"), "Ready", "Ready", 1, null)
+            ],
+            Steps: [],
+            Warnings: [],
+            Errors: [],
+            Title: "Moon and Jupiter Close Approach",
+            OutputRoot: root);
 
         await new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance).BuildAndWriteDiagnosticsAsync(request, response, CancellationToken.None);
         var result = await new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance).BuildAndWriteDiagnosticsAsync(request, response, CancellationToken.None);
