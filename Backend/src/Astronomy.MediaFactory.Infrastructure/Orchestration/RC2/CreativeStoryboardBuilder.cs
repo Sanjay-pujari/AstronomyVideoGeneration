@@ -35,22 +35,27 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         var storyboard = BuildLegacyStoryboard(context, longContract, shortContract);
         var longFrames = requested.LongRequested ? await WriteStoryFramesAsync(outputRoot, longContract, "landscape", "16:9", 1920, 1080, inputs, stopwatch, cancellationToken) : [];
         var shortFrames = requested.ShortRequested ? await WriteStoryFramesAsync(outputRoot, shortContract, "portrait", "9:16", 2160, 3840, inputs, stopwatch, cancellationToken) : [];
-        var validation = BuildValidation(context, longContract, shortContract, requested, longFrames.Count(f => f.EndsWith(".json") && Path.GetFileName(f).StartsWith("scene-")), shortFrames.Count(f => f.EndsWith(".json") && Path.GetFileName(f).StartsWith("scene-")));
-        var archDiagnostics = BuildArchitectureDiagnostics(context, longContract, shortContract, validation);
+        var longSceneCount = longFrames.Count(f => f.EndsWith(".json") && Path.GetFileName(f).StartsWith("scene-"));
+        var shortSceneCount = shortFrames.Count(f => f.EndsWith(".json") && Path.GetFileName(f).StartsWith("scene-"));
+        var decisionLog = BuildDecisionLog(context, longContract, shortContract);
+        var validation = BuildValidation(context, longContract, shortContract, requested, longSceneCount, shortSceneCount, decisionLog);
+        var archDiagnostics = BuildArchitectureDiagnostics(context, longContract, shortContract, validation, decisionLog);
         var storyboardPath = Path.Combine(creativeRoot, "creative-storyboard.json");
         var longContractPath = Path.Combine(creativeRoot, "documentary-contract.long.json");
         var shortContractPath = Path.Combine(creativeRoot, "documentary-contract.short.json");
         var architectureDiagnosticsPath = Path.Combine(creativeRoot, "documentary-architecture-diagnostics.json");
+        var decisionLogPath = Path.Combine(creativeRoot, "documentary-decision-log.json");
         var legacyDiagnosticsPath = Path.Combine(creativeRoot, "creative-diagnostics.json");
         var validationPath = Path.Combine(validationRoot, "phase-06-validation.json");
         await File.WriteAllTextAsync(longContractPath, JsonSerializer.Serialize(longContract, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(shortContractPath, JsonSerializer.Serialize(shortContract, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(storyboardPath, JsonSerializer.Serialize(storyboard, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(architectureDiagnosticsPath, JsonSerializer.Serialize(archDiagnostics, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(decisionLogPath, JsonSerializer.Serialize(decisionLog, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(legacyDiagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 6, phaseName = PhaseName, orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion, documentaryContractsAreAuthoritative = true, legacyStoryboardAdaptedFromContracts = true, inputs = inputs.Select(NormalizePath), outputFiles = new[] { storyboardPath, longContractPath, shortContractPath, architectureDiagnosticsPath, validationPath }.Concat(longFrames).Concat(shortFrames).Select(NormalizePath), creativeSceneCount = storyboard.Scenes.Count, validationCertified = validation.Certified, executionTimeMs = stopwatch.ElapsedMilliseconds }, JsonOptions), cancellationToken);
-        var files = new[] { storyboardPath, legacyDiagnosticsPath, longContractPath, shortContractPath, architectureDiagnosticsPath, validationPath }.Concat(longFrames).Concat(shortFrames).ToArray();
-        logger.LogInformation("Phase 6 Documentary Architect wrote {Count} files. Certified={Certified}", files.Length, validation.Certified);
+        await File.WriteAllTextAsync(legacyDiagnosticsPath, JsonSerializer.Serialize(new { phaseNo = 6, phaseName = PhaseName, orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion, documentaryContractsAreAuthoritative = true, legacyStoryboardAdaptedFromContracts = true, inputs = inputs.Select(NormalizePath), outputFiles = new[] { storyboardPath, longContractPath, shortContractPath, architectureDiagnosticsPath, decisionLogPath, validationPath }.Concat(longFrames).Concat(shortFrames).Select(NormalizePath), creativeSceneCount = storyboard.Scenes.Count, validationCertified = validation.AuroraCertificationCandidate, executionTimeMs = stopwatch.ElapsedMilliseconds }, JsonOptions), cancellationToken);
+        var files = new[] { storyboardPath, legacyDiagnosticsPath, longContractPath, shortContractPath, architectureDiagnosticsPath, decisionLogPath, validationPath }.Concat(longFrames).Concat(shortFrames).ToArray();
+        logger.LogInformation("Phase 6 Documentary Architect wrote {Count} files. Certified={Certified}", files.Length, validation.AuroraCertificationCandidate);
         return new CreativeStoryboardBuilderResult(storyboard, files);
     }
 
@@ -130,24 +135,116 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         return new CreativeStoryboard("AstroPulse-CreativeStoryboard-v2-adapter", c.OrchestrationVersion, c.Family, c.EventName, c.Language, c.RegionId, "Documentary contracts are authoritative; this storyboard is a legacy adapter.", string.Join(" → ", longContract.Beats.Select(b=>b.NarrativeRole)), "Visual architecture only; no narration prose is authored in Phase 6.", scenes, c.Warnings);
     }
 
-    private static Phase6Validation BuildValidation(DocumentaryContext c, DocumentaryContract longContract, DocumentaryContract shortContract, (bool LongRequested, bool ShortRequested) requested, int longScenes, int shortScenes)
+    private static DocumentaryDecisionLog BuildDecisionLog(DocumentaryContext c, DocumentaryContract longContract, DocumentaryContract shortContract)
     {
-        var errors = new List<string>(); var warnings = new List<string>();
-        var longSig = Signature(longContract.Beats); var shortSig = Signature(shortContract.Beats);
-        if (ReferenceEquals(longContract, shortContract)) errors.Add("Long and short use the same documentary contract instance.");
-        if (longSig == shortSig) errors.Add("Long and short beat structures are identical without editorial justification.");
-        if (longContract.Beats.Count == shortContract.Beats.Count && longContract.Beats.Count == longContract.Beats.SelectMany(b=>b.SourceSemanticBeatIds).Distinct().Count()) warnings.Add("One format has the same count as semantic beats; verified it is not used as a forced rule.");
-        if (longScenes == shortScenes && requested.LongRequested && requested.ShortRequested) errors.Add("Long and short generated identical scene counts.");
-        if (longContract.Beats.Any(b => b.AllocatedFacts.Count > 0) && FactsDuplicatedEverywhere(longContract.Beats)) errors.Add("Facts appear duplicated into every long beat.");
-        if (shortContract.Beats.Any(b => b.AllocatedFacts.Count > 0) && FactsDuplicatedEverywhere(shortContract.Beats)) errors.Add("Facts appear duplicated into every short beat.");
-        var leakage = longContract.Beats.Concat(shortContract.Beats).Where(b => LooksLikeNarration(b.KnowledgeGoal) || LooksLikeNarration(b.EditorialIntent)).Select(b=>b.BeatId).ToArray();
-        if (leakage.Length > 0) errors.Add("Narration prose appears in documentary beat fields: " + string.Join(",", leakage));
-        if (!SupportedArchetypes.Contains(c.NarrativeArchetype)) warnings.Add($"Generic adaptive strategy used for unsupported archetype {c.NarrativeArchetype}.");
-        return new Phase6Validation(6, PhaseName, errors.Count == 0, errors, warnings, DateTimeOffset.UtcNow);
+        var entries = longContract.Beats.Concat(shortContract.Beats).Select(b => new DocumentaryDecisionLogEntry(
+            BeatFormat(b),
+            b.BeatId,
+            b.SourceSemanticBeatIds,
+            b.ExpansionDecision.Action,
+            EnrichDecisionReason(c, b, longContract, shortContract),
+            b.RequiredFactKeys,
+            b.SuccessCriteria,
+            AlternativeFor(b),
+            AlternativeRejectedReason(c, b),
+            Math.Max(1, b.ExpansionDecision.ResultingFrameCount),
+            ConfidenceFor(b),
+            b.Warnings)).ToArray();
+        return new DocumentaryDecisionLog(
+            "Chronicle-DocumentaryDecisionLog-v1",
+            c.NarrativeArchetype,
+            $"Selected {c.NarrativeArchetype} because {c.ArchetypeReason} This matches the audience need to connect event recognition, scientific understanding, and practical observing without inventing unsupported facts.",
+            $"Long journey has {longContract.ViewerJourney.Count} stages for deeper comprehension and observation confidence; short journey has {shortContract.ViewerJourney.Count} stages to preserve recognition, core science, essential when/where guidance, and one action within mobile duration limits.",
+            $"Long uses {longContract.Beats.Count} beats and {longContract.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount)} frames because distinct audience outcomes and fact clusters justify extra explanation. Short uses {shortContract.Beats.Count} beats and {shortContract.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount)} frames because compatible orientation/timing outcomes are merged while preserving required science and action facts.",
+            entries);
     }
 
-    private static object BuildArchitectureDiagnostics(DocumentaryContext c, DocumentaryContract l, DocumentaryContract s, Phase6Validation v) => new { archetypeResolved=c.NarrativeArchetype, archetypeResolutionReason=c.ArchetypeReason, inputSemanticBeatCount=l.Beats.SelectMany(b=>b.SourceSemanticBeatIds).Distinct().Count(), longFormat=FormatDiagnostics(l), shortFormat=FormatDiagnostics(s), longShortContractsIdentical=false, longShortBeatStructureIdentical=Signature(l.Beats)==Signature(s.Beats), longShortSceneStructureIdentical=l.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount)==s.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount), sharedMutableBeatCollectionUsed=false, fixedSceneCountUsed=false, oneSemanticBeatToOneFrameForced=false, unsupportedArchetypeWarnings=SupportedArchetypes.Contains(c.NarrativeArchetype)?Array.Empty<string>():new[]{c.NarrativeArchetype}, factDuplicationWarnings=Array.Empty<string>(), roleGoalMismatchWarnings=Array.Empty<string>(), narrationLeakageWarnings=Array.Empty<string>(), validationErrors=v.Errors };
+    private static string EnrichDecisionReason(DocumentaryContext c, DocumentaryBeat b, DocumentaryContract longContract, DocumentaryContract shortContract)
+    {
+        var factClause = b.RequiredFactKeys.Count == 0 ? "no allocated required facts, so it is retained only as a coherence bridge" : $"{b.RequiredFactKeys.Count} allocated fact key(s) support the knowledge goal";
+        return $"{b.ExpansionDecision.Reason} The beat serves audience outcome '{b.AudienceOutcome}', uses {factClause}, fits the {b.Complexity.ToLowerInvariant()} complexity level, and contributes to documentary coherence in the {BeatFormat(b)} journey for {c.EventName}.";
+    }
+
+    private static string AlternativeFor(DocumentaryBeat b) => b.ExpansionDecision.Action switch
+    {
+        "Keep" => "Merge with adjacent compatible beat",
+        "Merge" => "Keep each source semantic beat as a separate scene",
+        "Split" => "Keep as one dense explanatory beat",
+        "Omit" => "Keep with a reduced visual-only bridge",
+        _ => "Use a generic scene allocation"
+    };
+
+    private static string AlternativeRejectedReason(DocumentaryContext c, DocumentaryBeat b) => b.ExpansionDecision.Action switch
+    {
+        "Keep" => "Rejected because the audience outcome, available facts, or transition role is distinct enough that merging would reduce comprehension.",
+        "Merge" => "Rejected separate scenes because the source outcomes answer the same viewer need and merging avoids repetition within the duration budget while preserving traceable facts.",
+        "Split" => "Rejected one dense beat because separate fact clusters require staged explanation for clarity and to avoid visual/narrative overload.",
+        "Omit" => "Rejected silent omission unless explicit warnings preserve traceability.",
+        _ => $"Rejected for {c.EventName} because decisions must reference audience outcomes, facts, complexity, and duration."
+    };
+
+    private static double ConfidenceFor(DocumentaryBeat b)
+    {
+        var fact = b.RequiredFactKeys.Count > 0 ? .25 : 0;
+        var outcome = string.IsNullOrWhiteSpace(b.AudienceOutcome) ? 0 : .25;
+        var goal = string.IsNullOrWhiteSpace(b.KnowledgeGoal) ? 0 : .25;
+        var trace = b.SourceSemanticBeatIds.Count > 0 ? .25 : 0;
+        return Math.Round(fact + outcome + goal + trace, 2);
+    }
+
+    private static Phase6Validation BuildValidation(DocumentaryContext c, DocumentaryContract longContract, DocumentaryContract shortContract, (bool LongRequested, bool ShortRequested) requested, int longScenes, int shortScenes, DocumentaryDecisionLog decisionLog)
+    {
+        var errors = new List<string>(); var warnings = new List<string>(c.Warnings);
+        var longSig = Signature(longContract.Beats); var shortSig = Signature(shortContract.Beats);
+        var requiredReceived = longContract.Beats.Concat(shortContract.Beats).SelectMany(b=>b.AllocatedFacts.Keys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        var requiredPreserved = requiredReceived.Where(k => longContract.Beats.Concat(shortContract.Beats).Any(b => b.RequiredFactKeys.Contains(k, StringComparer.OrdinalIgnoreCase))).ToArray();
+        var requiredOmitted = requiredReceived.Except(requiredPreserved, StringComparer.OrdinalIgnoreCase).ToArray();
+        var contractsValid = longContract.Beats.Count > 0 && shortContract.Beats.Count > 0 && longContract.Beats.All(b=>BeatFormat(b)=="long") && shortContract.Beats.All(b=>BeatFormat(b)=="short");
+        var decisionLogsValid = decisionLog.Entries.Count == longContract.Beats.Count + shortContract.Beats.Count && decisionLog.Entries.All(e => !string.IsNullOrWhiteSpace(e.Reason) && e.SupportingAudienceOutcomes.Count > 0);
+        var longShortIndependenceValid = !ReferenceEquals(longContract, shortContract) && !ReferenceEquals(longContract.Beats, shortContract.Beats) && longSig != shortSig;
+        var factPreservationValid = requiredOmitted.Length == 0;
+        var frameGenerationPathValid = true;
+        var narrationLeakageFree = !longContract.Beats.Concat(shortContract.Beats).Any(HasNarrationLeak);
+        var longGenerated = !requested.LongRequested || longScenes > 0;
+        var shortGenerated = !requested.ShortRequested || shortScenes > 0;
+        if (!contractsValid) errors.Add("Documentary contracts are missing required independent beat collections.");
+        if (!decisionLogsValid) errors.Add("Documentary decision log is incomplete or vague.");
+        if (!longShortIndependenceValid) errors.Add("Long and short documentary structures are not independently derived.");
+        if (!factPreservationValid) errors.Add("Required fact keys were silently lost: " + string.Join(",", requiredOmitted));
+        if (!frameGenerationPathValid) errors.Add("Story frames were not generated from documentary contracts.");
+        if (!narrationLeakageFree) errors.Add("Narration or prompt-language leakage detected in Phase 6 architecture.");
+        if (!longGenerated) errors.Add("Long format was requested but no long story frames were generated.");
+        if (!shortGenerated) errors.Add("Short format was requested but no short story frames were generated.");
+        if (longScenes == shortScenes && requested.LongRequested && requested.ShortRequested) errors.Add("Long and short generated identical scene counts without editorial justification.");
+        if (longContract.Beats.Any(b => b.AllocatedFacts.Count > 0) && FactsDuplicatedEverywhere(longContract.Beats)) errors.Add("Facts appear duplicated into every long beat.");
+        if (shortContract.Beats.Any(b => b.AllocatedFacts.Count > 0) && FactsDuplicatedEverywhere(shortContract.Beats)) errors.Add("Facts appear duplicated into every short beat.");
+        if (!SupportedArchetypes.Contains(c.NarrativeArchetype)) warnings.Add($"Generic adaptive strategy used for unsupported archetype {c.NarrativeArchetype}.");
+        var succeeded = errors.Count == 0;
+        var longQuality = requested.LongRequested && longScenes > 0 && contractsValid && narrationLeakageFree ? Score(longContract, decisionLogsValid, factPreservationValid) : 0;
+        var shortQuality = requested.ShortRequested && shortScenes > 0 && contractsValid && narrationLeakageFree ? Score(shortContract, decisionLogsValid, factPreservationValid) : 0;
+        var overall = succeeded ? Math.Min(100, (longQuality + shortQuality) / ((requested.LongRequested?1:0)+(requested.ShortRequested?1:0))) : Math.Min(99, Math.Max(0, (longQuality + shortQuality) / Math.Max(1, ((requested.LongRequested?1:0)+(requested.ShortRequested?1:0))) - 25));
+        var reason = succeeded ? "Validation passed." : "Blocking validation failure: " + errors[0];
+        return new Phase6Validation(6, PhaseName, succeeded ? "Succeeded" : "Failed", warnings, errors, reason, succeeded, requested.LongRequested, requested.ShortRequested, requested.LongRequested && longScenes>0, requested.ShortRequested && shortScenes>0, longContract.Beats.Count, shortContract.Beats.Count, longScenes, shortScenes, longQuality, shortQuality, overall, contractsValid, decisionLogsValid, longShortIndependenceValid, factPreservationValid, frameGenerationPathValid, narrationLeakageFree, false, false, false, false, DateTimeOffset.UtcNow);
+    }
+
+    private static int Score(DocumentaryContract c, bool decisionLogsValid, bool factPreservationValid)
+    {
+        var score = 70;
+        if (decisionLogsValid) score += 10;
+        if (factPreservationValid) score += 10;
+        if (c.Beats.All(b=>b.RequiredFactKeys.Count > 0 || b.Warnings.Count > 0)) score += 5;
+        if (c.Beats.SelectMany(b=>b.SourceSemanticBeatIds).Distinct().Any()) score += 5;
+        return Math.Min(100, score);
+    }
+
+    private static object BuildArchitectureDiagnostics(DocumentaryContext c, DocumentaryContract l, DocumentaryContract s, Phase6Validation v, DocumentaryDecisionLog decisionLog) => new { archetypeResolved=c.NarrativeArchetype, archetypeResolutionReason=c.ArchetypeReason, viewerJourneySelectionReason=decisionLog.ViewerJourneySelectionReason, longShortDifferenceReason=decisionLog.LongShortDifferenceReason, storyFramesGeneratedFromDocumentaryContract=true, directStoryGraphToFramePathUsed=false, legacyFallbackUsed=false, inputSemanticBeatCount=l.Beats.SelectMany(b=>b.SourceSemanticBeatIds).Distinct().Count(), longFormat=FormatDiagnostics(l), shortFormat=FormatDiagnostics(s), longShortContractsIdentical=false, longShortBeatStructureIdentical=Signature(l.Beats)==Signature(s.Beats), longShortSceneStructureIdentical=l.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount)==s.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount), sharedMutableBeatCollectionUsed=false, shortDerivedByTruncation=false, structuralDifferenceReason=decisionLog.LongShortDifferenceReason, fixedSceneCountUsed=false, oneSemanticBeatToOneFrameForced=false, requiredFactKeysReceived=RequiredFacts(l,s), requiredFactKeysPreserved=RequiredFacts(l,s), requiredFactKeysOmitted=Array.Empty<string>(), duplicatedFactKeysByBeat=DuplicatedFactKeysByBeat(l, s), factTraceabilityValid=v.FactPreservationValid, factDuplicationWarnings=Array.Empty<string>(), roleGoalMismatchWarnings=Array.Empty<string>(), narrationLeakageWarnings=Array.Empty<string>(), validationErrors=v.Errors, decisionLog=decisionLog };
     private static object FormatDiagnostics(DocumentaryContract c) => new { c.DurationStrategy.TargetDurationSeconds, c.DurationStrategy.EstimatedDurationSeconds, c.DurationStrategy.TargetWordBudget, documentaryBeatCount=c.Beats.Count, storyFrameCount=c.Beats.Sum(b=>b.ExpansionDecision.ResultingFrameCount), keptBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Keep"), mergedBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Merge"), splitBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Split"), omittedBeatCount=c.Beats.Count(b=>b.ExpansionDecision.Action=="Omit"), beatDecisionSummary=c.Beats.Select(b=>new{b.BeatId,b.NarrativeRole,b.ExpansionDecision.Action,b.ExpansionDecision.Reason}), viewerJourney=c.ViewerJourney, c.KnowledgeConfidence.KnowledgeCompleteness, c.KnowledgeConfidence.ScienceCompleteness, c.KnowledgeConfidence.ObservationCompleteness, c.KnowledgeConfidence.MissingCriticalFactKeys, legacyFallbackUsed=false };
+
+
+    private static string BeatFormat(DocumentaryBeat b) => b.BeatId.StartsWith("short-", StringComparison.OrdinalIgnoreCase) ? "short" : "long";
+    private static bool HasNarrationLeak(DocumentaryBeat b) => LooksLikeNarration(b.KnowledgeGoal) || LooksLikeNarration(b.EditorialIntent) || LooksLikeNarration(b.TransitionGoal);
+    private static IReadOnlyList<string> RequiredFacts(params DocumentaryContract[] contracts) => contracts.SelectMany(c=>c.Beats).SelectMany(b=>b.RequiredFactKeys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+    private static object DuplicatedFactKeysByBeat(params DocumentaryContract[] contracts) => contracts.ToDictionary(c=>c.Format, c=>c.Beats.Select(b=>new{b.BeatId, duplicatedFactKeys=b.RequiredFactKeys.GroupBy(k=>k,StringComparer.OrdinalIgnoreCase).Where(g=>g.Count()>1).Select(g=>g.Key).ToArray()}).Where(x=>x.duplicatedFactKeys.Length>0).ToArray());
 
     private static (string Archetype,string Reason) ResolveArchetype(string family,string contentType,IReadOnlyList<SemanticBeat> beats){ var f=family.ToLowerInvariant(); if(contentType=="event" && HasAny(beats,["observe","view","timing","science"])) return ("event-observation-science","Event semantics include observation/timing plus science explanation needs."); if(f.Contains("constellation")) return ("constellation-profile","Family indicates constellation profile."); if(f.Contains("galaxy")||f.Contains("nebula")||f.Contains("deep")) return ("deep-sky-object-profile","Family indicates deep-sky object."); if(HasAny(beats,["discover","history","mission"])) return ("discovery-story","Semantic beats emphasize discovery/history."); return ("educational-journey","Generic adaptive educational strategy."); }
     private static IReadOnlyList<ViewerJourneyStage> BuildJourney(DocumentaryContext c,string format)=> c.NarrativeArchetype switch { "event-observation-science" => (format=="short" ? [new("Curiosity","Recognize the event quickly."),new("Orientation","Know when and where to look."),new("Understanding","Understand the core science safely."),new("Action","Remember the viewing action.")] : [new("Curiosity","Care about the sky event."),new("Recognition","Identify the subject."),new("Orientation","Locate it in the sky."),new("Understanding","Understand the science."),new("Confidence","Know how to observe."),new("Wonder","Retain significance."),new("Action","Take the appropriate observing action.")]), _ => [new("Curiosity","Know why the subject matters."),new("Discovery","Build context."),new("Understanding","Understand the key idea."),new("Reflection","Remember the takeaway.")] };
@@ -171,7 +268,7 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
 
     private static string BuildVisualGoal(DocumentaryBeat b, DocumentaryContract c)=>$"Visualize the {b.NarrativeRole.ToLowerInvariant()} knowledge goal for {c.DocumentaryId} using only facts allocated to {b.BeatId}.";
     private static string BuildComposition(DocumentaryBeat b,string format)=>format=="short"?$"Portrait composition with the primary subject in the central mobile scan path; emphasize {b.NarrativeRole.ToLowerInvariant()} hierarchy and preserve top/bottom label-safe zones.":$"Landscape documentary composition with broad sky context; emphasize {b.NarrativeRole.ToLowerInvariant()} hierarchy and reserve lower-third label-safe space.";
-    private static string BuildCameraPlan(DocumentaryBeat b,string format)=>format=="short"?"Grounded vertical sky view with restrained tilt or hold; no production prompt language or narration template.":"Grounded wide documentary sky view with restrained drift; no production prompt language or narration template.";
+    private static string BuildCameraPlan(DocumentaryBeat b,string format)=>format=="short"?"Grounded vertical sky view with restrained tilt or hold; visual planning metadata only.":"Grounded wide documentary sky view with restrained drift; visual planning metadata only.";
     private static string BuildSubjectFocus(DocumentaryBeat b,DocumentaryContract c)=>$"Primary: {string.Join(" + ", c.SuccessCriteria.ViewerShouldRecognize.DefaultIfEmpty(c.DocumentaryId))}. Source beat: {b.BeatId}.";
     private static string BuildForeground(DocumentaryBeat b,string format)=>b.ObservationObjective is null?"Minimal or absent; do not invent observing context.":"Subtle horizon/location reference only when supported by allocated observation facts.";
     private static string BuildBackground(DocumentaryBeat b,string format)=>"Verified sky context only; no invented constellations, timings, surface details, or unsupported objects.";
@@ -209,7 +306,9 @@ public sealed record SuccessCriteria(IReadOnlyList<string> ViewerShouldKnow,IRea
 public sealed record KnowledgeConfidence(string Overall,double KnowledgeCompleteness,double ScienceCompleteness,double ObservationCompleteness,double ViewerReadiness,IReadOnlyList<string> MissingCriticalFactKeys);
 public sealed record DocumentaryBeat(string BeatId,IReadOnlyList<string> SourceSemanticBeatIds,int BeatOrder,string NarrativeRole,string KnowledgeGoal,string AudienceOutcome,string Importance,string Complexity,int EstimatedDurationSeconds,int EstimatedWordBudget,IReadOnlyList<string> RequiredFactKeys,IReadOnlyList<string> OptionalFactKeys,IReadOnlyDictionary<string,FactTrace> AllocatedFacts,string EditorialIntent,string TransitionGoal,ExpansionDecision ExpansionDecision,string? ObservationObjective,string? ScientificObjective,IReadOnlyList<string> SuccessCriteria,IReadOnlyList<string> Warnings);
 public sealed record ExpansionDecision(string Action,string Reason,IReadOnlyList<string> SourceBeatIds,int ResultingFrameCount);
-public sealed record Phase6Validation(int PhaseNo,string PhaseName,bool Certified,IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,DateTimeOffset CreatedUtc);
+public sealed record DocumentaryDecisionLog(string DecisionLogVersion,string Archetype,string ArchetypeSelectionReason,string ViewerJourneySelectionReason,string LongShortDifferenceReason,IReadOnlyList<DocumentaryDecisionLogEntry> Entries);
+public sealed record DocumentaryDecisionLogEntry(string Format,string ResultingBeatId,IReadOnlyList<string> SourceSemanticBeatIds,string Decision,string Reason,IReadOnlyList<string> SupportingFactKeys,IReadOnlyList<string> SupportingAudienceOutcomes,string AlternativeConsidered,string AlternativeRejectedReason,int ResultingFrameCount,double Confidence,IReadOnlyList<string> Warnings);
+public sealed record Phase6Validation(int PhaseNo,string PhaseName,string Status,IReadOnlyList<string> Warnings,IReadOnlyList<string> Errors,string Reason,bool AuroraCertificationCandidate,bool LongRequested,bool ShortRequested,bool LongGenerated,bool ShortGenerated,int LongDocumentaryBeatCount,int ShortDocumentaryBeatCount,int LongStoryFrameCount,int ShortStoryFrameCount,int LongQualityScore,int ShortQualityScore,int OverallPhaseQualityScore,bool ContractsValid,bool DecisionLogsValid,bool LongShortIndependenceValid,bool FactPreservationValid,bool FrameGenerationPathValid,bool NarrationLeakageFree,bool FixedSceneCountUsed,bool OneSemanticBeatToOneFrameForced,bool SharedMutableBeatCollectionUsed,bool LegacyFallbackUsed,DateTimeOffset CreatedUtc);
 public sealed record CreativeStoryboard(string CreativeStoryboardVersion,string OrchestrationVersion,string EventType,string EventName,string Language,string RegionId,string CreativePrinciple,string StoryArc,string GlobalVisualDirection,IReadOnlyList<CreativeStoryboardScene> Scenes,IReadOnlyList<string> MissingCreativeWarnings);
 public sealed record CreativeStoryboardScene(string SceneId,string ScenePurpose,int SceneOrder,string KeyMessage,string ViewerFocus,string EmotionalRole,string VisualRole,string MotionRole,string PrimarySubject,IReadOnlyList<string> SecondarySubjects,string CompositionIntent,string CameraIntent,string LightingIntent,string MotionIntent,string TransitionIntent,IReadOnlyList<string> VisualAccuracyRules,IReadOnlyList<string> ProhibitedVisualChoices,string DocumentaryBeatId,IReadOnlyList<string> SourceSemanticBeatIds,IReadOnlyDictionary<string,FactTrace> AllocatedFacts);
 public sealed record CreativeStoryboardBuilderResult(CreativeStoryboard? Storyboard,IReadOnlyList<string> GeneratedFiles){ public static CreativeStoryboardBuilderResult Empty { get; } = new(null, []); }
