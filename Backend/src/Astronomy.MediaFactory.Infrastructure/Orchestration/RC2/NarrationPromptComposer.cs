@@ -12,10 +12,10 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     [
         "Your Role",
         "Astro Pulse Editorial Identity",
-        "Story Overview",
-        "Producer Notes",
+        "Documentary Outline",
+        "Scene Fact Cards",
         "Scientific Guardrails",
-        "Writing Principles",
+        "Astro Pulse Voice Profile",
         "Output Contract"
     ];
 
@@ -93,10 +93,10 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         var sb = new StringBuilder();
         AddSection(sb, 1, "Your Role", new RoleSectionBuilder().Build());
         AddSection(sb, 2, "Astro Pulse Editorial Identity", new EditorialIdentitySectionBuilder().Build());
-        AddSection(sb, 3, "Story Overview", new StoryOverviewSectionBuilder().Build(language, storyArc));
-        AddSection(sb, 4, "Producer Notes", new SceneEditorialBriefBuilder().Build(scenes, styleContract));
+        AddSection(sb, 3, "Documentary Outline", new StoryOverviewSectionBuilder().Build(language, storyArc));
+        AddSection(sb, 4, "Scene Fact Cards", new SceneEditorialBriefBuilder().Build(scenes, styleContract));
         AddSection(sb, 5, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, prohibited));
-        AddSection(sb, 6, "Writing Principles", new WritingPrinciplesSectionBuilder().Build(preferred, prohibited, styleContract));
+        AddSection(sb, 6, "Astro Pulse Voice Profile", new WritingPrinciplesSectionBuilder().Build(preferred, prohibited, styleContract));
         AddSection(sb, 7, "Output Contract", new OutputContractSectionBuilder().Build());
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }

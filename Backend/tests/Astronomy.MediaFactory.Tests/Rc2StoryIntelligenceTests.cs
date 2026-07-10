@@ -299,9 +299,12 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.DoesNotContain("Available facts", promptPreview);
 
         using var llmRequest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "llm-request.json")));
-        Assert.Equal("AstroPulse-NarrationLlmRequest-v3", llmRequest.RootElement.GetProperty("requestVersion").GetString());
-        Assert.Equal("LLMDocumentaryTranscriptionist", llmRequest.RootElement.GetProperty("component").GetString());
+        Assert.Equal("AstroPulse-NarrationLlmRequest-v5", llmRequest.RootElement.GetProperty("requestVersion").GetString());
+        Assert.Equal("LLMDocumentaryPerformer", llmRequest.RootElement.GetProperty("component").GetString());
         Assert.DoesNotContain("producer-notes", llmRequest.RootElement.GetProperty("userPrompt").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("documentaryOutline", llmRequest.RootElement.GetProperty("userPrompt").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sceneFactCards", llmRequest.RootElement.GetProperty("userPrompt").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("astroPulseVoiceProfile", llmRequest.RootElement.GetProperty("userPrompt").GetString()!, StringComparison.OrdinalIgnoreCase);
 
         using var producerNotes = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "producer-notes", "producer-notes-contract.json")));
         Assert.True(producerNotes.RootElement.GetProperty("contractVersion").GetString()!.Contains("ProducerNotes", StringComparison.OrdinalIgnoreCase));

@@ -157,9 +157,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         var composer = promptComposer ?? new NarrationPromptComposer();
         var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [producerNotesContractPath, knowledgeContractPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
-        var writerPrompt = "You are the lead documentary narrator for Astro Pulse.\n\nThe production team has already completed all research.\n\nThe information below is verified.\n\nYour responsibility is to transform the verified facts into beautiful spoken documentary language.\n\nDo not invent facts.\n\nDo not remove facts.\n\nDo not reorder meaning.\n\nDo not expose planning.\n\nSpeak naturally.";
-        var transcriptionistInput = new DocumentaryTranscriptionistInput(longSceneFactCards, shortSceneFactCards, styleContract?.VoiceProfile ?? "CalmDocumentary", writerPrompt);
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v4", "LLMDocumentaryTranscriptionist", "local-documentary-transcriptionist-v2", 0.7m, 0.9m, 1800, writerPrompt, JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
+        var performerPrompt = "You are the lead narrator of Astro Pulse.\n\nThe documentary has already been written by the Chronicle production team.\n\nYour responsibility is only to perform it naturally.\n\nYou are standing inside the recording booth.\n\nThe recording light has turned red.\n\nSpeak to the audience naturally.\n\nDo not expose planning.\n\nDo not expose production.\n\nDo not expose notes.\n\nDo not invent facts.\n\nDo not remove facts.\n\nDo not change chronology.\n\nPerform the documentary.";
+        var documentaryOutline = GetString(storyboard, "storyArc") ?? "Opening → Discovery → Science → Observation → Takeaway → Ending";
+        var transcriptionistInput = new DocumentaryTranscriptionistInput(documentaryOutline, new DocumentaryPerformerSceneFactCards(longSceneFactCards, shortSceneFactCards), styleContract?.VoiceProfile ?? "Calm scientific Astro Pulse voice: elegant, professional, curious, observation-first, with quiet wonder.");
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, performerPrompt, JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -183,7 +184,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                     var textForFormat = string.Join("\n\n", scenesForFormat.Select(scene => scene.NarrationText));
                     generatedByFormat[format] = new NarrationV5($"AstroPulse-Narration-v5-{format}", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, scenesForFormat, textForFormat, ChannelEnding);
                 }
-                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryTranscriptionist-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "all-ordered-scene-fact-cards", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, outputFormatRequirementProvided = true, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
+                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v1", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "documentary-outline-scene-fact-cards-voice-profile", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
                 await File.WriteAllTextAsync(documentaryScriptDiagnosticsPath, JsonSerializer.Serialize(documentaryScriptDiagnostics, JsonOptions), cancellationToken);
                 narration = generatedByFormat.TryGetValue("long", out var longNarration) ? longNarration : generatedByFormat.Values.First();
                 narrationScenes = narration.Scenes.ToArray();
@@ -275,6 +276,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var reviewPasses = 1;
         var finalDecision = editorialReviewerDecision;
         var finalEditorialDecision = repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid ? finalDecision : "Do Not Publish";
+        var editorialBoardReview = new
+        {
+            wouldIContinueWatching = professionalScores.ViewerRetentionScore >= 80,
+            didIUnderstandSomething = professionalScores.ScientificAccuracyScore >= 80,
+            couldIActuallyObserveIt = professionalScores.ObservationGuidanceScore >= 80,
+            didItFeelLikeOneDocumentary = documentaryFlowScore >= 80,
+            wouldIPublishIt = finalEditorialDecision.Equals("Publish", StringComparison.OrdinalIgnoreCase),
+            decision = finalEditorialDecision
+        };
         var validationErrors = errors.Where(e => !e.StartsWith("Prompt quality", StringComparison.OrdinalIgnoreCase)).ToArray();
         var finalPromptQuality = promptComposerOutput.PromptQuality with
         {
@@ -376,6 +386,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             sceneMappingValid,
             documentaryFlowScore,
             finalEditorialDecision,
+            editorialBoardReview,
             bothFormatsRequested,
             missingRequestedFormats,
             shortCopiedFromLong,
@@ -503,6 +514,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             sceneMappingValid,
             documentaryFlowScore,
             finalEditorialDecision,
+            editorialBoardReview,
             bothFormatsRequested,
             missingRequestedFormats,
             shortCopiedFromLong,
@@ -1007,7 +1019,8 @@ public sealed record RawNarrative(string ContractVersion, string OrchestrationVe
 public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> MustSayFacts, IReadOnlyList<string> MustExplain, IReadOnlyList<string> MustGuide, IReadOnlyList<string> MustNotSay, string TransitionToNext, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
 public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
-public sealed record DocumentaryTranscriptionistInput(SceneFactCardSet LongSceneFactCards, SceneFactCardSet ShortSceneFactCards, string ToneProfile, string OutputFormatRequirement);
+public sealed record DocumentaryTranscriptionistInput(string DocumentaryOutline, DocumentaryPerformerSceneFactCards SceneFactCards, string AstroPulseVoiceProfile);
+public sealed record DocumentaryPerformerSceneFactCards(SceneFactCardSet Long, SceneFactCardSet Short);
 public sealed record DocumentaryScript(string ContractVersion, string Format, string Title, string Language, IReadOnlyList<DocumentaryScriptScene> Scenes, [property: JsonPropertyName("fullScript")] string FullScriptText);
 public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, [property: JsonPropertyName("narration")] string NarrationText, string TransitionToNext, [property: JsonPropertyName("requiredFactsUsed")] IReadOnlyList<string> RequiredFactsPreserved, IReadOnlyList<string> MustNotSay, string ObservationGuidance)
 {
