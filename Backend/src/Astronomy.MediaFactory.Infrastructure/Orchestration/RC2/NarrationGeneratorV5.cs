@@ -157,7 +157,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         var composer = promptComposer ?? new NarrationPromptComposer();
         var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(contract, storyboard, narrationBriefs, [producerNotesContractPath, knowledgeContractPath, briefsPath, styleContractPath], promptPreviewPath, promptDiagnosticsPath, styleContract, promptQualityPath), cancellationToken);
-        var writerPrompt = "You are the lead documentary narrator for Astro Pulse. The production team has already completed all research, planning, and editorial work. The Scene Fact Cards below are verified facts. Do not quote them. Do not expose them. Do not explain the production process. Your only task is to transform these verified facts into natural spoken documentary narration. Imagine the recording light has just turned red. Speak naturally. Do not sound like you are reading notes. Sound like you are recording the final documentary.";
+        var writerPrompt = "You are the lead documentary narrator for Astro Pulse.\n\nThe production team has already completed all research.\n\nThe information below is verified.\n\nYour responsibility is to transform the verified facts into beautiful spoken documentary language.\n\nDo not invent facts.\n\nDo not remove facts.\n\nDo not reorder meaning.\n\nDo not expose planning.\n\nSpeak naturally.";
         var transcriptionistInput = new DocumentaryTranscriptionistInput(longSceneFactCards, shortSceneFactCards, styleContract?.VoiceProfile ?? "CalmDocumentary", writerPrompt);
         var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v4", "LLMDocumentaryTranscriptionist", "local-documentary-transcriptionist-v2", 0.7m, 0.9m, 1800, writerPrompt, JsonSerializer.Serialize(transcriptionistInput, JsonOptions), promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(longSceneFactCardsPath), NormalizePath(shortSceneFactCardsPath), NormalizePath(styleContractPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
@@ -271,10 +271,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await File.WriteAllTextAsync(sceneFactCardsDiagnosticsPath, JsonSerializer.Serialize(enrichedSceneFactCardsDiagnostics, JsonOptions), cancellationToken);
         var editorialReviewerDecision = ResolveEditorialReviewerDecision(professionalScores.OverallNarrationScore);
         var editorialReviewerReason = BuildEditorialReviewerReason(editorialReviewerDecision, professionalScores.OverallNarrationScore, promptComposerOutput.PromptQuality.Recommendation);
-        var editorialRequiredPasses = PromptQualityEvaluator.RequiredPassesFor(editorialReviewerDecision);
+        var editorialRequiredPasses = Array.Empty<string>();
         var reviewPasses = 1;
         var finalDecision = editorialReviewerDecision;
-        var finalEditorialDecision = repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid ? finalDecision : PromptQualityEvaluator.Regenerate;
+        var finalEditorialDecision = repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid ? finalDecision : "Do Not Publish";
         var validationErrors = errors.Where(e => !e.StartsWith("Prompt quality", StringComparison.OrdinalIgnoreCase)).ToArray();
         var finalPromptQuality = promptComposerOutput.PromptQuality with
         {
@@ -443,7 +443,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             phaseNo = 7,
             phaseName = PhaseName,
             validator = "AstroPulse-NarrationValidator-v3",
-            passed = generationErrors.Count == 0 && validationErrors.Length == 0 && editorialReviewerDecision != PromptQualityEvaluator.Regenerate && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath) && repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid && wholeDocumentGenerationUsed,
+            passed = generationErrors.Count == 0 && validationErrors.Length == 0 && !editorialReviewerDecision.Equals("Do Not Publish", StringComparison.OrdinalIgnoreCase) && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath) && repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid && wholeDocumentGenerationUsed,
             editorialReviewerDecision,
             editorialReviewerReason,
             promptRecommendation = finalPromptQuality.Recommendation,
@@ -592,15 +592,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string GetNarrationText(string narrationPath)
         => GetString(ReadFirstJson(narrationPath), "fullNarrationText") ?? string.Empty;
 
-    private static string ResolveEditorialReviewerDecision(int overall) => PromptQualityEvaluator.Recommend(overall);
+    private static string ResolveEditorialReviewerDecision(int overall) => overall >= 80 ? "Publish" : "Do Not Publish";
 
-    private static string BuildEditorialReviewerReason(string decision, int overall, string promptRecommendation) => decision switch
-    {
-        PromptQualityEvaluator.Pass => $"Editorial Reviewer approves publish at overall narration score {overall}; Prompt Quality advised {promptRecommendation}.",
-        PromptQualityEvaluator.MinorRevision => $"Editorial Reviewer requires minor editorial refinement at overall narration score {overall}; do not regenerate narration.",
-        PromptQualityEvaluator.MajorRevision => $"Editorial Reviewer requires writer plus editor revision at overall narration score {overall}.",
-        _ => $"Editorial Reviewer requires regeneration because overall narration score {overall} is below 80."
-    };
+    private static string BuildEditorialReviewerReason(string decision, int overall, string promptRecommendation) => decision.Equals("Publish", StringComparison.OrdinalIgnoreCase)
+        ? "Editorial board decision: Publish."
+        : "Editorial board decision: Do Not Publish.";
 
     private static async Task WriteFormatDiagnosticsAsync(string path, string format, string narrationPath, int expectedSceneCount, IReadOnlyList<string> errors, CancellationToken cancellationToken)
     {
@@ -1138,45 +1134,49 @@ public static class LlmDocumentaryTranscriptionist
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var isShort = cardSet.Format.Equals("short", StringComparison.OrdinalIgnoreCase);
         var title = isShort ? "Tonight's Sky in One Look" : "A Quiet Alignment in the Evening Sky";
-        var scenes = orderedCards.Select((scene, index) =>
+        var sceneFacts = orderedCards.Select((scene, index) =>
         {
             var allFacts = scene.Facts.Concat(scene.Observations).Concat(scene.Visibility).Concat(scene.Timing).Concat(scene.Location).Concat(scene.Objects).Concat(scene.Science).Concat(scene.RequiredMentions)
                 .Select(CleanFact).Where(v => !string.IsNullOrWhiteSpace(v) && !LooksLikePlanningText(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var factsForScene = allFacts.Where(f => used.Add(NormalizeFactKey(f))).ToArray();
             if (factsForScene.Length == 0) factsForScene = allFacts.Take(1).ToArray();
             var observations = scene.Observations.Where(v => !LooksLikePlanningText(v)).Select(CleanFact).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return new { Card = scene, Index = index, Facts = factsForScene, Observations = observations };
+        }).ToArray();
+        var scenes = sceneFacts.Select(item =>
+        {
             var narration = isShort
-                ? BuildShortScene(scene, index, orderedCards.Length, factsForScene, observations)
-                : BuildLongScene(scene, index, orderedCards.Length, factsForScene, observations, outline);
-            var transition = index < orderedCards.Length - 1 ? BuildTransition(isShort, index) : string.Empty;
-            return new DocumentaryScriptScene(scene.SceneId, scene.SceneOrder, RemoveAdjacentDuplicateSentences(CleanScript(narration)), transition, factsForScene, scene.ForbiddenClaims, string.Join(" ", observations));
+                ? BuildShortScene(item.Card, item.Index, orderedCards.Length, item.Facts, item.Observations)
+                : BuildLongScene(item.Card, item.Index, orderedCards.Length, item.Facts, item.Observations, outline);
+            var transition = item.Index < orderedCards.Length - 1 ? BuildTransition(isShort, item.Index) : string.Empty;
+            return new DocumentaryScriptScene(item.Card.SceneId, item.Card.SceneOrder, RemoveAdjacentDuplicateSentences(CleanScript(narration)), transition, item.Facts, item.Card.ForbiddenClaims, string.Join(" ", item.Observations));
         }).ToArray();
         var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
-        return new DocumentaryScript("AstroPulse-DocumentaryScript-v2", cardSet.Format, title, cardSet.Language, scenes, fullScript);
+        return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", cardSet.Format, title, cardSet.Language, scenes, fullScript);
     }
 
 
     private static string BuildLongScene(SceneFactCard scene, int index, int total, IReadOnlyList<string> facts, IReadOnlyList<string> observations, string outline)
     {
         var core = string.Join(" ", facts.Take(index == 0 ? 3 : 5));
-        if (index == 0) return CleanScript($"The story begins with a visible sky event, not a list of separate moments. {core} We will follow it as one continuous evening narrative.");
-        if (index == total - 1) return CleanScript($"By the end, the important thing is simple: the sky has given us a specific moment to notice. {core} Until next time, keep looking up.");
-        if (observations.Count > 0 || facts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"Now the documentary turns practical. {string.Join(" ", facts.Take(4))} Use that guidance as one observing plan, then let the view itself carry the ending.");
-        return CleanScript($"From there, the science gives the scene its shape. {core} The point is not repetition; it is continuity, with each detail adding to the same sky story.");
+        if (index == 0) return CleanScript($"As the sky darkens, the event is already rooted in what can be observed. {core} The value of the night is in looking carefully, then letting the science explain the pattern.");
+        if (index == total - 1) return CleanScript($"The observing plan ends with a simple act of attention. {core} Hold the view for a moment, and the sky becomes easier to read the next time you step outside.");
+        if (observations.Count > 0 || facts.Any(f => ContainsAny(f, "look", "view", "horizon", "time", "date", "evening", "morning"))) return CleanScript($"The practical part is quiet and specific. {string.Join(" ", facts.Take(4))} Start with the open sky, use equipment only if it helps, and give your eyes time to settle.");
+        return CleanScript($"The explanation stays grounded in the real geometry of the sky. {core} Large motions become readable because, from Earth, they resolve into position, timing, and direction.");
     }
 
     private static string BuildShortScene(SceneFactCard scene, int index, int total, IReadOnlyList<string> facts, IReadOnlyList<string> observations)
     {
         var core = string.Join(" ", facts.Take(index == 0 ? 2 : 3));
-        if (index == 0) return CleanScript($"Look for the visible event first. {core}");
-        if (index == total - 1) return CleanScript($"Your action is clear: step outside, face the right part of the sky, and look. {core}");
-        if (facts.Any(f => ContainsAny(f, "separation", "orbit", "perspective", "geometry", "degree"))) return CleanScript($"Here is the one idea behind it: the view is shaped by perspective. {core}");
-        return CleanScript($"Keep it simple and observable. {core}");
+        if (index == 0) return CleanScript($"Begin with the visible sky. {core}");
+        if (index == total - 1) return CleanScript($"Step outside, face the indicated sky, and let your eyes find the pattern. {core}");
+        if (facts.Any(f => ContainsAny(f, "separation", "orbit", "perspective", "geometry", "degree"))) return CleanScript($"The science is perspective made visible. {core}");
+        return CleanScript($"Keep the observation calm and direct. {core}");
     }
 
     private static string BuildTransition(bool isShort, int index) => isShort
-        ? (index == 0 ? "That visible hook leads straight to the science." : "Now turn that idea into an observing action.")
-        : (index == 0 ? "With the event established, the next section explains why it appears that way." : "That explanation now narrows into practical observing guidance.");
+        ? (index == 0 ? "The same view also carries the science." : "The science points back to the observing action.")
+        : (index == 0 ? "The visible pattern then opens into the science behind it." : "The explanation naturally returns to where and how to look.");
 
     private static string NormalizeFactKey(string value) => Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
     private static bool ContainsAny(string? value, params string[] keywords) => !string.IsNullOrWhiteSpace(value) && keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
