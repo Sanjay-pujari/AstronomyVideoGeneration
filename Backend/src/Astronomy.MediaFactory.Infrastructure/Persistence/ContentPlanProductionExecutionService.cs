@@ -128,6 +128,7 @@ public sealed class ContentPlanProductionExecutionService(
             var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
             var partialPhaseExecution = IsPartialPhaseExecution(request);
             var successDiagnostics = BuildSuccessAggregationDiagnostics(request, pipelineResult.PhaseResults, pipelineResult.RequestedOutputCompletion);
+            await WritePipelinePhaseAggregationDiagnosticsAsync(outputRoot, pipelineResult, successDiagnostics, cancellationToken);
             var thumbnailOnlyExecution = IsThumbnailOnlyExecution(request, productionRequest);
             var partialPhaseSuccess = partialPhaseExecution && successDiagnostics.AllExecutedPhasesSucceeded;
             var productionFailed = thumbnailOnlyExecution ? !partialPhaseSuccess : partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
@@ -338,6 +339,42 @@ public sealed class ContentPlanProductionExecutionService(
         return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, "PartialPhaseRange");
     }
 
+    private static async Task WritePipelinePhaseAggregationDiagnosticsAsync(string outputRoot, ProductionPipelineExecutionResult pipelineResult, SuccessAggregationDiagnostics successDiagnostics, CancellationToken cancellationToken)
+    {
+        var phaseResults = pipelineResult.PhaseResults ?? [];
+        var failed = phaseResults.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).Distinct().OrderBy(p => p).ToArray();
+        var allSucceeded = phaseResults.Count > 0 && phaseResults.Where(p => p.Status != ProductionPhaseStatus.Skipped).All(p => p.Status == ProductionPhaseStatus.Succeeded);
+        var expectedLastCompleted = CalculateLastCompletedPhaseNo(phaseResults);
+        var expectedLastFailed = failed.Cast<int?>().LastOrDefault();
+        var mismatches = new List<string>();
+        if (successDiagnostics.AllExecutedPhasesSucceeded != allSucceeded) mismatches.Add("successDiagnostics.allExecutedPhasesSucceeded disagrees with phaseResults.");
+        if (!successDiagnostics.FailedExecutedPhases.SequenceEqual(failed)) mismatches.Add("successDiagnostics.failedExecutedPhases disagrees with phaseResults.");
+        if (pipelineResult.LastCompletedPhaseNo != expectedLastCompleted) mismatches.Add("top-level lastCompletedPhaseNo disagrees with phaseResults.");
+        if (pipelineResult.LastFailedPhaseNo != expectedLastFailed) mismatches.Add("top-level lastFailedPhaseNo disagrees with phaseResults.");
+        var path = Path.Combine(outputRoot, "pipeline-phase-aggregation-diagnostics.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+        {
+            allConsistent = mismatches.Count == 0,
+            mismatches,
+            overallSuccess = pipelineResult.Success,
+            failedPlans = pipelineResult.Success ? 0 : 1,
+            expected = new { allExecutedPhasesSucceeded = allSucceeded, failedExecutedPhases = failed, lastCompletedPhaseNo = expectedLastCompleted, lastFailedPhaseNo = expectedLastFailed },
+            actual = new { pipelineResult.LastCompletedPhaseNo, pipelineResult.LastFailedPhaseNo, successDiagnostics }
+        }, JsonOptions), cancellationToken);
+    }
+
+    private static int? CalculateLastCompletedPhaseNo(IReadOnlyList<ProductionPhaseResult> phaseResults)
+    {
+        var ordered = phaseResults.Where(p => p.Status != ProductionPhaseStatus.Skipped).OrderBy(p => p.PhaseNo).ToArray();
+        int? last = null;
+        foreach (var phase in ordered)
+        {
+            if (phase.Status == ProductionPhaseStatus.Failed) break;
+            if (phase.Status == ProductionPhaseStatus.Succeeded) last = phase.PhaseNo;
+        }
+        return last;
+    }
+
     private static bool CalculatePartialPhaseSuccess(ContentPlanProductionExecutionRequest request, ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
     {
         if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess && errors.Count == 0;
@@ -522,11 +559,7 @@ public sealed class ContentPlanProductionExecutionService(
 
     private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool? heroGenerated, bool? thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool? shortVideoGenerated, bool? longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults, ContentPlanExecutionMode executionMode, bool completedPlanRerun, bool previousOutputArchived, string? archivePath, IReadOnlyList<string> deletedOutputFolders, int startPhaseNo, int endPhaseNo, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion = null, bool partialPhaseExecution = false, int? requestedStartPhase = null, int? requestedEndPhase = null, bool dependencyExpansionApplied = false, bool partialPhaseSuccess = false, SuccessAggregationDiagnostics? successDiagnostics = null)
     {
-        var lastCompletedPhaseNo = phaseResults
-            .Where(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
-            .OrderByDescending(p => p.PhaseNo)
-            .Select(p => (int?)p.PhaseNo)
-            .FirstOrDefault();
+        var lastCompletedPhaseNo = CalculateLastCompletedPhaseNo(phaseResults);
         var lastFailedPhaseNo = phaseResults
             .Where(p => p.Status == ProductionPhaseStatus.Failed)
             .OrderByDescending(p => p.PhaseNo)
