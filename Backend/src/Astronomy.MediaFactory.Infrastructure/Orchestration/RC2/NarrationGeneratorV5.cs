@@ -171,21 +171,38 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             : new Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Diagnostics.DocumentaryStyleDiagnostics(0, 0, 0, 0, styleWarnings, styleErrors, styleStopwatch.Elapsed.ToString("c"), DocumentaryStyleDirector.Version);
         await WriteAllTextUtf8Async(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
 
+        var longDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.long.json"));
+        var shortDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.short.json"));
+        var familyProfile = AstronomyFamilyProfileCatalog.Resolve(contract, storyboard);
+        var semanticFactResolver = new RequiredSemanticFactResolver();
+        var semanticResolution = semanticFactResolver.Resolve(new RequiredSemanticFactResolutionInput(
+            familyProfile,
+            longDocumentaryContract,
+            shortDocumentaryContract,
+            contract,
+            ReadFirstJson(Path.Combine(outputRoot, "editorial", "story-graph.json")),
+            ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json")),
+            ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json")),
+            ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
+            languageProfile));
+        var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
+        await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
+
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
-            ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")),
-            ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")),
+            longDocumentaryContract,
+            shortDocumentaryContract,
             ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-decision-log.json")),
             ReadFirstJson(editorialBriefContractPath),
             ReadFirstJson(producerNotesContractPath),
             ReadFirstJson(styleContractPath),
             new DocumentaryPerformerSceneFactCards(longSceneFactCards, shortSceneFactCards),
+            semanticResolution,
             styleContract?.VoiceProfile ?? "Premium astronomy documentary: confident, elegant, natural, human, curious, educational, and calm.",
             Rc2PipelinePhaseRegistry.OrchestrationVersion,
             languageProfile);
-        var familyProfile = AstronomyFamilyProfileCatalog.Resolve(contract, storyboard);
         var realizer = new NarrationRealizer();
         var realizationResults = narrationInputNormalization.SafeContexts.Select(c => realizer.Realize(c, familyProfile, languageProfile)).ToArray();
-        var realizationValidation = NarrationRealizationValidator.Validate(realizationResults, familyProfile).ToArray();
+        var realizationValidation = NarrationRealizationValidator.Validate(realizationResults, familyProfile).Concat(RequiredSemanticFactPhase7Validator.Validate(semanticResolution)).ToArray();
         var narrationContext = NarrationRealizedContextMapper.ToContext(narrationInputNormalization.Context, realizationResults);
         var narrationContextJson = JsonSerializer.Serialize(narrationContext, JsonOptions);
         await WriteAllTextUtf8Async(narrationContextPath, narrationContextJson, cancellationToken);
@@ -194,6 +211,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await WriteAllTextUtf8Async(narrationRealizationDiagnosticsPath, JsonSerializer.Serialize(realizationDiagnostics, JsonOptions), cancellationToken);
         logger.LogInformation("Phase 7 NarrationContext before prompt generation: {NarrationContext}", narrationContextJson);
         var narrationContextPurityFailures = NarrationContextPurityValidator.Validate(narrationContext).ToArray();
+        if (semanticResolution.Blocking || realizationResults.Any(r => !r.CanRealize))
+        {
+            await WriteAllTextUtf8Async(validationPath, JsonSerializer.Serialize(new { phaseNo = 7, phaseName = PhaseName, status = "Failed", requiredSemanticFactResolutionBlocking = semanticResolution.Blocking, errors = realizationValidation }, JsonOptions), cancellationToken);
+            throw new InvalidOperationException("Required semantic fact resolution failed before prompt generation: " + string.Join(" | ", realizationValidation.Select(v => v.ToString())));
+        }
         if (narrationContextPurityFailures.Length > 0)
         {
             await WriteAllTextUtf8Async(validationPath, JsonSerializer.Serialize(new { phaseNo = 7, phaseName = PhaseName, status = "Failed", errors = narrationContextPurityFailures }, JsonOptions), cancellationToken);
@@ -1388,8 +1410,11 @@ public static class NarrationInputNormalizer
     private static readonly Regex LocalOffsetRegex = new(@"\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[+-]\d{4}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static NarrationInputNormalizationResult Normalize(JsonElement? longContract, JsonElement? shortContract, JsonElement? decisionLog, JsonElement? editorialBrief, JsonElement? producerNotes, JsonElement? styleContract, DocumentaryPerformerSceneFactCards factCards, string voiceProfile, string orchestrationVersion, LanguageProfile languageProfile)
+        => Normalize(longContract, shortContract, decisionLog, editorialBrief, producerNotes, styleContract, factCards, null, voiceProfile, orchestrationVersion, languageProfile);
+
+    public static NarrationInputNormalizationResult Normalize(JsonElement? longContract, JsonElement? shortContract, JsonElement? decisionLog, JsonElement? editorialBrief, JsonElement? producerNotes, JsonElement? styleContract, DocumentaryPerformerSceneFactCards factCards, RequiredSemanticFactResolutionResult? resolvedFacts, string voiceProfile, string orchestrationVersion, LanguageProfile languageProfile)
     {
-        var source = NarrationContextBuilder.Build(longContract, shortContract, decisionLog, editorialBrief, producerNotes, styleContract, factCards, voiceProfile, orchestrationVersion);
+        var source = NarrationContextBuilder.Build(longContract, shortContract, decisionLog, editorialBrief, producerNotes, styleContract, factCards, resolvedFacts, voiceProfile, orchestrationVersion);
         var warnings = new List<string>();
         var errors = new List<string>();
         var safeContexts = new List<NarrationSafeContext>();
@@ -1560,12 +1585,12 @@ public static class NarrationContextBuilder
         @"\b(?:create\s+a\s+visual-only\s+hook\s+frame|(?:landscape|portrait)\s+composition|reserve\s+(?:a\s+)?label-safe|label-safe\s+(?:space|area)|apply\s+slow\s+camera\s+motion|camera\s+motion|render\s+\w+\s+in\s+the\s+upper\s+third|place\s+the\s+label|render\s+a\s+label|show\s+the\s+object\s+label|source\s+facts\s+attached|slow\s+reveal|steady\s+hold|visual\s+comprehension|safe\s*area|primary\s+subject|cameraIntent|compositionIntent|visualRole|motionIntent|visualAccuracyRules|prohibitedVisualChoices|safeArea|lightingIntent|visual\s+hierarchy|visual\s+prompt)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    public static NarrationContextDocument Build(JsonElement? longContract, JsonElement? shortContract, JsonElement? decisionLog, JsonElement? editorialBrief, JsonElement? producerNotes, JsonElement? styleContract, DocumentaryPerformerSceneFactCards factCards, string voiceProfile, string orchestrationVersion)
+    public static NarrationContextDocument Build(JsonElement? longContract, JsonElement? shortContract, JsonElement? decisionLog, JsonElement? editorialBrief, JsonElement? producerNotes, JsonElement? styleContract, DocumentaryPerformerSceneFactCards factCards, RequiredSemanticFactResolutionResult? resolvedFacts, string voiceProfile, string orchestrationVersion)
     {
         var formats = new[]
         {
-            new NarrationFormatContext("long", BuildBeats("long", longContract, styleContract, factCards.Long, voiceProfile)),
-            new NarrationFormatContext("short", BuildBeats("short", shortContract, styleContract, factCards.Short, voiceProfile))
+            new NarrationFormatContext("long", BuildBeats("long", longContract, styleContract, factCards.Long, resolvedFacts, voiceProfile)),
+            new NarrationFormatContext("short", BuildBeats("short", shortContract, styleContract, factCards.Short, resolvedFacts, voiceProfile))
         };
         return new NarrationContextDocument("AstroPulse-NarrationContext-v2", orchestrationVersion, formats);
     }
@@ -1573,7 +1598,7 @@ public static class NarrationContextBuilder
     public static bool ContainsForbiddenVisualLanguage(string? value)
         => !string.IsNullOrWhiteSpace(value) && ForbiddenVisualLanguageRegex.IsMatch(value);
 
-    private static IReadOnlyList<NarrationContextBeat> BuildBeats(string format, JsonElement? contract, JsonElement? styleContract, SceneFactCardSet cards, string voiceProfile)
+    private static IReadOnlyList<NarrationContextBeat> BuildBeats(string format, JsonElement? contract, JsonElement? styleContract, SceneFactCardSet cards, RequiredSemanticFactResolutionResult? resolvedFacts, string voiceProfile)
     {
         var contractBeats = ReadArray(contract, "beats").OrderBy(e => GetInt(e, "beatOrder") ?? 0).ToArray();
         return contractBeats.Select(beat =>
@@ -1585,7 +1610,8 @@ public static class NarrationContextBuilder
                 if (!string.IsNullOrWhiteSpace(value) && !ContainsForbiddenVisualLanguage(value)) return Clean(value!);
                 return fallback;
             }
-            var facts = ReadAllocatedFacts(beat, warnings);
+            var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), GetString(beat, "id"));
+            var facts = ReadResolvedFacts(format, beatId, resolvedFacts).DefaultIfEmpty().First() is null ? ReadAllocatedFacts(beat, warnings) : ReadResolvedFacts(format, beatId, resolvedFacts);
             var tone = Clean(FirstNonEmpty(GetString(beat, "tone"), GetString(beat, "desiredTone"), voiceProfile, "Confident, elegant, natural, human, curious, educational, and calm.")!);
             var rhythm = Clean(FirstNonEmpty(GetString(beat, "narrativeRhythm"), format.Equals("short", StringComparison.OrdinalIgnoreCase) ? "compressed documentary beat" : "measured documentary beat")!);
             var observationObjective = FirstNonEmpty(GetString(beat, "observationObjective"), GetString(beat, "scientificObjective"));
@@ -1602,6 +1628,13 @@ public static class NarrationContextBuilder
                 ReadStringArray(beat, "successCriteria").Where(v => !ContainsForbiddenVisualLanguage(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 warnings.Count == 0 ? null : string.Join(" ", warnings));
         }).ToArray();
+    }
+
+    private static IReadOnlyList<NarrationVerifiedFact> ReadResolvedFacts(string format, string? beatId, RequiredSemanticFactResolutionResult? resolvedFacts)
+    {
+        if (resolvedFacts is null) return [];
+        var beat = resolvedFacts.Beats.FirstOrDefault(b => b.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && (string.IsNullOrWhiteSpace(beatId) || b.DocumentaryBeatId.Equals(beatId, StringComparison.OrdinalIgnoreCase)));
+        return beat is null ? [] : beat.RequiredFacts.Concat(beat.OptionalFacts).Where(f => f.SafeForNarration).Select(f => new NarrationVerifiedFact(f.FactType, Convert.ToString(f.CanonicalValue, CultureInfo.InvariantCulture) ?? string.Empty, f.SemanticMeaning, f.Unit)).ToArray();
     }
 
     private static IReadOnlyList<NarrationVerifiedFact> ReadAllocatedFacts(JsonElement beat, List<string> warnings)
@@ -1914,10 +1947,116 @@ public interface INarrationRealizer
     NarrationRealizationResult Realize(NarrationSafeContext context, AstronomyFamilyProfile familyProfile, LanguageProfile languageProfile);
 }
 
+public interface IRequiredSemanticFactResolver
+{
+    RequiredSemanticFactResolutionResult Resolve(RequiredSemanticFactResolutionInput input);
+}
+
+public sealed record RequiredSemanticFactResolutionInput(AstronomyFamilyProfile FamilyProfile, JsonElement? LongDocumentaryContract, JsonElement? ShortDocumentaryContract, JsonElement? EditorialContract, JsonElement? StoryGraph, JsonElement? ProductionEventIntelligence, JsonElement? ObservationMetadata, JsonElement? QuestionAnswerSet, LanguageProfile LanguageProfile);
+public sealed record RequiredSemanticFactResolutionResult(IReadOnlyList<ResolvedBeatFacts> Beats, object Diagnostics)
+{
+    public bool Blocking => Beats.Any(b => b.Blocking);
+}
+public sealed record ResolvedBeatFacts(string Format, string SceneId, string DocumentaryBeatId, string NarrativeRole, IReadOnlyList<ResolvedSemanticFact> RequiredFacts, IReadOnlyList<ResolvedSemanticFact> OptionalFacts, IReadOnlyList<string> MissingRequiredFacts, IReadOnlyList<string> OmittedOptionalFacts, IReadOnlyList<string> ResolutionWarnings, IReadOnlyList<FactConflict> Conflicts, bool Blocking);
+public sealed record ResolvedSemanticFact(string FactType, string FactKey, object CanonicalValue, string? Unit, string SemanticMeaning, string SourceArtifact, string SourceField, string? SourceBeatId, string VerificationStatus, decimal Confidence, string Requiredness, string? LocalizedDisplayValue, string? SpeakableValue, string Language, bool SafeForNarration, string FactOrigin = "Source", string? DerivationRuleId = null, IReadOnlyList<string>? SourceInputs = null);
+public sealed record FactConflict(string FactType, IReadOnlyList<object> Values, string SelectedSourceArtifact, bool Blocking, string Message);
+
+public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
+{
+    private static readonly string[] SourceOrder = ["Documentary Contract", "Editorial Contract", "Observation Metadata", "Production Event Intelligence", "Question Answer Set", "Story Graph", "Approved Derived Facts"];
+
+    public RequiredSemanticFactResolutionResult Resolve(RequiredSemanticFactResolutionInput input)
+    {
+        var all = new List<CandidateFact>();
+        AddDocumentary(all, input.LongDocumentaryContract, "long");
+        AddDocumentary(all, input.ShortDocumentaryContract, "short");
+        AddJsonFacts(all, input.EditorialContract, "Editorial Contract", null);
+        AddJsonFacts(all, input.ObservationMetadata, "Observation Metadata", null);
+        AddJsonFacts(all, input.ProductionEventIntelligence, "Production Event Intelligence", null);
+        AddJsonFacts(all, input.QuestionAnswerSet, "Question Answer Set", null);
+        AddJsonFacts(all, input.StoryGraph, "Story Graph", null);
+        var beats = new List<ResolvedBeatFacts>();
+        foreach (var (format, contract) in new[] { ("long", input.LongDocumentaryContract), ("short", input.ShortDocumentaryContract) })
+        foreach (var (beat, index) in ReadArray(contract, "beats").OrderBy(e => GetInt(e, "beatOrder") ?? 0).Select((b, i) => (b, i)))
+        {
+            var role = ResolveRole(beat, index);
+            var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), GetString(beat, "id")) ?? $"{format}-beat-{index + 1:000}";
+            var required = RequiredTypes(input.FamilyProfile, role, format).ToArray();
+            var optional = OptionalTypes(input.FamilyProfile, role, format).ToArray();
+            var resolvedRequired = required.Select(t => ResolveType(t, all, input, format, beatId, "Required")).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var resolvedOptional = optional.Select(t => ResolveType(t, all, input, format, beatId, "Optional")).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
+            var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f.FactType))).ToArray();
+            var conflicts = FindConflicts(required.Concat(optional), all).ToArray();
+            var warnings = omitted.Select(o => $"Optional fact {o} was unavailable and omitted.").Concat(conflicts.Select(c => c.Message)).ToArray();
+            beats.Add(new(format, GetString(beat, "sceneId") ?? string.Empty, beatId, role, resolvedRequired, resolvedOptional, missing, omitted, warnings, conflicts, missing.Length > 0 || conflicts.Any(c => c.Blocking)));
+        }
+        var diagnostics = new
+        {
+            component = "RequiredSemanticFactResolver-v1",
+            sourcePrecedence = SourceOrder,
+            blocking = beats.Any(b => b.Blocking),
+            beats = beats.Select(b => new { input.FamilyProfile.FamilyId, b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredFactTypes = RequiredTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedRequiredFacts = b.RequiredFacts.Select(f => f.FactType), b.MissingRequiredFacts, optionalFactTypes = OptionalTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedOptionalFacts = b.OptionalFacts.Select(f => f.FactType), b.OmittedOptionalFacts, sourceArtifacts = b.RequiredFacts.Concat(b.OptionalFacts).Select(f => f.SourceArtifact).Distinct(), b.Conflicts, derivedFacts = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactOrigin == "Derived"), b.Blocking, warnings = b.ResolutionWarnings })
+        };
+        return new RequiredSemanticFactResolutionResult(beats, diagnostics);
+    }
+
+    private static ResolvedSemanticFact? ResolveType(string type, List<CandidateFact> all, RequiredSemanticFactResolutionInput input, string format, string beatId, string req)
+    {
+        var candidates = all.Where(c => (c.Format is null || c.Format == format) && Matches(type, c.Type)).OrderBy(c => Array.IndexOf(SourceOrder, c.SourceArtifact)).ToArray();
+        var best = candidates.FirstOrDefault();
+        if (best is null && TryDerive(type, all, input.FamilyProfile.FamilyId, out var derived)) best = derived;
+        return best is null ? null : new(type, type, best.Value, best.Unit, type, best.SourceArtifact, best.SourceField, best.BeatId ?? beatId, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Verified", best.Confidence, req, null, null, input.LanguageProfile.LanguageCode, true, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Source", best.RuleId, best.Inputs);
+    }
+    private static bool TryDerive(string type, List<CandidateFact> all, string family, out CandidateFact fact)
+    {
+        fact = default!;
+        if (!family.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase) || !Matches(type, "ApparentAlignmentExplanation") && !Matches(type, "PhysicalProximityClarification")) return false;
+        if (!all.Any(c => Matches("PrimaryObjects", c.Type)) || !all.Any(c => Matches("EventType", c.Type))) return false;
+        fact = new("ApparentAlignmentExplanation", "The planets appear close from Earth but are not physically near each other", null, "Approved Derived Facts", "rule:planetary-conjunction-apparent-alignment-v1", null, null, .98m, "planetary-conjunction-apparent-alignment-v1", ["PrimaryObjects", "EventType"]);
+        return true;
+    }
+    private static IEnumerable<string> RequiredTypes(AstronomyFamilyProfile p, string role, string format)
+    {
+        var r = role.ToLowerInvariant();
+        if (p.FamilyId == "PlanetaryConjunction")
+        {
+            if (r.Contains("hook")) return ["PrimaryObjects", "EventType"];
+            if (r.Contains("timing")) return ["EventDateOrWindow"];
+            if (r.Contains("science")) return ["ApparentAlignmentExplanation", "PhysicalProximityClarification"];
+            if (r.Contains("observation")) return ["Direction", "ViewingWindow"];
+            if (r.Contains("orientation")) return format == "long" ? ["Direction", "Region"] : ["Direction"];
+            return ["PrimaryObjects"];
+        }
+        if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return p.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
+        return p.RequiredFactTypes;
+    }
+    private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => p.OptionalFactTypes.Concat(format == "long" ? ["AngularSeparation", "LocalPeakTime", "ObservationMode"] : ["AngularSeparation"]).Distinct(StringComparer.OrdinalIgnoreCase);
+    private static IEnumerable<FactConflict> FindConflicts(IEnumerable<string> types, List<CandidateFact> all) => types.SelectMany(t => all.Where(c => Matches(t, c.Type)).GroupBy(c => c.Value.ToString(), StringComparer.OrdinalIgnoreCase).Count() > 1 ? [new FactConflict(t, all.Where(c => Matches(t, c.Type)).Select(c => c.Value).Distinct().ToArray(), all.Where(c => Matches(t, c.Type)).OrderBy(c => Array.IndexOf(SourceOrder, c.SourceArtifact)).First().SourceArtifact, false, $"Conflicting {t} values resolved by source precedence.")] : Array.Empty<FactConflict>()).DistinctBy(c => c.FactType);
+    private static void AddDocumentary(List<CandidateFact> facts, JsonElement? contract, string format) { foreach (var beat in ReadArray(contract, "beats")) { var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), GetString(beat, "id")); var a = FindProperty(beat, "allocatedFacts"); if (a is null) continue; AddJsonFacts(facts, a, "Documentary Contract", format, beatId); } }
+    private static void AddJsonFacts(List<CandidateFact> facts, JsonElement? e, string source, string? format, string? beatId = null, string path = "")
+    {
+        if (e is null) return;
+        if (e.Value.ValueKind == JsonValueKind.Object) foreach (var p in e.Value.EnumerateObject()) { var type = CanonicalType(p.Name); var value = GetString(p.Value, "value") ?? ValueToString(p.Value); if (!string.IsNullOrWhiteSpace(value) && IsKnownFact(type)) facts.Add(new(type, value!, GetString(p.Value, "unit"), source, string.IsNullOrWhiteSpace(path) ? p.Name : path + "." + p.Name, beatId, format)); AddJsonFacts(facts, p.Value, source, format, beatId, string.IsNullOrWhiteSpace(path) ? p.Name : path + "." + p.Name); }
+        else if (e.Value.ValueKind == JsonValueKind.Array) foreach (var item in e.Value.EnumerateArray()) AddJsonFacts(facts, item, source, format, beatId, path);
+    }
+    private static string CanonicalType(string key) { var k = key ?? ""; if (Regex.IsMatch(k, "primary.*object|objectPair|objects", RegexOptions.IgnoreCase)) return "PrimaryObjects"; if (Regex.IsMatch(k, "event.*type|family", RegexOptions.IgnoreCase)) return "EventType"; if (Regex.IsMatch(k, "date|window", RegexOptions.IgnoreCase)) return "EventDateOrWindow"; if (Regex.IsMatch(k, "peak.*time|local.*time", RegexOptions.IgnoreCase)) return "LocalPeakTime"; if (Regex.IsMatch(k, "direction|azimuth", RegexOptions.IgnoreCase)) return "Direction"; if (Regex.IsMatch(k, "separation", RegexOptions.IgnoreCase)) return "AngularSeparation"; if (Regex.IsMatch(k, "region|location", RegexOptions.IgnoreCase)) return "Region"; if (Regex.IsMatch(k, "binocular|naked|visibility|mode", RegexOptions.IgnoreCase)) return "ObservationMode"; if (Regex.IsMatch(k, "alignment|proximity|explanation|mechanism|science", RegexOptions.IgnoreCase)) return "ApparentAlignmentExplanation"; return k; }
+    private static bool IsKnownFact(string type) => !Regex.IsMatch(type, "id|source|publish|scheduled|utc", RegexOptions.IgnoreCase);
+    private static bool Matches(string requested, string actual) => requested.Equals(actual, StringComparison.OrdinalIgnoreCase) || requested.Contains(actual, StringComparison.OrdinalIgnoreCase) || actual.Contains(requested.Replace("OrWindow", ""), StringComparison.OrdinalIgnoreCase);
+    private sealed record CandidateFact(string Type, object Value, string? Unit, string SourceArtifact, string SourceField, string? BeatId, string? Format, decimal Confidence = .95m, string? RuleId = null, IReadOnlyList<string>? Inputs = null);
+    private static string ResolveRole(JsonElement beat, int index) { var text = string.Join(" ", GetString(beat, "narrativeRole"), GetString(beat, "beatRole"), GetString(beat, "role"), GetString(beat, "purpose")); foreach (var r in new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing" }) if (text.Contains(r, StringComparison.OrdinalIgnoreCase)) return r; return index == 0 ? "Hook" : "Science"; }
+    private static IReadOnlyList<JsonElement> ReadArray(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return []; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Array) return p.Value.EnumerateArray().Select(i => i.Clone()).ToArray(); return []; }
+    private static JsonElement? FindProperty(JsonElement element, string name) { if (element.ValueKind != JsonValueKind.Object) return null; foreach (var p in element.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value; return null; }
+    private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False ? p.Value.GetRawText() : null; return null; }
+    private static int? GetInt(JsonElement? element, string name) => int.TryParse(GetString(element, name), out var value) ? value : null;
+    private static string? ValueToString(JsonElement element) => element.ValueKind switch { JsonValueKind.String => element.GetString(), JsonValueKind.Number => element.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+}
+
 public sealed record AstronomyFamilyProfile(string FamilyId, string ContentNature, string PreferredLongArchetype, string PreferredShortArchetype, IReadOnlyList<string> RequiredFactTypes, IReadOnlyList<string> OptionalFactTypes, IReadOnlyList<string> AllowedBeatRoles, IReadOnlyList<string> PreferredBeatOrder, string ObservationRequirements, string TimingRequirements, IReadOnlyList<string> ScientificConcepts, IReadOnlyList<string> ProhibitedAssumptions, IReadOnlyList<string> ValidationRules);
 public sealed record RealizedSemanticFact(string IntentType, string FactType, string Label, string Value, string? Unit = null);
 public sealed record TransitionIntent(string FromConcept, string ToConcept, string Relationship);
-public sealed record NarrationRealizationResult(string Format, string SceneId, string BeatRole, string FamilyProfileId, string ContentNature, string NarrativeRole, string NarrativePurpose, IReadOnlyList<RealizedSemanticFact> SpeakableFacts, IReadOnlyList<string> ScientificBoundaries, IReadOnlyList<RealizedSemanticFact> ObservationDetails, TransitionIntent? TransitionIntent, string Tone, string Rhythm, int WordBudget, string? PriorBeatSummary, string? NextBeatPurpose, IReadOnlyList<string> ForbiddenNarrationPatterns, string OpeningGuidance);
+public sealed record NarrationRealizationResult(string Format, string SceneId, string BeatRole, string FamilyProfileId, string ContentNature, string NarrativeRole, string NarrativePurpose, IReadOnlyList<RealizedSemanticFact> SpeakableFacts, IReadOnlyList<string> ScientificBoundaries, IReadOnlyList<RealizedSemanticFact> ObservationDetails, TransitionIntent? TransitionIntent, string Tone, string Rhythm, int WordBudget, string? PriorBeatSummary, string? NextBeatPurpose, IReadOnlyList<string> ForbiddenNarrationPatterns, string OpeningGuidance, bool CanRealize = true, IReadOnlyList<string>? MissingRequiredFacts = null);
 public sealed record NarrationRealizationIssue(string FamilyProfile, string Format, string SceneId, string BeatRole, string Field, string DetectedIssue, string SourceArtifact, string SourceField, string NormalizationStep, string RealizationStep);
 
 public static class AstronomyFamilyProfileCatalog
@@ -1999,6 +2138,22 @@ public static class NarrationRealizationValidator
         return issues;
     }
     private static bool IsStrict(string req) => !Regex.IsMatch(req, "Date|Time|Direction|Angular|Safety|Start|End|Peak", RegexOptions.IgnoreCase);
+}
+
+public static class RequiredSemanticFactPhase7Validator
+{
+    public static IReadOnlyList<NarrationRealizationIssue> Validate(RequiredSemanticFactResolutionResult resolution)
+        => resolution.Beats.Where(b => b.Blocking).SelectMany(b => b.MissingRequiredFacts.Select(m => new NarrationRealizationIssue(
+            "RequiredSemanticFactResolver",
+            b.Format,
+            b.SceneId,
+            b.NarrativeRole,
+            m,
+            "missing required semantic fact",
+            "required-semantic-fact-diagnostics",
+            m,
+            "RequiredSemanticFactResolver",
+            "NarrationRealizer"))).ToArray();
 }
 
 public static class NarrationRealizationDiagnosticsBuilder
