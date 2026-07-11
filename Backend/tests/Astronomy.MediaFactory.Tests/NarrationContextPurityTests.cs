@@ -60,6 +60,67 @@ public sealed class NarrationContextPurityTests
         Assert.Empty(failures);
     }
 
+
+
+    [Theory]
+    [InlineData("data labels")]
+    [InlineData("raw time strings")]
+    [InlineData("NoInternalFieldLabelLeakage")]
+    public void SuccessCriteriaValidationMetadata_IsNotScannedAsNarration(string criterion)
+    {
+        var context = ContextWithSuccessCriterion(criterion);
+
+        var failures = NarrationContextPurityValidator.Validate(context);
+
+        Assert.Empty(failures);
+    }
+
+    [Theory]
+    [InlineData("Their planetary motion changes the apparent separation.")]
+    [InlineData("Help the audience understand apparent motion.")]
+    [InlineData("The timing of the event makes it easier to notice.")]
+    public void OrdinarySemanticNarrationWords_DoNotFailPurityValidation(string text)
+    {
+        var context = new NarrationContextDocument("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat(text, "The audience can understand the geometry safely.", "Present the fact naturally.", [new NarrationVerifiedFact("Science", "Planetary motion is apparent from Earth.", null)], [], text, "Continue.", "calm", "measured", ["imperative guidance language"], null)])]);
+
+        var failures = NarrationContextPurityValidator.Validate(context);
+
+        Assert.Empty(failures);
+    }
+
+    [Theory]
+    [InlineData("Reserve label-safe space.", "VisualProductionInstruction")]
+    [InlineData("Use the timing field.", "EditorialImperativeInstruction")]
+    [InlineData("Scene 3 should show the conjunction.", "VisualProductionInstruction")]
+    [InlineData("2026-11-16T00:00:00+00:00", "RawTimestamp")]
+    public void UnsafeSpeakableContext_FailsWithTypedRule(string value, string ruleId)
+    {
+        var context = ContextWithFact("Science", value);
+
+        var failures = NarrationContextPurityValidator.Validate(context);
+
+        Assert.Contains(failures, f => f.Contains($"ruleId={ruleId}", StringComparison.OrdinalIgnoreCase) && f.Contains("matchedPhrase=", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void GeneratedNarrationContainingRegionCode_FailsWithInternalRegionCode()
+    {
+        var failures = GeneratedNarrationValidator.Validate("Look from IN-RJ-UDAIPUR after sunset.");
+
+        Assert.Contains(failures, f => f.RuleId == "InternalRegionCode");
+    }
+
+    [Fact]
+    public void GeneratedNarrationRepeatingProducerInstruction_FailsPlanningLeakage()
+    {
+        var failures = GeneratedNarrationValidator.Validate("Explain why the planets appear close. Then continue.");
+
+        Assert.Contains(failures, f => f.RuleId == "PlanningLeakage");
+    }
+
     private static NarrationContextDocument ContextWithFact(string key, string value) =>
         new("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat("Notice the event.", "The audience recognizes it.", "Open cleanly.", [new NarrationVerifiedFact(key, value, null)], [], null, "Continue.", "calm", "measured", [], null)])]);
+
+    private static NarrationContextDocument ContextWithSuccessCriterion(string criterion) =>
+        new("v", "o", [new NarrationFormatContext("long", [new NarrationContextBeat("Notice the event.", "The audience recognizes it.", "Open cleanly.", [new NarrationVerifiedFact("PrimaryObjects", "Jupiter.", null)], [], null, "Continue.", "calm", "measured", [criterion], null)])]);
 }
