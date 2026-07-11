@@ -199,7 +199,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
             languageProfile));
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
+        var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(semanticCapabilityDiagnosticsPath, JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"), JsonSerializer.Serialize(DomainKnowledgeDiagnosticsBuilder.Build(familyProfileResolution.Resolved.ResolvedProfileId, familyProfile.FamilyId, semanticResolution), JsonOptions), cancellationToken);
 
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
@@ -2006,9 +2008,12 @@ public sealed record RequiredSemanticFactResolutionResult(IReadOnlyList<Resolved
 {
     public bool Blocking => Beats.Any(b => b.Blocking);
 }
-public sealed record ResolvedBeatFacts(string Format, string SceneId, string DocumentaryBeatId, string NarrativeRole, IReadOnlyList<ResolvedSemanticFact> RequiredFacts, IReadOnlyList<ResolvedSemanticFact> OptionalFacts, IReadOnlyList<string> MissingRequiredFacts, IReadOnlyList<string> OmittedOptionalFacts, IReadOnlyList<string> ResolutionWarnings, IReadOnlyList<FactConflict> Conflicts, bool Blocking);
+public sealed record ResolvedBeatFacts(string Format, string SceneId, string DocumentaryBeatId, string NarrativeRole, IReadOnlyList<ResolvedSemanticFact> RequiredFacts, IReadOnlyList<ResolvedSemanticFact> OptionalFacts, IReadOnlyList<string> MissingRequiredFacts, IReadOnlyList<string> OmittedOptionalFacts, IReadOnlyList<string> ResolutionWarnings, IReadOnlyList<FactConflict> Conflicts, IReadOnlyList<SemanticCapabilityResolution> CapabilityResolutions, bool Blocking);
 public sealed record ResolvedSemanticFact(string FactType, string FactKey, object CanonicalValue, string? Unit, string SemanticMeaning, string SourceArtifact, string SourceField, string? SourceBeatId, string VerificationStatus, decimal Confidence, string Requiredness, string? LocalizedDisplayValue, string? SpeakableValue, string Language, bool SafeForNarration, string FactOrigin = "Source", string? DerivationRuleId = null, IReadOnlyList<string>? SourceInputs = null);
 public sealed record FactConflict(string FactType, IReadOnlyList<object> Values, string SelectedSourceArtifact, bool Blocking, string Message);
+public sealed record SemanticCapabilityResolution(string Capability, string Status, string? SelectedSource, object? CanonicalValue, string? SpeakableValue, IReadOnlyList<string> AlternativesConsidered, IReadOnlyList<string> Warnings, string CapabilityStrength, IReadOnlyList<SemanticCapabilityCandidate> Candidates, IReadOnlyList<SemanticCapabilityRejection> RejectedSources, IReadOnlyList<string> SubstitutionsApplied);
+public sealed record SemanticCapabilityCandidate(string Source, string SourceField, object Value, string Strength);
+public sealed record SemanticCapabilityRejection(string Source, string SourceField, string Reason);
 
 
 public interface IAstronomyDomainKnowledgeProvider
@@ -2066,6 +2071,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 {
     private static readonly string[] SourceOrder = ["Documentary Contract", "Editorial Contract", "Observation Metadata", "Production Event Intelligence", "Question Answer Set", "Story Graph", "Approved Derived Facts", "Astronomy Domain Knowledge Provider"];
     private readonly IAstronomyDomainKnowledgeProvider _domainKnowledgeProvider;
+    private readonly SemanticCapabilityResolver _capabilityResolver = new();
 
     public RequiredSemanticFactResolver() : this(new AstronomyDomainKnowledgeProvider()) { }
     public RequiredSemanticFactResolver(IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) => _domainKnowledgeProvider = domainKnowledgeProvider;
@@ -2088,26 +2094,34 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), GetString(beat, "id")) ?? $"{format}-beat-{index + 1:000}";
             var required = RequiredTypes(input.FamilyProfile, role, format).ToArray();
             var optional = OptionalTypes(input.FamilyProfile, role, format).ToArray();
-            var resolvedRequired = required.Select(t => ResolveType(t, all, input, format, beatId, "Required")).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
-            var resolvedOptional = optional.Select(t => ResolveType(t, all, input, format, beatId, "Optional")).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var capabilityResults = required.Concat(optional).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary(t => t, t => _capabilityResolver.Resolve(t, all.Where(c => c.Format is null || c.Format == format).ToArray(), input.LanguageProfile), StringComparer.OrdinalIgnoreCase);
+            var resolvedRequired = required.Select(t => ResolveType(t, all, input, format, beatId, "Required", capabilityResults[t])).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var resolvedOptional = optional.Select(t => ResolveType(t, all, input, format, beatId, "Optional", capabilityResults[t])).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
             var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
             var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f.FactType))).ToArray();
             var conflicts = FindConflicts(required.Concat(optional), all).ToArray();
-            var warnings = omitted.Select(o => $"Optional fact {o} was unavailable and omitted.").Concat(conflicts.Select(c => c.Message)).ToArray();
-            beats.Add(new(format, GetString(beat, "sceneId") ?? string.Empty, beatId, role, resolvedRequired, resolvedOptional, missing, omitted, warnings, conflicts, missing.Length > 0 || conflicts.Any(c => c.Blocking)));
+            var adaptations = capabilityResults.Values.SelectMany(r => r.SubstitutionsApplied).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var warnings = omitted.Select(o => $"Optional capability {o} was unavailable and omitted.").Concat(capabilityResults.Values.SelectMany(r => r.Warnings)).Concat(conflicts.Select(c => c.Message)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            beats.Add(new(format, GetString(beat, "sceneId") ?? string.Empty, beatId, role, resolvedRequired, resolvedOptional, missing, omitted, warnings, conflicts, capabilityResults.Values.ToArray(), missing.Length > 0 || conflicts.Any(c => c.Blocking)));
         }
         var diagnostics = new
         {
             component = "RequiredSemanticFactResolver-v1",
             sourcePrecedence = SourceOrder,
             blocking = beats.Any(b => b.Blocking),
-            beats = beats.Select(b => new { input.FamilyProfile.FamilyId, b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredFactTypes = RequiredTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedRequiredFacts = b.RequiredFacts.Select(f => f.FactType), b.MissingRequiredFacts, optionalFactTypes = OptionalTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedOptionalFacts = b.OptionalFacts.Select(f => f.FactType), b.OmittedOptionalFacts, sourceArtifacts = b.RequiredFacts.Concat(b.OptionalFacts).Select(f => f.SourceArtifact).Distinct(), b.Conflicts, derivedFacts = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactOrigin == "Derived"), b.Blocking, warnings = b.ResolutionWarnings })
+            beats = beats.Select(b => new { input.FamilyProfile.FamilyId, b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredCapabilities = RequiredTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedRequiredCapabilities = b.RequiredFacts.Select(f => f.FactType), b.MissingRequiredFacts, optionalCapabilities = OptionalTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedOptionalCapabilities = b.OptionalFacts.Select(f => f.FactType), b.OmittedOptionalFacts, candidateSources = b.CapabilityResolutions.ToDictionary(r => r.Capability, r => r.Candidates, StringComparer.OrdinalIgnoreCase), selectedSources = b.CapabilityResolutions.Where(r => r.SelectedSource is not null).ToDictionary(r => r.Capability, r => r.SelectedSource, StringComparer.OrdinalIgnoreCase), rejectedSources = b.CapabilityResolutions.ToDictionary(r => r.Capability, r => r.RejectedSources, StringComparer.OrdinalIgnoreCase), substitutionsApplied = b.CapabilityResolutions.SelectMany(r => r.SubstitutionsApplied).Distinct(StringComparer.OrdinalIgnoreCase), capabilityStrength = b.CapabilityResolutions.ToDictionary(r => r.Capability, r => r.CapabilityStrength, StringComparer.OrdinalIgnoreCase), beatAdaptations = b.ResolutionWarnings.Where(w => w.Contains("adapt", StringComparison.OrdinalIgnoreCase) || w.Contains("omitted", StringComparison.OrdinalIgnoreCase)), capabilityResolutions = b.CapabilityResolutions, sourceArtifacts = b.RequiredFacts.Concat(b.OptionalFacts).Select(f => f.SourceArtifact).Distinct(), b.Conflicts, derivedFacts = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactOrigin == "Derived"), b.Blocking, warnings = b.ResolutionWarnings })
         };
         return new RequiredSemanticFactResolutionResult(beats, diagnostics);
     }
 
-    private ResolvedSemanticFact? ResolveType(string type, List<CandidateFact> all, RequiredSemanticFactResolutionInput input, string format, string beatId, string req)
+    private ResolvedSemanticFact? ResolveType(string type, List<CandidateFact> all, RequiredSemanticFactResolutionInput input, string format, string beatId, string req, SemanticCapabilityResolution capability)
     {
+        if (capability.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) && capability.SelectedSource is not null && capability.CanonicalValue is not null)
+        {
+            var selected = capability.Candidates.FirstOrDefault(c => capability.SelectedSource.EndsWith(c.SourceField, StringComparison.OrdinalIgnoreCase) || capability.SelectedSource.StartsWith(c.Source, StringComparison.OrdinalIgnoreCase));
+            var parts = capability.SelectedSource.Split('.', 2);
+            return new ResolvedSemanticFact(type, type, capability.CanonicalValue, null, type, selected?.Source ?? parts[0], selected?.SourceField ?? (parts.Length > 1 ? parts[1] : capability.SelectedSource), beatId, "Verified", capability.CapabilityStrength == "Strong" ? .95m : .8m, req, capability.SpeakableValue, capability.SpeakableValue, input.LanguageProfile.LanguageCode, true, "Source", null, capability.AlternativesConsidered);
+        }
         var candidates = all.Where(c => (c.Format is null || c.Format == format) && Matches(type, c.Type)).OrderBy(c => Array.IndexOf(SourceOrder, c.SourceArtifact)).ToArray();
         var best = candidates.FirstOrDefault();
         if (best is null && TryDerive(type, all, input.FamilyProfile.FamilyId, out var derived)) best = derived;
@@ -2127,11 +2141,11 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var r = role.ToLowerInvariant();
         if (p.FamilyId == "PlanetaryConjunction" || p.FamilyId == "PlanetPairing")
         {
-            if (r.Contains("hook")) return ["PrimaryObjects", "EventType"];
-            if (r.Contains("timing")) return ["EventDateOrWindow"];
+            if (r.Contains("hook")) return ["PrimaryObjects", "EventIdentity"];
+            if (r.Contains("timing")) return ["ObservationTiming"];
             if (r.Contains("science")) return ["ApparentAlignmentExplanation", "PhysicalProximityClarification"];
-            if (r.Contains("observation")) return ["Direction", "ViewingWindow"];
-            if (r.Contains("orientation")) return format == "long" ? ["Direction", "Region"] : ["Direction"];
+            if (r.Contains("observation")) return ["ObservationDirection", "ObservationTiming"];
+            if (r.Contains("orientation")) return format == "long" ? ["ObservationDirection", "LocationContext"] : ["ObservationDirection"];
             return ["PrimaryObjects"];
         }
         if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return p.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
@@ -2146,9 +2160,78 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         if (e.Value.ValueKind == JsonValueKind.Object) foreach (var p in e.Value.EnumerateObject()) { var type = CanonicalType(p.Name); var value = GetString(p.Value, "value") ?? ValueToString(p.Value); if (!string.IsNullOrWhiteSpace(value) && IsKnownFact(type)) facts.Add(new(type, value!, GetString(p.Value, "unit"), source, string.IsNullOrWhiteSpace(path) ? p.Name : path + "." + p.Name, beatId, format)); AddJsonFacts(facts, p.Value, source, format, beatId, string.IsNullOrWhiteSpace(path) ? p.Name : path + "." + p.Name); }
         else if (e.Value.ValueKind == JsonValueKind.Array) foreach (var item in e.Value.EnumerateArray()) AddJsonFacts(facts, item, source, format, beatId, path);
     }
-    private static string CanonicalType(string key) { var k = key ?? ""; if (Regex.IsMatch(k, "primary.*object|objectPair|objects", RegexOptions.IgnoreCase)) return "PrimaryObjects"; if (Regex.IsMatch(k, "event.*type|family", RegexOptions.IgnoreCase)) return "EventType"; if (Regex.IsMatch(k, "date|window", RegexOptions.IgnoreCase)) return "EventDateOrWindow"; if (Regex.IsMatch(k, "peak.*time|local.*time", RegexOptions.IgnoreCase)) return "LocalPeakTime"; if (Regex.IsMatch(k, "direction|azimuth", RegexOptions.IgnoreCase)) return "Direction"; if (Regex.IsMatch(k, "separation", RegexOptions.IgnoreCase)) return "AngularSeparation"; if (Regex.IsMatch(k, "region|location", RegexOptions.IgnoreCase)) return "Region"; if (Regex.IsMatch(k, "binocular|naked|visibility|mode", RegexOptions.IgnoreCase)) return "ObservationMode"; if (Regex.IsMatch(k, "alignment|proximity|explanation|mechanism|science", RegexOptions.IgnoreCase)) return "ApparentAlignmentExplanation"; return k; }
+    private static string CanonicalType(string key) { var k = key ?? ""; if (Regex.IsMatch(k, "primary.*object|objectPair|objects", RegexOptions.IgnoreCase)) return "PrimaryObjects"; if (Regex.IsMatch(k, "event.*type|family|title|name", RegexOptions.IgnoreCase)) return "EventIdentity"; if (Regex.IsMatch(k, "bestViewingWindowLocal|viewingWindow|preferredViewingWindow|date|window|interval", RegexOptions.IgnoreCase)) return "ObservationTiming"; if (Regex.IsMatch(k, "peak.*time|local.*time|peakUtc|peakUTC", RegexOptions.IgnoreCase)) return "LocalPeakTime"; if (Regex.IsMatch(k, "direction|azimuth|skyDirection", RegexOptions.IgnoreCase)) return "ObservationDirection"; if (Regex.IsMatch(k, "separation|angular", RegexOptions.IgnoreCase)) return "AngularRelationship"; if (Regex.IsMatch(k, "region|location|timezone", RegexOptions.IgnoreCase)) return "LocationContext"; if (Regex.IsMatch(k, "binocular|naked|visibility|mode", RegexOptions.IgnoreCase)) return "ObservationMode"; if (Regex.IsMatch(k, "alignment|proximity|explanation|mechanism|science|pairing", RegexOptions.IgnoreCase)) return "ApparentPairingScience"; return k; }
     private static bool IsKnownFact(string type) => !Regex.IsMatch(type, "id|source|publish|scheduled|utc", RegexOptions.IgnoreCase);
-    private static bool Matches(string requested, string actual) => requested.Equals(actual, StringComparison.OrdinalIgnoreCase) || requested.Contains(actual, StringComparison.OrdinalIgnoreCase) || actual.Contains(requested.Replace("OrWindow", ""), StringComparison.OrdinalIgnoreCase);
+    private static bool Matches(string requested, string actual) => requested.Equals(actual, StringComparison.OrdinalIgnoreCase) || requested.Contains(actual, StringComparison.OrdinalIgnoreCase) || actual.Contains(requested.Replace("OrWindow", ""), StringComparison.OrdinalIgnoreCase) || SemanticCapabilityResolver.Accepts(requested, actual);
+
+    private sealed class SemanticCapabilityResolver
+    {
+        public SemanticCapabilityResolution Resolve(string capability, IReadOnlyList<CandidateFact> facts, LanguageProfile language)
+        {
+            var accepted = facts.Where(f => Accepts(capability, f.Type)).OrderBy(f => SourceRank(f.SourceArtifact)).ThenByDescending(f => Strength(f.Type)).ToArray();
+            var candidates = accepted.Select(f => new SemanticCapabilityCandidate(f.SourceArtifact, f.SourceField, f.Value, StrengthName(Strength(f.Type)))).ToArray();
+            if (accepted.Length == 0)
+            {
+                return new SemanticCapabilityResolution(capability, "Unresolved", null, null, null, [], [$"Capability {capability} could not be resolved from approved sources; beat must adapt or block if exact timing is essential."], "Missing", [], facts.Where(f => LooksRelated(capability, f.Type)).Select(f => new SemanticCapabilityRejection(f.SourceArtifact, f.SourceField, "Source is related but not authoritative enough for this capability.")).ToArray(), []);
+            }
+
+            var best = accepted[0];
+            var selectedSource = $"{best.SourceArtifact}.{best.SourceField}";
+            var substitutions = best.Type.Equals(capability, StringComparison.OrdinalIgnoreCase) ? Array.Empty<string>() : [$"{capability} substituted with valid source {best.Type} from {selectedSource}."];
+            var warnings = new List<string>();
+            if (capability.Equals("ObservationTiming", StringComparison.OrdinalIgnoreCase) && best.Type.Equals("LocalPeakTime", StringComparison.OrdinalIgnoreCase))
+                warnings.Add("ObservationTiming using LocalPeakTime because a precise viewing window was not required or unavailable.");
+            return new SemanticCapabilityResolution(
+                capability,
+                "Resolved",
+                selectedSource,
+                best.Value,
+                Speakable(best.Value?.ToString(), language),
+                accepted.Skip(1).Select(f => $"{f.SourceArtifact}.{f.SourceField}").ToArray(),
+                warnings,
+                StrengthName(Strength(best.Type)),
+                candidates,
+                facts.Except(accepted).Where(f => LooksRelated(capability, f.Type)).Select(f => new SemanticCapabilityRejection(f.SourceArtifact, f.SourceField, "Lower authority or incompatible semantic type.")).ToArray(),
+                substitutions);
+        }
+
+        public static bool Accepts(string capability, string actual)
+        {
+            if (capability.Equals(actual, StringComparison.OrdinalIgnoreCase)) return true;
+            return CapabilityAliases(capability).Contains(actual, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static IEnumerable<string> CapabilityAliases(string capability) => capability switch
+        {
+            "ObservationTiming" => ["ObservationTiming", "EventDateOrWindow", "ViewingWindow", "BestViewingWindowLocal", "LocalPeakTime", "PeakTime", "PeakWindow", "StartTime", "EndTime"],
+            "ObservationDirection" => ["ObservationDirection", "Direction", "SkyDirection", "SkyLocation"],
+            "EventIdentity" => ["EventIdentity", "EventType", "Name", "Title"],
+            "PrimaryObjects" => ["PrimaryObjects", "OccultingObject", "HiddenObject", "ObjectName", "Name"],
+            "ApparentAlignmentExplanation" or "PhysicalProximityClarification" or "ApparentPairingScience" => ["ApparentPairingScience", "ApparentAlignmentExplanation", "PhysicalProximityClarification", "PerspectiveExplanation", "WhyPlanetsAppearClose"],
+            "AngularRelationship" or "AngularSeparation" => ["AngularRelationship", "AngularSeparation"],
+            "LocationContext" => ["LocationContext", "Region", "VisibilityRegion", "Location"],
+            _ => [capability]
+        };
+
+        private static bool LooksRelated(string capability, string actual)
+            => CapabilityAliases(capability).Any(a => actual.Contains(a, StringComparison.OrdinalIgnoreCase) || a.Contains(actual, StringComparison.OrdinalIgnoreCase));
+
+        private static int SourceRank(string source)
+        {
+            var index = Array.IndexOf(SourceOrder, source);
+            return index < 0 ? 99 : index;
+        }
+
+        private static int Strength(string type)
+            => type.Equals("ObservationTiming", StringComparison.OrdinalIgnoreCase) ? 100
+                : Regex.IsMatch(type, "BestViewingWindowLocal|ViewingWindow|PeakWindow", RegexOptions.IgnoreCase) ? 95
+                : type.Equals("LocalPeakTime", StringComparison.OrdinalIgnoreCase) ? 85
+                : Regex.IsMatch(type, "DateOrWindow|StartTime|EndTime", RegexOptions.IgnoreCase) ? 75
+                : 90;
+
+        private static string StrengthName(int strength) => strength >= 95 ? "Strong" : strength >= 80 ? "Substitutable" : strength > 0 ? "Weak" : "Missing";
+        private static string? Speakable(string? value, LanguageProfile language) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
     private sealed record CandidateFact(string Type, object Value, string? Unit, string SourceArtifact, string SourceField, string? BeatId, string? Format, decimal Confidence = .95m, string? RuleId = null, IReadOnlyList<string>? Inputs = null);
     private static string ResolveRole(JsonElement beat, int index) { var text = string.Join(" ", GetString(beat, "narrativeRole"), GetString(beat, "beatRole"), GetString(beat, "role"), GetString(beat, "purpose")); foreach (var r in new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing" }) if (text.Contains(r, StringComparison.OrdinalIgnoreCase)) return r; return index == 0 ? "Hook" : "Science"; }
     private static IReadOnlyList<JsonElement> ReadArray(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return []; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.Array) return p.Value.EnumerateArray().Select(i => i.Clone()).ToArray(); return []; }
@@ -2174,8 +2257,8 @@ public static class AstronomyFamilyProfileCatalog
     public const string ProfileVersion = "AstronomyFamilyProfileCatalog-v2";
     private static readonly IReadOnlyDictionary<string, AstronomyFamilyProfile> Profiles = new Dictionary<string, AstronomyFamilyProfile>(StringComparer.OrdinalIgnoreCase)
     {
-        ["PlanetPairing"] = new("PlanetPairing", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "EventDateOrWindow", "ApparentAlignmentExplanation"], ["Direction", "AngularSeparation", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
-        ["PlanetaryConjunction"] = new("PlanetaryConjunction", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "EventDateOrWindow", "ApparentAlignmentExplanation"], ["Direction", "AngularSeparation", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
+        ["PlanetPairing"] = new("PlanetPairing", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "ObservationTiming", "ApparentPairingScience"], ["ObservationDirection", "AngularRelationship", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
+        ["PlanetaryConjunction"] = new("PlanetaryConjunction", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "ObservationTiming", "ApparentPairingScience"], ["ObservationDirection", "AngularRelationship", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
         ["Occultation"] = new("Occultation", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["OccultingObject", "HiddenObject", "StartTime", "VisibilityRegion", "Mechanism"], ["EndTime", "Duration", "ReappearanceTime", "TelescopeGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Orientation", "Science", "Observation", "Closing"], "Region and object pairing required.", "Start time required; end time or duration preferred.", ["ForegroundBody", "Reappearance"], ["Global visibility", "Instantaneous everywhere"], ["Mechanism must be stated"]),
         ["Eclipse"] = new("Eclipse", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["EclipseType", "EventDateOrWindow", "VisibilityRegion", "SafetyGuidance", "Mechanism"], ["StartTime", "PeakTime", "EndTime", "Magnitude"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Safety", "Timing", "Science", "Observation", "Closing"], "Safety guidance required for solar eclipses.", "Window or date required.", ["ShadowGeometry", "OrbitalAlignment"], ["Unsafe solar viewing", "Worldwide visibility"], ["Safety must not be omitted"]),
         ["MeteorShower"] = new("MeteorShower", "TimedObservationEvent", "ObservationGuide", "SkyWatchShort", ["Name", "EventDateOrWindow", "Radiant", "PeakWindow"], ["MoonPhase", "Zhr", "DarkSkyGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Observation", "Science", "Closing"], "Dark sky and patience guidance when verified.", "Peak window required.", ["CometDebris", "Radiant"], ["Guaranteed counts"], ["No guaranteed meteors"]),
