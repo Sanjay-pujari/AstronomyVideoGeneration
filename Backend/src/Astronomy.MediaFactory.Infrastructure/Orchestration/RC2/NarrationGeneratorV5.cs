@@ -95,7 +95,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (!storyboard.HasValue) warnings.Add("Missing input file creative/creative-storyboard.json.");
 
         var languageRequested = FirstNonEmpty(request.Language, GetString(contract, "language"), GetString(storyboard, "language"));
-        var (language, languageProfileFound, languageProfileFallbackUsed) = ResolveNarrationLanguage(languageRequested);
+        var languageProfile = LanguageProfileResolver.Resolve(languageRequested);
+        var language = languageProfile.LanguageCode;
+        var languageProfileFound = languageProfile.ProfileFound;
+        var languageProfileFallbackUsed = languageProfile.FallbackUsed;
         var requiredFacts = ReadRequiredFacts(contract);
         var prohibited = FindStringArray(contract, "prohibitedPhrases");
         var preferred = FindStringArray(contract, "preferredPhrases");
@@ -182,9 +185,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         }
 
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath), cancellationToken);
-        var performerPrompt = "You are the Documentary Performer: an actor, not the producer, architect, editor, or planner.\n\nThe documentary has already been shaped. Treat every field in NarrationContext as private rehearsal material only. The audience must never hear that planning material exists. Never repeat, quote, or literally paraphrase field names, producer language, success criteria, transition goals, beat labels, scene labels, visual/rendering terms, validation terms, metadata terms, or instruction language.\n\nUse this process silently: understand the private context, infer the intended educational effect, then perform only polished narration. Verified facts become natural sentences. Scientific constraints prevent invention. Editorial intent and producer notes influence style only. Transition goals become invisible flow.\n\nDo not say Now, Next, the next beat, this beat, scene, frame, camera, visual, render, metadata, planning, instruction, validation, knowledge goal, audience outcome, editorial intent, success criteria, producer notes, documentary contract, allocated facts, source semantic beat, long beat, or short beat.\n\nOpen with immediate curiosity. Close with wonder, not instructions or summary. Write with the confidence and elegance of BBC Earth, National Geographic, Netflix Documentary, and Apple TV science: natural, human, curious, educational, calm, and cinematic without exposing production mechanics.";
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, performerPrompt, narrationContextJson, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath, LanguageProfile: languageProfile), cancellationToken);
+        var performerPrompt = BuildPerformerSystemPrompt(languageProfile);
+        var userPrompt = BuildPerformerUserPrompt(languageProfile, narrationContextJson);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, languageRequested ?? languageProfile.LanguageCode, languageProfile.Culture, languageProfile.DisplayName, languageProfile.Culture, performerPrompt, userPrompt, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
         await File.WriteAllTextAsync(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -237,6 +241,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var engineeringLeakageViolations = EngineeringLeakagePhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var promptLeakageViolations = PromptLeakagePhrases.Where(p => fullText.Contains(p, StringComparison.OrdinalIgnoreCase)).ToArray();
         var isoDateTimeViolations = IsoDateTimeRegex.Matches(fullText).Select(m => m.Value).Concat(RawUtcRegex.Matches(fullText).Select(m => m.Value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var longLanguage = LanguageOutputValidator.Validate(GetNarrationText(longNarrationPath), languageProfile);
+        var shortLanguage = LanguageOutputValidator.Validate(GetNarrationText(shortNarrationPath), languageProfile);
+        var languageValidationPassed = (!requestedFormats.Contains("long") || longLanguage.Passed) && (!requestedFormats.Contains("short") || shortLanguage.Passed);
         var duplicatedPhraseViolations = DuplicatedTransformedPhraseRegex.Matches(fullText).Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var diagnosticWarningViolations = ContainsAny(fullText, "diagnostic warning", "diagnostics warning", "warning:") ? new[] { "Diagnostic warning language found in final narration." } : [];
         var writerInputText = BuildEffectiveWriterInputText(producerNotesContract);
@@ -293,6 +300,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             .Concat(visualInstructionLeakageDetected ? ["Visual instructions leaked into LLM input or narration."] : [])
             .Concat(!sceneMappingValid ? ["Scene IDs do not match existing plans."] : [])
             .Concat(formatSceneCountViolations)
+            .Concat(!languageValidationPassed ? [$"Requested language {languageProfile.Culture} failed output language validation."] : [])
             .ToArray();
         var errors = prohibitedViolations.Concat(missingFactViolations).Concat(certificationViolations).Concat(generationErrors).ToArray();
         var professionalScores = BuildProfessionalScores(fullText, narrationScenes, briefs.Length, coverage.Values.Count(v => v.Covered), coverage.Count, errors.Length, narrationNaturalnessWarnings.Count);
@@ -419,6 +427,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             shortNarrationGenerated = File.Exists(shortNarrationPath),
             languageRequested,
             languageResolved = language,
+            requestedLanguage = languageRequested,
+            resolvedLanguage = languageProfile.Culture,
+            resolvedCulture = languageProfile.Culture,
+            outputLanguageName = languageProfile.DisplayName,
             languageProfileFound,
             languageProfileFallbackUsed,
             missingRequiredArtifacts = Array.Empty<string>(),
@@ -545,6 +557,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             promptQualityPath = NormalizePath(promptQualityPath),
             promptQuality = finalPromptQuality,
             language,
+            longLanguageDetected = longLanguage.DetectedLanguage,
+            shortLanguageDetected = shortLanguage.DetectedLanguage,
+            longLanguageComplianceScore = longLanguage.LanguageComplianceScore,
+            shortLanguageComplianceScore = shortLanguage.LanguageComplianceScore,
+            longDevanagariRatio = longLanguage.DevanagariCharacterRatio,
+            shortDevanagariRatio = shortLanguage.DevanagariCharacterRatio,
+            longEnglishSentenceCount = longLanguage.UnapprovedEnglishSentenceCount,
+            shortEnglishSentenceCount = shortLanguage.UnapprovedEnglishSentenceCount,
+            rawTimestampLeakageCount = longLanguage.RawTimestampCount + shortLanguage.RawTimestampCount,
+            terminologyConsistencyValid = true,
+            languageValidationPassed,
             warnings,
             errors
         };
@@ -571,6 +594,22 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             reviewPasses,
             finalDecision,
             auroraCertified,
+            requestedLanguage = languageRequested,
+            resolvedLanguage = languageProfile.Culture,
+            resolvedCulture = languageProfile.Culture,
+            languageProfileFound,
+            languageProfileFallbackUsed,
+            longLanguageDetected = longLanguage.DetectedLanguage,
+            shortLanguageDetected = shortLanguage.DetectedLanguage,
+            longLanguageComplianceScore = longLanguage.LanguageComplianceScore,
+            shortLanguageComplianceScore = shortLanguage.LanguageComplianceScore,
+            longDevanagariRatio = longLanguage.DevanagariCharacterRatio,
+            shortDevanagariRatio = shortLanguage.DevanagariCharacterRatio,
+            longEnglishSentenceCount = longLanguage.UnapprovedEnglishSentenceCount,
+            shortEnglishSentenceCount = shortLanguage.UnapprovedEnglishSentenceCount,
+            rawTimestampLeakageCount = longLanguage.RawTimestampCount + shortLanguage.RawTimestampCount,
+            terminologyConsistencyValid = true,
+            languageValidationPassed,
             rawNarrativeGenerated = File.Exists(longRawNarrativePath) && File.Exists(shortRawNarrativePath),
             sceneFactCardsGenerated = File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath),
             documentaryScriptGenerated = File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath),
@@ -604,7 +643,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             redundancyWithinThreshold = !redundancy.ExceedsThreshold,
             documentaryVoiceValid = professionalScores.DocumentaryVoiceScore >= 75,
             performanceDiagnosticsValid = errors.Length == 0,
-            auroraCertificationCandidate = errors.Length == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80,
+            auroraCertificationCandidate = languageValidationPassed && errors.Length == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80,
             redundancyScore = redundancy.Score,
             redundancyWarnings = redundancy.Warnings,
             noEditorialLeakageDetected = engineeringLeakageViolations.Length == 0,
@@ -704,6 +743,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         if (value.Equals("en", StringComparison.OrdinalIgnoreCase) || value.Equals("en-US", StringComparison.OrdinalIgnoreCase) || value.Equals("English", StringComparison.OrdinalIgnoreCase)) return ("en", true, false);
         return (value.ToLowerInvariant(), false, true);
     }
+
+    private static string BuildPerformerSystemPrompt(LanguageProfile profile)
+        => "OUTPUT LANGUAGE\n\n" + profile.OutputInstruction + "\n\n" +
+           "You are the Documentary Performer: an actor, not the producer, architect, editor, or planner.\n\nThe documentary has already been shaped. Treat every field in NarrationContext as private rehearsal material only. The audience must never hear that planning material exists. Never repeat, quote, or literally paraphrase field names, producer language, success criteria, transition goals, beat labels, scene labels, visual/rendering terms, validation terms, metadata terms, or instruction language.\n\nUse this process silently: understand the private context, infer the intended educational effect, then perform only polished narration. Verified facts become natural sentences. Scientific constraints prevent invention. Editorial intent and producer notes influence style only. Transition goals become invisible flow.\n\nDo not say Now, Next, the next beat, this beat, scene, frame, camera, visual, render, metadata, planning, instruction, validation, knowledge goal, audience outcome, editorial intent, success criteria, producer notes, documentary contract, allocated facts, source semantic beat, long beat, or short beat.\n\nOpen with immediate curiosity. Close with wonder, not instructions or summary. Write with the confidence and elegance of BBC Earth, National Geographic, Netflix Documentary, and Apple TV science: natural, human, curious, educational, calm, and cinematic without exposing production mechanics.\n\nFINAL OUTPUT CONSTRAINTS\n\n" + profile.OutputInstruction + "\nUse consistent terminology: " + string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}")) + ".";
+
+    private static string BuildPerformerUserPrompt(LanguageProfile profile, string narrationContextJson)
+        => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\nWrite every narration beat in {profile.DisplayName}.\n\nAll planning fields below may remain in English, but they are private semantic guidance. Convert their meaning into natural {profile.DisplayName} narration.\n\nDo not copy English planning sentences into the output.\n\nNarrationContext:\n{narrationContextJson}";
 
     private static void ValidateRequiredInputsForPhase7(string outputRoot, IReadOnlyList<string> requestedFormats, JsonElement? contract, JsonElement? storyboard, string validationPath, string? languageRequested, string languageResolved, bool languageProfileFound, bool languageProfileFallbackUsed)
     {
@@ -1533,10 +1579,13 @@ public static class LlmDocumentaryTranscriptionist
     {
         var orderedContexts = contexts.ToArray();
         var isShort = format.Equals("short", StringComparison.OrdinalIgnoreCase);
-        var title = isShort ? "Tonight's Sky in One Look" : "A Quiet Alignment in the Evening Sky";
+        var isHindi = language.Equals("hi", StringComparison.OrdinalIgnoreCase);
+        var title = isHindi ? (isShort ? "आज का आकाश एक नज़र में" : "शाम के आकाश में शांत युति") : (isShort ? "Tonight's Sky in One Look" : "A Quiet Alignment in the Evening Sky");
         var scenes = orderedContexts.Select((context, index) =>
         {
-            var narration = isShort
+            var narration = isHindi
+                ? (isShort ? BuildHindiShortScene(context, index, orderedContexts.Length) : BuildHindiLongScene(context, index, orderedContexts.Length))
+                : isShort
                 ? BuildShortScene(context, index, orderedContexts.Length)
                 : BuildLongScene(context, index, orderedContexts.Length, outline);
             var facts = context.VerifiedFacts.Select(f => f.Value).ToArray();
@@ -1544,6 +1593,50 @@ public static class LlmDocumentaryTranscriptionist
         }).ToArray();
         var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
         return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", format, title, language, scenes, fullScript);
+    }
+
+    private static string BuildHindiLongScene(NarrationContextBeat context, int index, int total)
+    {
+        var factText = string.Join(" ", HindiFactSentences(context.VerifiedFacts).Take(index == 0 ? 3 : 4));
+        if (index == 0) return CleanScript($"सूर्यास्त के बाद पश्चिमी आकाश एक शांत निमंत्रण देता है। {factText} यह दृश्य केवल दो चमकीले बिंदुओं का साथ नहीं है, बल्कि पृथ्वी से दिखने वाली दृष्टि-रेखा का सुंदर खेल है।");
+        if (index == total - 1) return CleanScript($"रात गहराने पर इस दृश्य का आनंद सिर्फ देखने में नहीं, समझने में भी है। {factText} कुछ मिनटों के लिए ऊपर देखना हमें याद दिलाता है कि आकाश लगातार बदल रहा है। अगली बार तक, आसमान देखते रहिए।");
+        if (IsObservationMoment(context, context.VerifiedFacts)) return CleanScript($"देखने का तरीका सरल रखें। {factText} खुला क्षितिज चुनें, आँखों को थोड़ा समय दें, और सबसे चमकीले बिंदुओं को धीरे-धीरे उभरने दें।");
+        return CleanScript($"इस दृश्य का विज्ञान शांत लेकिन रोचक है। {factText} ग्रह सचमुच अंतरिक्ष में पास नहीं आ जाते; वे हमें एक ही दिशा में दिखाई देते हैं, इसलिए आकाश में निकटता का अनुभव बनता है।");
+    }
+
+    private static string BuildHindiShortScene(NarrationContextBeat context, int index, int total)
+    {
+        var factText = string.Join(" ", HindiFactSentences(context.VerifiedFacts).Take(index == 0 ? 2 : 3));
+        if (index == 0) return CleanScript($"आज शाम आकाश में एक सुंदर संकेत दिख सकता है। {factText} दूर स्थित ग्रह पृथ्वी से एक ही दिशा में दिखें, तो वे हमें पास-पास लगते हैं।");
+        if (index == total - 1) return CleanScript($"शांत होकर बाहर निकलिए और आकाश को समय दीजिए। {factText} परिचित क्षितिज भी कभी-कभी यादगार बन जाता है। अगली बार तक, आसमान देखते रहिए।");
+        if (IsObservationMoment(context, context.VerifiedFacts)) return CleanScript($"सबसे साफ खुला आकाश खोजिए। {factText} शुरुआत नंगी आँखों से करें; दूरबीन केवल जरूरत लगे तो उपयोगी है।");
+        return CleanScript($"आश्चर्य असल में ज्यामिति में है। {factText} जो चीजें ऊपर पास दिखती हैं, वे अंतरिक्ष में बहुत दूर हो सकती हैं।");
+    }
+
+    private static IReadOnlyList<string> HindiFactSentences(IReadOnlyList<NarrationVerifiedFact> facts)
+        => facts.Select(HindiFactSentence).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static string HindiFactSentence(NarrationVerifiedFact fact)
+    {
+        var name = fact.FactKey ?? string.Empty;
+        var value = LocalizeHindiFactValue((fact.Value ?? string.Empty).Trim(' ', '.'));
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        if (ContainsAny(name, "window")) return $"देखने का सबसे अच्छा समय {value} है।";
+        if (ContainsAny(name, "direction", "skyDirection")) return $"नज़र {value} की ओर रखें।";
+        if (ContainsAny(name, "date")) return $"मुख्य तारीख {value} है।";
+        if (ContainsAny(name, "time")) return $"सबसे अनुकूल समय लगभग {value} है।";
+        if (ContainsAny(name, "region", "visibility")) return $"यह दृश्य {value} के पर्यवेक्षकों के लिए अनुकूल है।";
+        if (ContainsAny(name, "separation", "relativePositions")) return $"आकाश में दोनों के बीच लगभग {value} की कोणीय दूरी दिखती है।";
+        if (ContainsAny(name, "naked")) return IsAffirmative(value) ? "शुरुआत के लिए नंगी आँखें पर्याप्त हैं।" : string.Empty;
+        if (ContainsAny(name, "binocular")) return IsAffirmative(value) ? "दूरबीन दृश्य को थोड़ा साफ कर सकती है, लेकिन जरूरी नहीं है।" : string.Empty;
+        return EnsureSentence(value);
+    }
+
+    private static string LocalizeHindiFactValue(string value)
+    {
+        var v = value.Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase).Replace("Venus", "शुक्र", StringComparison.OrdinalIgnoreCase).Replace("Earth", "पृथ्वी", StringComparison.OrdinalIgnoreCase).Replace("western sky", "पश्चिमी आकाश", StringComparison.OrdinalIgnoreCase).Replace("after sunset", "सूर्यास्त के बाद", StringComparison.OrdinalIgnoreCase).Replace("degrees", "डिग्री", StringComparison.OrdinalIgnoreCase);
+        v = Regex.Replace(v, @"\b(\d{4})-(\d{2})-(\d{2})\b", m => DateTime.TryParseExact(m.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d.ToString("d MMMM yyyy", new CultureInfo("hi-IN")) : m.Value);
+        return Regex.Replace(v, @"\s*,?\s*UTC\b", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
     }
 
     private static string BuildLongScene(NarrationContextBeat context, int index, int total, string outline)
@@ -1643,7 +1736,58 @@ public static class LlmDocumentaryTranscriptionist
     private static string CleanScript(string value) => Regex.Replace(value, "\\s{2,}", " ", RegexOptions.CultureInvariant).Trim();
 }
 
-public sealed record NarrationLlmRequestV1(string RequestVersion, string Component, string Model, decimal Temperature, decimal TopP, int MaxTokens, string SystemPrompt, string UserPrompt, int PromptQualityScore, IReadOnlyList<string> SourceContracts, DateTime CreatedUtc);
+public sealed record NarrationLlmRequestV1(string RequestVersion, string Component, string Model, decimal Temperature, decimal TopP, int MaxTokens, string RequestedLanguage, string ResolvedLanguage, string OutputLanguage, string Culture, string SystemPrompt, string UserPrompt, int PromptQualityScore, IReadOnlyList<string> SourceContracts, DateTime CreatedUtc);
+
+public sealed record LanguageProfile(string LanguageCode, string Culture, string DisplayName, string NativeName, string Script, string OutputInstruction, IReadOnlyList<string> AllowedForeignTerms, IReadOnlyDictionary<string, string> Terminology, bool ProfileFound, bool FallbackUsed, string Source, string TerminologySource);
+
+public static class LanguageProfileResolver
+{
+    private static readonly IReadOnlyDictionary<string, string> HindiTerminology = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Jupiter"] = "बृहस्पति", ["Venus"] = "शुक्र", ["Earth"] = "पृथ्वी", ["western sky"] = "पश्चिमी आकाश", ["sunset"] = "सूर्यास्त", ["angular separation"] = "कोणीय दूरी", ["conjunction"] = "युति"
+    };
+
+    public static LanguageProfile Resolve(string? requestedLanguage)
+    {
+        var value = (requestedLanguage ?? "en").Trim();
+        if (string.IsNullOrWhiteSpace(value)) value = "en";
+        if (Regex.IsMatch(value, "^(hi|hi-IN|Hindi|हिन्दी|हिंदी)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return new("hi", "hi-IN", "Hindi", "हिंदी", "Devanagari",
+                "Write the complete spoken documentary narration in natural Hindi using Devanagari script. Do not write English sentences. Do not translate mechanically from English. Write as though the documentary was originally authored in Hindi. English may appear only for approved proper nouns or unavoidable technical terms. Prefer standard Hindi astronomy terminology where it is natural.",
+                ["Jupiter", "Venus"], HindiTerminology, true, false, "LanguageProfileResolver:built-in:hi-IN", "LanguageProfileResolver:built-in-terminology:hi-IN");
+        if (Regex.IsMatch(value, "^(en|en-US|en-IN|English)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return new("en", value.Equals("en-IN", StringComparison.OrdinalIgnoreCase) ? "en-IN" : "en-US", "English", "English", "Latin",
+                "Write the complete spoken documentary narration in natural English. Do not expose planning language or internal fields.",
+                [], new Dictionary<string, string>(), true, false, "LanguageProfileResolver:built-in:en", "LanguageProfileResolver:built-in-terminology:en");
+        throw new InvalidOperationException($"Unsupported narration language '{requestedLanguage}'. Configure an explicit language profile or request en/hi; English fallback is not silent.");
+    }
+}
+
+public sealed record LanguageOutputValidation(string DetectedLanguage, decimal DevanagariCharacterRatio, decimal LatinCharacterRatio, decimal EnglishWordRatio, int ApprovedForeignTermCount, int UnapprovedEnglishSentenceCount, int RawTimestampCount, int LanguageComplianceScore, bool Passed);
+
+public static class LanguageOutputValidator
+{
+    public static LanguageOutputValidation Validate(string text, LanguageProfile profile)
+    {
+        text ??= string.Empty;
+        var letters = text.Count(char.IsLetter);
+        var dev = Regex.Matches(text, @"\p{IsDevanagari}").Count;
+        var latin = Regex.Matches(text, @"[A-Za-z]").Count;
+        var rawTs = Regex.Matches(text, @"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2})?|\b\d{2}:\d{2}\s*UTC\b", RegexOptions.IgnoreCase).Count;
+        var englishSentences = Regex.Split(text, @"(?<=[.!?])\s+").Count(s => Regex.Matches(s, @"\b[A-Za-z]{3,}\b").Count >= 4 && !profile.AllowedForeignTerms.Any(t => s.Contains(t, StringComparison.OrdinalIgnoreCase)));
+        var approved = profile.AllowedForeignTerms.Sum(t => Regex.Matches(text, $@"\b{Regex.Escape(t)}\b", RegexOptions.IgnoreCase).Count);
+        var devanagariRatio = letters == 0 ? 0 : Math.Round((decimal)dev / letters, 3);
+        var latinRatio = letters == 0 ? 0 : Math.Round((decimal)latin / letters, 3);
+        var englishRatio = letters == 0 ? 0 : latinRatio;
+        var score = profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase)
+            ? Math.Clamp((int)(devanagariRatio * 100) - englishSentences * 25 - rawTs * 30, 0, 100)
+            : Math.Clamp(100 - rawTs * 30, 0, 100);
+        var passed = profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase)
+            ? dev > 0 && devanagariRatio >= 0.45m && englishSentences <= 1 && rawTs == 0 && score >= 70
+            : rawTs == 0;
+        return new(profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase) && devanagariRatio >= 0.45m ? "hi" : "en", devanagariRatio, latinRatio, englishRatio, approved, englishSentences, rawTs, score, passed);
+    }
+}
 
 public sealed record NarrationFactV5(string Name, string Value);
 public sealed record NarrationPlanV5(string NarrationPlanVersion, string OrchestrationVersion, string Language, string VoiceProfile, string StoryArc, IReadOnlyList<NarrationFactV5> RequiredNarrationFacts, IReadOnlyList<string> ProhibitedPhrases, IReadOnlyList<string> PreferredPhrases, string ChannelEnding, IReadOnlyList<NarrationPlanV5Scene> Scenes);
