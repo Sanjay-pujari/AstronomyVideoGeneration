@@ -1,5 +1,5 @@
 {
-  "certificationVersion": "Chronicle-Core-v1",
+  "certificationVersion": "Chronicle-Core-Phase01-07-GenericNarration-v2",
   "languages": [
     "en",
     "hi"
@@ -22,13 +22,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "planetary-conjunction-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "planetary-conjunction-hi",
@@ -47,13 +51,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "planetary-conjunction-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "eclipse-en",
@@ -72,13 +80,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "eclipse-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "eclipse-hi",
@@ -97,13 +109,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "eclipse-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "meteor-shower-en",
@@ -122,13 +138,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "meteor-shower-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "meteor-shower-hi",
@@ -147,13 +167,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "meteor-shower-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "constellation-profile-en",
@@ -172,13 +196,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "constellation-profile-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "constellation-profile-hi",
@@ -197,13 +225,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "constellation-profile-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "deep-sky-nebula-en",
@@ -222,13 +254,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "deep-sky-nebula-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "deep-sky-nebula-hi",
@@ -247,13 +283,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "deep-sky-nebula-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "galaxy-en",
@@ -272,13 +312,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "galaxy-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "galaxy-hi",
@@ -297,13 +341,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "galaxy-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "black-hole-explainer-en",
@@ -322,13 +370,17 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "black-hole-explainer-en",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     },
     {
       "benchmarkId": "black-hole-explainer-hi",
@@ -347,17 +399,36 @@
       "factTraceabilityValid": false,
       "languageComplianceValid": false,
       "dateTimeLocalizationValid": false,
-      "scienceFidelityValid": false,
       "longShortIndependenceValid": false,
-      "narrationQualityValid": false,
       "errors": [
         "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
       ],
-      "warnings": []
+      "warnings": [],
+      "eventOrSubject": "black-hole-explainer-hi",
+      "phases01To07Result": "NotRun",
+      "noEventSpecificCodeRequired": true,
+      "narrationRealizationValid": false,
+      "performanceValidationValid": false,
+      "scientificFidelityValid": false
     }
   ],
   "englishCertified": false,
   "hindiCertified": false,
   "multiEventCertified": false,
-  "phase01To07Certified": false
+  "phase01To07Certified": false,
+  "certificationScope": "Tracks profile-based Phase 7 readiness; astronomy general certification remains false until all gates execute.",
+  "definitionOfDone": {
+    "fourConjunctionBenchmarksRequired": [
+      "Jupiter-Venus en",
+      "Jupiter-Venus hi",
+      "Mars-Jupiter en",
+      "Mars-Jupiter hi"
+    ],
+    "genericityGateRequired": [
+      "occultation-or-eclipse en/hi",
+      "constellation en/hi",
+      "deep-sky-object-or-nebula en/hi"
+    ],
+    "certifyAstronomyGenerallyFromConjunctionsAlone": false
+  }
 }
