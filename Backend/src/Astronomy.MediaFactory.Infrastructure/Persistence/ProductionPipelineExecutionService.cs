@@ -374,10 +374,17 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             if (phaseNo <= 15) ValidatePhaseInputContract(context, phaseNo);
             var outputs = (await action(context, cancellationToken)).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var missing = outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
+            var requiredOutputDiagnostics = phaseNo == 7
+                ? await WritePhase7RequiredOutputValidationDiagnosticsAsync(context, outputs, cancellationToken)
+                : null;
+            var missing = requiredOutputDiagnostics?.BlockingErrors?.ToArray()
+                ?? outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
             var warnings = phaseNo == 18 ? ReadPhase18Warnings(context) : [];
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, warnings, missing, missing.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics);
+            var reason = missing.Length == 0
+                ? "Validation passed."
+                : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
@@ -583,6 +590,138 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string BuildNarrationV5PromptPreviewPath(ProductionPhaseContext context)
         => Path.Combine(BuildNarrationV5Root(context), "prompt-preview.md");
+
+    private static IReadOnlyList<Phase7RequiredOutputManifestEntry> Phase7RequiredOutputManifest(ProductionPhaseContext context)
+    {
+        static Phase7RequiredOutputManifestEntry Entry(string id, string relativePath, int minLength, string? jsonType, string stage)
+            => new(id, relativePath, true, minLength, jsonType, stage, "Phase7RequiredOutputValidator");
+
+        return
+        [
+            Entry("SceneIdentityDiagnostics", "scene-identity-diagnostics.json", 2, "object", "Scene identity diagnostics"),
+            Entry("NarrationContext", "narration-context.json", 2, "object", "Narration context builder"),
+            Entry("NarrationRealizationDiagnostics", "narration-realization-diagnostics.json", 2, "object", "Narration realization"),
+            Entry("NarrationPlan", "narration-plan.json", 2, "object", "Narration planning"),
+            Entry("NarrationBriefs", "narration-briefs.json", 2, "object", "Narration briefs"),
+            Entry("LongRawNarrative", "raw-narrative/long/raw-narrative.json", 2, "object", "Raw narrative writer"),
+            Entry("ShortRawNarrative", "raw-narrative/short/raw-narrative.json", 2, "object", "Raw narrative writer"),
+            Entry("RawNarrativeDiagnostics", "raw-narrative/raw-narrative-diagnostics.json", 2, "object", "Raw narrative diagnostics"),
+            Entry("LongSceneFactCards", "scene-fact-cards/long/scene-fact-cards.json", 2, "object", "Scene fact card writer"),
+            Entry("ShortSceneFactCards", "scene-fact-cards/short/scene-fact-cards.json", 2, "object", "Scene fact card writer"),
+            Entry("SceneFactCardsDiagnostics", "scene-fact-cards/scene-fact-cards-diagnostics.json", 2, "object", "Scene fact card diagnostics"),
+            Entry("LongDocumentaryScript", "documentary-script/long/documentary-script.json", 2, "object", "Documentary script writer"),
+            Entry("ShortDocumentaryScript", "documentary-script/short/documentary-script.json", 2, "object", "Documentary script writer"),
+            Entry("DocumentaryScriptDiagnostics", "documentary-script/documentary-script-diagnostics.json", 2, "object", "Documentary script diagnostics"),
+            Entry("PerformanceDiagnostics", "documentary-script/performance-diagnostics.json", 2, "object", "Performance diagnostics"),
+            Entry("LlmRequest", "llm-request.json", 2, "object", "LLM request capture"),
+            Entry("Narration", "narration.json", 2, "object", "Narration writer"),
+            Entry("LongNarration", "long/narration.json", 2, "object", "Long narration writer"),
+            Entry("ShortNarration", "short/narration.json", 2, "object", "Short narration writer"),
+            Entry("NarrationDiagnostics", "narration-diagnostics.json", 2, "object", "Narration diagnostics"),
+            Entry("PromptPreview", "prompt-preview.md", 1, null, "Prompt composer"),
+            Entry("PromptDiagnostics", "prompt-diagnostics.json", 2, "object", "Prompt diagnostics"),
+            Entry("PromptQuality", "prompt-quality.json", 2, "object", "Prompt quality diagnostics"),
+            Entry("NormalizationDiagnostics", "narration-input-normalization-diagnostics.json", 2, "object", "Normalization diagnostics")
+        ];
+    }
+
+    private async Task<Phase7RequiredOutputDiagnostics> WritePhase7RequiredOutputValidationDiagnosticsAsync(ProductionPhaseContext context, IReadOnlyList<string> declaredOutputs, CancellationToken cancellationToken)
+    {
+        var manifest = Phase7RequiredOutputManifest(context);
+        var checks = manifest.Select(entry => EvaluatePhase7RequiredOutput(context, entry, declaredOutputs)).ToArray();
+        var diagnostics = new Phase7RequiredOutputDiagnostics(
+            checks.All(c => !c.Required || c.Status == "Present"),
+            checks,
+            checks.Where(c => c.Required && c.Status == "Missing").Select(c => c.ArtifactId).ToArray(),
+            checks.Where(c => c.Required && c.Status == "Empty").Select(c => c.ArtifactId).ToArray(),
+            checks.Where(c => c.Required && c.Status == "Invalid").Select(c => c.ArtifactId).ToArray(),
+            checks.Where(c => c.Required && c.Status != "Present")
+                .Select(c => $"Required Phase 7 output {c.Status.ToLowerInvariant()}: artifactId={c.ArtifactId}, expectedPath={c.ExpectedPath}, validatorId={c.ValidatorId}, failureReason={c.FailureReason}")
+                .ToArray(),
+            declaredOutputs.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            checks.Where(c => c.Status == "Present").Select(c => c.ExpectedPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            checks.Where(c => c.Status == "Missing").Select(c => c.ExpectedPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            checks.Where(c => c.Status == "Empty").Select(c => c.ExpectedPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            checks.Where(c => c.Status == "Invalid").Select(c => c.ExpectedPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        var path = Path.Combine(BuildNarrationV5Root(context), "required-output-validation-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        return diagnostics;
+    }
+
+    private static Phase7RequiredOutputCheck EvaluatePhase7RequiredOutput(ProductionPhaseContext context, Phase7RequiredOutputManifestEntry entry, IReadOnlyList<string> declaredOutputs)
+    {
+        var expectedPath = Path.Combine(BuildNarrationV5Root(context), entry.RelativePath);
+        var exists = File.Exists(expectedPath);
+        long length = 0;
+        var readable = false;
+        bool? validJson = null;
+        string status;
+        string? failureReason = null;
+        if (!exists)
+        {
+            status = "Missing";
+            failureReason = "FileNotFound";
+        }
+        else
+        {
+            try
+            {
+                var info = new FileInfo(expectedPath);
+                length = info.Length;
+                using var stream = File.OpenRead(expectedPath);
+                readable = true;
+                if (length < entry.MinimumFileLength)
+                {
+                    status = "Empty";
+                    failureReason = "EmptyArtifact";
+                }
+                else if (!string.IsNullOrWhiteSpace(entry.JsonType))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(stream);
+                        validJson = entry.JsonType.Equals("array", StringComparison.OrdinalIgnoreCase)
+                            ? doc.RootElement.ValueKind == JsonValueKind.Array
+                            : doc.RootElement.ValueKind == JsonValueKind.Object;
+                        status = validJson == true ? "Present" : "Invalid";
+                        failureReason = validJson == true ? null : "UnexpectedJsonRootType";
+                    }
+                    catch (JsonException)
+                    {
+                        validJson = false;
+                        status = "Invalid";
+                        failureReason = "InvalidJson";
+                    }
+                }
+                else
+                {
+                    status = "Present";
+                }
+            }
+            catch (IOException)
+            {
+                status = "Invalid";
+                failureReason = "Unreadable";
+            }
+            catch (UnauthorizedAccessException)
+            {
+                status = "Invalid";
+                failureReason = "Unreadable";
+            }
+        }
+
+        return new Phase7RequiredOutputCheck(entry.ArtifactId, entry.ValidatorOwner, NormalizePath(expectedPath), NormalizePath(expectedPath), exists, length, readable, validJson, entry.Required, entry.ProducerStage, "AfterWrite", failureReason, entry.MinimumFileLength, entry.JsonType, declaredOutputs.Any(p => string.Equals(p, expectedPath, StringComparison.OrdinalIgnoreCase)), status);
+    }
+
+    private static string BuildPhase7RequiredOutputFailureReason(Phase7RequiredOutputDiagnostics? diagnostics, IReadOnlyList<string> fallbackErrors)
+    {
+        if (diagnostics is null) return "Validation failed: " + string.Join("; ", fallbackErrors);
+        var failed = diagnostics.RequiredOutputs.Where(o => o.Required && o.Status != "Present").ToArray();
+        if (failed.Length == 0) return "Validation passed.";
+        var grouped = failed.GroupBy(f => f.Status.ToLowerInvariant()).Select(g => $"{g.Count()} required output{(g.Count() == 1 ? " is" : "s are")} {g.Key}: {string.Join(", ", g.Select(x => x.ArtifactId))}");
+        return "Validation failed: " + string.Join("; ", grouped) + ".";
+    }
 
     private static void ValidatePhase7NarrationV5FilesGenerated(ProductionPhaseContext context)
     {
@@ -13517,6 +13656,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var resultOutputFiles = phaseNo == 12
             ? outputFiles.Concat(new[] { validationPath }).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
             : outputFiles;
+        var declaredOutputFiles = resultOutputFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var verifiedOutputFiles = resultOutputFiles.Where(p => File.Exists(p) || Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var missingOutputFiles = resultOutputFiles.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason);
         if (phaseNo == 14 && File.Exists(validationPath))
             return result;
@@ -13590,7 +13732,13 @@ public sealed partial class ProductionPipelineExecutionService(
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             filesGeneratedThisRun = resultOutputFiles,
             inputFiles,
-            outputFiles = resultOutputFiles,
+            outputFiles = declaredOutputFiles,
+            outputFilesSemantics = "Declared output files for backward compatibility. Use verifiedOutputFiles for files confirmed on disk.",
+            declaredOutputFiles,
+            verifiedOutputFiles,
+            missingOutputFiles,
+            emptyOutputFiles = Array.Empty<string>(),
+            invalidOutputFiles = Array.Empty<string>(),
             warnings,
             errors,
             reason,
@@ -15505,11 +15653,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static ProductionPipelineExecutionResult BuildResult(bool success, bool dryRun, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool? heroGenerated, bool? thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool? shortVideoGenerated, bool? longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult>? phaseResults = null, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion = null)
     {
-        var lastCompletedPhaseNo = phaseResults?
-            .Where(p => p.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
-            .OrderByDescending(p => p.PhaseNo)
-            .Select(p => (int?)p.PhaseNo)
-            .FirstOrDefault();
+        var lastCompletedPhaseNo = CalculateLastContiguousCompletedPhaseNo(phaseResults ?? []);
         var lastFailedPhaseNo = phaseResults?
             .Where(p => p.Status == ProductionPhaseStatus.Failed)
             .OrderByDescending(p => p.PhaseNo)
@@ -15517,6 +15661,17 @@ public sealed partial class ProductionPipelineExecutionService(
             .FirstOrDefault();
 
         return new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, RequestedOutputCompletion: requestedOutputCompletion);
+    }
+
+    private static int? CalculateLastContiguousCompletedPhaseNo(IReadOnlyList<ProductionPhaseResult> phaseResults)
+    {
+        int? last = null;
+        foreach (var phase in phaseResults.OrderBy(p => p.PhaseNo))
+        {
+            if (phase.Status == ProductionPhaseStatus.Failed) break;
+            if (phase.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped) last = phase.PhaseNo;
+        }
+        return last;
     }
 
     private static string GetSceneApprovalNormalizedRoot(string outputRoot) => Path.Combine(outputRoot, "scene-approval-v3");
@@ -15553,6 +15708,39 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private sealed record SceneImageValidationPath(IReadOnlyList<string> CheckedPaths, string SelectedPath);
+
+    private sealed record Phase7RequiredOutputManifestEntry(string ArtifactId, string RelativePath, bool Required, int MinimumFileLength, string? JsonType, string ProducerStage, string ValidatorOwner);
+
+    private sealed record Phase7RequiredOutputCheck(
+        string ArtifactId,
+        string ValidatorId,
+        string ExpectedPath,
+        string PathResolved,
+        bool Exists,
+        long FileLength,
+        bool Readable,
+        bool? ValidJson,
+        bool Required,
+        string ProductionStageExpected,
+        string CheckedBeforeOrAfterWrite,
+        string? FailureReason,
+        int MinimumFileLength,
+        string? JsonType,
+        bool Declared,
+        string Status);
+
+    private sealed record Phase7RequiredOutputDiagnostics(
+        bool AllRequiredOutputsPresent,
+        IReadOnlyList<Phase7RequiredOutputCheck> RequiredOutputs,
+        IReadOnlyList<string> MissingRequiredArtifactIds,
+        IReadOnlyList<string> EmptyRequiredArtifactIds,
+        IReadOnlyList<string> InvalidRequiredArtifactIds,
+        IReadOnlyList<string> BlockingErrors,
+        IReadOnlyList<string> DeclaredOutputFiles,
+        IReadOnlyList<string> VerifiedOutputFiles,
+        IReadOnlyList<string> MissingOutputFiles,
+        IReadOnlyList<string> EmptyOutputFiles,
+        IReadOnlyList<string> InvalidOutputFiles);
 
     private static bool HeroContractExists(string outputRoot) => File.Exists(OutputArtifactRegistry.ResolveExistingPath(outputRoot, OutputArtifactName.HeroFinal)) && File.Exists(OutputArtifactRegistry.ResolveExistingPath(outputRoot, OutputArtifactName.HeroReview));
     private static bool ThumbnailsExist(string outputRoot) => File.Exists(Path.Combine(outputRoot, "thumbnails", "landscape.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "square.png")) && File.Exists(Path.Combine(outputRoot, "thumbnails", "portrait.png"));
