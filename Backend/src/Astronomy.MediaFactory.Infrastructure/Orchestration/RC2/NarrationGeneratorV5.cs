@@ -80,6 +80,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var documentaryScriptDiagnosticsPath = Path.Combine(documentaryScriptRoot, "documentary-script-diagnostics.json");
         var performanceDiagnosticsPath = Path.Combine(documentaryScriptRoot, "performance-diagnostics.json");
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
+        var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
         var narrationInputNormalizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-input-normalization-diagnostics.json");
         var validationRoot = Path.Combine(outputRoot, "validation");
         Directory.CreateDirectory(validationRoot);
@@ -181,10 +182,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             styleContract?.VoiceProfile ?? "Premium astronomy documentary: confident, elegant, natural, human, curious, educational, and calm.",
             Rc2PipelinePhaseRegistry.OrchestrationVersion,
             languageProfile);
-        var narrationContext = narrationInputNormalization.Context;
+        var familyProfile = AstronomyFamilyProfileCatalog.Resolve(contract, storyboard);
+        var realizer = new NarrationRealizer();
+        var realizationResults = narrationInputNormalization.SafeContexts.Select(c => realizer.Realize(c, familyProfile, languageProfile)).ToArray();
+        var realizationValidation = NarrationRealizationValidator.Validate(realizationResults, familyProfile).ToArray();
+        var narrationContext = NarrationRealizedContextMapper.ToContext(narrationInputNormalization.Context, realizationResults);
         var narrationContextJson = JsonSerializer.Serialize(narrationContext, JsonOptions);
         await WriteAllTextUtf8Async(narrationContextPath, narrationContextJson, cancellationToken);
         await WriteAllTextUtf8Async(narrationInputNormalizationDiagnosticsPath, JsonSerializer.Serialize(narrationInputNormalization.Diagnostics, JsonOptions), cancellationToken);
+        var realizationDiagnostics = NarrationRealizationDiagnosticsBuilder.Build(familyProfile, realizationResults, realizationValidation, languageProfile);
+        await WriteAllTextUtf8Async(narrationRealizationDiagnosticsPath, JsonSerializer.Serialize(realizationDiagnostics, JsonOptions), cancellationToken);
         logger.LogInformation("Phase 7 NarrationContext before prompt generation: {NarrationContext}", narrationContextJson);
         var narrationContextPurityFailures = NarrationContextPurityValidator.Validate(narrationContext).ToArray();
         if (narrationContextPurityFailures.Length > 0)
@@ -194,9 +201,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         }
 
         var composer = promptComposer ?? new NarrationPromptComposer();
-        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath, LanguageProfile: languageProfile), cancellationToken);
+        var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath, narrationRealizationDiagnosticsPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath, LanguageProfile: languageProfile, Realizations: realizationResults), cancellationToken);
         var performerPrompt = BuildPerformerSystemPrompt(languageProfile);
-        var userPrompt = BuildPerformerUserPrompt(languageProfile, narrationContextJson);
+        var userPrompt = BuildPerformerUserPrompt(languageProfile, promptComposerOutput.PromptPreviewMarkdown);
         var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, languageRequested ?? languageProfile.LanguageCode, languageProfile.Culture, languageProfile.DisplayName, languageProfile.Culture, languageProfile.Script, languageProfile.ProfileId, performerPrompt, userPrompt, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
         await WriteAllTextUtf8Async(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
@@ -215,7 +222,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                     var contexts = narrationContext.Formats.FirstOrDefault(f => f.Format.Equals(format, StringComparison.OrdinalIgnoreCase))?.Beats ?? [];
                     llmRequestCounts[format] = 1;
                     var outline = GetString(storyboard, "storyArc") ?? "Hook → Discovery → Science → Observation → Takeaway";
-                    var documentaryScript = LlmDocumentaryTranscriptionist.Transcribe(contexts, format, language, outline);
+                    var formatRealizations = realizationResults.Where(r => r.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).ToArray();
+                    var documentaryScript = LlmDocumentaryTranscriptionist.Transcribe(contexts, format, language, outline, formatRealizations);
                     var scriptPath = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortDocumentaryScriptPath : longDocumentaryScriptPath;
                     await WriteAllTextUtf8Async(scriptPath, JsonSerializer.Serialize(documentaryScript, JsonOptions), cancellationToken);
                     var scenesForFormat = RunChronicleEditorialEngine(llmRequest, documentaryScript, format).ToArray();
@@ -290,6 +298,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             .Concat(sharedSceneSourceUsed ? ["Long and short narration used the same source scene collection."] : [])
             .ToArray();
         var certificationViolations = narrationContextPurityFailures.Select(p => $"Narration context purity failure: {p}")
+            .Concat(realizationValidation.Select(p => $"Narration realization failure: {p.DetectedIssue}"))
             .Concat(engineeringLeakageViolations.Select(p => $"Instruction leakage phrase found: {p}"))
             .Concat(promptLeakageViolations.Select(p => $"Prompt leakage phrase found: {p}"))
             .Concat(isoDateTimeViolations.Select(p => $"Raw ISO datetime/date found: {p}"))
@@ -456,7 +465,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
                 new { path = NormalizePath(editorialBriefContractPath), exists = File.Exists(editorialBriefContractPath) },
                 new { path = NormalizePath(producerNotesContractPath), exists = File.Exists(producerNotesContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationContextPath, performanceDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationContextPath, narrationRealizationDiagnosticsPath, performanceDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -669,6 +678,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             redundancyWithinThreshold = !redundancy.ExceedsThreshold,
             documentaryVoiceValid = professionalScores.DocumentaryVoiceScore >= 75,
             performanceDiagnosticsValid = errors.Length == 0,
+            realizationValid = realizationValidation.Length == 0,
             auroraCertificationCandidate = validationStatusSucceeded && languageValidationPassed && errors.Length == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80,
             redundancyScore = redundancy.Score,
             redundancyWarnings = redundancy.Warnings,
@@ -728,13 +738,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             formatSceneCountViolations,
             errors = errors,
             blockingFailureSummaries = errors,
-            downstreamDiagnostics = new { performanceDiagnostics = NormalizePath(performanceDiagnosticsPath), longNarrationDiagnostics = NormalizePath(longDiagnosticsPath), shortNarrationDiagnostics = NormalizePath(shortDiagnosticsPath), promptDiagnostics = NormalizePath(promptDiagnosticsPath), normalizationDiagnostics = NormalizePath(narrationInputNormalizationDiagnosticsPath), longLanguage, shortLanguage },
+            downstreamDiagnostics = new { performanceDiagnostics = NormalizePath(performanceDiagnosticsPath), longNarrationDiagnostics = NormalizePath(longDiagnosticsPath), shortNarrationDiagnostics = NormalizePath(shortDiagnosticsPath), promptDiagnostics = NormalizePath(promptDiagnosticsPath), normalizationDiagnostics = NormalizePath(narrationInputNormalizationDiagnosticsPath), realizationDiagnostics = NormalizePath(narrationRealizationDiagnosticsPath), longLanguage, shortLanguage },
             warnings
         };
         await WriteAllTextUtf8Async(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([narrationContextPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath]);
+        return new NarrationGeneratorV5Result([narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath]);
     }
 
     private static Task WriteAllTextUtf8Async(string path, string contents, CancellationToken cancellationToken = default)
@@ -776,10 +786,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
     private static string BuildPerformerSystemPrompt(LanguageProfile profile)
         => "OUTPUT LANGUAGE\n\n" + profile.OutputInstruction + "\n\n" +
-           "You are the Documentary Performer: an actor, not the producer, architect, editor, or planner.\n\nThe documentary has already been shaped. Treat every field in NarrationContext as private rehearsal material only. The audience must never hear that planning material exists. Never repeat, quote, or literally paraphrase field names, producer language, success criteria, transition goals, beat labels, scene labels, visual/rendering terms, validation terms, metadata terms, or instruction language.\n\nUse this process silently: understand the private context, infer the intended educational effect, then perform only polished narration. Verified facts become natural sentences. Scientific constraints prevent invention. Editorial intent and producer notes influence style only. Transition goals become invisible flow.\n\nDo not say Now, Next, the next beat, this beat, scene, frame, camera, visual, render, metadata, planning, instruction, validation, knowledge goal, audience outcome, editorial intent, success criteria, producer notes, documentary contract, allocated facts, source semantic beat, long beat, or short beat.\n\nOpen with immediate curiosity. Close with wonder, not instructions or summary. Write with the confidence and elegance of BBC Earth, National Geographic, Netflix Documentary, and Apple TV science: natural, human, curious, educational, calm, and cinematic without exposing production mechanics.\n\nFINAL OUTPUT CONSTRAINTS\n\n" + profile.OutputInstruction + "\nUse consistent terminology: " + string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}")) + ".";
+           "You are the Documentary Performer: an actor, the documentary voice, not an architect or editor.\n\nThe documentary has already been shaped. Treat every field in NarrationContext as private rehearsal material only. The audience must never hear that private guidance exists. Never repeat, quote, or literally paraphrase labels, guidance language, success criteria, transition goals, beat labels, scene labels, visual/rendering terms, validation terms, data terms, or directive language.\n\nUse this process silently: understand the private context, infer the intended educational effect, then perform only polished narration. Verified facts become natural sentences. Scientific boundaries prevent invention. Style cues influence delivery only. Transition meanings become invisible flow.\n\nDo not say Now, Next, the next beat, this beat, scene, frame, camera, visual, render, data label, private guidance, directive, validation, knowledge goal, audience outcome, editorial intent, success criteria, private notes, documentary contract, allocated facts, source semantic beat, long beat, or short beat.\n\nOpen with immediate curiosity. Close with wonder, not instructions or summary. Write with the confidence and elegance of BBC Earth, National Geographic, Netflix Documentary, and Apple TV science: natural, human, curious, educational, calm, and cinematic without exposing production mechanics.\n\nFINAL OUTPUT CONSTRAINTS\n\n" + profile.OutputInstruction + "\nUse consistent terminology: " + string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}")) + ".";
 
-    private static string BuildPerformerUserPrompt(LanguageProfile profile, string narrationContextJson)
-        => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\nWrite every narration beat in {profile.DisplayName}.\n\nAll planning fields below may remain in English, but they are private semantic guidance. Convert their meaning into natural {profile.DisplayName} narration.\n\nDo not copy English planning sentences into the output.\n\nNarrationContext:\n{narrationContextJson}";
+    private static string BuildPerformerUserPrompt(LanguageProfile profile, string writerBrief)
+        => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\nWrite every narration beat in {profile.DisplayName}. Use the clean writer brief below as semantic meaning only; do not copy section titles or labels.\n\n{writerBrief}";
 
     private static void ValidateRequiredInputsForPhase7(string outputRoot, IReadOnlyList<string> requestedFormats, JsonElement? contract, JsonElement? storyboard, string validationPath, string? languageRequested, string languageResolved, bool languageProfileFound, bool languageProfileFallbackUsed)
     {
@@ -958,7 +968,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var text = purposeKind switch
         {
             "hook" => $"As twilight deepens, the sky sets up a quiet meeting worth noticing. {detailPhrase} This is an easy moment to miss, but a rewarding one to catch.",
-            "science" => $"The closeness is a line-of-sight effect. Jupiter and Venus remain worlds apart, yet from Earth their separate paths can briefly seem to gather in one small patch of sky. {detailPhrase}",
+            "science" => $"The closeness is a line-of-sight effect. the objects remain physically separate, yet from Earth their separate paths can briefly seem to gather in one small patch of sky. {detailPhrase}",
             "observation" => $"Make it practical now. {BuildObservationGuidance(facts)} {detailPhrase}",
             "takeaway" or "closing" => $"After the viewing window passes, the memory is simple: two bright worlds sharing one quiet corner of the sky. {BuildClosingMeaning(facts)}",
             _ => $"Curiosity turns into recognition. {detailPhrase} Each detail makes the sky easier to read."
@@ -1368,7 +1378,7 @@ public sealed record NarrationInputNormalizationResult(NarrationContextDocument 
 public sealed record NarrationInputNormalizationDiagnostics(int SourceFieldCount, int ClassifiedFactCount, int SafeFactCount, int OmittedOptionalFieldCount, int BlockedFieldCount, int LocalizedFieldCount, int ProducerNotesSanitized, int PublishingMetadataExcluded, int TimestampValuesNormalized, int RegionIdsResolved, int DirectionCodesResolved, string LanguageProfileUsed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<NormalizationRecord>? NormalizedFields = null, IReadOnlyList<NormalizationRecord>? OmittedFields = null, IReadOnlyList<NormalizationRecord>? ExcludedPublishingFields = null, IReadOnlyList<NormalizationRecord>? UnresolvedFields = null, IReadOnlyList<NormalizationRecord>? FallbacksUsed = null);
 public sealed record NormalizationRecord(string SourceArtifact, string SourceField, string Classification, string CanonicalValuePreview, string? NormalizedValue, string Language, string Result, string Reason);
 
-public enum NarrationFactType { ObjectName, EventDate, PeakTime, ViewingWindow, Direction, AngularSeparation, Location, ScientificExplanation, ObservationGuidance, VisibilityCondition, PublishMetadata, InternalMetadata }
+public enum NarrationFactType { ObjectName, EventDate, PeakTime, ViewingWindow, Direction, AngularSeparation, Location, ScienceMeaning, ObservationGuidance, VisibilityCondition, PublishMetadata, InternalMetadata }
 
 public static class NarrationInputNormalizer
 {
@@ -1432,7 +1442,7 @@ public static class NarrationInputNormalizer
         if (ContainsAny(k, "region", "location", "visibility")) return NarrationFactType.Location;
         if (ContainsAny(k, "separation", "relative")) return NarrationFactType.AngularSeparation;
         if (ContainsAny(k, "guidance", "observe")) return NarrationFactType.ObservationGuidance;
-        if (ContainsAny(k, "science", "explanation", "perspective")) return NarrationFactType.ScientificExplanation;
+        if (ContainsAny(k, "science", "explanation", "perspective")) return NarrationFactType.ScienceMeaning;
         return NarrationFactType.ObjectName;
     }
 
@@ -1493,7 +1503,7 @@ public static class SpeakableFactFormatter
             NarrationFactType.Location => RegionDisplayResolver.TryResolveDisplay(clean, profile.LanguageCode, out var loc) ? IncRegion(loc, counters) : null,
             NarrationFactType.AngularSeparation => NumberUnitFormatter.Format(clean, string.IsNullOrWhiteSpace(unit) ? "degrees" : unit!, hi),
             NarrationFactType.ObjectName => AstronomyTerminologyResolver.Resolve(clean, profile),
-            NarrationFactType.ScientificExplanation => hi ? "दिखने वाली निकटता पृथ्वी से हमारी दृष्टि-रेखा के कारण होती है" : "the apparent closeness comes from our line of sight on Earth",
+            NarrationFactType.ScienceMeaning => hi ? "दिखने वाली निकटता पृथ्वी से हमारी दृष्टि-रेखा के कारण होती है" : "the apparent closeness comes from our line of sight on Earth",
             NarrationFactType.ObservationGuidance => hi ? "खुले आकाश में शांत होकर देखें" : "watch calmly from an open sky view",
             NarrationFactType.VisibilityCondition => hi ? "साफ आकाश होने पर दृश्य बेहतर होगा" : "clear skies make the view better",
             _ => null
@@ -1830,7 +1840,7 @@ public static class RawNarrativeGenerator
     {
         var lower = value.ToLowerInvariant();
         if (lower.Contains("observ") || lower.Contains("view")) return "Observation guidance";
-        if (lower.Contains("explain") || lower.Contains("science")) return "Science explanation";
+        if (lower.Contains("explain") || lower.Contains("science")) return "Science meaning";
         if (lower.Contains("close") || lower.Contains("ending")) return "Reflective close";
         return index == 0 ? "Opening sky fact" : "Documentary context";
     }
@@ -1841,26 +1851,154 @@ public static class RawNarrativeGenerator
         .ToArray();
 }
 
+public interface INarrationRealizer
+{
+    NarrationRealizationResult Realize(NarrationSafeContext context, AstronomyFamilyProfile familyProfile, LanguageProfile languageProfile);
+}
+
+public sealed record AstronomyFamilyProfile(string FamilyId, string ContentNature, string PreferredLongArchetype, string PreferredShortArchetype, IReadOnlyList<string> RequiredFactTypes, IReadOnlyList<string> OptionalFactTypes, IReadOnlyList<string> AllowedBeatRoles, IReadOnlyList<string> PreferredBeatOrder, string ObservationRequirements, string TimingRequirements, IReadOnlyList<string> ScientificConcepts, IReadOnlyList<string> ProhibitedAssumptions, IReadOnlyList<string> ValidationRules);
+public sealed record RealizedSemanticFact(string IntentType, string FactType, string Label, string Value, string? Unit = null);
+public sealed record TransitionIntent(string FromConcept, string ToConcept, string Relationship);
+public sealed record NarrationRealizationResult(string Format, string SceneId, string BeatRole, string FamilyProfileId, string ContentNature, string NarrativeRole, string NarrativePurpose, IReadOnlyList<RealizedSemanticFact> SpeakableFacts, IReadOnlyList<string> ScientificBoundaries, IReadOnlyList<RealizedSemanticFact> ObservationDetails, TransitionIntent? TransitionIntent, string Tone, string Rhythm, int WordBudget, string? PriorBeatSummary, string? NextBeatPurpose, IReadOnlyList<string> ForbiddenNarrationPatterns, string OpeningGuidance);
+public sealed record NarrationRealizationIssue(string FamilyProfile, string Format, string SceneId, string BeatRole, string Field, string DetectedIssue, string SourceArtifact, string SourceField, string NormalizationStep, string RealizationStep);
+
+public static class AstronomyFamilyProfileCatalog
+{
+    private static readonly IReadOnlyDictionary<string, AstronomyFamilyProfile> Profiles = new Dictionary<string, AstronomyFamilyProfile>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["PlanetaryConjunction"] = new("PlanetaryConjunction", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "EventDateOrWindow", "ApparentAlignmentExplanation"], ["Direction", "AngularSeparation", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
+        ["Occultation"] = new("Occultation", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["OccultingObject", "HiddenObject", "StartTime", "VisibilityRegion", "Mechanism"], ["EndTime", "Duration", "ReappearanceTime", "TelescopeGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Orientation", "Science", "Observation", "Closing"], "Region and object pairing required.", "Start time required; end time or duration preferred.", ["ForegroundBody", "Reappearance"], ["Global visibility", "Instantaneous everywhere"], ["Mechanism must be stated"]),
+        ["Eclipse"] = new("Eclipse", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["EclipseType", "EventDateOrWindow", "VisibilityRegion", "SafetyGuidance", "Mechanism"], ["StartTime", "PeakTime", "EndTime", "Magnitude"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Safety", "Timing", "Science", "Observation", "Closing"], "Safety guidance required for solar eclipses.", "Window or date required.", ["ShadowGeometry", "OrbitalAlignment"], ["Unsafe solar viewing", "Worldwide visibility"], ["Safety must not be omitted"]),
+        ["MeteorShower"] = new("MeteorShower", "TimedObservationEvent", "ObservationGuide", "SkyWatchShort", ["Name", "EventDateOrWindow", "Radiant", "PeakWindow"], ["MoonPhase", "Zhr", "DarkSkyGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Observation", "Science", "Closing"], "Dark sky and patience guidance when verified.", "Peak window required.", ["CometDebris", "Radiant"], ["Guaranteed counts"], ["No guaranteed meteors"]),
+        ["Constellation"] = new("Constellation", "EducationalObjectProfile", "ObjectProfile", "ConstellationShort", ["Name", "SkyRegion", "IdentificationPattern", "MajorStars", "ScientificIdentity"], ["Mythology", "BestSeason", "DeepSkyObjects"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Science", "Significance", "Closing"], "Identification pattern replaces event viewing direction.", "No event date required.", ["StarPattern", "CelestialCoordinates"], ["Required event date"], ["Do not force event structure"]),
+        ["PlanetProfile"] = new("PlanetProfile", "EducationalObjectProfile", "PlanetProfile", "PlanetShort", ["Name", "PlanetType", "ScientificIdentity"], ["Distance", "Visibility", "Moons", "Atmosphere"], ["Hook", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Observation details optional.", "Timing optional.", ["Orbit", "Composition"], ["Current visibility unless verified"], ["No fabricated live sky facts"]),
+        ["Comet"] = new("Comet", "ScientificObjectProfile", "CometProfile", "CometShort", ["Name", "ObjectType", "Orbit", "ScientificImportance"], ["Perihelion", "Visibility", "TelescopeGuidance"], ["Hook", "Science", "Observation", "Significance", "Closing"], ["Hook", "Science", "Observation", "Closing"], "Observation optional unless visibility story.", "Timing optional unless observing event.", ["IcyBody", "TailFormation"], ["Guaranteed naked-eye visibility"], ["Visibility must be verified"]),
+        ["DeepSkyObject"] = new("DeepSkyObject", "ScientificObjectProfile", "DeepSkyProfile", "DeepSkyShort", ["ObjectName", "ObjectType", "SkyLocation", "ScientificImportance"], ["Distance", "DiscoveryHistory", "TelescopeGuidance", "ImagingNotes"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Science", "Significance", "Closing"], "Location relative to constellation or stars preferred.", "Timing optional unless observation-focused.", ["Distance", "AstrophysicalStructure"], ["Required event date"], ["Do not force event structure"]),
+        ["Nebula"] = new("Nebula", "ScientificObjectProfile", "NebulaProfile", "NebulaShort", ["ObjectName", "ObjectType", "SkyLocation", "ScientificImportance"], ["Distance", "StarFormation", "TelescopeGuidance"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Science", "Closing"], "Optional unless observation-focused.", "Timing optional.", ["GasDust", "StarFormation", "RemnantPhysics"], ["Required event date"], ["State physics only when supported"]),
+        ["Galaxy"] = new("Galaxy", "ScientificObjectProfile", "GalaxyProfile", "GalaxyShort", ["ObjectName", "ObjectType", "SkyLocation", "ScientificImportance"], ["Distance", "Structure", "TelescopeGuidance"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Optional unless observation-focused.", "Timing optional.", ["StellarSystems", "Scale", "Structure"], ["Required event date"], ["Do not force event structure"]),
+        ["BlackHoleOrScientificExplainer"] = new("BlackHoleOrScientificExplainer", "ScientificExplainer", "ScienceExplainer", "ScienceShort", ["Concept", "ScientificIdentity", "Evidence", "ScientificImportance"], ["DiscoveryHistory", "ObservationMethod"], ["Hook", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Observation details optional.", "No timing required.", ["Gravity", "EventHorizon", "ObservationalEvidence"], ["Visible surface", "Required event date"], ["No unsupported claims"])
+    };
+
+    public static AstronomyFamilyProfile Resolve(JsonElement? contract, JsonElement? storyboard)
+    {
+        var text = (contract?.GetRawText() ?? string.Empty) + " " + (storyboard?.GetRawText() ?? string.Empty);
+        foreach (var key in Profiles.Keys.OrderByDescending(k => k.Length)) if (text.Contains(key, StringComparison.OrdinalIgnoreCase)) return Profiles[key];
+        if (Regex.IsMatch(text, "occult", RegexOptions.IgnoreCase)) return Profiles["Occultation"];
+        if (Regex.IsMatch(text, "eclipse", RegexOptions.IgnoreCase)) return Profiles["Eclipse"];
+        if (Regex.IsMatch(text, "meteor", RegexOptions.IgnoreCase)) return Profiles["MeteorShower"];
+        if (Regex.IsMatch(text, "constellation|Orion|Ursa", RegexOptions.IgnoreCase)) return Profiles["Constellation"];
+        if (Regex.IsMatch(text, "nebula", RegexOptions.IgnoreCase)) return Profiles["Nebula"];
+        if (Regex.IsMatch(text, "galaxy", RegexOptions.IgnoreCase)) return Profiles["Galaxy"];
+        if (Regex.IsMatch(text, "black hole|event horizon", RegexOptions.IgnoreCase)) return Profiles["BlackHoleOrScientificExplainer"];
+        if (Regex.IsMatch(text, "comet", RegexOptions.IgnoreCase)) return Profiles["Comet"];
+        if (Regex.IsMatch(text, "deep sky|cluster|Messier|NGC", RegexOptions.IgnoreCase)) return Profiles["DeepSkyObject"];
+        return Profiles["PlanetaryConjunction"];
+    }
+}
+
+public sealed class NarrationRealizer : INarrationRealizer
+{
+    public NarrationRealizationResult Realize(NarrationSafeContext context, AstronomyFamilyProfile familyProfile, LanguageProfile languageProfile)
+    {
+        var facts = context.SpeakableFacts.Select(f => new RealizedSemanticFact(IntentForFact(f.FactType), f.FactKey, HumanizeFact(f.FactKey), f.SpeakableValue, f.CanonicalUnit)).ToArray();
+        var observation = facts.Where(f => Regex.IsMatch(f.FactType + f.Label, "Direction|Window|Time|Date|Region|Visibility|Telescope|Binocular|Radiant|SkyLocation|Pattern", RegexOptions.IgnoreCase)).ToArray();
+        var role = ResolveBeatRole(context, familyProfile);
+        return new NarrationRealizationResult(context.Format, string.IsNullOrWhiteSpace(context.SceneId) ? $"{context.Format}-{role}" : context.SceneId, role, familyProfile.FamilyId, familyProfile.ContentNature, role, Purpose(role, familyProfile), facts, BuildBoundaries(context, familyProfile), observation, BuildTransition(role, familyProfile), context.Tone, context.Rhythm, context.WordBudget, null, null, ["private-note prose", "imperative guidance language", "raw time strings", "production staging language", "data labels", "internal IDs"], OpeningGuidance(role, familyProfile));
+    }
+    private static string IntentForFact(string t) => Regex.IsMatch(t, "Direction|Window|Time|Date|Region|Visibility|Telescope|Binocular|SkyLocation", RegexOptions.IgnoreCase) ? "ObservationGuidance" : Regex.IsMatch(t, "Explanation|Mechanism|Science|Identity|Importance|Concept", RegexOptions.IgnoreCase) ? "ScienceMeaning" : "SpeakableFact";
+    private static string ResolveBeatRole(NarrationSafeContext c, AstronomyFamilyProfile p) { var s = c.NarrativeRole + " " + c.KnowledgeGoal + " " + c.ObservationObjective; foreach (var r in p.AllowedBeatRoles) if (s.Contains(r, StringComparison.OrdinalIgnoreCase)) return r; if (!string.IsNullOrWhiteSpace(c.ObservationObjective)) return p.AllowedBeatRoles.Contains("Observation") ? "Observation" : "Orientation"; return p.PreferredBeatOrder.FirstOrDefault() ?? "Science"; }
+    private static string Purpose(string role, AstronomyFamilyProfile p) => role.ToLowerInvariant() switch { "hook" => p.ContentNature.Contains("Event") ? "Create curiosity about a timed sky event." : p.FamilyId.Contains("Galaxy") ? "Create wonder about scale and distance." : "Create curiosity about the subject.", "orientation" => p.ContentNature.Contains("Event") ? "Give spatial clarity using verified observing facts." : "Show how to locate or identify the subject without event assumptions.", "timing" => "Give temporal clarity only from verified timing facts.", "science" => "Convert verified scientific concepts into accurate spoken understanding.", "significance" => "Reveal meaning, scale, or importance.", "closing" => "Leave a memorable factual takeaway and wonder.", _ => "Carry the documentary beat using verified facts." };
+    private static IReadOnlyList<string> BuildBoundaries(NarrationSafeContext c, AstronomyFamilyProfile p) => c.Constraints.Concat(p.ProhibitedAssumptions.Select(a => "Do not imply " + a + ".")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private static TransitionIntent BuildTransition(string role, AstronomyFamilyProfile p) => role.Equals("Orientation", StringComparison.OrdinalIgnoreCase) ? new("Where to look", "When or why it matters", "LocationToTimingOrMeaning") : new(role, "Next documentary concept", "SemanticContinuity");
+    private static string OpeningGuidance(string role, AstronomyFamilyProfile p) => role.ToLowerInvariant() switch { "hook" => "curiosity, surprise, or wonder", "orientation" => "spatial clarity", "timing" => "temporal clarity", "observation" => "practical action", "science" => "conceptual meaning", "significance" => "meaning or scale", "closing" => "memorable takeaway or wonder", _ => p.ContentNature };
+    private static string HumanizeFact(string value) => Regex.Replace(value ?? string.Empty, "(?<!^)([A-Z])", " $1").Trim();
+}
+
+public static class NarrationRealizedContextMapper
+{
+    public static NarrationContextDocument ToContext(NarrationContextDocument source, IReadOnlyList<NarrationRealizationResult> results)
+    {
+        var byFormat = results.GroupBy(r => r.Format, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+        return source with { Formats = source.Formats.Select(f => new NarrationFormatContext(f.Format, byFormat.TryGetValue(f.Format, out var rs) ? rs.Select(ToBeat).ToArray() : f.Beats)).ToArray() };
+    }
+    private static NarrationContextBeat ToBeat(NarrationRealizationResult r) => new(r.NarrativeRole, r.NarrativePurpose, r.OpeningGuidance, r.SpeakableFacts.Concat(r.ObservationDetails).Select(f => new NarrationVerifiedFact(f.FactType, f.Value, f.Unit)).ToArray(), r.ScientificBoundaries, string.Join("; ", r.ObservationDetails.Select(f => f.Value)), r.TransitionIntent is null ? string.Empty : $"{r.TransitionIntent.FromConcept} -> {r.TransitionIntent.ToConcept} ({r.TransitionIntent.Relationship})", r.Tone, r.Rhythm, r.ForbiddenNarrationPatterns, null);
+}
+
+public static class NarrationRealizationValidator
+{
+    private static readonly Regex Blocked = new(@"\b(explain|establish|use the verified|turn this into|producer notes?|scene goal|visual|camera|render|metadata|JSON|prompt|\d{4}-\d{2}-\d{2}T|[a-z]{2}-[A-Z]{2}-[a-z0-9-]+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    public static IReadOnlyList<NarrationRealizationIssue> Validate(IReadOnlyList<NarrationRealizationResult> results, AstronomyFamilyProfile profile)
+    {
+        var issues = new List<NarrationRealizationIssue>();
+        foreach (var r in results)
+        {
+            foreach (var (field, value) in new[] { ("narrativePurpose", r.NarrativePurpose), ("openingGuidance", r.OpeningGuidance), ("transitionIntent", r.TransitionIntent?.Relationship ?? string.Empty) })
+                if (Blocked.IsMatch(value)) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, field, "imperative editorial or raw metadata language detected", "narration-realization", field, "NarrationInputNormalizer", "NarrationRealizer"));
+            var labels = r.SpeakableFacts.Select(f => f.FactType).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var req in profile.RequiredFactTypes.Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)))
+                if (IsStrict(req) && !labels.Any(l => l.Contains(req, StringComparison.OrdinalIgnoreCase) || req.Contains(l, StringComparison.OrdinalIgnoreCase))) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, req, "missing required profile fact", "narration-safe-context", req, "profile-requiredness", "NarrationRealizer"));
+        }
+        return issues;
+    }
+    private static bool IsStrict(string req) => !Regex.IsMatch(req, "Date|Time|Direction|Angular|Safety|Start|End|Peak", RegexOptions.IgnoreCase);
+}
+
+public static class NarrationRealizationDiagnosticsBuilder
+{
+    public static object Build(AstronomyFamilyProfile profile, IReadOnlyList<NarrationRealizationResult> results, IReadOnlyList<NarrationRealizationIssue> issues, LanguageProfile language) => new { familyProfileSelected = profile.FamilyId, profile.ContentNature, longArchetype = profile.PreferredLongArchetype, shortArchetype = profile.PreferredShortArchetype, requiredFacts = profile.RequiredFactTypes, optionalFacts = profile.OptionalFactTypes, missingRequiredFacts = issues.Where(i => i.DetectedIssue.Contains("missing")).Select(i => i.Field).Distinct().ToArray(), omittedOptionalFacts = profile.OptionalFactTypes.Where(o => !results.SelectMany(r => r.SpeakableFacts).Any(f => f.FactType.Contains(o, StringComparison.OrdinalIgnoreCase))).ToArray(), semanticIntentsCreated = results.SelectMany(r => r.SpeakableFacts.Select(f => f.IntentType)).Distinct().ToArray(), producerInstructionsRemoved = true, transitionsRealized = results.Count(r => r.TransitionIntent is not null), languageProfileUsed = language.ProfileId, terminologyProfileUsed = language.TerminologySource, openingDiversityMetrics = new { distinctGuidance = results.Select(r => r.OpeningGuidance).Distinct(StringComparer.OrdinalIgnoreCase).Count(), total = results.Count }, warnings = Array.Empty<string>(), errors = issues };
+}
+
+
 public static class LlmDocumentaryTranscriptionist
 {
-    public static DocumentaryScript Transcribe(IReadOnlyList<NarrationContextBeat> contexts, string format, string language, string outline)
+    public static DocumentaryScript Transcribe(IReadOnlyList<NarrationContextBeat> contexts, string format, string language, string outline, IReadOnlyList<NarrationRealizationResult>? realizations = null)
     {
         var orderedContexts = contexts.ToArray();
+        var realized = realizations ?? [];
         var isShort = format.Equals("short", StringComparison.OrdinalIgnoreCase);
         var isHindi = language.Equals("hi", StringComparison.OrdinalIgnoreCase);
         var title = isHindi ? (isShort ? "आज का आकाश एक नज़र में" : "शाम के आकाश में शांत युति") : (isShort ? "Tonight's Sky in One Look" : "A Quiet Alignment in the Evening Sky");
         var scenes = orderedContexts.Select((context, index) =>
         {
             var narration = isHindi
-                ? (isShort ? BuildHindiShortScene(context, index, orderedContexts.Length) : BuildHindiLongScene(context, index, orderedContexts.Length))
-                : isShort
-                ? BuildShortScene(context, index, orderedContexts.Length)
-                : BuildLongScene(context, index, orderedContexts.Length, outline);
+                ? BuildHindiRealizedScene(realized.ElementAtOrDefault(index), context, index, orderedContexts.Length, isShort)
+                : BuildEnglishRealizedScene(realized.ElementAtOrDefault(index), context, index, orderedContexts.Length, isShort, outline);
             var facts = context.VerifiedFacts.Select(f => f.Value).ToArray();
             return new DocumentaryScriptScene(ResolveStableSceneId(format, index), index + 1, SentenceRealizer.Finalize(RemoveAdjacentDuplicateSentences(CleanScript(narration)), isHindi), string.Empty, facts, [], BuildObservationLine(context));
         }).ToArray();
         var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
         return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", format, title, language, scenes, fullScript);
+    }
+
+
+    private static string BuildEnglishRealizedScene(NarrationRealizationResult? r, NarrationContextBeat context, int index, int total, bool isShort, string outline)
+    {
+        if (r is null) return isShort ? BuildShortScene(context, index, total) : BuildLongScene(context, index, total, outline);
+        var facts = string.Join(" ", r.SpeakableFacts.Concat(r.ObservationDetails).Select(f => NaturalFactSentence(new NarrationVerifiedFact(f.FactType, f.Value, f.Unit))).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).Take(isShort ? 2 : 4));
+        return r.BeatRole.ToLowerInvariant() switch
+        {
+            var role when role.Contains("hook") => CleanScript($"Look up with curiosity: this sky story begins in plain sight. {facts} The invitation is simple, but the scale behind it is not."),
+            var role when role.Contains("orientation") => CleanScript($"First, find the pattern in the sky. {facts} Let the confirmed details guide your eye without adding anything unverified."),
+            var role when role.Contains("timing") => CleanScript($"Timing is part of the story only where the evidence supports it. {facts}"),
+            var role when role.Contains("science") => CleanScript($"The science gives the view its meaning. {facts} Keep the explanation within the verified boundary: {string.Join(" ", r.ScientificBoundaries.Take(1))}"),
+            var role when role.Contains("closing") => CleanScript($"Carry away the wonder, not just the facts. {facts} A small confirmed detail can make the whole sky feel newly readable. Until next time, keep looking up."),
+            _ => CleanScript($"The next idea becomes clearer through the verified details. {facts}")
+        };
+    }
+
+    private static string BuildHindiRealizedScene(NarrationRealizationResult? r, NarrationContextBeat context, int index, int total, bool isShort)
+    {
+        if (r is null) return isShort ? BuildHindiShortScene(context, index, total) : BuildHindiLongScene(context, index, total);
+        var facts = string.Join(" ", r.SpeakableFacts.Concat(r.ObservationDetails).Select(f => HindiFactSentence(new NarrationVerifiedFact(f.FactType, f.Value, f.Unit))).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).Take(isShort ? 2 : 4));
+        return r.BeatRole.ToLowerInvariant() switch
+        {
+            var role when role.Contains("hook") => CleanScript($"जिज्ञासा के साथ ऊपर देखिए; यह आकाश-कथा सामने से शुरू होती है। {facts} दृश्य छोटा हो सकता है, पर उसका पैमाना बहुत बड़ा है।"),
+            var role when role.Contains("orientation") => CleanScript($"पहले आकाश में पहचानने योग्य दिशा या पैटर्न खोजिए। {facts} केवल पुष्ट जानकारी को ही मार्गदर्शन बनने दें।"),
+            var role when role.Contains("timing") => CleanScript($"समय तभी कहानी का हिस्सा बने, जब तथ्य उसे सहारा दें। {facts}"),
+            var role when role.Contains("science") => CleanScript($"विज्ञान इस दृश्य को अर्थ देता है। {facts} बात उतनी ही रखें जितनी पुष्ट सीमा अनुमति देती है।"),
+            var role when role.Contains("closing") => CleanScript($"साथ में केवल तथ्य नहीं, आश्चर्य भी ले जाइए। {facts} आकाश की छोटी-सी पुष्टि पूरी रात को नया अर्थ दे सकती है। अगली बार तक, आसमान देखते रहिए।"),
+            _ => CleanScript($"अगला विचार पुष्ट विवरणों से स्पष्ट होता है। {facts}")
+        };
     }
 
     private static string BuildHindiLongScene(NarrationContextBeat context, int index, int total)
@@ -1908,7 +2046,7 @@ public static class LlmDocumentaryTranscriptionist
 
     private static string LocalizeHindiFactValue(string value)
     {
-        var v = RegionDisplayResolver.ResolveDisplay(value, "hi").Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase).Replace("Venus", "शुक्र", StringComparison.OrdinalIgnoreCase).Replace("Earth", "पृथ्वी", StringComparison.OrdinalIgnoreCase).Replace("Look toward the", "", StringComparison.OrdinalIgnoreCase).Replace("Look toward", "", StringComparison.OrdinalIgnoreCase).Replace("face the", "", StringComparison.OrdinalIgnoreCase).Replace("western sky", "पश्चिमी आकाश", StringComparison.OrdinalIgnoreCase).Replace("after sunset", "सूर्यास्त के बाद", StringComparison.OrdinalIgnoreCase).Replace("degrees", "डिग्री", StringComparison.OrdinalIgnoreCase);
+        var v = RegionDisplayResolver.ResolveDisplay(value, "hi").Replace("Mercury", "बुध", StringComparison.OrdinalIgnoreCase).Replace("Venus", "शुक्र", StringComparison.OrdinalIgnoreCase).Replace("Earth", "पृथ्वी", StringComparison.OrdinalIgnoreCase).Replace("Mars", "मंगल", StringComparison.OrdinalIgnoreCase).Replace("Jupiter", "बृहस्पति", StringComparison.OrdinalIgnoreCase).Replace("Saturn", "शनि", StringComparison.OrdinalIgnoreCase).Replace("Uranus", "अरुण", StringComparison.OrdinalIgnoreCase).Replace("Neptune", "वरुण", StringComparison.OrdinalIgnoreCase).Replace("Look toward the", "", StringComparison.OrdinalIgnoreCase).Replace("Look toward", "", StringComparison.OrdinalIgnoreCase).Replace("face the", "", StringComparison.OrdinalIgnoreCase).Replace("western sky", "पश्चिमी आकाश", StringComparison.OrdinalIgnoreCase).Replace("after sunset", "सूर्यास्त के बाद", StringComparison.OrdinalIgnoreCase).Replace("degrees", "डिग्री", StringComparison.OrdinalIgnoreCase);
         v = Regex.Replace(v, @"\b(\d{4})-(\d{2})-(\d{2})\b", m => DateTime.TryParseExact(m.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d.ToString("d MMMM yyyy", new CultureInfo("hi-IN")) : m.Value);
         return Regex.Replace(v, @"\s*,?\s*UTC\b", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
     }
@@ -2056,7 +2194,7 @@ public static class LanguageProfileResolver
 {
     private static readonly IReadOnlyDictionary<string, string> HindiTerminology = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["Jupiter"] = "बृहस्पति", ["Venus"] = "शुक्र", ["Earth"] = "पृथ्वी", ["planet"] = "ग्रह", ["western sky"] = "पश्चिमी आकाश", ["after sunset"] = "सूर्यास्त के बाद", ["sunset"] = "सूर्यास्त", ["angular separation"] = "कोणीय दूरी", ["conjunction"] = "ग्रहों की युति", ["horizon"] = "क्षितिज", ["naked eye"] = "नंगी आँखों से", ["binoculars"] = "दूरबीन"
+        ["Mercury"] = "बुध", ["Venus"] = "शुक्र", ["Earth"] = "पृथ्वी", ["Mars"] = "मंगल", ["Jupiter"] = "बृहस्पति", ["Saturn"] = "शनि", ["Uranus"] = "अरुण", ["Neptune"] = "वरुण", ["planet"] = "ग्रह", ["western sky"] = "पश्चिमी आकाश", ["after sunset"] = "सूर्यास्त के बाद", ["sunset"] = "सूर्यास्त", ["angular separation"] = "कोणीय दूरी", ["conjunction"] = "ग्रहों की युति", ["horizon"] = "क्षितिज", ["naked eye"] = "नंगी आँखों से", ["binoculars"] = "दूरबीन"
     };
 
     public static LanguageProfile Resolve(string? requestedLanguage)
@@ -2065,8 +2203,8 @@ public static class LanguageProfileResolver
         if (string.IsNullOrWhiteSpace(value)) value = "en";
         if (Regex.IsMatch(value, "^(hi|hi-IN|Hindi|हिन्दी|हिंदी)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return new("hi", "hi-IN", "Hindi", "हिंदी", "Devanagari",
-                "Write all spoken narration in natural Hindi using Devanagari script. Do not output complete English sentences. Treat all English planning fields as private semantic guidance. Transform their meaning into original Hindi documentary narration.",
-                ["Jupiter", "Venus"], HindiTerminology, true, false, "LanguageProfileResolver:built-in:hi-IN", "LanguageProfileResolver:built-in-terminology:hi-IN", "hi-IN-Devanagari-v1", "फिर मिलेंगे—तब तक आसमान की ओर देखते रहिए।", 80m);
+                "Write all spoken narration in natural Hindi using Devanagari script. Do not output complete English sentences. Use semantic guidance only as meaning and author original Hindi documentary narration.",
+                ["Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"], HindiTerminology, true, false, "LanguageProfileResolver:built-in:hi-IN", "LanguageProfileResolver:built-in-terminology:hi-IN", "hi-IN-Devanagari-v1", "फिर मिलेंगे—तब तक आसमान की ओर देखते रहिए।", 80m);
         if (Regex.IsMatch(value, "^(en|en-US|en-IN|English)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return new("en", value.Equals("en-IN", StringComparison.OrdinalIgnoreCase) ? "en-IN" : "en-US", "English", "English", "Latin",
                 "Write all spoken narration in natural English.",
@@ -2407,7 +2545,7 @@ public sealed class EditorialBriefInterpreter
     {
         "Hook" => "A clear, visible sky pairing earns curiosity quickly.",
         "Discovery" => "Orientation becomes practical and approachable.",
-        "Science" => "The apparent closeness is explained as perspective from Earth.",
+        "Science" => "The apparent closeness is perspective from Earth.",
         "Observation" => "A practical observing next step is ready.",
         "Takeaway" or "Closing" => "The sky connects back to everyday life.",
         _ => Clean(source)
