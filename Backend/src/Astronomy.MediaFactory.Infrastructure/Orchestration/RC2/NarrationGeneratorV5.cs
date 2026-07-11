@@ -187,7 +187,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             productionEventIntelligence,
             observationMetadata));
         var familyProfile = familyProfileResolution.Profile;
-        var semanticFactResolver = new RequiredSemanticFactResolver();
+        var semanticFactResolver = new RequiredSemanticFactResolver(new AstronomyDomainKnowledgeProvider());
         var semanticResolution = semanticFactResolver.Resolve(new RequiredSemanticFactResolutionInput(
             familyProfile,
             longDocumentaryContract,
@@ -200,6 +200,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             languageProfile));
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"), JsonSerializer.Serialize(DomainKnowledgeDiagnosticsBuilder.Build(familyProfileResolution.Resolved.ResolvedProfileId, familyProfile.FamilyId, semanticResolution), JsonOptions), cancellationToken);
 
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
             longDocumentaryContract,
@@ -1682,7 +1683,7 @@ public static class NarrationContextBuilder
     {
         if (resolvedFacts is null) return [];
         var beat = resolvedFacts.Beats.FirstOrDefault(b => b.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && (string.IsNullOrWhiteSpace(beatId) || b.DocumentaryBeatId.Equals(beatId, StringComparison.OrdinalIgnoreCase)));
-        return beat is null ? [] : beat.RequiredFacts.Concat(beat.OptionalFacts).Where(f => f.SafeForNarration).Select(f => new NarrationVerifiedFact(f.FactType, Convert.ToString(f.CanonicalValue, CultureInfo.InvariantCulture) ?? string.Empty, f.SemanticMeaning, f.Unit)).ToArray();
+        return beat is null ? [] : beat.RequiredFacts.Concat(beat.OptionalFacts).Where(f => f.SafeForNarration).Select(f => new NarrationVerifiedFact(f.FactType, f.FactOrigin == "DomainKnowledge" ? f.SemanticMeaning : Convert.ToString(f.CanonicalValue, CultureInfo.InvariantCulture) ?? string.Empty, f.SemanticMeaning, f.Unit)).ToArray();
     }
 
     private static IReadOnlyList<NarrationVerifiedFact> ReadAllocatedFacts(JsonElement beat, List<string> warnings)
@@ -2009,9 +2010,65 @@ public sealed record ResolvedBeatFacts(string Format, string SceneId, string Doc
 public sealed record ResolvedSemanticFact(string FactType, string FactKey, object CanonicalValue, string? Unit, string SemanticMeaning, string SourceArtifact, string SourceField, string? SourceBeatId, string VerificationStatus, decimal Confidence, string Requiredness, string? LocalizedDisplayValue, string? SpeakableValue, string Language, bool SafeForNarration, string FactOrigin = "Source", string? DerivationRuleId = null, IReadOnlyList<string>? SourceInputs = null);
 public sealed record FactConflict(string FactType, IReadOnlyList<object> Values, string SelectedSourceArtifact, bool Blocking, string Message);
 
+
+public interface IAstronomyDomainKnowledgeProvider
+{
+    bool TryResolve(string familyProfileId, string semanticFactType, AstronomyKnowledgeContext context, out ResolvedSemanticFact fact);
+}
+
+public sealed record AstronomyKnowledgeContext(string FamilyProfileId, IReadOnlyList<AstronomyKnowledgeContextFact> UpstreamFacts, string LanguageCode);
+public sealed record AstronomyKnowledgeContextFact(string FactType, object Value, string SourceArtifact, string SourceField);
+
+public sealed class AstronomyDomainKnowledgeProvider : IAstronomyDomainKnowledgeProvider
+{
+    private static readonly string[] Registry = ["PlanetPairing", "Eclipse", "Occultation", "MeteorShower", "Constellation", "PlanetProfile", "Comet", "DeepSkyObject", "Nebula", "Galaxy", "BlackHoleOrScientificExplainer"];
+    private static readonly string[] PlanetPairingFacts = ["ApparentAlignmentExplanation", "PhysicalProximityClarification", "PerspectiveExplanation", "WhyPlanetsAppearClose"];
+    public bool TryResolve(string familyProfileId, string semanticFactType, AstronomyKnowledgeContext context, out ResolvedSemanticFact fact)
+    {
+        fact = default!;
+        var family = NormalizeFamily(familyProfileId);
+        if (!Registry.Contains(family, StringComparer.OrdinalIgnoreCase)) return false;
+        if (!family.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!PlanetPairingFacts.Any(t => t.Equals(semanticFactType, StringComparison.OrdinalIgnoreCase))) return false;
+        if (Regex.IsMatch(semanticFactType, "AngularSeparation|ViewingDirection|Direction|BestViewingTime|VisibilityMethod|Time|Date|Region|Location", RegexOptions.IgnoreCase)) return false;
+        var semanticMeaning = new { apparentCloseness = true, viewpoint = "Earth", cause = "line-of-sight geometry", physicalProximity = false, terminologyKeys = new[] { "apparentCloseness", "EarthViewpoint", "lineOfSightGeometry", "notPhysicalProximity" }, scientificConstraints = new[] { "Do not imply physical close approach.", "Do not imply collision risk.", "Do not imply identical brightness or visibility.", "Do not use conjunction terminology unless taxonomy permits it." } };
+        fact = new ResolvedSemanticFact(semanticFactType, semanticFactType, semanticMeaning, null, "PlanetPairingApparentLineOfSightGeometry", "Astronomy Domain Knowledge Provider", "PlanetPairingKnowledgeProfile", null, "DomainKnowledge", 1.0m, "Required", null, null, context.LanguageCode, true, "DomainKnowledge", "planet-pairing-apparent-line-of-sight-v1", ["familyProfileId", "semanticFactType"]);
+        return true;
+    }
+    private static string NormalizeFamily(string family) => family.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase) ? "PlanetPairing" : family;
+}
+
+public static class DomainKnowledgeDiagnosticsBuilder
+{
+    public static object Build(string requestedFamilyProfile, string resolvedFamilyProfile, RequiredSemanticFactResolutionResult resolution)
+    {
+        var facts = resolution.Beats.SelectMany(b => b.RequiredFacts.Concat(b.OptionalFacts)).ToArray();
+        return new
+        {
+            requestedFamilyProfile,
+            resolvedFamilyProfile,
+            requestedFactTypes = resolution.Beats.SelectMany(b => b.RequiredFacts.Select(f => f.FactType).Concat(b.MissingRequiredFacts).Concat(b.OptionalFacts.Select(f => f.FactType))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            factsResolvedFromUpstream = facts.Where(f => f.FactOrigin == "Source").Select(f => f.FactType).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            factsResolvedFromDerivedRules = facts.Where(f => f.FactOrigin == "Derived").Select(f => f.FactType).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            factsResolvedFromDomainKnowledge = facts.Where(f => f.FactOrigin == "DomainKnowledge").Select(f => f.FactType).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            unresolvedFactTypes = resolution.Beats.SelectMany(b => b.MissingRequiredFacts).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            providerProfileUsed = facts.FirstOrDefault(f => f.FactOrigin == "DomainKnowledge")?.SourceField,
+            providerRuleIds = facts.Where(f => f.FactOrigin == "DomainKnowledge" && f.DerivationRuleId is not null).Select(f => f.DerivationRuleId).Distinct().ToArray(),
+            overwritesPrevented = facts.Where(f => f.FactOrigin != "DomainKnowledge").Select(f => f.FactType).Intersect(facts.Where(f => f.FactOrigin == "DomainKnowledge").Select(f => f.FactType), StringComparer.OrdinalIgnoreCase).ToArray(),
+            languageNeutralKnowledgeConfirmed = facts.Where(f => f.FactOrigin == "DomainKnowledge").All(f => f.CanonicalValue is not string),
+            warnings = resolution.Beats.SelectMany(b => b.ResolutionWarnings).Distinct().ToArray(),
+            errors = resolution.Beats.SelectMany(b => b.MissingRequiredFacts.Select(m => new { b.Format, b.SceneId, beatRole = b.NarrativeRole, factType = m })).Distinct().ToArray()
+        };
+    }
+}
+
 public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 {
-    private static readonly string[] SourceOrder = ["Documentary Contract", "Editorial Contract", "Observation Metadata", "Production Event Intelligence", "Question Answer Set", "Story Graph", "Approved Derived Facts"];
+    private static readonly string[] SourceOrder = ["Documentary Contract", "Editorial Contract", "Observation Metadata", "Production Event Intelligence", "Question Answer Set", "Story Graph", "Approved Derived Facts", "Astronomy Domain Knowledge Provider"];
+    private readonly IAstronomyDomainKnowledgeProvider _domainKnowledgeProvider;
+
+    public RequiredSemanticFactResolver() : this(new AstronomyDomainKnowledgeProvider()) { }
+    public RequiredSemanticFactResolver(IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) => _domainKnowledgeProvider = domainKnowledgeProvider;
 
     public RequiredSemanticFactResolutionResult Resolve(RequiredSemanticFactResolutionInput input)
     {
@@ -2049,25 +2106,26 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         return new RequiredSemanticFactResolutionResult(beats, diagnostics);
     }
 
-    private static ResolvedSemanticFact? ResolveType(string type, List<CandidateFact> all, RequiredSemanticFactResolutionInput input, string format, string beatId, string req)
+    private ResolvedSemanticFact? ResolveType(string type, List<CandidateFact> all, RequiredSemanticFactResolutionInput input, string format, string beatId, string req)
     {
         var candidates = all.Where(c => (c.Format is null || c.Format == format) && Matches(type, c.Type)).OrderBy(c => Array.IndexOf(SourceOrder, c.SourceArtifact)).ToArray();
         var best = candidates.FirstOrDefault();
         if (best is null && TryDerive(type, all, input.FamilyProfile.FamilyId, out var derived)) best = derived;
-        return best is null ? null : new(type, type, best.Value, best.Unit, type, best.SourceArtifact, best.SourceField, best.BeatId ?? beatId, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Verified", best.Confidence, req, null, null, input.LanguageProfile.LanguageCode, true, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Source", best.RuleId, best.Inputs);
+        if (best is not null) return ToResolved(type, best, beatId, req, input.LanguageProfile.LanguageCode);
+        var context = new AstronomyKnowledgeContext(input.FamilyProfile.FamilyId, all.Where(c => c.Format is null || c.Format == format).Select(c => new AstronomyKnowledgeContextFact(c.Type, c.Value, c.SourceArtifact, c.SourceField)).ToArray(), input.LanguageProfile.LanguageCode);
+        return _domainKnowledgeProvider.TryResolve(input.FamilyProfile.FamilyId, type, context, out var domainFact) ? domainFact with { Requiredness = req, SourceBeatId = beatId, Language = input.LanguageProfile.LanguageCode } : null;
     }
+    private static ResolvedSemanticFact ToResolved(string type, CandidateFact best, string beatId, string req, string language)
+        => new(type, type, best.Value, best.Unit, type, best.SourceArtifact, best.SourceField, best.BeatId ?? beatId, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Verified", best.Confidence, req, null, null, language, true, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Source", best.RuleId, best.Inputs);
     private static bool TryDerive(string type, List<CandidateFact> all, string family, out CandidateFact fact)
     {
         fact = default!;
-        if (!family.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase) || !Matches(type, "ApparentAlignmentExplanation") && !Matches(type, "PhysicalProximityClarification")) return false;
-        if (!all.Any(c => Matches("PrimaryObjects", c.Type)) || !all.Any(c => Matches("EventType", c.Type))) return false;
-        fact = new("ApparentAlignmentExplanation", "The planets appear close from Earth but are not physically near each other", null, "Approved Derived Facts", "rule:planetary-conjunction-apparent-alignment-v1", null, null, .98m, "planetary-conjunction-apparent-alignment-v1", ["PrimaryObjects", "EventType"]);
-        return true;
+        return false;
     }
     private static IEnumerable<string> RequiredTypes(AstronomyFamilyProfile p, string role, string format)
     {
         var r = role.ToLowerInvariant();
-        if (p.FamilyId == "PlanetaryConjunction")
+        if (p.FamilyId == "PlanetaryConjunction" || p.FamilyId == "PlanetPairing")
         {
             if (r.Contains("hook")) return ["PrimaryObjects", "EventType"];
             if (r.Contains("timing")) return ["EventDateOrWindow"];
@@ -2229,10 +2287,16 @@ public static class NarrationRealizationValidator
             foreach (var (field, value) in new[] { ("narrativePurpose", r.NarrativePurpose), ("openingGuidance", r.OpeningGuidance), ("transitionIntent", r.TransitionIntent?.Relationship ?? string.Empty) })
                 if (Blocked.IsMatch(value)) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, field, "imperative editorial or raw metadata language detected", "narration-realization", field, "NarrationInputNormalizer", "NarrationRealizer"));
             var labels = r.SpeakableFacts.Select(f => f.FactType).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var req in profile.RequiredFactTypes.Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)))
+            foreach (var req in RequiredForBeat(profile, r.BeatRole).Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)))
                 if (IsStrict(req) && !labels.Any(l => l.Contains(req, StringComparison.OrdinalIgnoreCase) || req.Contains(l, StringComparison.OrdinalIgnoreCase))) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, req, "missing required profile fact", "narration-safe-context", req, "profile-requiredness", "NarrationRealizer"));
         }
         return issues;
+    }
+    private static IEnumerable<string> RequiredForBeat(AstronomyFamilyProfile profile, string beatRole)
+    {
+        if (profile.FamilyId.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) || profile.FamilyId.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase))
+            return beatRole.Contains("Science", StringComparison.OrdinalIgnoreCase) ? ["ApparentAlignmentExplanation", "PhysicalProximityClarification"] : [];
+        return profile.RequiredFactTypes;
     }
     private static bool IsStrict(string req) => !Regex.IsMatch(req, "Date|Time|Direction|Angular|Safety|Start|End|Peak", RegexOptions.IgnoreCase);
 }
@@ -2250,7 +2314,7 @@ public static class RequiredSemanticFactPhase7Validator
             "required-semantic-fact-diagnostics",
             m,
             "RequiredSemanticFactResolver",
-            "NarrationRealizer"))).ToArray();
+            "NarrationRealizer"))).DistinctBy(i => (i.Format, i.SceneId, i.BeatRole, i.Field)).ToArray();
 }
 
 public static class NarrationRealizationDiagnosticsBuilder

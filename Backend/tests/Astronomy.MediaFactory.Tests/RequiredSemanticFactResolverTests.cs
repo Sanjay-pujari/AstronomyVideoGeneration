@@ -5,7 +5,7 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class RequiredSemanticFactResolverTests
 {
-    private static readonly AstronomyFamilyProfile Planetary = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"PlanetaryConjunction\"}"), null);
+    private static readonly AstronomyFamilyProfile Planetary = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"PlanetPairing\"}"), null);
     private static readonly LanguageProfile English = LanguageProfileResolver.Resolve("en");
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
@@ -25,13 +25,48 @@ public sealed class RequiredSemanticFactResolverTests
     }
 
     [Fact]
-    public void ApparentAlignmentExplanationCanBeDerivedWithTraceability()
+    public void PlanetPairingMissingApparentAlignmentExplanationResolvesFromDomainKnowledge()
     {
-        var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
+        var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"));
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
-        Assert.Equal("Derived", fact.FactOrigin);
-        Assert.Equal("planetary-conjunction-apparent-alignment-v1", fact.DerivationRuleId);
-        Assert.Contains("PrimaryObjects", fact.SourceInputs!);
+        Assert.Equal("DomainKnowledge", fact.FactOrigin);
+        Assert.Equal("Astronomy Domain Knowledge Provider", fact.SourceArtifact);
+        Assert.Equal("planet-pairing-apparent-line-of-sight-v1", fact.DerivationRuleId);
+        Assert.False(fact.CanonicalValue is string);
+    }
+
+
+    [Fact]
+    public void UpstreamApparentAlignmentExplanationWinsOverProvider()
+    {
+        var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\",\"ApparentAlignmentExplanation\":\"allocated upstream concept\"}"));
+        var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
+        Assert.Equal("Documentary Contract", fact.SourceArtifact);
+        Assert.Equal("Source", fact.FactOrigin);
+    }
+
+    [Fact]
+    public void PlanetPairingDoesNotFabricateAngularSeparation()
+    {
+        var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"));
+        Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType == "AngularSeparation");
+        Assert.Contains("AngularSeparation", result.Beats[0].OmittedOptionalFacts);
+    }
+
+    [Fact]
+    public void ConstellationDoesNotUsePlanetPairingApparentAlignmentKnowledge()
+    {
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"Constellation\"}"), null);
+        var provider = new AstronomyDomainKnowledgeProvider();
+        var resolved = provider.TryResolve(profile.FamilyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(profile.FamilyId, [], "en"), out _);
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void TimingBeatDoesNotGloballyRequireApparentAlignmentExplanation()
+    {
+        var result = Resolve(LongWithBeat("Timing", "{\"EventDateOrWindow\":\"August 12\"}"));
+        Assert.DoesNotContain("ApparentAlignmentExplanation", result.Beats[0].MissingRequiredFacts);
     }
 
     [Fact]
@@ -103,6 +138,25 @@ public sealed class RequiredSemanticFactResolverTests
         Assert.Contains(issues, i => i.DetectedIssue == "missing required semantic fact");
     }
 
+
+    [Fact]
+    public void ProviderFailureLeavesDescriptiveBlockingErrorWithoutFiller()
+    {
+        var resolver = new RequiredSemanticFactResolver(new EmptyDomainKnowledgeProvider());
+        var result = resolver.Resolve(new RequiredSemanticFactResolutionInput(Planetary, LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"), LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"), null, null, null, null, null, English));
+        Assert.True(result.Blocking);
+        Assert.Contains("ApparentAlignmentExplanation", result.Beats[0].MissingRequiredFacts);
+        Assert.DoesNotContain(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
+    }
+
+    [Fact]
+    public void DuplicateMissingFactReportsCollapsePerBeat()
+    {
+        var result = Resolve(LongWithBeat("Timing", "{}"));
+        var issues = RequiredSemanticFactPhase7Validator.Validate(result).Concat(RequiredSemanticFactPhase7Validator.Validate(result)).DistinctBy(i => (i.Format, i.SceneId, i.BeatRole, i.Field)).ToArray();
+        Assert.Single(issues.Where(i => i.Format == "long" && i.Field == "EventDateOrWindow"));
+    }
+
     [Fact]
     public void Phase7CannotReportSuccessWhenRequiredDiagnosticsBlock()
     {
@@ -163,4 +217,13 @@ public sealed class RequiredSemanticFactResolverTests
 
     private static JsonElement LongWithBeat(string role, string facts) => Json("{\"beats\":[{\"documentaryBeatId\":\"long-beat-001\",\"narrativeRole\":" + JsonSerializer.Serialize(role) + ",\"allocatedFacts\":" + facts + "}]}");
     private static JsonElement ShortWithBeat(string role, string facts) => Json("{\"beats\":[{\"documentaryBeatId\":\"short-beat-001\",\"narrativeRole\":" + JsonSerializer.Serialize(role) + ",\"allocatedFacts\":" + facts + "}]}");
+
+    private sealed class EmptyDomainKnowledgeProvider : IAstronomyDomainKnowledgeProvider
+    {
+        public bool TryResolve(string familyProfileId, string semanticFactType, AstronomyKnowledgeContext context, out ResolvedSemanticFact fact)
+        {
+            fact = default!;
+            return false;
+        }
+    }
 }
