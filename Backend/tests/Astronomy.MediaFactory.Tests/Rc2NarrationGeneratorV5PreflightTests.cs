@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
@@ -35,6 +36,39 @@ public sealed class Rc2NarrationGeneratorV5PreflightTests
         Assert.Equal("hi", validation.RootElement.GetProperty("languageResolved").GetString());
         Assert.True(validation.RootElement.GetProperty("languageProfileFound").GetBoolean());
         Assert.False(validation.RootElement.GetProperty("languageProfileFallbackUsed").GetBoolean());
+    }
+
+    [Fact]
+    public void SceneIdentityDiagnostics_RootTypeMatchesPhase7ValidatorContract()
+    {
+        var buildMethod = typeof(NarrationGeneratorV5).GetMethod("BuildSceneIdentityDiagnostics", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildMethod);
+
+        var longCards = new[]
+        {
+            new SceneFactCard(
+                "long-scene-001",
+                1,
+                "long",
+                ["Jupiter and Venus appear close together."],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                45,
+                "intent-001",
+                "frame-001")
+        };
+        var result = buildMethod!.Invoke(null, [longCards, Array.Empty<SceneFactCard>(), new[] { "long-scene-001" }, Array.Empty<string>(), new[] { "long" }]);
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+        Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        Assert.True(document.RootElement.TryGetProperty("diagnostics", out var diagnostics));
+        Assert.Equal(JsonValueKind.Array, diagnostics.ValueKind);
     }
 
     private static string CreateRoot()
