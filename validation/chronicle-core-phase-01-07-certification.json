@@ -1,0 +1,363 @@
+{
+  "certificationVersion": "Chronicle-Core-v1",
+  "languages": [
+    "en",
+    "hi"
+  ],
+  "benchmarks": [
+    {
+      "benchmarkId": "planetary-conjunction-en",
+      "family": "Planetary conjunction",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "planetary-conjunction-hi",
+      "family": "Planetary conjunction",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "eclipse-en",
+      "family": "Solar or lunar eclipse",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "eclipse-hi",
+      "family": "Solar or lunar eclipse",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "meteor-shower-en",
+      "family": "Meteor shower",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "meteor-shower-hi",
+      "family": "Meteor shower",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "constellation-profile-en",
+      "family": "Constellation profile",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "constellation-profile-hi",
+      "family": "Constellation profile",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "deep-sky-nebula-en",
+      "family": "Deep-sky object or nebula",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "deep-sky-nebula-hi",
+      "family": "Deep-sky object or nebula",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "galaxy-en",
+      "family": "Galaxy",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "galaxy-hi",
+      "family": "Galaxy",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "black-hole-explainer-en",
+      "family": "Scientific explainer or black hole",
+      "language": "en",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    },
+    {
+      "benchmarkId": "black-hole-explainer-hi",
+      "family": "Scientific explainer or black hole",
+      "language": "hi",
+      "phaseResults": {
+        "phase01": "NotRun",
+        "phase02": "NotRun",
+        "phase03": "NotRun",
+        "phase04": "NotRun",
+        "phase05": "NotRun",
+        "phase06": "NotRun",
+        "phase07": "NotRun"
+      },
+      "documentaryArchitectureValid": false,
+      "factTraceabilityValid": false,
+      "languageComplianceValid": false,
+      "dateTimeLocalizationValid": false,
+      "scienceFidelityValid": false,
+      "longShortIndependenceValid": false,
+      "narrationQualityValid": false,
+      "errors": [
+        "Benchmark execution was not completed in this environment because the .NET SDK is unavailable."
+      ],
+      "warnings": []
+    }
+  ],
+  "englishCertified": false,
+  "hindiCertified": false,
+  "multiEventCertified": false,
+  "phase01To07Certified": false
+}
