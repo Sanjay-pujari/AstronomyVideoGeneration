@@ -111,6 +111,53 @@ public sealed class RequiredSemanticFactResolverTests
         Assert.NotEmpty(RequiredSemanticFactPhase7Validator.Validate(result));
     }
 
+
+    [Theory]
+    [InlineData("PlanetPairing", "PlanetPairing")]
+    [InlineData("SolarEclipse", "Eclipse")]
+    [InlineData("LunarOccultation", "Occultation")]
+    [InlineData("Constellation", "Constellation")]
+    [InlineData("Galaxy", "DeepSkyObject")]
+    [InlineData("Nebula", "DeepSkyObject")]
+    [InlineData("Planet", "PlanetProfile")]
+    public void FamilyProfileResolver_UsesAuthoritativeEventTypeMapping(string eventType, string expectedProfile)
+    {
+        var result = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(eventType, null, null, null));
+
+        Assert.Equal(expectedProfile, result.Resolved.ResolvedProfileId);
+        Assert.False(result.Resolved.FallbackUsed);
+    }
+
+    [Theory]
+    [InlineData("Mars and Jupiter Close Pairing")]
+    [InlineData("Jupiter and Venus Close Pairing")]
+    public void PlanetPairingRunsResolvePlanetPairing(string title)
+    {
+        var result = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput("PlanetPairing", title, null, null));
+
+        Assert.Equal("PlanetPairing", result.Profile.FamilyId);
+        Assert.NotEqual("Constellation", result.Profile.FamilyId);
+    }
+
+    [Fact]
+    public void PlanetPairingAndConstellationNeverCrossValidate()
+    {
+        var planetPairing = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput("PlanetPairing", null, null, null));
+        var constellation = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput("Constellation", null, null, null));
+
+        Assert.Equal("PlanetPairing", planetPairing.Profile.FamilyId);
+        Assert.Equal("Constellation", constellation.Profile.FamilyId);
+    }
+
+    [Fact]
+    public void UnknownFamilyProfileFailsWithoutDefault()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput("UnmappedEvent", null, null, null)));
+
+        Assert.Contains("Unable to resolve astronomy family profile.", ex.Message);
+        Assert.Contains("No matching profile found.", ex.Message);
+    }
+
     private static RequiredSemanticFactResolutionResult Resolve(JsonElement longContract, JsonElement? shortContract = null, JsonElement? eventIntel = null, JsonElement? observation = null, AstronomyFamilyProfile? profile = null, LanguageProfile? language = null)
         => new RequiredSemanticFactResolver().Resolve(new RequiredSemanticFactResolutionInput(profile ?? Planetary, longContract, shortContract ?? longContract, null, null, eventIntel, observation, null, language ?? English));
 

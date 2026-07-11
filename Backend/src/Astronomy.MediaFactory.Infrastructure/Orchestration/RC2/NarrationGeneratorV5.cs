@@ -173,7 +173,20 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
 
         var longDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.long.json"));
         var shortDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.short.json"));
-        var familyProfile = AstronomyFamilyProfileCatalog.Resolve(contract, storyboard);
+        var productionEventIntelligence = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json"));
+        var observationMetadata = ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json"));
+        var familyProfileResolution = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(
+            ResolvePipelineRequestEventType(response.ProductionPipelineRequest),
+            FirstNonEmpty(response.SelectedPlans.FirstOrDefault()?.ContentCategoryCode, request.PlanTitles?.FirstOrDefault()),
+            FirstNonEmpty(GetString(longDocumentaryContract, "documentaryArchetype"), GetString(shortDocumentaryContract, "documentaryArchetype"), GetString(contract, "documentaryArchetype")),
+            FirstNonEmpty(GetString(observationMetadata, "observationMode"), GetString(productionEventIntelligence, "observationMode")),
+            contract,
+            storyboard,
+            longDocumentaryContract,
+            shortDocumentaryContract,
+            productionEventIntelligence,
+            observationMetadata));
+        var familyProfile = familyProfileResolution.Profile;
         var semanticFactResolver = new RequiredSemanticFactResolver();
         var semanticResolution = semanticFactResolver.Resolve(new RequiredSemanticFactResolutionInput(
             familyProfile,
@@ -181,12 +194,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             shortDocumentaryContract,
             contract,
             ReadFirstJson(Path.Combine(outputRoot, "editorial", "story-graph.json")),
-            ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json")),
-            ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json")),
+            productionEventIntelligence,
+            observationMetadata,
             ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
             languageProfile));
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
-        await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolution.Diagnostics, semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
 
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
             longDocumentaryContract,
@@ -1299,6 +1312,41 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    private static string? ResolvePipelineRequestEventType(object? pipelineRequest)
+    {
+        if (pipelineRequest is null) return null;
+        try
+        {
+            var json = pipelineRequest is JsonElement e ? e.GetRawText() : JsonSerializer.Serialize(pipelineRequest, JsonOptions);
+            using var doc = JsonDocument.Parse(json);
+            return FindStringRecursive(doc.RootElement, "eventType");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+    private static string? FindStringRecursive(JsonElement element, string name)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var p in element.EnumerateObject())
+            {
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String) return p.Value.GetString();
+                var value = FindStringRecursive(p.Value, name);
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var value = FindStringRecursive(item, name);
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+        }
+        return null;
+    }
     private static readonly string[] EngineeringLeakagePhrases = ["knowledge goal", "audience outcome", "editorial intent", "success criteria", "producer notes", "producer note", "transition goal", "observation objective", "the viewer should", "viewer should", "establish why", "communicate", "use only verified", "this beat", "the next beat", "beat", "source semantic beat", "sourceSemanticBeat", "long-beat", "short-beat", "allocated facts", "documentary contract", "keep in mind", "anchor", "scene purpose", "audience promise", "available facts", "planning", "facts to mention", "verified details", "event identity", "scene goal", "guide the viewer", "open by", "end with", "the event feels", "warning", "the story", "story language", "narrative hint", "let viewers", "by the end", "keep the tone", "raw metadata", "diagnostic text", "peak date/time", "peak date", "peak time", "confirmed detail", "the sky becomes", "best viewing window", "instruction", "validation"];
     private static readonly string[] PromptLeakagePhrases = ["metadata", "prompt", "json", "llm", "system message", "user prompt", "contract", "schema"];
     private static readonly string[] RawNarrativeLeakagePhrases = ["mustSayFacts", "mustExplain", "mustGuide", "mustNotSay", "transitionToNext", "raw narrative"];
@@ -2054,6 +2102,10 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 }
 
 public sealed record AstronomyFamilyProfile(string FamilyId, string ContentNature, string PreferredLongArchetype, string PreferredShortArchetype, IReadOnlyList<string> RequiredFactTypes, IReadOnlyList<string> OptionalFactTypes, IReadOnlyList<string> AllowedBeatRoles, IReadOnlyList<string> PreferredBeatOrder, string ObservationRequirements, string TimingRequirements, IReadOnlyList<string> ScientificConcepts, IReadOnlyList<string> ProhibitedAssumptions, IReadOnlyList<string> ValidationRules);
+public sealed record ResolvedFamilyProfile(string ResolvedEventFamily, string ResolvedProfileId, string ResolutionSource, bool FallbackUsed, string? FallbackReason, string ResolvedProfileVersion);
+public sealed record AstronomyFamilyProfileResolutionInput(string? EventType, string? ContentCategory, string? DocumentaryArchetype, string? ObservationMode, JsonElement? EditorialContract = null, JsonElement? CreativeStoryboard = null, JsonElement? LongDocumentaryContract = null, JsonElement? ShortDocumentaryContract = null, JsonElement? ProductionEventIntelligence = null, JsonElement? ObservationMetadata = null);
+public sealed record AstronomyFamilyProfileResolutionResult(AstronomyFamilyProfile Profile, ResolvedFamilyProfile Resolved, object Diagnostics);
+public sealed record FamilyProfileResolutionStage(string Stage, string? InputValue, string? ResolvedEventFamily, string? ResolvedProfileId, string ResolutionSource, bool FallbackUsed);
 public sealed record RealizedSemanticFact(string IntentType, string FactType, string Label, string Value, string? Unit = null);
 public sealed record TransitionIntent(string FromConcept, string ToConcept, string Relationship);
 public sealed record NarrationRealizationResult(string Format, string SceneId, string BeatRole, string FamilyProfileId, string ContentNature, string NarrativeRole, string NarrativePurpose, IReadOnlyList<RealizedSemanticFact> SpeakableFacts, IReadOnlyList<string> ScientificBoundaries, IReadOnlyList<RealizedSemanticFact> ObservationDetails, TransitionIntent? TransitionIntent, string Tone, string Rhythm, int WordBudget, string? PriorBeatSummary, string? NextBeatPurpose, IReadOnlyList<string> ForbiddenNarrationPatterns, string OpeningGuidance, bool CanRealize = true, IReadOnlyList<string>? MissingRequiredFacts = null);
@@ -2061,8 +2113,10 @@ public sealed record NarrationRealizationIssue(string FamilyProfile, string Form
 
 public static class AstronomyFamilyProfileCatalog
 {
+    public const string ProfileVersion = "AstronomyFamilyProfileCatalog-v2";
     private static readonly IReadOnlyDictionary<string, AstronomyFamilyProfile> Profiles = new Dictionary<string, AstronomyFamilyProfile>(StringComparer.OrdinalIgnoreCase)
     {
+        ["PlanetPairing"] = new("PlanetPairing", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "EventDateOrWindow", "ApparentAlignmentExplanation"], ["Direction", "AngularSeparation", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
         ["PlanetaryConjunction"] = new("PlanetaryConjunction", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["PrimaryObjects", "EventDateOrWindow", "ApparentAlignmentExplanation"], ["Direction", "AngularSeparation", "LocalPeakTime", "BinocularGuidance", "VisibilityConditions"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Timing", "Science", "Observation", "Closing"], "Direction when available; equipment only when verified.", "Event date or window is required.", ["ApparentAlignment"], ["Physical closeness", "Unverified weather", "Unverified brightness"], ["No raw producer notes", "No unsupported science"]),
         ["Occultation"] = new("Occultation", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["OccultingObject", "HiddenObject", "StartTime", "VisibilityRegion", "Mechanism"], ["EndTime", "Duration", "ReappearanceTime", "TelescopeGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Orientation", "Science", "Observation", "Closing"], "Region and object pairing required.", "Start time required; end time or duration preferred.", ["ForegroundBody", "Reappearance"], ["Global visibility", "Instantaneous everywhere"], ["Mechanism must be stated"]),
         ["Eclipse"] = new("Eclipse", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["EclipseType", "EventDateOrWindow", "VisibilityRegion", "SafetyGuidance", "Mechanism"], ["StartTime", "PeakTime", "EndTime", "Magnitude"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Safety", "Timing", "Science", "Observation", "Closing"], "Safety guidance required for solar eclipses.", "Window or date required.", ["ShadowGeometry", "OrbitalAlignment"], ["Unsafe solar viewing", "Worldwide visibility"], ["Safety must not be omitted"]),
@@ -2071,26 +2125,69 @@ public static class AstronomyFamilyProfileCatalog
         ["PlanetProfile"] = new("PlanetProfile", "EducationalObjectProfile", "PlanetProfile", "PlanetShort", ["Name", "PlanetType", "ScientificIdentity"], ["Distance", "Visibility", "Moons", "Atmosphere"], ["Hook", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Observation details optional.", "Timing optional.", ["Orbit", "Composition"], ["Current visibility unless verified"], ["No fabricated live sky facts"]),
         ["Comet"] = new("Comet", "ScientificObjectProfile", "CometProfile", "CometShort", ["Name", "ObjectType", "Orbit", "ScientificImportance"], ["Perihelion", "Visibility", "TelescopeGuidance"], ["Hook", "Science", "Observation", "Significance", "Closing"], ["Hook", "Science", "Observation", "Closing"], "Observation optional unless visibility story.", "Timing optional unless observing event.", ["IcyBody", "TailFormation"], ["Guaranteed naked-eye visibility"], ["Visibility must be verified"]),
         ["DeepSkyObject"] = new("DeepSkyObject", "ScientificObjectProfile", "DeepSkyProfile", "DeepSkyShort", ["ObjectName", "ObjectType", "SkyLocation", "ScientificImportance"], ["Distance", "DiscoveryHistory", "TelescopeGuidance", "ImagingNotes"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Science", "Significance", "Closing"], "Location relative to constellation or stars preferred.", "Timing optional unless observation-focused.", ["Distance", "AstrophysicalStructure"], ["Required event date"], ["Do not force event structure"]),
-        ["Nebula"] = new("Nebula", "ScientificObjectProfile", "NebulaProfile", "NebulaShort", ["ObjectName", "ObjectType", "SkyLocation", "ScientificImportance"], ["Distance", "StarFormation", "TelescopeGuidance"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Science", "Closing"], "Optional unless observation-focused.", "Timing optional.", ["GasDust", "StarFormation", "RemnantPhysics"], ["Required event date"], ["State physics only when supported"]),
-        ["Galaxy"] = new("Galaxy", "ScientificObjectProfile", "GalaxyProfile", "GalaxyShort", ["ObjectName", "ObjectType", "SkyLocation", "ScientificImportance"], ["Distance", "Structure", "TelescopeGuidance"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Optional unless observation-focused.", "Timing optional.", ["StellarSystems", "Scale", "Structure"], ["Required event date"], ["Do not force event structure"]),
         ["BlackHoleOrScientificExplainer"] = new("BlackHoleOrScientificExplainer", "ScientificExplainer", "ScienceExplainer", "ScienceShort", ["Concept", "ScientificIdentity", "Evidence", "ScientificImportance"], ["DiscoveryHistory", "ObservationMethod"], ["Hook", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Observation details optional.", "No timing required.", ["Gravity", "EventHorizon", "ObservationalEvidence"], ["Visible surface", "Required event date"], ["No unsupported claims"])
     };
 
-    public static AstronomyFamilyProfile Resolve(JsonElement? contract, JsonElement? storyboard)
+    public static AstronomyFamilyProfile Resolve(JsonElement? contract, JsonElement? storyboard) => ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(FirstNonEmpty(GetString(contract, "eventType"), GetString(contract, "family")), GetString(contract, "contentCategory"), GetString(contract, "documentaryArchetype"), null, contract, storyboard)).Profile;
+
+    public static AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(AstronomyFamilyProfileResolutionInput input)
     {
-        var text = (contract?.GetRawText() ?? string.Empty) + " " + (storyboard?.GetRawText() ?? string.Empty);
-        foreach (var key in Profiles.Keys.OrderByDescending(k => k.Length)) if (text.Contains(key, StringComparison.OrdinalIgnoreCase)) return Profiles[key];
-        if (Regex.IsMatch(text, "occult", RegexOptions.IgnoreCase)) return Profiles["Occultation"];
-        if (Regex.IsMatch(text, "eclipse", RegexOptions.IgnoreCase)) return Profiles["Eclipse"];
-        if (Regex.IsMatch(text, "meteor", RegexOptions.IgnoreCase)) return Profiles["MeteorShower"];
-        if (Regex.IsMatch(text, "constellation|Orion|Ursa", RegexOptions.IgnoreCase)) return Profiles["Constellation"];
-        if (Regex.IsMatch(text, "nebula", RegexOptions.IgnoreCase)) return Profiles["Nebula"];
-        if (Regex.IsMatch(text, "galaxy", RegexOptions.IgnoreCase)) return Profiles["Galaxy"];
-        if (Regex.IsMatch(text, "black hole|event horizon", RegexOptions.IgnoreCase)) return Profiles["BlackHoleOrScientificExplainer"];
-        if (Regex.IsMatch(text, "comet", RegexOptions.IgnoreCase)) return Profiles["Comet"];
-        if (Regex.IsMatch(text, "deep sky|cluster|Messier|NGC", RegexOptions.IgnoreCase)) return Profiles["DeepSkyObject"];
-        return Profiles["PlanetaryConjunction"];
+        var stages = BuildStages(input).ToArray();
+        var winning = stages.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.ResolvedProfileId));
+        if (winning is null || string.IsNullOrWhiteSpace(winning.ResolvedProfileId) || !Profiles.TryGetValue(winning.ResolvedProfileId, out var profile))
+            throw new InvalidOperationException($"Unable to resolve astronomy family profile. EventType = {input.EventType ?? "<missing>"}. No matching profile found.");
+        var resolved = new ResolvedFamilyProfile(winning.ResolvedEventFamily!, winning.ResolvedProfileId!, winning.ResolutionSource, false, null, ProfileVersion);
+        var diagnostics = new
+        {
+            familyProfileRequested = new { input.EventType, input.ContentCategory, input.DocumentaryArchetype, input.ObservationMode },
+            familyProfileResolved = resolved.ResolvedProfileId,
+            familyProfileSource = resolved.ResolutionSource,
+            fallbackApplied = false,
+            fallbackReason = (string?)null,
+            resolvedProfileVersion = ProfileVersion,
+            resolutionChain = stages.Select(s => new { s.Stage, resolvedEventFamily = s.ResolvedEventFamily, resolvedProfileId = s.ResolvedProfileId, s.ResolutionSource, s.FallbackUsed })
+        };
+        return new(profile, resolved, diagnostics);
     }
+
+    private static IEnumerable<FamilyProfileResolutionStage> BuildStages(AstronomyFamilyProfileResolutionInput input)
+    {
+        yield return Stage("ProductionPipelineRequest.EventType", input.EventType, "ProductionPipelineRequest.EventType");
+        yield return Stage("ProductionEventIntelligence.EventType", GetString(input.ProductionEventIntelligence, "eventType"), "ProductionEventIntelligence.EventType");
+        yield return Stage("Story Intelligence", FirstNonEmpty(GetString(input.EditorialContract, "storyTheme"), GetString(input.EditorialContract, "theme")), "EditorialContract.storyTheme");
+        yield return Stage("Editorial Contract", FirstNonEmpty(GetString(input.EditorialContract, "eventType"), GetString(input.EditorialContract, "family"), input.ContentCategory), "EditorialContract");
+        yield return Stage("Creative Storyboard", FirstNonEmpty(GetString(input.CreativeStoryboard, "eventType"), GetString(input.CreativeStoryboard, "storyTheme")), "CreativeStoryboard");
+        yield return Stage("Documentary Contract", FirstNonEmpty(GetString(input.LongDocumentaryContract, "eventType"), GetString(input.ShortDocumentaryContract, "eventType"), input.DocumentaryArchetype), "DocumentaryContract");
+        yield return Stage("Narration Context", FirstNonEmpty(input.ObservationMode, input.ContentCategory), "NarrationContext");
+        yield return Stage("AstronomyFamilyProfileResolver", FirstNonEmpty(input.EventType, GetString(input.ProductionEventIntelligence, "eventType"), GetString(input.CreativeStoryboard, "eventType")), nameof(ResolveFamilyProfile));
+        yield return Stage("RequiredSemanticFactResolver", FirstNonEmpty(input.EventType, GetString(input.ProductionEventIntelligence, "eventType")), "RequiredSemanticFactResolverInput");
+    }
+
+    private static FamilyProfileResolutionStage Stage(string stage, string? value, string source)
+    {
+        var family = MapToProfileId(value);
+        return new(stage, value, family, family, source, false);
+    }
+
+    private static string? MapToProfileId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var text = value.Trim();
+        if (text.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetaryConjunction";
+        if (Regex.IsMatch(text, "PlanetPairing|planetary encounter|close apparent meeting of two planets|conjunction|close pairing", RegexOptions.IgnoreCase)) return "PlanetPairing";
+        if (Regex.IsMatch(text, "SolarEclipse|LunarEclipse|Eclipse", RegexOptions.IgnoreCase)) return "Eclipse";
+        if (Regex.IsMatch(text, "LunarOccultation|Occultation|occult", RegexOptions.IgnoreCase)) return "Occultation";
+        if (Regex.IsMatch(text, "Constellation|Orion|Ursa", RegexOptions.IgnoreCase)) return "Constellation";
+        if (Regex.IsMatch(text, "Galaxy|Nebula|DeepSkyObject|deep sky|cluster|Messier|NGC", RegexOptions.IgnoreCase)) return "DeepSkyObject";
+        if (Regex.IsMatch(text, "^Planet$|PlanetProfile", RegexOptions.IgnoreCase)) return "PlanetProfile";
+        if (Regex.IsMatch(text, "MeteorShower|meteor", RegexOptions.IgnoreCase)) return "MeteorShower";
+        if (Regex.IsMatch(text, "Comet", RegexOptions.IgnoreCase)) return "Comet";
+        if (Regex.IsMatch(text, "black hole|event horizon", RegexOptions.IgnoreCase)) return "BlackHoleOrScientificExplainer";
+        return null;
+    }
+
+    private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False ? p.Value.GetRawText() : null; return null; }
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 }
 
 public sealed class NarrationRealizer : INarrationRealizer
