@@ -278,6 +278,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var duplicateSentenceCount = CountAdjacentDuplicateSentences(fullText);
         var redundancy = DetectRedundancy(fullText, narrationScenes);
         var visualInstructionLeakageDetected = NarrationContextBuilder.ContainsForbiddenVisualLanguage(fullText);
+        var generatedNarrationFailures = GeneratedNarrationValidator.Validate(fullText).ToArray();
         var longExpectedSceneIds = longSceneFactCards.Cards.Select(c => c.SceneId).ToArray();
         var shortExpectedSceneIds = shortSceneFactCards.Cards.Select(c => c.SceneId).ToArray();
         var longActualSceneIds = ReadArray(ReadFirstJson(longNarrationPath), "scenes").Select(s => GetString(s, "sceneId") ?? string.Empty).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
@@ -316,6 +317,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             .Concat(duplicateSentenceCount > 0 ? [$"Adjacent duplicate sentence detected {duplicateSentenceCount} time(s)."] : [])
             .Concat(redundancy.ExceedsThreshold ? [$"Repeated narration exceeds threshold: {redundancy.DuplicateCount} duplicate sentence(s)."] : [])
             .Concat(visualInstructionLeakageDetected ? ["Visual instructions leaked into LLM input or narration."] : [])
+            .Concat(generatedNarrationFailures.Select(p => $"Generated narration validation failure: {p}"))
             .Concat(!sceneMappingValid ? ["Scene IDs do not match existing plans."] : [])
             .Concat(formatSceneCountViolations)
             .Concat(!languageValidationPassed ? [$"Requested language {languageProfile.Culture} failed output language validation."] : [])
@@ -608,7 +610,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             phaseNo = 7,
             phaseName = PhaseName,
             validator = "AstroPulse-NarrationValidator-v3",
-            passed = validationStatusSucceeded && languageValidationPassed && generationErrors.Count == 0 && validationErrors.Length == 0 && !editorialReviewerDecision.Equals("Do Not Publish", StringComparison.OrdinalIgnoreCase) && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath) && repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid && wholeDocumentGenerationUsed && !visualInstructionLeakageDetected && !redundancy.ExceedsThreshold && !sharedSceneSourceUsed && !longShortSceneStructureIdentical && (!requestedFormats.Contains("long") || longGeneratedSceneCount == longExpectedSceneCount) && (!requestedFormats.Contains("short") || shortGeneratedSceneCount == shortExpectedSceneCount),
+            passed = validationStatusSucceeded && languageValidationPassed && generationErrors.Count == 0 && validationErrors.Length == 0 && !editorialReviewerDecision.Equals("Do Not Publish", StringComparison.OrdinalIgnoreCase) && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath) && repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid && wholeDocumentGenerationUsed && !visualInstructionLeakageDetected && generatedNarrationFailures.Length == 0 && !redundancy.ExceedsThreshold && !sharedSceneSourceUsed && !longShortSceneStructureIdentical && (!requestedFormats.Contains("long") || longGeneratedSceneCount == longExpectedSceneCount) && (!requestedFormats.Contains("short") || shortGeneratedSceneCount == shortExpectedSceneCount),
             editorialReviewerDecision,
             editorialReviewerReason,
             promptRecommendation = finalPromptQuality.Recommendation,
@@ -1554,13 +1556,9 @@ public static class NumberUnitFormatter
 
 public static class NarrationContextBuilder
 {
-    private static readonly string[] ForbiddenVisualFields =
-    [
-        "visual-only", "frame for", "source facts attached", "landscape composition", "portrait composition", "label-safe",
-        "camera", "motion", "slow reveal", "steady hold", "visual comprehension", "render", "safe area",
-        "primary subject", "cameraIntent", "compositionIntent", "visualRole", "motionIntent", "visualAccuracyRules",
-        "prohibitedVisualChoices", "safeArea", "lightingIntent", "visual hierarchy", "visual prompt"
-    ];
+    private static readonly Regex ForbiddenVisualLanguageRegex = new(
+        @"\b(?:create\s+a\s+visual-only\s+hook\s+frame|(?:landscape|portrait)\s+composition|reserve\s+(?:a\s+)?label-safe|label-safe\s+(?:space|area)|apply\s+slow\s+camera\s+motion|camera\s+motion|render\s+\w+\s+in\s+the\s+upper\s+third|place\s+the\s+label|render\s+a\s+label|show\s+the\s+object\s+label|source\s+facts\s+attached|slow\s+reveal|steady\s+hold|visual\s+comprehension|safe\s*area|primary\s+subject|cameraIntent|compositionIntent|visualRole|motionIntent|visualAccuracyRules|prohibitedVisualChoices|safeArea|lightingIntent|visual\s+hierarchy|visual\s+prompt)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static NarrationContextDocument Build(JsonElement? longContract, JsonElement? shortContract, JsonElement? decisionLog, JsonElement? editorialBrief, JsonElement? producerNotes, JsonElement? styleContract, DocumentaryPerformerSceneFactCards factCards, string voiceProfile, string orchestrationVersion)
     {
@@ -1573,7 +1571,7 @@ public static class NarrationContextBuilder
     }
 
     public static bool ContainsForbiddenVisualLanguage(string? value)
-        => !string.IsNullOrWhiteSpace(value) && ForbiddenVisualFields.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+        => !string.IsNullOrWhiteSpace(value) && ForbiddenVisualLanguageRegex.IsMatch(value);
 
     private static IReadOnlyList<NarrationContextBeat> BuildBeats(string format, JsonElement? contract, JsonElement? styleContract, SceneFactCardSet cards, string voiceProfile)
     {
@@ -1702,33 +1700,93 @@ public static class NarrationSafeFactFormatter
     }
 }
 
-public static class NarrationContextPurityValidator
+public sealed record NarrationPurityFailure(string Format, string SceneId, string DocumentaryBeatId, string Field, string RuleId, string MatchedPhrase, string SurroundingText, string SourceArtifact, string SourceField, string Severity)
 {
-    private static readonly Regex IsoRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly string[] Forbidden = ["visual", "visual-only", "frame", "source facts attached", "landscape", "portrait", "label", "camera", "composition", "motion", "render", "safe area", "safeArea", "framing", "lighting", "image prompt", "prompt", "raw timestamp", "sceneId", "beatId", "sourceSemanticBeatIds"];
-    public static IReadOnlyList<string> Validate(NarrationContextDocument context)
+    public override string ToString()
+        => $"Narration context purity failure: format={Format}; sceneId={SceneId}; documentaryBeatId={DocumentaryBeatId}; field={Field}; ruleId={RuleId}; matchedPhrase={MatchedPhrase}; surroundingText={SurroundingText}; sourceArtifact={SourceArtifact}; sourceField={SourceField}; severity={Severity}";
+}
+
+public static class ContextSchemaValidator
+{
+    private static readonly HashSet<string> KnownSuccessCriteria = new(StringComparer.OrdinalIgnoreCase)
     {
-        var failures = new List<string>();
-        foreach (var beat in context.Formats.SelectMany(f => f.Beats))
+        "NoPrivateNoteLeakage", "NoImperativeInstructionLeakage", "NoRawTimestampLeakage", "NoProductionLanguageLeakage", "NoInternalFieldLabelLeakage", "NoInternalIdentifierLeakage",
+        "private-note prose", "imperative guidance language", "raw time strings", "production staging language", "data labels", "internal IDs", "Keep the story factual and natural.", "कहानी तथ्यपरक और स्वाभाविक रहे।"
+    };
+
+    public static IReadOnlyList<NarrationPurityFailure> Validate(NarrationContextDocument context)
+    {
+        var failures = new List<NarrationPurityFailure>();
+        foreach (var format in context.Formats)
+        foreach (var (beat, index) in format.Beats.Select((b, i) => (b, i)))
         {
-            Check(beat.KnowledgeGoal, "knowledgeGoal"); Check(beat.AudienceOutcome, "audienceOutcome"); Check(beat.EditorialIntent, "editorialIntent"); Check(beat.ObservationObjective, "observationObjective"); Check(beat.TransitionGoal, "transitionGoal"); Check(beat.Tone, "tone"); Check(beat.NarrativeRhythm, "narrativeRhythm"); Check(beat.OptionalProducerNotes, "optionalProducerNotes");
-            foreach (var c in beat.ScientificConstraints) Check(c, "scientificConstraints");
-            foreach (var c in beat.SuccessCriteria) Check(c, "successCriteria");
-            foreach (var fact in beat.VerifiedFacts) { Check(fact.FactKey, "verifiedFacts.factKey"); Check(fact.Value, "verifiedFacts"); Check(fact.SemanticPurpose, "verifiedFacts.semanticPurpose"); if (Regex.IsMatch(fact.Value, "\\b(long|short)-beat-\\d+\\b", RegexOptions.IgnoreCase)) failures.Add($"Internal beat ID leaked into speakable fact {fact.FactKey}."); }
-            void Check(string? value, string field)
-            {
-                if (string.IsNullOrWhiteSpace(value)) return;
-                foreach (var term in Forbidden) if (value.Contains(term, StringComparison.OrdinalIgnoreCase)) failures.Add($"Narration context purity failure in {field}: '{term}'.");
-                if (IsoRegex.IsMatch(value)) failures.Add($"Raw ISO timestamp leaked into {field}.");
-                if (Regex.IsMatch(value, @"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant)) failures.Add($"Internal region or source identifier leaked into {field}.");
-                if (Regex.IsMatch(value, @"[+-]\d{2}:?\d{2}\b", RegexOptions.CultureInvariant)) failures.Add($"Timezone offset leaked into {field}.");
-                if (value.Contains("recommendedPublishWindow", StringComparison.OrdinalIgnoreCase) || value.Contains("scheduledUtc", StringComparison.OrdinalIgnoreCase)) failures.Add($"Publishing metadata leaked into {field}.");
-                if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) failures.Add($"Serialized JSON leaked into {field}.");
-            }
+            if (string.IsNullOrWhiteSpace(format.Format)) Add("format", "RequiredProperty", string.Empty, index);
+            if (string.IsNullOrWhiteSpace(beat.KnowledgeGoal)) Add("knowledgeGoal", "RequiredProperty", string.Empty, index);
+            foreach (var criterion in beat.SuccessCriteria.Where(c => !string.IsNullOrWhiteSpace(c) && !KnownSuccessCriteria.Contains(c) && !Regex.IsMatch(c, @"^No[A-Za-z0-9]+Leakage$", RegexOptions.CultureInvariant)))
+                Add("successCriteria", "UnrecognizedSuccessCriterion", criterion, index);
         }
-        return failures.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return failures;
+
+        void Add(string field, string ruleId, string match, int index) => failures.Add(new NarrationPurityFailure("unknown", string.Empty, $"beat-{index + 1}", field, ruleId, match, match, "narration-context", field, "Blocking"));
     }
 }
+
+public static class SpeakableContextPurityValidator
+{
+    private static readonly Regex RawTimestamp = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex TimezoneOffset = new(@"(?<!\d)\b[+-]\d{2}:?\d{2}\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex InternalIdentifier = new(@"\b(?:[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+|(?:long|short)-beat-\d+|sceneId|beatId|sourceSemanticBeatIds)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex FilePath = new(@"(?:^|\s)(?:[A-Za-z]:\\|/[^\s]+/|\.{1,2}/)[^\s]+", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex VisualProduction = new(@"\b(?:create\s+a\s+visual-only\s+hook\s+frame|use\s+a\s+landscape\s+composition|reserve\s+(?:a\s+)?label-safe\s+(?:space|area)|apply\s+slow\s+camera\s+motion|render\s+\w+\s+in\s+the\s+upper\s+third|place\s+the\s+label|render\s+a\s+label|show\s+the\s+object\s+label|in\s+this\s+scene,?\s+show|scene\s+\d+\s+should\s+show|create\s+a\s+scene\s+with)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex EditorialImperative = new(@"(?:^|[.!?]\s+)(?:Explain why|Use the verified timing|Use the timing field|Turn (?:these|this) facts into|Establish the importance|The viewer should understand|Mention the direction and time)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex InternalFieldLabel = new(@"(?:^|[.!?]\s+)(?:Timing|SceneId|BeatId|SourceField|SuccessCriteria)\s*:|\buse\s+the\s+timing\s+field\b|\bthe\s+timing\s+objective\s+is\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    public static IReadOnlyList<NarrationPurityFailure> Validate(NarrationContextDocument context)
+    {
+        var failures = new List<NarrationPurityFailure>();
+        foreach (var format in context.Formats)
+        foreach (var (beat, index) in format.Beats.Select((b, i) => (b, i)))
+        {
+            Check(beat.KnowledgeGoal, "knowledgeGoal", format.Format, index); Check(beat.AudienceOutcome, "audienceOutcome", format.Format, index); Check(beat.EditorialIntent, "editorialIntent", format.Format, index); Check(beat.ObservationObjective, "observationObjective", format.Format, index); Check(beat.TransitionGoal, "transitionGoal", format.Format, index); Check(beat.OptionalProducerNotes, "optionalProducerNotes", format.Format, index);
+            foreach (var c in beat.ScientificConstraints) Check(c, "scientificConstraints", format.Format, index);
+            foreach (var fact in beat.VerifiedFacts) Check(fact.Value, "verifiedFacts.speakableValue", format.Format, index, fact.FactKey);
+        }
+        return failures;
+        void Check(string? value, string field, string format, int index, string sourceField = "")
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            foreach (var (id, rx) in new[] { ("RawTimestamp", RawTimestamp), ("TimezoneOffset", TimezoneOffset), ("InternalIdentifier", InternalIdentifier), ("FilePath", FilePath), ("VisualProductionInstruction", VisualProduction), ("EditorialImperativeInstruction", EditorialImperative), ("InternalFieldLabel", InternalFieldLabel) })
+            {
+                var m = rx.Match(value); if (!m.Success) continue;
+                failures.Add(new NarrationPurityFailure(format, string.Empty, $"{format}-beat-{index + 1:000}", field, id, m.Value, Surround(value, m.Index, m.Length), "narration-context", string.IsNullOrWhiteSpace(sourceField) ? field : sourceField, "Blocking"));
+            }
+            if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) failures.Add(new NarrationPurityFailure(format, string.Empty, $"{format}-beat-{index + 1:000}", field, "SerializedJson", value.Trim()[..Math.Min(value.Trim().Length, 40)], Surround(value, 0, Math.Min(value.Length, 40)), "narration-context", field, "Blocking"));
+            if (value.Contains("recommendedPublishWindow", StringComparison.OrdinalIgnoreCase) || value.Contains("scheduledUtc", StringComparison.OrdinalIgnoreCase)) failures.Add(new NarrationPurityFailure(format, string.Empty, $"{format}-beat-{index + 1:000}", field, "PublishingMetadata", "publishing metadata", Surround(value, 0, Math.Min(value.Length, 40)), "narration-context", field, "Blocking"));
+        }
+    }
+    private static string Surround(string text, int index, int length) { var start = Math.Max(0, index - 32); var end = Math.Min(text.Length, index + length + 32); return text[start..end]; }
+}
+
+public static class GeneratedNarrationValidator
+{
+    private static readonly Regex InternalRegionCode = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex PlanningLeakage = new(@"(?:^|[.!?]\s+)(?:Explain why|Use the verified timing|Turn (?:these|this) facts into|Establish the importance|Mention the direction and time)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    public static IReadOnlyList<NarrationPurityFailure> Validate(string narration, string format = "output")
+    {
+        var failures = new List<NarrationPurityFailure>();
+        Add(InternalRegionCode.Match(narration ?? string.Empty), "InternalRegionCode");
+        Add(PlanningLeakage.Match(narration ?? string.Empty), "PlanningLeakage");
+        return failures;
+        void Add(Match m, string rule) { if (m.Success) failures.Add(new NarrationPurityFailure(format, string.Empty, string.Empty, "generatedNarration", rule, m.Value, m.Value, "documentary-script", "narration", "Blocking")); }
+    }
+}
+
+public static class NarrationContextPurityValidator
+{
+    public static IReadOnlyList<string> Validate(NarrationContextDocument context)
+        => ContextSchemaValidator.Validate(context).Concat(SpeakableContextPurityValidator.Validate(context)).Select(f => f.ToString()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+}
+
 
 
 public static class SceneFactCardGenerator

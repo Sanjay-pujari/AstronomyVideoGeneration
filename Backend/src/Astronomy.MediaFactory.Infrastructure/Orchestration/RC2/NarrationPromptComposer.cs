@@ -132,7 +132,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
 
     private static string FormatNarrationContext(NarrationContextDocument context)
         => string.Join("\n\n", context.Formats.Select(format => $"Format: {format.Format}\n" + string.Join("\n", format.Beats.Select((beat, index) =>
-            $"Beat {index + 1}: knowledge goal: {beat.KnowledgeGoal} audience outcome: {beat.AudienceOutcome} editorial intent: {beat.EditorialIntent} facts: {FormatVerifiedFacts(beat.VerifiedFacts)} constraints: {FormatList(beat.ScientificConstraints)} observation objective: {beat.ObservationObjective ?? "none"} transition goal: {beat.TransitionGoal} tone: {beat.Tone} rhythm: {beat.NarrativeRhythm} success criteria: {FormatList(beat.SuccessCriteria)} notes: {beat.OptionalProducerNotes ?? "none"}"))));
+            $"Beat {index + 1}: narrative role: {beat.KnowledgeGoal} documentary purpose: {beat.AudienceOutcome} editorial intent: {beat.EditorialIntent} localized speakable facts: {FormatVerifiedFacts(beat.VerifiedFacts)} scientific boundaries: {FormatList(beat.ScientificConstraints)} observation details: {beat.ObservationObjective ?? "none"} transition relationship: {beat.TransitionGoal} tone: {beat.Tone} rhythm: {beat.NarrativeRhythm}"))));
 
     private static string FormatVerifiedFacts(IReadOnlyList<NarrationVerifiedFact> facts) => facts.Count == 0 ? "none" : string.Join("; ", facts.Select(f => $"{NormalizeFactName(f.FactKey)} — {f.Value}"));
 
