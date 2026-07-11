@@ -82,6 +82,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var shortDocumentaryScriptPath = Path.Combine(documentaryScriptShortRoot, "documentary-script.json");
         var documentaryScriptDiagnosticsPath = Path.Combine(documentaryScriptRoot, "documentary-script-diagnostics.json");
         var performanceDiagnosticsPath = Path.Combine(documentaryScriptRoot, "performance-diagnostics.json");
+        var sceneIdentityDiagnosticsPath = Path.Combine(narrationRoot, "scene-identity-diagnostics.json");
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
         var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
         var narrationInputNormalizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-input-normalization-diagnostics.json");
@@ -340,8 +341,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var shortExpectedSceneIds = shortSceneFactCards.Cards.Select(c => c.SceneId).ToArray();
         var longActualSceneIds = ReadArray(ReadFirstJson(longNarrationPath), "scenes").Select(s => GetString(s, "sceneId") ?? string.Empty).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
         var shortActualSceneIds = ReadArray(ReadFirstJson(shortNarrationPath), "scenes").Select(s => GetString(s, "sceneId") ?? string.Empty).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
-        var sceneMappingValid = (!requestedFormats.Contains("long") || longExpectedSceneIds.All(id => longActualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)))
-            && (!requestedFormats.Contains("short") || shortExpectedSceneIds.All(id => shortActualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)));
+        var sceneIdentityDiagnostics = BuildSceneIdentityDiagnostics(longSceneFactCards.Cards, shortSceneFactCards.Cards, longActualSceneIds, shortActualSceneIds, requestedFormats);
+        await WriteAllTextUtf8Async(sceneIdentityDiagnosticsPath, JsonSerializer.Serialize(sceneIdentityDiagnostics, JsonOptions), cancellationToken);
+        var sceneMappingValid = sceneIdentityDiagnostics.All(d => d.MappingStatus.Equals("Mapped", StringComparison.OrdinalIgnoreCase));
         var wholeDocumentGenerationUsed = llmRequestCounts.Values.Sum() == requestedFormats.Count && llmRequestCounts.Values.All(c => c == 1);
         var expectedCounts = requestedFormats.ToDictionary(f => f, f => ResolveExpectedFrameCount(outputRoot, f), StringComparer.OrdinalIgnoreCase);
         var longExpectedSceneCount = expectedCounts.GetValueOrDefault("long");
@@ -524,7 +526,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 new { path = NormalizePath(editorialBriefContractPath), exists = File.Exists(editorialBriefContractPath) },
                 new { path = NormalizePath(producerNotesContractPath), exists = File.Exists(producerNotesContractPath) }
             },
-            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationContextPath, narrationRealizationDiagnosticsPath, performanceDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
+            outputsCreated = new[] { planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, sceneIdentityDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationContextPath, narrationRealizationDiagnosticsPath, performanceDiagnosticsPath, sceneIdentityDiagnosticsPath }.Select(path => new { path = NormalizePath(path), exists = File.Exists(path) || path == diagnosticsPath || path == validationPath }).ToArray(),
             validationVersion = "AstroPulse-NarrationValidator-v2",
             sceneCount = narrationScenes.Length,
             requiredFactCoverage = coverage,
@@ -567,6 +569,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             repeatedOpeningCount,
             duplicateSentenceCount,
             sceneMappingValid,
+            sceneIdentityDiagnosticsPath = NormalizePath(sceneIdentityDiagnosticsPath),
             documentaryFlowScore,
             finalEditorialDecision,
             editorialBoardReview,
@@ -659,7 +662,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
         await WriteFormatDiagnosticsAsync(longDiagnosticsPath, "long", longNarrationPath, expectedCounts.GetValueOrDefault("long"), errors, cancellationToken);
         await WriteFormatDiagnosticsAsync(shortDiagnosticsPath, "short", shortNarrationPath, expectedCounts.GetValueOrDefault("short"), errors, cancellationToken);
-        var validationStatusSucceeded = languageValidationPassed && errors.Length == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80;
+        var outputFilesExist = (!requestedFormats.Contains("long") || File.Exists(longNarrationPath)) && (!requestedFormats.Contains("short") || File.Exists(shortNarrationPath));
+        var longTextNonEmpty = !requestedFormats.Contains("long") || !string.IsNullOrWhiteSpace(GetNarrationText(longNarrationPath));
+        var shortTextNonEmpty = !requestedFormats.Contains("short") || !string.IsNullOrWhiteSpace(GetNarrationText(shortNarrationPath));
+        var mandatoryBlockingFailures = errors.Length + (languageValidationPassed ? 0 : 1) + (sceneMappingValid ? 0 : 1) + (outputFilesExist ? 0 : 1) + (longTextNonEmpty && shortTextNonEmpty ? 0 : 1);
+        var validationStatusSucceeded = mandatoryBlockingFailures == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80;
         var validation = new
         {
             status = validationStatusSucceeded ? "Succeeded" : "Failed",
@@ -678,7 +685,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             observationPasses = narrationScenes.Length > 0 ? 1 : 0,
             reviewPasses,
             finalDecision,
-            auroraCertified = validationStatusSucceeded && auroraCertified,
+            auroraCertified = validationStatusSucceeded && mandatoryBlockingFailures == 0 && auroraCertified,
             canRetry = !validationStatusSucceeded,
             requestedLanguage = languageRequested,
             resolvedLanguage = languageProfile.Culture,
@@ -738,7 +745,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             documentaryVoiceValid = professionalScores.DocumentaryVoiceScore >= 75,
             performanceDiagnosticsValid = errors.Length == 0,
             realizationValid = realizationValidation.Length == 0,
-            auroraCertificationCandidate = validationStatusSucceeded && languageValidationPassed && errors.Length == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80,
+            blockingFailureCount = mandatoryBlockingFailures,
+            auroraCertificationCandidate = validationStatusSucceeded && mandatoryBlockingFailures == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80,
             redundancyScore = redundancy.Score,
             redundancyWarnings = redundancy.Warnings,
             noEditorialLeakageDetected = engineeringLeakageViolations.Length == 0,
@@ -775,6 +783,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             repeatedOpeningCount,
             duplicateSentenceCount,
             sceneMappingValid,
+            sceneIdentityDiagnosticsPath = NormalizePath(sceneIdentityDiagnosticsPath),
             documentaryFlowScore,
             finalEditorialDecision,
             editorialBoardReview,
@@ -803,7 +812,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath]);
+        return new NarrationGeneratorV5Result([sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, sceneIdentityDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath]);
     }
 
     private static Task WriteAllTextUtf8Async(string path, string contents, CancellationToken cancellationToken = default)
@@ -1442,6 +1451,37 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             .ToArray();
     }
 
+    private static IReadOnlyList<SceneIdentityDiagnostic> BuildSceneIdentityDiagnostics(
+        IReadOnlyList<SceneFactCard> longCards,
+        IReadOnlyList<SceneFactCard> shortCards,
+        IReadOnlyList<string> longActualSceneIds,
+        IReadOnlyList<string> shortActualSceneIds,
+        IReadOnlyList<string> requestedFormats)
+    {
+        var diagnostics = new List<SceneIdentityDiagnostic>();
+        Add("long", longCards, longActualSceneIds);
+        Add("short", shortCards, shortActualSceneIds);
+        return diagnostics;
+
+        void Add(string format, IReadOnlyList<SceneFactCard> cards, IReadOnlyList<string> actualIds)
+        {
+            if (!requestedFormats.Contains(format, StringComparer.OrdinalIgnoreCase)) return;
+            foreach (var card in cards.OrderBy(c => c.SceneOrder))
+            {
+                var actual = actualIds.ElementAtOrDefault(Math.Max(0, card.SceneOrder - 1)) ?? string.Empty;
+                var mapped = !string.IsNullOrWhiteSpace(actual) && string.Equals(card.SceneId, actual, StringComparison.OrdinalIgnoreCase);
+                diagnostics.Add(new SceneIdentityDiagnostic(
+                    card.SceneId,
+                    actual,
+                    string.IsNullOrWhiteSpace(card.SourceStoryFrameId) ? card.SourceSceneIntentId : card.SourceStoryFrameId,
+                    format,
+                    card.SceneOrder,
+                    mapped ? "Mapped" : "Mismatch",
+                    mapped ? string.Empty : $"Expected Phase 7 sceneId '{card.SceneId}' at order {card.SceneOrder}, but found '{(string.IsNullOrWhiteSpace(actual) ? "<missing>" : actual)}'."));
+            }
+        }
+    }
+
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
@@ -1452,6 +1492,7 @@ public sealed record RawNarrative(string ContractVersion, string OrchestrationVe
 public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> MustSayFacts, IReadOnlyList<string> MustExplain, IReadOnlyList<string> MustGuide, IReadOnlyList<string> MustNotSay, string TransitionToNext, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
 public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
+public sealed record SceneIdentityDiagnostic(string Phase6SceneId, string Phase7SceneId, string DocumentaryBeatId, string Format, int SceneOrder, string MappingStatus, string MismatchReason);
 public sealed record DocumentaryTranscriptionistInput(string DocumentaryOutline, DocumentaryPerformerSceneFactCards SceneFactCards, string AstroPulseVoiceProfile);
 public sealed record DocumentaryPerformerSceneFactCards(SceneFactCardSet Long, SceneFactCardSet Short);
 public sealed record NarrationContextDocument(string ContractVersion, string OrchestrationVersion, IReadOnlyList<NarrationFormatContext> Formats);
@@ -1600,13 +1641,44 @@ public static class SpeakableFactFormatter
             NarrationFactType.Location => RegionDisplayResolver.TryResolveDisplay(clean, profile.LanguageCode, out var loc) ? IncRegion(loc, counters) : null,
             NarrationFactType.AngularSeparation => NumberUnitFormatter.Format(clean, string.IsNullOrWhiteSpace(unit) ? "degrees" : unit!, hi),
             NarrationFactType.ObjectName => AstronomyTerminologyResolver.Resolve(clean, profile),
-            NarrationFactType.ScienceMeaning => hi ? "दिखने वाली निकटता पृथ्वी से हमारी दृष्टि-रेखा के कारण होती है" : "the apparent closeness comes from our line of sight on Earth",
+            NarrationFactType.ScienceMeaning => SemanticTermRealizer.Realize(clean, profile),
             NarrationFactType.ObservationGuidance => hi ? "खुले आकाश में शांत होकर देखें" : "watch calmly from an open sky view",
             NarrationFactType.VisibilityCondition => hi ? "साफ आकाश होने पर दृश्य बेहतर होगा" : "clear skies make the view better",
             _ => null
         };
     }
     private static string IncRegion(string value, dynamic counters) { counters.RegionIdsResolved++; return value; }
+}
+
+public interface ISemanticTermRealizer
+{
+    string Realize(string semanticTerm, LanguageProfile profile);
+}
+
+public sealed class DefaultSemanticTermRealizer : ISemanticTermRealizer
+{
+    public string Realize(string semanticTerm, LanguageProfile profile) => SemanticTermRealizer.Realize(semanticTerm, profile);
+}
+
+public static class SemanticTermRealizer
+{
+    private static readonly Dictionary<string, (string En, string Hi)> KnownTerms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["PlanetPairingApparentLineOfSightGeometry"] = ("The planets appear close because they lie along nearly the same line of sight from Earth.", "पृथ्वी से देखने पर दोनों ग्रह लगभग एक ही दृष्टि-रेखा में दिखाई देते हैं, इसलिए वे पास नज़र आते हैं।"),
+        ["ApparentAlignmentExplanation"] = ("This is an apparent alignment from our viewpoint, not a physical meeting in space.", "यह हमारे दृष्टिकोण से दिखने वाला संरेखण है, अंतरिक्ष में वास्तविक मिलन नहीं।"),
+        ["ObservationTiming"] = ("Use the verified observing time for this sky event.", "इस आकाशीय घटना के लिए पुष्ट देखने का समय अपनाएँ।"),
+        ["BinocularGuidance"] = ("Binoculars may add clarity when the verified guidance recommends them.", "जब पुष्ट मार्गदर्शन सुझाव दे, तब दूरबीन दृश्य को थोड़ा साफ कर सकती है।")
+    };
+
+    public static string Realize(string semanticTerm, LanguageProfile profile)
+    {
+        var hi = profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase);
+        var key = (semanticTerm ?? string.Empty).Trim();
+        if (KnownTerms.TryGetValue(key, out var known)) return hi ? known.Hi : known.En;
+        if (Regex.IsMatch(key, @"^[A-Z][A-Za-z0-9]+(?:[A-Z][a-z0-9]+)+$", RegexOptions.CultureInvariant))
+            return hi ? "दिखने वाली निकटता पृथ्वी से हमारी दृष्टि-रेखा और परिप्रेक्ष्य से समझी जाती है।" : "The apparent closeness is explained by line of sight and perspective from Earth.";
+        return hi ? "दिखने वाली निकटता पृथ्वी से हमारी दृष्टि-रेखा के कारण होती है" : "the apparent closeness comes from our line of sight on Earth";
+    }
 }
 
 public static class AstronomyDateTimeLocalizer
@@ -1640,12 +1712,23 @@ public static class AstronomyTerminologyResolver
 
 public static class NumberUnitFormatter
 {
+    public sealed record StructuredMeasurement(decimal NumericValue, int Precision, string Unit, string Qualifier, string LocalizedSpeakableValue);
+
     public static string Format(string value, string unit, bool hi)
     {
-        var m = Regex.Match(value ?? string.Empty, @"\d+(?:\.\d+)?");
-        var number = m.Success ? m.Value : value;
+        return FormatStructured(value, unit, hi).LocalizedSpeakableValue;
+    }
+
+    public static StructuredMeasurement FormatStructured(string value, string unit, bool hi, string qualifier = "about")
+    {
+        var m = Regex.Match(value ?? string.Empty, @"\d+(?:[.]\d+)?", RegexOptions.CultureInvariant);
+        var rawNumber = m.Success ? m.Value : "0";
+        var precision = rawNumber.Contains('.', StringComparison.Ordinal) ? rawNumber.Length - rawNumber.IndexOf('.') - 1 : 0;
+        var number = decimal.TryParse(rawNumber, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0m;
+        var display = precision > 0 ? number.ToString($"F{precision}", CultureInfo.InvariantCulture) : number.ToString("0", CultureInfo.InvariantCulture);
         var u = unit.Contains("degree", StringComparison.OrdinalIgnoreCase) ? (hi ? "डिग्री" : "degrees") : unit;
-        return hi ? $"लगभग {number} {u}" : $"about {number} {u}";
+        var q = hi ? "लगभग" : string.IsNullOrWhiteSpace(qualifier) ? "about" : qualifier;
+        return new(number, precision, u, q, hi ? $"{q} {display} {u}" : $"{q} {display} {u}");
     }
 }
 
@@ -1873,12 +1956,20 @@ public static class SpeakableContextPurityValidator
 public static class GeneratedNarrationValidator
 {
     private static readonly Regex InternalRegionCode = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex PascalCaseSemanticKey = new(@"\b(?:PlanetPairingApparentLineOfSightGeometry|ApparentAlignmentExplanation|ObservationTiming|BinocularGuidance|NarrativeRole|TransitionIntent|FactType|CapabilityId|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,})\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex IncompleteTransition = new(@"\bthrough the\s*[.!?]|\{[A-Za-z0-9_]+\}|<[^>]+>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex FactListFragment = new(@"^(?:[A-Z][a-z]+|[\p{IsDevanagari}]+)(?:,\s*(?:[A-Z][a-z]+|[\p{IsDevanagari}]+))+[.!?।]?$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex PlanningLeakage = new(@"(?:^|[.!?]\s+)(?:Explain why|Use the verified timing|Turn (?:these|this) facts into|Establish the importance|Mention the direction and time)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     public static IReadOnlyList<NarrationPurityFailure> Validate(string narration, string format = "output")
     {
         var failures = new List<NarrationPurityFailure>();
-        Add(InternalRegionCode.Match(narration ?? string.Empty), "InternalRegionCode");
-        Add(PlanningLeakage.Match(narration ?? string.Empty), "PlanningLeakage");
+        var text = narration ?? string.Empty;
+        Add(InternalRegionCode.Match(text), "InternalRegionCode");
+        Add(PascalCaseSemanticKey.Match(text), "PascalCaseSemanticKey");
+        Add(IncompleteTransition.Match(text), "IncompleteTransition");
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?।])\s+").Select(s => s.Trim()))
+            Add(FactListFragment.Match(sentence), "StandaloneFactListFragment");
+        Add(PlanningLeakage.Match(text), "PlanningLeakage");
         return failures;
         void Add(Match m, string rule) { if (m.Success) failures.Add(new NarrationPurityFailure(format, string.Empty, string.Empty, "generatedNarration", rule, m.Value, m.Value, "documentary-script", "narration", "Blocking")); }
     }
@@ -2405,7 +2496,11 @@ public static class LlmDocumentaryTranscriptionist
                 ? BuildHindiRealizedScene(realized.ElementAtOrDefault(index), context, index, orderedContexts.Length, isShort)
                 : BuildEnglishRealizedScene(realized.ElementAtOrDefault(index), context, index, orderedContexts.Length, isShort, outline);
             var facts = context.VerifiedFacts.Select(f => f.Value).ToArray();
-            return new DocumentaryScriptScene(ResolveStableSceneId(format, index), index + 1, SentenceRealizer.Finalize(RemoveAdjacentDuplicateSentences(CleanScript(narration)), isHindi), string.Empty, facts, [], BuildObservationLine(context));
+            var realizedSceneId = realized.ElementAtOrDefault(index)?.SceneId;
+            var sceneId = !string.IsNullOrWhiteSpace(realizedSceneId) && !Regex.IsMatch(realizedSceneId, @"^(?:long|short)-[A-Za-z]+$", RegexOptions.CultureInvariant)
+                ? realizedSceneId!
+                : ResolveStableSceneId(format, index);
+            return new DocumentaryScriptScene(sceneId, index + 1, SentenceRealizer.Finalize(RemoveAdjacentDuplicateSentences(CleanScript(narration)), isHindi), string.Empty, facts, [], BuildObservationLine(context));
         }).ToArray();
         var fullScript = RemoveAdjacentDuplicateSentences(string.Join("\n\n", scenes.Select(s => s.NarrationText)));
         return new DocumentaryScript("AstroPulse-DocumentaryScript-v3", format, title, language, scenes, fullScript);
@@ -2423,7 +2518,7 @@ public static class LlmDocumentaryTranscriptionist
             var role when role.Contains("timing") => CleanScript($"Timing is part of the story only where the evidence supports it. {facts}"),
             var role when role.Contains("science") => CleanScript($"The science gives the view its meaning. {facts} Keep the explanation within the verified boundary: {string.Join(" ", r.ScientificBoundaries.Take(1))}"),
             var role when role.Contains("closing") => CleanScript($"Carry away the wonder, not just the facts. {facts} A small confirmed detail can make the whole sky feel newly readable. Until next time, keep looking up."),
-            _ => CleanScript($"The next idea becomes clearer through the verified details. {facts}")
+            _ => string.IsNullOrWhiteSpace(facts) ? "The verified details carry this beat without adding unsupported claims." : CleanScript(facts)
         };
     }
 
@@ -2438,7 +2533,7 @@ public static class LlmDocumentaryTranscriptionist
             var role when role.Contains("timing") => CleanScript($"समय तभी कहानी का हिस्सा बने, जब तथ्य उसे सहारा दें। {facts}"),
             var role when role.Contains("science") => CleanScript($"विज्ञान इस दृश्य को अर्थ देता है। {facts} बात उतनी ही रखें जितनी पुष्ट सीमा अनुमति देती है।"),
             var role when role.Contains("closing") => CleanScript($"साथ में केवल तथ्य नहीं, आश्चर्य भी ले जाइए। {facts} आकाश की छोटी-सी पुष्टि पूरी रात को नया अर्थ दे सकती है। अगली बार तक, आसमान देखते रहिए।"),
-            _ => CleanScript($"अगला विचार पुष्ट विवरणों से स्पष्ट होता है। {facts}")
+            _ => string.IsNullOrWhiteSpace(facts) ? "यह भाग बिना अपुष्ट दावे जोड़े पुष्ट जानकारी पर टिका रहता है।" : CleanScript(facts)
         };
     }
 
@@ -2678,17 +2773,22 @@ public sealed record LanguageOutputValidation(
     public int UnapprovedEnglishSentenceCount => FullEnglishSentenceCount;
     public string RequestedLanguageCode => RequestedLanguage;
     public string RequestedCulture => RequestedLanguage;
+    public string RequestedLanguageFamily => RequestedLanguage.Split('-')[0];
     public string DetectedLanguageCode => DetectedPrimaryLanguage;
-    public bool LanguageFamilyMatch => string.Equals(RequestedLanguage.Split('-')[0], DetectedPrimaryLanguage.Split('-')[0], StringComparison.OrdinalIgnoreCase);
+    public string DetectedLanguageFamily => DetectedPrimaryLanguage.Split('-')[0];
+    public bool LanguageFamilyMatch => string.Equals(RequestedLanguageFamily, DetectedLanguageFamily, StringComparison.OrdinalIgnoreCase);
     public bool ScriptMatch => RequestedLanguage.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? DetectedScripts.Contains("Devanagari") : DetectedScripts.Contains("Latin") || DetectedScripts.Count == 0;
     public int ComplianceScore => LanguageComplianceScore;
+    public decimal ScriptRatio => RequestedLanguage.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? DevanagariCharacterRatio : LatinCharacterRatio;
+    public int EnglishSentenceCount => FullEnglishSentenceCount;
+    public int MixedSentenceCount => MixedLanguageSentenceCount;
 }
 
 public static class LanguageOutputValidator
 {
     private static readonly string[] EnglishTemplates = ["You are watching a real sky alignment unfold", "Let the timing guide", "The main pattern", "It matters because", "Until next time, keep looking up"];
     private static readonly Regex RawTimestampRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b|\b\d{5,6}\+00:00\b|\+00:00\b|\b\d{1,2}:\d{2}\s*UTC\b|\bUTC\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-    private static readonly Regex InternalIdRegex = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b|\b(?:long|short)-beat-\d+\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex InternalIdRegex = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b|\b(?:long|short)-beat-\d+\b|\b(?:PlanetPairingApparentLineOfSightGeometry|ApparentAlignmentExplanation|ObservationTiming|BinocularGuidance|NarrativeRole|TransitionIntent|FactType|CapabilityId|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,})\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static LanguageOutputValidation Validate(string text, LanguageProfile profile)
     {
