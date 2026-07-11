@@ -11,6 +11,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     public static readonly string[] PromptSections =
     [
         "Your Role",
+        "Output Language",
         "Astro Pulse Editorial Identity",
         "Documentary Outline",
         "Scene Fact Cards",
@@ -47,7 +48,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
             .GroupBy(f => f.FactKey, StringComparer.OrdinalIgnoreCase)
             .Select(g => new NarrationFactV5(g.First().FactKey, g.First().Value))
             .ToArray();
-        var prompt = BuildPrompt(input.NarrationContext, contextFacts);
+        var prompt = BuildPrompt(input.NarrationContext, contextFacts, input.LanguageProfile);
         prompt = new PromptLanguageCleaner().Clean(prompt);
         var sceneCount = input.NarrationContext.Formats.Sum(f => f.Beats.Count);
         var quality = new PromptQualityEvaluator().Evaluate(prompt, sceneCount, input.PromptQualityThreshold);
@@ -62,7 +63,15 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
             PromptSections.Length,
             ProhibitedInternalPhrases,
             missing.Concat(quality.Warnings).ToArray(),
-            missing.Count == 0);
+            missing.Count == 0,
+            input.LanguageProfile is not null,
+            input.LanguageProfile is null ? "missing" : "sections 1 and 4",
+            input.LanguageProfile is not null && prompt.Contains(input.LanguageProfile.DisplayName, StringComparison.OrdinalIgnoreCase),
+            input.LanguageProfile is not null && prompt.Contains(input.LanguageProfile.Culture, StringComparison.OrdinalIgnoreCase),
+            input.LanguageProfile is not null && !input.LanguageProfile.LanguageCode.Equals("en", StringComparison.OrdinalIgnoreCase),
+            false,
+            input.LanguageProfile?.Source ?? "none",
+            input.LanguageProfile?.TerminologySource ?? "none");
 
         return new NarrationPromptComposerOutput(prompt, diagnostics, quality);
     }
@@ -78,15 +87,19 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         return output;
     }
 
-    private static string BuildPrompt(NarrationContextDocument context, IReadOnlyList<NarrationFactV5> facts)
+    private static string BuildPrompt(NarrationContextDocument context, IReadOnlyList<NarrationFactV5> facts, LanguageProfile? languageProfile)
     {
         var sb = new StringBuilder();
         AddSection(sb, 1, "Your Role", "Perform the supplied narration context only. Write narration, not production instructions. Do not expose labels, data formats, internal identifiers, or visual-production language.");
-        AddSection(sb, 2, "Narration Context", FormatNarrationContext(context));
-        AddSection(sb, 3, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, ProhibitedInternalPhrases));
-        AddSection(sb, 4, "Output Contract", new OutputContractSectionBuilder().Build());
+        if (languageProfile is not null) AddSection(sb, 2, "Output Language", BuildLanguageHeader(languageProfile));
+        AddSection(sb, 3, "Narration Context", FormatNarrationContext(context));
+        AddSection(sb, 4, "Scientific Guardrails", new ScientificGuardrailSectionBuilder().Build(facts, ProhibitedInternalPhrases));
+        AddSection(sb, 7, "Output Contract", new OutputContractSectionBuilder().Build() + (languageProfile is null ? string.Empty : "\n\nFinal language constraint: " + languageProfile.OutputInstruction));
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
+
+    private static string BuildLanguageHeader(LanguageProfile profile)
+        => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\n{profile.OutputInstruction}\n\nAll planning fields below may remain in English, but they are private semantic guidance. Convert their meaning into natural {profile.DisplayName} narration. Do not copy English planning sentences into the output.\n\nTerminology policy: {string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}"))}";
 
     private static string FormatNarrationContext(NarrationContextDocument context)
         => string.Join("\n\n", context.Formats.Select(format => $"Format: {format.Format}\n" + string.Join("\n", format.Beats.Select((beat, index) =>
@@ -161,6 +174,6 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
-public sealed record NarrationPromptComposerInput(NarrationContextDocument NarrationContext, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, string PromptQualityPath = "", int PromptQualityThreshold = 80);
+public sealed record NarrationPromptComposerInput(NarrationContextDocument NarrationContext, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, string PromptQualityPath = "", int PromptQualityThreshold = 80, LanguageProfile? LanguageProfile = null);
 public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown, NarrationPromptDiagnostics Diagnostics, PromptQualityContract PromptQuality);
-public sealed record NarrationPromptDiagnostics(string ComposerName, string OrchestrationVersion, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, int SceneCount, int PromptSectionCount, IReadOnlyList<string> ProhibitedInternalPhraseList, IReadOnlyList<string> MissingInputWarnings, bool ReadyForGeneration);
+public sealed record NarrationPromptDiagnostics(string ComposerName, string OrchestrationVersion, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, int SceneCount, int PromptSectionCount, IReadOnlyList<string> ProhibitedInternalPhraseList, IReadOnlyList<string> MissingInputWarnings, bool ReadyForGeneration, bool LanguageInstructionPresent, string LanguageInstructionLocation, bool RequestedLanguageIncludedInSystemPrompt, bool RequestedLanguageIncludedInUserPrompt, bool LanguageExamplesUsed, bool EnglishDominatingExamplesDetected, string LanguageProfileSource, string TerminologyProfileSource);
