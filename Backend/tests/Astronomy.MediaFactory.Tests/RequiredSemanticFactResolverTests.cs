@@ -21,7 +21,7 @@ public sealed class RequiredSemanticFactResolverTests
     public void FactAbsentInContractFallsBackToEventIntelligence()
     {
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\"}"), eventIntel: Json("{\"eventType\":\"Planetary conjunction\"}"));
-        Assert.Contains(result.Beats[0].RequiredFacts, f => f.FactType == "EventType" && f.SourceArtifact == "Production Event Intelligence");
+        Assert.Contains(result.Beats[0].RequiredFacts, f => f.FactType == "EventIdentity" && f.SourceArtifact == "Production Event Intelligence");
     }
 
     [Fact]
@@ -74,7 +74,22 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Timing", "{\"PrimaryObjects\":\"Mars and Jupiter\"}"));
         Assert.True(result.Blocking);
-        Assert.Contains("EventDateOrWindow", result.Beats[0].MissingRequiredFacts);
+        Assert.Contains("ObservationTiming", result.Beats[0].MissingRequiredFacts);
+    }
+
+    [Theory]
+    [InlineData("{\"localPeakTime\":\"before dawn on November 16, around 5:30 AM\"}", "Production Event Intelligence", "localPeakTime")]
+    [InlineData("{\"bestViewingWindowLocal\":\"2026-11-16 04:30–06:00 IST\"}", "Production Event Intelligence", "bestViewingWindowLocal")]
+    [InlineData("{\"peakUtc\":\"2026-11-16T00:00:00Z\"}", "Production Event Intelligence", "peakUtc")]
+    public void ObservationTimingResolvesFromSemanticAlternatives(string eventIntelJson, string expectedSource, string expectedField)
+    {
+        var result = Resolve(LongWithBeat("Timing", "{}"), eventIntel: Json(eventIntelJson));
+
+        Assert.False(result.Blocking);
+        var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ObservationTiming");
+        Assert.Equal(expectedSource, fact.SourceArtifact);
+        Assert.Contains(expectedField, fact.SourceField);
+        Assert.DoesNotContain("ViewingWindow", result.Beats[0].MissingRequiredFacts);
     }
 
     [Fact]
@@ -107,7 +122,7 @@ public sealed class RequiredSemanticFactResolverTests
     public void ConflictingAngularSeparationSelectsAuthorityAndWarns()
     {
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\",\"AngularSeparation\":{\"value\":\"1.19\",\"unit\":\"degrees\"}}"), observation: Json("{\"angularSeparation\":\"1.25\"}"));
-        Assert.Contains(result.Beats[0].Conflicts, c => c.FactType == "AngularSeparation");
+        Assert.Contains(result.Beats[0].Conflicts, c => c.FactType == "AngularRelationship");
     }
 
     [Fact]
@@ -116,8 +131,8 @@ public sealed class RequiredSemanticFactResolverTests
         var longC = LongWithBeat("Orientation", "{\"Direction\":\"SE\",\"Region\":\"Udaipur, Rajasthan\"}");
         var shortC = ShortWithBeat("Orientation", "{\"Direction\":\"SE\"}");
         var result = Resolve(longC, shortC);
-        Assert.Contains(result.Beats, b => b.Format == "long" && b.RequiredFacts.Any(f => f.FactType == "Region"));
-        Assert.Contains(result.Beats, b => b.Format == "short" && !b.RequiredFacts.Any(f => f.FactType == "Region"));
+        Assert.Contains(result.Beats, b => b.Format == "long" && b.RequiredFacts.Any(f => f.FactType == "LocationContext"));
+        Assert.Contains(result.Beats, b => b.Format == "short" && !b.RequiredFacts.Any(f => f.FactType == "LocationContext"));
     }
 
     [Fact]
@@ -154,7 +169,7 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Timing", "{}"));
         var issues = RequiredSemanticFactPhase7Validator.Validate(result).Concat(RequiredSemanticFactPhase7Validator.Validate(result)).DistinctBy(i => (i.Format, i.SceneId, i.BeatRole, i.Field)).ToArray();
-        Assert.Single(issues.Where(i => i.Format == "long" && i.Field == "EventDateOrWindow"));
+        Assert.Single(issues.Where(i => i.Format == "long" && i.Field == "ObservationTiming"));
     }
 
     [Fact]
