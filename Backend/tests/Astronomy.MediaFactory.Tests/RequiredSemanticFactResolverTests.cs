@@ -98,6 +98,20 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
         Assert.False(result.Blocking);
         Assert.Contains("BinocularGuidance", result.Beats[0].OmittedOptionalFacts);
+        var binocular = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "ObservationMode");
+        Assert.Null(binocular.SelectedSource);
+        Assert.Contains(binocular.RejectedSources, r => r.Reason == "SourceValueMissing");
+    }
+
+    [Fact]
+    public void GenericDomainKnowledgeDoesNotCreateEventSpecificEquipmentClaims()
+    {
+        var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
+        var text = JsonSerializer.Serialize(result.Diagnostics);
+        Assert.DoesNotContain("magnification", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("surface detail", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("planetary disk", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("guaranteed visibility", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -63,6 +63,58 @@ public sealed class SemanticCapabilityArchitectureTests
         Assert.DoesNotContain("new NarrationRealizer", source);
     }
 
+
+    [Fact]
+    public void BinocularGuidanceIsClassifiedAsObservationModeAlias()
+    {
+        var catalog = new SemanticCapabilityCatalog();
+        Assert.True(catalog.TryGet("BinocularGuidance", out var definition));
+        Assert.Equal("ObservationMode", definition.CapabilityId);
+        Assert.Contains("BinocularGuidance", definition.AcceptedAliases);
+        Assert.DoesNotContain(catalog.Capabilities, c => c.CapabilityId == "BinocularGuidance");
+    }
+
+    [Fact]
+    public void PlanetPairingCoverageEnumeratesFormatsRolesAndHasNoZeroPathCapabilities()
+    {
+        var catalog = new SemanticCapabilityCatalog();
+        var registry = new SemanticCapabilitySourceRegistry(catalog);
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"PlanetPairing\"}"), null);
+
+        var rows = registry.ValidateCoverageDetailed([profile]);
+
+        Assert.Contains(rows, r => r.FamilyProfile == "PlanetPairing" && r.Format == "long" && r.BeatRole == "Observation" && r.Capability == "ObservationTiming" && r.Required);
+        Assert.Contains(rows, r => r.Capability == "BinocularGuidance" && !r.Required && r.CatalogRegistrationFound && r.ResolutionPathValid);
+        Assert.Empty(rows.Where(r => r.Required && !r.ResolutionPathValid));
+        Assert.Empty(rows.Where(r => r.CatalogRegistrationFound && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0));
+    }
+
+    [Fact]
+    public void RequiredCapabilityWithNoResolutionPathFailsCoverageAndAllInvalidsAreReportedTogether()
+    {
+        var catalog = new SemanticCapabilityCatalog();
+        var registry = new SemanticCapabilitySourceRegistry(catalog);
+        var profile = new AstronomyFamilyProfile("Synthetic", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["MissingRequiredA", "MissingRequiredB"], [], ["Hook"], ["Hook"], "", "", [], [], []);
+
+        var rows = registry.ValidateCoverageDetailed([profile]).Where(r => !r.ResolutionPathValid).ToArray();
+
+        Assert.Contains(rows, r => r.Capability == "MissingRequiredA" && r.FailureReason == "CatalogRegistrationMissing");
+        Assert.Contains(rows, r => r.Capability == "MissingRequiredB" && r.FailureReason == "CatalogRegistrationMissing");
+        Assert.True(rows.Length >= 2);
+    }
+
+    [Fact]
+    public void SemanticSourceContainsNoMarsJupiterOrTitleSpecificResolverConditions()
+    {
+        var root = Path.Combine("..", "..", "..", "..", "src", "Astronomy.MediaFactory.Infrastructure");
+        var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(f => f.Contains(Path.Combine("Narration")) || f.Contains(Path.Combine("Orchestration", "RC2")))
+            .ToArray();
+        var source = string.Join("\n", files.Select(File.ReadAllText));
+        Assert.DoesNotContain("Mars and Jupiter", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Close Pairing", source, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ISemanticCapabilityResolver BuildResolver()
     {
         var catalog = new SemanticCapabilityCatalog();

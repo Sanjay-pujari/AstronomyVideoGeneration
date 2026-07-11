@@ -190,6 +190,24 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             productionEventIntelligence,
             observationMetadata));
         var familyProfile = familyProfileResolution.Profile;
+        var semanticRegistryValidationReportPath = Path.Combine(narrationRoot, "semantic-registry-validation-report.json");
+        var semanticRegistryCoverage = SemanticDefaults.SemanticCapabilitySourceRegistry.ValidateCoverageDetailed([familyProfile]);
+        var invalidSemanticRegistrations = semanticRegistryCoverage.Where(r => !r.ResolutionPathValid).Select(r => new
+        {
+            familyProfile = r.FamilyProfile,
+            format = r.Format,
+            beatRole = r.BeatRole,
+            capabilityId = r.Capability,
+            required = r.Required,
+            catalogRegistrationFound = r.CatalogRegistrationFound,
+            registeredAdapterIds = r.RegisteredAdapterIds,
+            approvedDerivationRuleIds = r.ApprovedDerivationRuleIds,
+            approvedDomainProviderIds = r.ApprovedDomainProviderIds,
+            failureReason = r.FailureReason
+        }).ToArray();
+        await WriteAllTextUtf8Async(semanticRegistryValidationReportPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, coverage = semanticRegistryCoverage, invalidCapabilities = invalidSemanticRegistrations }, JsonOptions), cancellationToken);
+        if (invalidSemanticRegistrations.Length > 0)
+            throw new InvalidOperationException("Semantic registry validation failed: " + string.Join("; ", invalidSemanticRegistrations.Select(i => $"FamilyProfile={i.familyProfile}, Format={i.format}, BeatRole={i.beatRole}, Capability={i.capabilityId}, Required={i.required}, FailureReason={i.failureReason}")));
         var semanticResolution = requiredSemanticFactResolver.Resolve(new RequiredSemanticFactResolutionInput(
             familyProfile,
             longDocumentaryContract,

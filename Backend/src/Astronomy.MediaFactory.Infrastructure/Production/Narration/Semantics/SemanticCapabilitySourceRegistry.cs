@@ -20,18 +20,34 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
     }
     public IReadOnlyList<string> ValidateCoverage(IEnumerable<AstronomyFamilyProfile> familyProfiles)
     {
+        return ValidateCoverageDetailed(familyProfiles)
+            .Where(r => !r.ResolutionPathValid)
+            .Select(r => $"Capability registration invalid:\nFamilyProfile = {r.FamilyProfile}\nFormat = {r.Format}\nBeatRole = {r.BeatRole}\nCapability = {r.Capability}\nRequired = {r.Required}\nCatalogRegistrationFound = {r.CatalogRegistrationFound}\nRegisteredAdapters = {r.RegisteredAdapterIds.Count}\nDerivedRules = {r.ApprovedDerivationRuleIds.Count}\nDomainProviders = {r.ApprovedDomainProviderIds.Count}")
+            .ToArray();
+    }
+
+    public IReadOnlyList<SemanticCapabilityCoverageRecord> ValidateCoverageDetailed(IEnumerable<AstronomyFamilyProfile> familyProfiles)
+    {
         Validate();
-        var errors = new List<string>();
+        var rows = new List<SemanticCapabilityCoverageRecord>();
         foreach (var p in familyProfiles)
+        foreach (var format in new[] { "long", "short" })
         foreach (var role in p.AllowedBeatRoles)
-        foreach (var cap in p.RequiredFactTypes.Concat(RequiredForBeat(p, role, "long")).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (!catalog.TryGet(cap, out var def)) { errors.Add($"Capability registration invalid:\nFamilyProfile = {p.FamilyId}\nBeatRole = {role}\nCapability = {cap}\nRegisteredAdapters = 0\nDerivedRules = 0\nDomainProviders = 0"); continue; }
-            var registered = GetAdapters(cap).Count;
-            if (registered == 0 && def.ApprovedDerivationRuleIds.Count == 0 && def.ApprovedDomainKnowledgeFactTypes.Count == 0)
-                errors.Add($"Capability registration invalid:\nFamilyProfile = {p.FamilyId}\nBeatRole = {role}\nCapability = {cap}\nRegisteredAdapters = 0\nDerivedRules = 0\nDomainProviders = 0");
+            var required = p.RequiredFactTypes.Concat(RequiredForBeat(p, role, format)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var optional = p.OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase).Except(required, StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var cap in required.Select(c => (Capability: c, Required: true)).Concat(optional.Select(c => (Capability: c, Required: false))))
+            {
+                var found = catalog.TryGet(cap.Capability, out var def);
+                var adapters = found ? GetAdapters(cap.Capability).Select(a => a.AdapterId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : [];
+                var rules = found ? def!.ApprovedDerivationRuleIds : [];
+                var domain = found ? def!.ApprovedDomainKnowledgeFactTypes : [];
+                var hasPath = found && (adapters.Length > 0 || rules.Count > 0 || domain.Count > 0);
+                var valid = !cap.Required || hasPath;
+                rows.Add(new(p.FamilyId, format, role, cap.Capability, cap.Required, found, adapters, rules, domain, valid, valid ? null : !found ? "CatalogRegistrationMissing" : "NoResolutionPath"));
+            }
         }
-        return errors;
+        return rows;
     }
     private static IEnumerable<string> RequiredForBeat(AstronomyFamilyProfile p, string role, string format)
     {
