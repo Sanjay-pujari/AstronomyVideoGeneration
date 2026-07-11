@@ -9,7 +9,9 @@ public sealed class SemanticCapabilityCatalog : ISemanticCapabilityCatalog
     {
         Capabilities = Build().ToArray();
         Validate();
-        _byId = Capabilities.ToDictionary(c => c.CapabilityId, StringComparer.OrdinalIgnoreCase);
+        _byId = Capabilities.SelectMany(c => c.AcceptedAliases.Append(c.CapabilityId).Distinct(StringComparer.OrdinalIgnoreCase).Select(a => new { Alias = canonical(a), Definition = c }))
+            .GroupBy(x => x.Alias, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.FirstOrDefault(x => x.Alias.Equals(x.Definition.CapabilityId, StringComparison.OrdinalIgnoreCase))?.Definition ?? g.First().Definition, StringComparer.OrdinalIgnoreCase);
     }
     public IReadOnlyList<SemanticCapabilityDefinition> Capabilities { get; }
     public bool TryGet(string capabilityId, out SemanticCapabilityDefinition definition) => _byId.TryGetValue(canonical(capabilityId), out definition!);

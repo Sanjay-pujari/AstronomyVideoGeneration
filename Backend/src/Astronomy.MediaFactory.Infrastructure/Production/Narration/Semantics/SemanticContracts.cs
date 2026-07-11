@@ -16,6 +16,7 @@ public interface ISemanticCapabilitySourceRegistry
     IReadOnlyList<ISemanticCapabilitySourceAdapter> Adapters { get; }
     IReadOnlyList<ISemanticCapabilitySourceAdapter> GetAdapters(string capabilityId);
     IReadOnlyList<string> ValidateCoverage(IEnumerable<AstronomyFamilyProfile> familyProfiles);
+    IReadOnlyList<SemanticCapabilityCoverageRecord> ValidateCoverageDetailed(IEnumerable<AstronomyFamilyProfile> familyProfiles);
     void Validate();
 }
 
@@ -39,3 +40,5 @@ public interface ISemanticCapabilityResolver
 
 public sealed record SemanticCapabilityDefinition(string CapabilityId, IReadOnlyList<string> AcceptedAliases, int MinimumStrength, string Strictness, bool Localizable, bool Narratable, IReadOnlyList<string> ApprovedSourceAdapterIds, IReadOnlyList<string> ApprovedDerivationRuleIds, IReadOnlyList<string> ApprovedDomainKnowledgeFactTypes);
 public sealed record SemanticCapabilitySourceContext(string? FamilyProfileId, string? Format, JsonElement? ProductionRequest, JsonElement? LongDocumentaryContract, JsonElement? ShortDocumentaryContract, JsonElement? EditorialContract, JsonElement? StoryGraph, JsonElement? ProductionEventIntelligence, JsonElement? ObservationMetadata, JsonElement? QuestionAnswerSet);
+
+public sealed record SemanticCapabilityCoverageRecord(string FamilyProfile, string Format, string BeatRole, string Capability, bool Required, bool CatalogRegistrationFound, IReadOnlyList<string> RegisteredAdapterIds, IReadOnlyList<string> ApprovedDerivationRuleIds, IReadOnlyList<string> ApprovedDomainProviderIds, bool ResolutionPathValid, string? FailureReason);
