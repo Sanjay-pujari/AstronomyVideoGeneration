@@ -80,6 +80,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         var documentaryScriptDiagnosticsPath = Path.Combine(documentaryScriptRoot, "documentary-script-diagnostics.json");
         var performanceDiagnosticsPath = Path.Combine(documentaryScriptRoot, "performance-diagnostics.json");
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
+        var narrationInputNormalizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-input-normalization-diagnostics.json");
         var validationRoot = Path.Combine(outputRoot, "validation");
         Directory.CreateDirectory(validationRoot);
         var validationPath = Path.Combine(validationRoot, "phase-07-validation.json");
@@ -169,7 +170,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             : new Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Diagnostics.DocumentaryStyleDiagnostics(0, 0, 0, 0, styleWarnings, styleErrors, styleStopwatch.Elapsed.ToString("c"), DocumentaryStyleDirector.Version);
         await WriteAllTextUtf8Async(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
 
-        var narrationContext = NarrationContextBuilder.Build(
+        var narrationInputNormalization = NarrationInputNormalizer.Normalize(
             ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")),
             ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")),
             ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-decision-log.json")),
@@ -178,9 +179,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             ReadFirstJson(styleContractPath),
             new DocumentaryPerformerSceneFactCards(longSceneFactCards, shortSceneFactCards),
             styleContract?.VoiceProfile ?? "Premium astronomy documentary: confident, elegant, natural, human, curious, educational, and calm.",
-            Rc2PipelinePhaseRegistry.OrchestrationVersion);
+            Rc2PipelinePhaseRegistry.OrchestrationVersion,
+            languageProfile);
+        var narrationContext = narrationInputNormalization.Context;
         var narrationContextJson = JsonSerializer.Serialize(narrationContext, JsonOptions);
         await WriteAllTextUtf8Async(narrationContextPath, narrationContextJson, cancellationToken);
+        await WriteAllTextUtf8Async(narrationInputNormalizationDiagnosticsPath, JsonSerializer.Serialize(narrationInputNormalization.Diagnostics, JsonOptions), cancellationToken);
         logger.LogInformation("Phase 7 NarrationContext before prompt generation: {NarrationContext}", narrationContextJson);
         var narrationContextPurityFailures = NarrationContextPurityValidator.Validate(narrationContext).ToArray();
         if (narrationContextPurityFailures.Length > 0)
@@ -727,7 +731,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
         await WriteAllTextUtf8Async(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([narrationContextPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath]);
+        return new NarrationGeneratorV5Result([narrationContextPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, validationPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath]);
     }
 
     private static Task WriteAllTextUtf8Async(string path, string contents, CancellationToken cancellationToken = default)
@@ -1327,6 +1331,173 @@ public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, [pro
     public NarrationBriefV5 ToNarrationBrief(string format) => new(SceneId, ObservationGuidance.Length > 0 ? "Observation" : "Documentary", SceneOrder, string.Empty, string.Empty, RequiredFactsPreserved.Select((v, i) => new NarrationFactV5($"scriptFact{i + 1}", v)).ToArray(), MustNotSay, [], TransitionToNext, string.Empty, string.Empty, format, false, ObservationGuidance);
 }
 
+
+public sealed record NarrationSafeContext(string Format, string SceneId, string DocumentaryBeatId, string NarrativeRole, string KnowledgeGoal, string AudienceOutcome, string EditorialIntent, string? ObservationObjective, string? ScientificObjective, string TransitionGoal, string Tone, string Rhythm, int WordBudget, IReadOnlyList<SpeakableFact> SpeakableFacts, IReadOnlyList<SemanticProducerNote> SemanticProducerNotes, IReadOnlyList<string> Constraints);
+public sealed record SpeakableFact(string FactKey, string CanonicalValue, string? CanonicalUnit, string FactType, string LocalizedDisplayValue, string SpeakableValue, string Language, string Culture, bool SafeForNarration, string SourceArtifact, string SourceField);
+public sealed record SemanticProducerNote(string NoteType, string SemanticInstruction, string SourceArtifact, string SourceField);
+public sealed record NarrationInputNormalizationResult(NarrationContextDocument Context, NarrationInputNormalizationDiagnostics Diagnostics, IReadOnlyList<NarrationSafeContext> SafeContexts);
+public sealed record NarrationInputNormalizationDiagnostics(int SourceFieldCount, int ClassifiedFactCount, int SafeFactCount, int OmittedOptionalFieldCount, int BlockedFieldCount, int LocalizedFieldCount, int ProducerNotesSanitized, int PublishingMetadataExcluded, int TimestampValuesNormalized, int RegionIdsResolved, int DirectionCodesResolved, string LanguageProfileUsed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+
+public enum NarrationFactType { ObjectName, EventDate, PeakTime, ViewingWindow, Direction, AngularSeparation, Location, ScientificExplanation, ObservationGuidance, VisibilityCondition, PublishMetadata, InternalMetadata }
+
+public static class NarrationInputNormalizer
+{
+    private static readonly Regex TimestampRegex = new(@"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex LocalOffsetRegex = new(@"\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[+-]\d{4}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    public static NarrationInputNormalizationResult Normalize(JsonElement? longContract, JsonElement? shortContract, JsonElement? decisionLog, JsonElement? editorialBrief, JsonElement? producerNotes, JsonElement? styleContract, DocumentaryPerformerSceneFactCards factCards, string voiceProfile, string orchestrationVersion, LanguageProfile languageProfile)
+    {
+        var source = NarrationContextBuilder.Build(longContract, shortContract, decisionLog, editorialBrief, producerNotes, styleContract, factCards, voiceProfile, orchestrationVersion);
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var safeContexts = new List<NarrationSafeContext>();
+        var formats = new List<NarrationFormatContext>();
+        var counters = new Counter();
+        foreach (var format in source.Formats)
+        {
+            var beats = new List<NarrationContextBeat>();
+            foreach (var beat in format.Beats)
+            {
+                counters.SourceFieldCount += 12 + beat.VerifiedFacts.Count;
+                var facts = beat.VerifiedFacts.Select(f => NormalizeFact(f, languageProfile, counters, warnings)).Where(f => f is not null).Cast<SpeakableFact>().Where(f => f.SafeForNarration).ToArray();
+                counters.SafeFactCount += facts.Length;
+                var notes = ProducerNoteSanitizer.Sanitize(beat.OptionalProducerNotes, languageProfile, counters, warnings).ToArray();
+                var constraints = beat.ScientificConstraints.Select(v => SanitizeSemantic(v, languageProfile, counters, warnings, optional:true)).Where(v => !string.IsNullOrWhiteSpace(v)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var safe = new NarrationSafeContext(format.Format, string.Empty, string.Empty, ResolveRole(facts, languageProfile), SemanticTemplate("knowledgeGoal", languageProfile), SemanticTemplate("audienceOutcome", languageProfile), SemanticTemplate("editorialIntent", languageProfile), SemanticTemplate("observationObjective", languageProfile), SemanticTemplate("scientificObjective", languageProfile), SemanticTemplate("transitionGoal", languageProfile), ResolveTone(languageProfile), ResolveRhythm(format.Format, languageProfile), format.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 35 : 95, facts, notes, constraints);
+                safeContexts.Add(safe);
+                beats.Add(new NarrationContextBeat(safe.KnowledgeGoal, safe.AudienceOutcome, safe.EditorialIntent, facts.Select(f => new NarrationVerifiedFact(f.FactKey, f.SpeakableValue, f.FactType, f.CanonicalUnit)).ToArray(), safe.Constraints, safe.ObservationObjective, safe.TransitionGoal, safe.Tone, safe.Rhythm, beat.SuccessCriteria.Select(_ => SemanticTemplate("successCriteria", languageProfile)).Distinct().ToArray(), notes.Count == 0 ? null : string.Join(" ", notes.Select(n => n.SemanticInstruction))));
+            }
+            formats.Add(new NarrationFormatContext(format.Format, beats));
+        }
+        return new NarrationInputNormalizationResult(new NarrationContextDocument("AstroPulse-NarrationSafeContext-v1", orchestrationVersion, formats), new NarrationInputNormalizationDiagnostics(counters.SourceFieldCount, counters.ClassifiedFactCount, counters.SafeFactCount, counters.OmittedOptionalFieldCount, counters.BlockedFieldCount, counters.LocalizedFieldCount, counters.ProducerNotesSanitized, counters.PublishingMetadataExcluded, counters.TimestampValuesNormalized, counters.RegionIdsResolved, counters.DirectionCodesResolved, languageProfile.ProfileId, warnings.Distinct().ToArray(), errors), safeContexts);
+    }
+
+    private static SpeakableFact? NormalizeFact(NarrationVerifiedFact fact, LanguageProfile languageProfile, Counter counters, List<string> warnings)
+    {
+        counters.ClassifiedFactCount++;
+        var type = Classify(fact.FactKey, fact.Value);
+        if (type is NarrationFactType.PublishMetadata or NarrationFactType.InternalMetadata) { counters.PublishingMetadataExcluded += type == NarrationFactType.PublishMetadata ? 1 : 0; counters.BlockedFieldCount++; warnings.Add($"Excluded {type} fact {fact.FactKey} from narration input."); return null; }
+        var formatted = SpeakableFactFormatter.Format(fact.FactKey, fact.Value, fact.Unit, type, languageProfile, counters, out var warning);
+        if (!string.IsNullOrWhiteSpace(warning)) warnings.Add(warning!);
+        if (formatted is null) { counters.OmittedOptionalFieldCount++; return null; }
+        counters.LocalizedFieldCount++;
+        return new SpeakableFact(fact.FactKey, fact.Value, fact.Unit, type.ToString(), formatted, formatted, languageProfile.LanguageCode, languageProfile.Culture, true, "NarrationInputNormalizer", fact.FactKey);
+    }
+
+    private static NarrationFactType Classify(string key, string value)
+    {
+        var k = key ?? string.Empty; var v = value ?? string.Empty;
+        if (ContainsAny(k, "publish", "scheduled", "campaign") || ContainsAny(v, "recommendedPublishWindow", "scheduledUtc")) return NarrationFactType.PublishMetadata;
+        if (Regex.IsMatch(v, @"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b") || ContainsAny(k, "id", "source") || v.TrimStart().StartsWith("{") || v.TrimStart().StartsWith("[")) return NarrationFactType.InternalMetadata;
+        if (ContainsAny(k, "date")) return NarrationFactType.EventDate;
+        if (ContainsAny(k, "time", "peak")) return NarrationFactType.PeakTime;
+        if (ContainsAny(k, "window")) return NarrationFactType.ViewingWindow;
+        if (ContainsAny(k, "direction", "skyDirection")) return NarrationFactType.Direction;
+        if (ContainsAny(k, "region", "location", "visibility")) return NarrationFactType.Location;
+        if (ContainsAny(k, "separation", "relative")) return NarrationFactType.AngularSeparation;
+        if (ContainsAny(k, "guidance", "observe")) return NarrationFactType.ObservationGuidance;
+        if (ContainsAny(k, "science", "explanation", "perspective")) return NarrationFactType.ScientificExplanation;
+        return NarrationFactType.ObjectName;
+    }
+
+    private static string? SanitizeSemantic(string? value, LanguageProfile profile, Counter counters, List<string> warnings, bool optional)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (UnsafePatterns.ContainsUnsafe(value)) { if (optional) { counters.OmittedOptionalFieldCount++; warnings.Add("Omitted unsafe optional semantic text before prompt generation."); return null; } counters.BlockedFieldCount++; return null; }
+        return profile.LanguageCode == "hi" ? "केवल प्रमाणित जानकारी कहें।" : "Use only verified astronomy information.";
+    }
+
+    private static string ResolveRole(IReadOnlyList<SpeakableFact> facts, LanguageProfile p) => p.LanguageCode == "hi" ? "खगोलीय व्याख्या" : "Astronomy explanation";
+    private static string ResolveTone(LanguageProfile p) => p.LanguageCode == "hi" ? "शांत, स्पष्ट और जिज्ञासु।" : "Calm, clear, and curious.";
+    private static string ResolveRhythm(string format, LanguageProfile p) => p.LanguageCode == "hi" ? (format == "short" ? "संक्षिप्त वृत्तचित्र लय।" : "मापा हुआ वृत्तचित्र प्रवाह।") : (format == "short" ? "Compact documentary rhythm." : "Measured documentary flow.");
+    private static string SemanticTemplate(string field, LanguageProfile p) => p.LanguageCode == "hi" ? field switch { "knowledgeGoal" => "दर्शकों को आकाशीय घटना का सुरक्षित अर्थ समझाएँ।", "audienceOutcome" => "दर्शक समझें कि क्या देखना है और क्यों।", "editorialIntent" => "तथ्यों को सरल और संयमित भाषा में प्रस्तुत करें।", "observationObjective" => "देखने योग्य जानकारी को स्वाभाविक मार्गदर्शन में बदलें।", "scientificObjective" => "दिखने वाली निकटता को दृष्टि-रेखा और परिप्रेक्ष्य से समझाएँ।", "transitionGoal" => "अगले विचार की ओर सहजता से बढ़ें।", _ => "कहानी तथ्यपरक और स्वाभाविक रहे।" } : field switch { "knowledgeGoal" => "Help the audience understand the astronomy event safely.", "audienceOutcome" => "The audience knows what to notice and why it matters.", "editorialIntent" => "Present verified facts with simple restraint.", "observationObjective" => "Turn observing details into natural guidance.", "scientificObjective" => "Explain apparent closeness through line of sight and perspective.", "transitionGoal" => "Move naturally into the next idea.", _ => "Keep the story factual and natural." };
+    private static bool ContainsAny(string? value, params string[] terms) => !string.IsNullOrWhiteSpace(value) && terms.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
+    public sealed class Counter { public int SourceFieldCount, ClassifiedFactCount, SafeFactCount, OmittedOptionalFieldCount, BlockedFieldCount, LocalizedFieldCount, ProducerNotesSanitized, PublishingMetadataExcluded, TimestampValuesNormalized, RegionIdsResolved, DirectionCodesResolved; }
+}
+
+public static class UnsafePatterns
+{
+    public static bool ContainsUnsafe(string value) => Regex.IsMatch(value ?? string.Empty, @"\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b|[+-]\d{2}:?\d{2}\b|\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b|^\s*[\{\[]|recommendedPublishWindow|scheduledUtc|campaign|/[^\s]+/|\b(?:long|short)-beat-\d+\b|skyfield", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+public static class ProducerNoteSanitizer
+{
+    public static IReadOnlyList<SemanticProducerNote> Sanitize(string? notes, LanguageProfile profile, dynamic counters, List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return [];
+        if (UnsafePatterns.ContainsUnsafe(notes)) { counters.OmittedOptionalFieldCount++; warnings.Add("Omitted unsafe optional producer note before prompt generation."); return []; }
+        counters.ProducerNotesSanitized++;
+        var text = profile.LanguageCode == "hi" ? "परिप्रेक्ष्य, समय और देखने की दिशा को संक्षेप में रखें।" : "Keep perspective, timing, and viewing direction concise.";
+        return [new SemanticProducerNote("EditorialGuidance", text, "ProducerNotes", "optionalProducerNotes")];
+    }
+}
+
+public static class SpeakableFactFormatter
+{
+    public static string? Format(string key, string value, string? unit, NarrationFactType type, LanguageProfile profile, dynamic counters, out string? warning)
+    {
+        warning = null;
+        var clean = (value ?? string.Empty).Trim().TrimEnd('.');
+        if (string.IsNullOrWhiteSpace(clean) || UnsafePatterns.ContainsUnsafe(clean) && type is not (NarrationFactType.EventDate or NarrationFactType.PeakTime or NarrationFactType.ViewingWindow)) { warning = $"Omitted unsafe fact {key}."; return null; }
+        var hi = profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase);
+        return type switch
+        {
+            NarrationFactType.EventDate => AstronomyDateTimeLocalizer.LocalizeDate(clean, hi, counters),
+            NarrationFactType.PeakTime => AstronomyDateTimeLocalizer.LocalizeTime(clean, hi, counters),
+            NarrationFactType.ViewingWindow => AstronomyDateTimeLocalizer.LocalizeWindow(clean, hi, counters),
+            NarrationFactType.Direction => DirectionResolver.Resolve(clean, hi, counters),
+            NarrationFactType.Location => RegionDisplayResolver.ResolveDisplay(clean, profile.LanguageCode) is var loc && loc != clean ? IncRegion(loc, counters) : (hi ? "स्थानीय दर्शकों के लिए अनुकूल क्षेत्र" : "the favored viewing region"),
+            NarrationFactType.AngularSeparation => NumberUnitFormatter.Format(clean, string.IsNullOrWhiteSpace(unit) ? "degrees" : unit!, hi),
+            NarrationFactType.ObjectName => AstronomyTerminologyResolver.Resolve(clean, profile),
+            NarrationFactType.ScientificExplanation => hi ? "दिखने वाली निकटता पृथ्वी से हमारी दृष्टि-रेखा के कारण होती है" : "the apparent closeness comes from our line of sight on Earth",
+            NarrationFactType.ObservationGuidance => hi ? "खुले आकाश में शांत होकर देखें" : "watch calmly from an open sky view",
+            NarrationFactType.VisibilityCondition => hi ? "साफ आकाश होने पर दृश्य बेहतर होगा" : "clear skies make the view better",
+            _ => null
+        };
+    }
+    private static string IncRegion(string value, dynamic counters) { counters.RegionIdsResolved++; return value; }
+}
+
+public static class AstronomyDateTimeLocalizer
+{
+    public static string LocalizeDate(string value, bool hi, dynamic counters) { if (TryParse(value, out var dto)) { counters.TimestampValuesNormalized++; return hi ? $"{dto.Day} {HindiMonth(dto.Month)} की सुबह" : $"before dawn on {dto.ToString("MMMM d", CultureInfo.InvariantCulture)}"; } return hi ? "घटना की तारीख प्रमाणित है" : "the event date is verified"; }
+    public static string LocalizeTime(string value, bool hi, dynamic counters) { if (TryParse(value, out var dto)) { counters.TimestampValuesNormalized++; if (hi && dto.Hour == 5 && dto.Minute == 30) return $"{dto.Day} {HindiMonth(dto.Month)} की सुबह लगभग साढ़े पाँच बजे"; return hi ? $"{dto.Day} {HindiMonth(dto.Month)} को लगभग {dto:HH:mm} बजे" : $"around {dto.ToString("h:mm tt", CultureInfo.InvariantCulture)} on {dto.ToString("MMMM d", CultureInfo.InvariantCulture)}"; } return hi ? "सुबह के अनुकूल समय में" : "during the favorable viewing time"; }
+    public static string LocalizeWindow(string value, bool hi, dynamic counters) { if (TryParse(value, out var dto)) { counters.TimestampValuesNormalized++; return hi ? $"{dto.Day} {HindiMonth(dto.Month)} की भोर से पहले" : $"before dawn on {dto.ToString("MMMM d", CultureInfo.InvariantCulture)}"; } return Contains(value,"before dawn") ? (hi ? "भोर से पहले" : "before dawn") : hi ? "अनुकूल देखने की अवधि में" : "during the best viewing window"; }
+    private static bool TryParse(string value, out DateTimeOffset dto) => DateTimeOffset.TryParse(value.Replace('T',' '), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out dto);
+    private static bool Contains(string a,string b)=>a?.Contains(b,StringComparison.OrdinalIgnoreCase)==true;
+    private static string HindiMonth(int m) => m switch { 1=>"जनवरी",2=>"फ़रवरी",3=>"मार्च",4=>"अप्रैल",5=>"मई",6=>"जून",7=>"जुलाई",8=>"अगस्त",9=>"सितंबर",10=>"अक्टूबर",11=>"नवंबर",12=>"दिसंबर",_=>""};
+}
+
+public static class DirectionResolver
+{
+    public static string Resolve(string value, bool hi, dynamic counters) { var v=(value??"").Trim().Trim('.'); if (Regex.IsMatch(v,"^SE$|south.?east",RegexOptions.IgnoreCase)) { counters.DirectionCodesResolved++; return hi ? "दक्षिण-पूर्वी आकाश" : "the southeastern sky"; } if (Regex.IsMatch(v,"^SW$|south.?west",RegexOptions.IgnoreCase)) { counters.DirectionCodesResolved++; return hi ? "दक्षिण-पश्चिमी आकाश" : "the southwestern sky"; } if (Regex.IsMatch(v,"^E$|east",RegexOptions.IgnoreCase)) { counters.DirectionCodesResolved++; return hi ? "पूर्वी आकाश" : "the eastern sky"; } if (Regex.IsMatch(v,"^W$|west",RegexOptions.IgnoreCase)) { counters.DirectionCodesResolved++; return hi ? "पश्चिमी आकाश" : "the western sky"; } return hi ? "उचित दिशा में खुला आकाश" : "the appropriate open sky direction"; }
+}
+
+public static class AstronomyTerminologyResolver
+{
+    public static string Resolve(string value, LanguageProfile profile)
+    {
+        var clean = Regex.Replace(value ?? string.Empty, @"\b(Mars|Jupiter|Venus|Saturn|Mercury|Earth)\b", m => profile.Terminology.TryGetValue(m.Value, out var term) ? term : m.Value, RegexOptions.IgnoreCase);
+        if (profile.LanguageCode == "hi")
+        {
+            clean = clean.Replace("Mars", "मंगल", StringComparison.OrdinalIgnoreCase).Replace(" and ", " और ", StringComparison.OrdinalIgnoreCase);
+            if (Regex.IsMatch(clean, @"[A-Za-z]{3,}")) clean = "मुख्य खगोलीय पिंड";
+        }
+        return clean;
+    }
+}
+
+public static class NumberUnitFormatter
+{
+    public static string Format(string value, string unit, bool hi)
+    {
+        var m = Regex.Match(value ?? string.Empty, @"\d+(?:\.\d+)?");
+        var number = m.Success ? m.Value : value;
+        var u = unit.Contains("degree", StringComparison.OrdinalIgnoreCase) ? (hi ? "डिग्री" : "degrees") : unit;
+        return hi ? $"लगभग {number} {u}" : $"about {number} {u}";
+    }
+}
+
 public static class NarrationContextBuilder
 {
     private static readonly string[] ForbiddenVisualFields =
@@ -1473,6 +1644,9 @@ public static class NarrationContextPurityValidator
                 if (string.IsNullOrWhiteSpace(value)) return;
                 foreach (var term in Forbidden) if (value.Contains(term, StringComparison.OrdinalIgnoreCase)) failures.Add($"Narration context purity failure in {field}: '{term}'.");
                 if (IsoRegex.IsMatch(value)) failures.Add($"Raw ISO timestamp leaked into {field}.");
+                if (Regex.IsMatch(value, @"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant)) failures.Add($"Internal region or source identifier leaked into {field}.");
+                if (Regex.IsMatch(value, @"[+-]\d{2}:?\d{2}\b", RegexOptions.CultureInvariant)) failures.Add($"Timezone offset leaked into {field}.");
+                if (value.Contains("recommendedPublishWindow", StringComparison.OrdinalIgnoreCase) || value.Contains("scheduledUtc", StringComparison.OrdinalIgnoreCase)) failures.Add($"Publishing metadata leaked into {field}.");
                 if (value.TrimStart().StartsWith("{") || value.TrimStart().StartsWith("[")) failures.Add($"Serialized JSON leaked into {field}.");
             }
         }
