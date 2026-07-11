@@ -343,7 +343,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var shortActualSceneIds = ReadArray(ReadFirstJson(shortNarrationPath), "scenes").Select(s => GetString(s, "sceneId") ?? string.Empty).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
         var sceneIdentityDiagnostics = BuildSceneIdentityDiagnostics(longSceneFactCards.Cards, shortSceneFactCards.Cards, longActualSceneIds, shortActualSceneIds, requestedFormats);
         await WriteAllTextUtf8Async(sceneIdentityDiagnosticsPath, JsonSerializer.Serialize(sceneIdentityDiagnostics, JsonOptions), cancellationToken);
-        var sceneMappingValid = sceneIdentityDiagnostics.All(d => d.MappingStatus.Equals("Mapped", StringComparison.OrdinalIgnoreCase));
+        var sceneMappingValid = sceneIdentityDiagnostics.Diagnostics.All(d => d.MappingStatus.Equals("Mapped", StringComparison.OrdinalIgnoreCase));
         var wholeDocumentGenerationUsed = llmRequestCounts.Values.Sum() == requestedFormats.Count && llmRequestCounts.Values.All(c => c == 1);
         var expectedCounts = requestedFormats.ToDictionary(f => f, f => ResolveExpectedFrameCount(outputRoot, f), StringComparer.OrdinalIgnoreCase);
         var longExpectedSceneCount = expectedCounts.GetValueOrDefault("long");
@@ -1461,7 +1461,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             .ToArray();
     }
 
-    private static IReadOnlyList<SceneIdentityDiagnostic> BuildSceneIdentityDiagnostics(
+    private static SceneIdentityDiagnostics BuildSceneIdentityDiagnostics(
         IReadOnlyList<SceneFactCard> longCards,
         IReadOnlyList<SceneFactCard> shortCards,
         IReadOnlyList<string> longActualSceneIds,
@@ -1471,7 +1471,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var diagnostics = new List<SceneIdentityDiagnostic>();
         Add("long", longCards, longActualSceneIds);
         Add("short", shortCards, shortActualSceneIds);
-        return diagnostics;
+        return new SceneIdentityDiagnostics("scene-identity-diagnostics.v1", diagnostics.Count, diagnostics);
 
         void Add(string format, IReadOnlyList<SceneFactCard> cards, IReadOnlyList<string> actualIds)
         {
@@ -1502,6 +1502,7 @@ public sealed record RawNarrative(string ContractVersion, string OrchestrationVe
 public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> MustSayFacts, IReadOnlyList<string> MustExplain, IReadOnlyList<string> MustGuide, IReadOnlyList<string> MustNotSay, string TransitionToNext, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
 public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
+public sealed record SceneIdentityDiagnostics(string ContractVersion, int DiagnosticCount, IReadOnlyList<SceneIdentityDiagnostic> Diagnostics);
 public sealed record SceneIdentityDiagnostic(string Phase6SceneId, string Phase7SceneId, string DocumentaryBeatId, string Format, int SceneOrder, string MappingStatus, string MismatchReason);
 public sealed record DocumentaryTranscriptionistInput(string DocumentaryOutline, DocumentaryPerformerSceneFactCards SceneFactCards, string AstroPulseVoiceProfile);
 public sealed record DocumentaryPerformerSceneFactCards(SceneFactCardSet Long, SceneFactCardSet Short);
