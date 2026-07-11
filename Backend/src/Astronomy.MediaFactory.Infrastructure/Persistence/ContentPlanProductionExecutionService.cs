@@ -118,7 +118,7 @@ public sealed class ContentPlanProductionExecutionService(
                 DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
             generatedFiles.AddRange(pipelineResult.GeneratedFiles);
             warnings.AddRange(pipelineResult.Warnings);
-            errors.AddRange(pipelineResult.Errors);
+            errors.AddRange(BuildAuthoritativeErrors(pipelineResult.Errors, pipelineResult.PhaseResults));
 
             var shortVideo = Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4");
             var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
@@ -130,9 +130,10 @@ public sealed class ContentPlanProductionExecutionService(
             var successDiagnostics = BuildSuccessAggregationDiagnostics(request, pipelineResult.PhaseResults, pipelineResult.RequestedOutputCompletion);
             await WritePipelinePhaseAggregationDiagnosticsAsync(outputRoot, pipelineResult, successDiagnostics, cancellationToken);
             var thumbnailOnlyExecution = IsThumbnailOnlyExecution(request, productionRequest);
-            var partialPhaseSuccess = partialPhaseExecution && successDiagnostics.AllExecutedPhasesSucceeded;
-            var productionFailed = thumbnailOnlyExecution ? !partialPhaseSuccess : partialPhaseExecution ? !partialPhaseSuccess : errors.Count > 0 || !pipelineResult.Success || phaseFailed;
-            var productionCompleted = thumbnailOnlyExecution ? partialPhaseSuccess : partialPhaseExecution ? partialPhaseSuccess : !productionFailed && phase20Succeeded;
+            var aggregationSuccess = successDiagnostics.AllExecutedPhasesSucceeded && !phaseFailed && errors.Count == 0 && pipelineResult.Success;
+            var partialPhaseSuccess = partialPhaseExecution && aggregationSuccess;
+            var productionCompleted = thumbnailOnlyExecution ? aggregationSuccess : partialPhaseExecution ? partialPhaseSuccess : aggregationSuccess && phase20Succeeded;
+            var productionFailed = !productionCompleted && (errors.Count > 0 || !pipelineResult.Success || phaseFailed || thumbnailOnlyExecution || partialPhaseExecution);
             if (partialPhaseExecution)
             {
                 logger.LogDebug(
@@ -310,26 +311,25 @@ public sealed class ContentPlanProductionExecutionService(
     private static string? ReadJsonString(JsonElement root, string propertyName)
         => root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    private static SuccessAggregationDiagnostics BuildSuccessAggregationDiagnostics(ContentPlanProductionExecutionRequest request, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion)
+    public static SuccessAggregationDiagnostics BuildSuccessAggregationDiagnostics(ContentPlanProductionExecutionRequest request, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion)
     {
         var requestedStartPhase = request.StartPhaseNo.HasValue ? Math.Clamp(request.StartPhaseNo.Value, 1, 20) : (int?)null;
         var requestedEndPhase = request.EndPhaseNo.HasValue ? Math.Clamp(request.EndPhaseNo.Value, requestedStartPhase ?? 1, 20) : (int?)null;
-        var executed = (phaseResults ?? [])
+        var executedResults = (phaseResults ?? [])
             .Where(result => result.Status != ProductionPhaseStatus.Skipped)
-            .Where(result => !requestedStartPhase.HasValue || !requestedEndPhase.HasValue || (result.PhaseNo >= requestedStartPhase.Value && result.PhaseNo <= requestedEndPhase.Value))
+            .ToArray();
+        var executed = executedResults
             .Select(result => result.PhaseNo)
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
-        var failed = (phaseResults ?? [])
-            .Where(result => executed.Contains(result.PhaseNo) && result.Status == ProductionPhaseStatus.Failed)
+        var failed = executedResults
+            .Where(result => result.Status == ProductionPhaseStatus.Failed)
             .Select(result => result.PhaseNo)
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
-        var allSucceeded = executed.Length > 0 && failed.Length == 0 && (phaseResults ?? [])
-            .Where(result => executed.Contains(result.PhaseNo))
-            .All(result => result.Status == ProductionPhaseStatus.Succeeded);
+        var allSucceeded = executedResults.Length > 0 && executedResults.All(result => result.Status == ProductionPhaseStatus.Succeeded);
         var outOfScope = (requestedOutputCompletion ?? [])
             .Where(output => string.Equals(output.Status, "OutOfScope", StringComparison.OrdinalIgnoreCase) || string.Equals(output.Status, "NotRun", StringComparison.OrdinalIgnoreCase))
             .Select(output => output.OutputType)
@@ -339,11 +339,25 @@ public sealed class ContentPlanProductionExecutionService(
         return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, "PartialPhaseRange");
     }
 
+    public static IReadOnlyList<string> BuildAuthoritativeErrors(IReadOnlyList<string>? orchestrationErrors, IReadOnlyList<ProductionPhaseResult>? phaseResults)
+    {
+        var messages = new List<string>();
+        messages.AddRange((orchestrationErrors ?? []).Where(e => !string.IsNullOrWhiteSpace(e)));
+        foreach (var phase in (phaseResults ?? []).Where(p => p.Status == ProductionPhaseStatus.Failed))
+        {
+            var structured = (phase.Errors ?? []).Where(e => !string.IsNullOrWhiteSpace(e)).ToArray();
+            if (structured.Length > 0) messages.AddRange(structured);
+            else if (!string.IsNullOrWhiteSpace(phase.Reason)) messages.Add(phase.Reason!);
+        }
+        return messages.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     private static async Task WritePipelinePhaseAggregationDiagnosticsAsync(string outputRoot, ProductionPipelineExecutionResult pipelineResult, SuccessAggregationDiagnostics successDiagnostics, CancellationToken cancellationToken)
     {
         var phaseResults = pipelineResult.PhaseResults ?? [];
-        var failed = phaseResults.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).Distinct().OrderBy(p => p).ToArray();
-        var allSucceeded = phaseResults.Count > 0 && phaseResults.Where(p => p.Status != ProductionPhaseStatus.Skipped).All(p => p.Status == ProductionPhaseStatus.Succeeded);
+        var executedResults = phaseResults.Where(p => p.Status != ProductionPhaseStatus.Skipped).ToArray();
+        var failed = executedResults.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).Distinct().OrderBy(p => p).ToArray();
+        var allSucceeded = executedResults.Length > 0 && executedResults.All(p => p.Status == ProductionPhaseStatus.Succeeded);
         var expectedLastCompleted = CalculateLastCompletedPhaseNo(phaseResults);
         var expectedLastFailed = failed.Cast<int?>().LastOrDefault();
         var mismatches = new List<string>();
@@ -580,7 +594,8 @@ public sealed class ContentPlanProductionExecutionService(
         var publishApproved = ReadDiagnosticBool(publishGateDiagnosticsPath, "publishApproved") == true;
         var phase19ReviewApproved = ReadDiagnosticBool(publishGateDiagnosticsPath, "phase19ReviewApproved") == true;
 
-        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion, partialPhaseExecution, requestedStartPhase ?? startPhaseNo, requestedEndPhase ?? endPhaseNo, startPhaseNo, endPhaseNo, partialPhaseSuccess, dependencyExpansionApplied, plan.Id, plan.Id, true, plan.AstronomyEventIntelligence?.AutoGenerateAllowed, plan.AstronomyEventIntelligence?.AutoGenerateAllowed == false, "ManualPlanId", publishGateChecked, publishApproved, phase19ReviewApproved, successDiagnostics);
+        var authoritativeErrors = BuildAuthoritativeErrors(errors, phaseResults);
+        return new(success, dryRun, true, false, 1, plan.Id, plan.Title ?? string.Empty, outputRoot, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, productionRequest, ProductionSteps, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), authoritativeErrors, phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, executionMode, completedPlanRerun, previousOutputArchived, archivePath, deletedOutputFolders, startPhaseNo, endPhaseNo, requestedOutputCompletion, partialPhaseExecution, requestedStartPhase ?? startPhaseNo, requestedEndPhase ?? endPhaseNo, startPhaseNo, endPhaseNo, partialPhaseSuccess, dependencyExpansionApplied, plan.Id, plan.Id, true, plan.AstronomyEventIntelligence?.AutoGenerateAllowed, plan.AstronomyEventIntelligence?.AutoGenerateAllowed == false, "ManualPlanId", publishGateChecked, publishApproved, phase19ReviewApproved, successDiagnostics);
     }
 
 

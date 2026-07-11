@@ -15660,7 +15660,21 @@ public sealed partial class ProductionPipelineExecutionService(
             .Select(p => (int?)p.PhaseNo)
             .FirstOrDefault();
 
-        return new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, RequestedOutputCompletion: requestedOutputCompletion);
+        var authoritativeErrors = BuildAuthoritativeErrors(errors, phaseResults);
+        return new(success, dryRun, questionEngineCompleted, shortScenesGenerated, longScenesGenerated, heroGenerated, thumbnailsGenerated, shortNarrationGenerated, longNarrationGenerated, shortTtsGenerated, longTtsGenerated, shortVideoGenerated, longVideoGenerated, finalShortVideoPath, finalLongVideoPath, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), authoritativeErrors, phaseResults, lastCompletedPhaseNo, lastFailedPhaseNo, RequestedOutputCompletion: requestedOutputCompletion);
+    }
+
+    private static IReadOnlyList<string> BuildAuthoritativeErrors(IReadOnlyList<string>? orchestrationErrors, IReadOnlyList<ProductionPhaseResult>? phaseResults)
+    {
+        var messages = new List<string>();
+        messages.AddRange((orchestrationErrors ?? []).Where(e => !string.IsNullOrWhiteSpace(e)));
+        foreach (var phase in (phaseResults ?? []).Where(p => p.Status == ProductionPhaseStatus.Failed))
+        {
+            var structured = (phase.Errors ?? []).Where(e => !string.IsNullOrWhiteSpace(e)).ToArray();
+            if (structured.Length > 0) messages.AddRange(structured);
+            else if (!string.IsNullOrWhiteSpace(phase.Reason)) messages.Add(phase.Reason!);
+        }
+        return messages.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static int? CalculateLastContiguousCompletedPhaseNo(IReadOnlyList<ProductionPhaseResult> phaseResults)

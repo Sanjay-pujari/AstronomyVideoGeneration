@@ -187,7 +187,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             var errors = status == ProductionPhaseStatus.Succeeded
                 ? Array.Empty<string>()
                 : generatedFiles.Where(path => !File.Exists(path)).Select(path => $"Expected RC2 output was not created in this run: {NormalizePath(path)}").ToArray();
-            var phase = await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, phaseName, status, started, inputFiles, currentFiles, diagnosticsPath, [], errors, status == ProductionPhaseStatus.Succeeded ? "Validation passed." : "Validation failed: required output missing.", status != ProductionPhaseStatus.Succeeded, null, cancellationToken);
+            var phase = await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, phaseName, status, started, inputFiles, currentFiles, diagnosticsPath, [], errors, status == ProductionPhaseStatus.Succeeded ? "Validation passed." : string.Join("; ", errors), status != ProductionPhaseStatus.Succeeded, null, cancellationToken);
             response = UpsertResponsePhase(response, phase);
             await UpsertPhaseManifestAsync(response.OutputRoot, phase, cancellationToken);
             return status == ProductionPhaseStatus.Succeeded ? response : MarkResponseFailed(response, phaseNo, errors);
@@ -429,7 +429,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             var started = DateTimeOffset.UtcNow;
             var outputs = spec.Outputs.Where(path => File.Exists(path)).ToArray();
             var errors = spec.Outputs.Except(outputs, StringComparer.OrdinalIgnoreCase).Select(path => $"Expected RC2 output was not created in this run: {NormalizePath(path)}").ToArray();
-            await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, spec.Name, errors.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, spec.Inputs, outputs, string.Empty, [], errors, errors.Length == 0 ? "Validation passed." : "Validation failed: required output missing.", errors.Length > 0, null, cancellationToken);
+            await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, spec.Name, errors.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, spec.Inputs, outputs, string.Empty, [], errors, errors.Length == 0 ? "Validation passed." : string.Join("; ", errors), errors.Length > 0, null, cancellationToken);
         }
     }
 
@@ -534,6 +534,13 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     private static async Task<BatchGenerateFromPlansResponse> ApplyRc2Phase7ResponseAsync(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult, CancellationToken cancellationToken)
     {
         var generatedFiles = narrationResult.GeneratedFiles;
+        var existingFailedPhase7 = response.Steps.OfType<ProductionPhaseResult>().FirstOrDefault(phase => phase.PhaseNo == 7 && phase.Status == ProductionPhaseStatus.Failed)
+            ?? response.Results?.OfType<ContentPlanProductionExecutionResult>().SelectMany(result => result.PhaseResults ?? []).FirstOrDefault(phase => phase.PhaseNo == 7 && phase.Status == ProductionPhaseStatus.Failed);
+        if (existingFailedPhase7 is not null)
+        {
+            await UpsertPhaseManifestAsync(response.OutputRoot, existingFailedPhase7, cancellationToken);
+            return UpsertResponsePhase(response, existingFailedPhase7);
+        }
         if (generatedFiles.Count == 0) return response;
 
         var phase7 = new ProductionPhaseResult(
