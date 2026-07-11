@@ -40,8 +40,29 @@ public sealed class NarrationInputNormalizerTests
         Assert.DoesNotContain("2026-", text);
         Assert.DoesNotContain("recommendedPublishWindow", text);
         Assert.DoesNotContain("IN-RJ-UDAIPUR", text);
+        Assert.DoesNotContain("the favored viewing region", text);
+        Assert.DoesNotContain("On before dawn", text);
+        Assert.DoesNotContain("at at", text);
+        Assert.DoesNotContain("on on", text);
+        Assert.DoesNotContain("during on", text);
+        Assert.DoesNotContain("1. 19", text);
         Assert.DoesNotContain("{\\\"", text);
         Assert.DoesNotContain("long-beat-001", text);
+        Assert.NotNull(result.Diagnostics.NormalizedFields);
+        Assert.NotNull(result.Diagnostics.OmittedFields);
+        Assert.NotNull(result.Diagnostics.ExcludedPublishingFields);
+        Assert.NotNull(result.Diagnostics.UnresolvedFields);
+        Assert.NotNull(result.Diagnostics.FallbacksUsed);
+        if (!string.IsNullOrWhiteSpace(region))
+        {
+            Assert.Contains(language == "hi" ? "उदयपुर, राजस्थान" : "Udaipur, Rajasthan", text);
+            Assert.True(result.Diagnostics.RegionIdsResolved > 0);
+        }
+        if (!string.IsNullOrWhiteSpace(separation))
+        {
+            Assert.Contains(separation, text);
+            Assert.Contains(language == "hi" ? "डिग्री" : "degrees", text);
+        }
         Assert.NotSame(result.Context.Formats[0].Beats, result.Context.Formats[1].Beats);
         if (language == "hi")
         {
