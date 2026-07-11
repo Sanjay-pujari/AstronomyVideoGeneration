@@ -32,6 +32,19 @@ public sealed class LanguageOutputValidatorTests
         Assert.Equal("English", profile.DisplayName);
     }
 
+    [Theory]
+    [InlineData("en-US", "Before dawn, Jupiter and Mars appear close in the southeastern sky.")]
+    [InlineData("en-IN", "Before dawn, Jupiter and Mars appear close in the southeastern sky.")]
+    [InlineData("hi-IN", "सूर्योदय से पहले बृहस्पति और मंगल दक्षिण-पूर्वी आकाश में पास दिखाई देंगे।")]
+    public void Validator_ComparesLanguageFamily_NotCultureCode(string requested, string narration)
+    {
+        var result = LanguageOutputValidator.Validate(narration, LanguageProfileResolver.Resolve(requested));
+
+        Assert.True(result.LanguageFamilyMatch);
+        Assert.True(result.ScriptMatch);
+        Assert.True(result.Passed);
+    }
+
     [Fact]
     public void HindiValidator_PassesDevanagariWithApprovedEnglishTerms()
     {
@@ -107,6 +120,15 @@ public sealed class LanguageOutputValidatorTests
     {
         var result = LanguageOutputValidator.Validate("बृहस्पति और शुक्र की कोणीय दूरी लगभग 1.63 डिग्री होगी।", LanguageProfileResolver.Resolve("hi"));
         Assert.True(result.Passed);
+    }
+
+    [Fact]
+    public void EnglishValidator_AllowsOrdinaryKnowTimingAndMotionWords()
+    {
+        var result = LanguageOutputValidator.Validate("If you know the timing, the apparent motion is easier to follow in the sky.", LanguageProfileResolver.Resolve("en-US"));
+
+        Assert.True(result.Passed);
+        Assert.True(result.LanguageFamilyMatch);
     }
 
 }
