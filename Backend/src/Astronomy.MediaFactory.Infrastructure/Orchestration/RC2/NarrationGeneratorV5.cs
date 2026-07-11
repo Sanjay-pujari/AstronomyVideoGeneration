@@ -199,7 +199,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, N
             ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
             languageProfile));
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
-        await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolution.Diagnostics, semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
 
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
             longDocumentaryContract,
