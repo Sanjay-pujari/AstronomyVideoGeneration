@@ -527,7 +527,7 @@ internal static class SemanticContractValidation
     internal static ImmutableArray<string> CopyNonEmpty(IReadOnlyList<string>? values, string parameterName)
     {
         var copy = Copy(values, parameterName);
-        if (copy.Count == 0) throw new ArgumentException("At least one value is required.", parameterName);
+        if (copy.Length == 0) throw new ArgumentException("At least one value is required.", parameterName);
         if (copy.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Values must not contain null, empty, or whitespace entries.", parameterName);
         return copy;
     }
