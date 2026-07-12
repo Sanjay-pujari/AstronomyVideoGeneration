@@ -1,17 +1,18 @@
 using System.Collections.Immutable;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
+using SemanticCapabilityDefinitionV1 = Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts.SemanticCapabilityDefinition;
 
 namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 
 public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
 {
-    private readonly ImmutableArray<SemanticCapabilityDefinition> _definitions;
-    private readonly ImmutableDictionary<string, SemanticCapabilityDefinition> _canonical;
-    private readonly ImmutableDictionary<string, SemanticCapabilityDefinition> _aliases;
+    private readonly ImmutableArray<SemanticCapabilityDefinitionV1> _definitions;
+    private readonly ImmutableDictionary<string, SemanticCapabilityDefinitionV1> _canonical;
+    private readonly ImmutableDictionary<string, SemanticCapabilityDefinitionV1> _aliases;
     private readonly ImmutableArray<LegacySemanticCapabilityMapEntry> _legacy;
 
     public SemanticCapabilityCatalogV1() : this(BuildDefinitions(), LegacySemanticCapabilityMapV1.Entries) { }
-    internal SemanticCapabilityCatalogV1(IEnumerable<SemanticCapabilityDefinition> definitions, IEnumerable<LegacySemanticCapabilityMapEntry> legacy)
+    internal SemanticCapabilityCatalogV1(IEnumerable<SemanticCapabilityDefinitionV1> definitions, IEnumerable<LegacySemanticCapabilityMapEntry> legacy)
     {
         _definitions = definitions.ToImmutableArray();
         _legacy = legacy.ToImmutableArray();
@@ -21,9 +22,9 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
         _aliases = _definitions.SelectMany(d => d.AcceptedAliases.Where(a => !a.Equals(d.CapabilityId, StringComparison.OrdinalIgnoreCase)).Select(a => (a, d))).ToImmutableDictionary(x => Normalize(x.a), x => x.d, StringComparer.OrdinalIgnoreCase);
     }
 
-    public IReadOnlyCollection<SemanticCapabilityDefinition> Definitions => _definitions;
-    public bool TryGet(SemanticCapabilityId id, out SemanticCapabilityDefinition definition) => _canonical.TryGetValue(Normalize(id.Value), out definition!);
-    public SemanticCapabilityDefinition GetRequired(SemanticCapabilityId id) => TryGet(id, out var d) ? d : throw new KeyNotFoundException($"Unknown V1 semantic capability: {id.Value}");
+    public IReadOnlyCollection<SemanticCapabilityDefinitionV1> Definitions => _definitions;
+    public bool TryGet(SemanticCapabilityId id, out SemanticCapabilityDefinitionV1 definition) => _canonical.TryGetValue(Normalize(id.Value), out definition!);
+    public SemanticCapabilityDefinitionV1 GetRequired(SemanticCapabilityId id) => TryGet(id, out var d) ? d : throw new KeyNotFoundException($"Unknown V1 semantic capability: {id.Value}");
     public LegacySemanticCapabilityResolution ResolveLegacyTerm(string term)
     {
         if (string.IsNullOrWhiteSpace(term)) return new(term, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.Unsupported, false, "Blank legacy term.");
@@ -41,7 +42,7 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
         return new(term, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.Unsupported, false, "No V1 mapping exists for this term.");
     }
     public SemanticCapabilityCatalogValidationResult Validate() => Validate(_definitions, _legacy);
-    public static SemanticCapabilityCatalogValidationResult Validate(IEnumerable<SemanticCapabilityDefinition> definitions, IEnumerable<LegacySemanticCapabilityMapEntry> legacy)
+    public static SemanticCapabilityCatalogValidationResult Validate(IEnumerable<SemanticCapabilityDefinitionV1> definitions, IEnumerable<LegacySemanticCapabilityMapEntry> legacy)
     {
         var errors = new List<string>(); var defs = definitions.ToArray(); var canon = defs.Select(d => Normalize(d.CapabilityId)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (defs.Any(d => string.IsNullOrWhiteSpace(d.CapabilityId))) errors.Add("Blank canonical ID.");
@@ -57,8 +58,8 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
         return new(errors.Count == 0, errors);
     }
     private static string Normalize(string value) => value.Trim().Replace(" ", "", StringComparison.Ordinal).ToUpperInvariant();
-    private static SemanticCapabilityDefinition Def(string id, string desc, string valueType, string[] evidence, int min, bool loc, bool nar, bool evt, string[] aliases, string policy) => new(id, [id, .. aliases], min, SemanticCapabilityStrictness.Strict, loc, nar, [], [], [.. evidence, $"description:{desc}", $"valueType:{valueType}", "aliasesOrdered:false", $"sourcePolicy:{policy}"], evt);
-    private static IEnumerable<SemanticCapabilityDefinition> BuildDefinitions()
+    private static SemanticCapabilityDefinitionV1 Def(string id, string desc, string valueType, string[] evidence, int min, bool loc, bool nar, bool evt, string[] aliases, string policy) => new(id, [id, .. aliases], min, SemanticCapabilityStrictness.Strict, loc, nar, [], [], [.. evidence, $"description:{desc}", $"valueType:{valueType}", "aliasesOrdered:false", $"sourcePolicy:{policy}"], evt);
+    private static IEnumerable<SemanticCapabilityDefinitionV1> BuildDefinitions()
     {
         yield return Def("EventIdentity","Canonical event identity.","EventIdentityValue",["EventMetadata","EditorialContract"],80,true,true,true,["EventType","Title","SubjectIdentity"],"v1-policy-event-identity");
         yield return Def("EventWindow","Observation or event time window.","EventWindowValue",["ObservationMetadata","Ephemeris"],80,true,true,true,["EventDate","EventTiming","ObservationTiming"],"v1-policy-event-window");
