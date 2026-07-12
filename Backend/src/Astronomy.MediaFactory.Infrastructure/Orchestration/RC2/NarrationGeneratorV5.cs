@@ -86,6 +86,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
         var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
         var narrationInputNormalizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-input-normalization-diagnostics.json");
+        var eventIdentityDiagnosticsPath = Path.Combine(narrationRoot, "event-identity-diagnostics.json");
         var validationPath = Path.Combine(narrationRoot, "generator-preflight-diagnostics.json");
         var narrationValidationDiagnosticsPath = Path.Combine(narrationRoot, "narration-validation-diagnostics.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
@@ -178,18 +179,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var shortDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.short.json"));
         var productionEventIntelligence = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json"));
         var observationMetadata = ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json"));
-        var familyProfileResolution = familyProfileResolver.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(
+        var storyGraph = ReadFirstJson(Path.Combine(outputRoot, "editorial", "story-graph.json"));
+        var canonicalEventIdentity = CanonicalEventIdentityResolver.Resolve(new CanonicalEventIdentityResolutionInput(
             ResolvePipelineRequestEventType(response.ProductionPipelineRequest),
-            FirstNonEmpty(response.SelectedPlans.FirstOrDefault()?.ContentCategoryCode, request.PlanTitles?.FirstOrDefault()),
-            FirstNonEmpty(GetString(longDocumentaryContract, "documentaryArchetype"), GetString(shortDocumentaryContract, "documentaryArchetype"), GetString(contract, "documentaryArchetype")),
-            FirstNonEmpty(GetString(observationMetadata, "observationMode"), GetString(productionEventIntelligence, "observationMode")),
-            contract,
-            storyboard,
-            longDocumentaryContract,
-            shortDocumentaryContract,
-            productionEventIntelligence,
-            observationMetadata));
+            GetString(productionEventIntelligence, "eventType"),
+            FirstNonEmpty(GetString(longDocumentaryContract, "eventType"), GetString(shortDocumentaryContract, "eventType")),
+            Array.Empty<string>(),
+            GetString(contract, "eventType")));
+        var familyProfileResolution = familyProfileResolver.ResolveFamilyProfile(canonicalEventIdentity);
         var familyProfile = familyProfileResolution.Profile;
+        await WriteAllTextUtf8Async(eventIdentityDiagnosticsPath, JsonSerializer.Serialize(CanonicalEventIdentityDiagnosticsBuilder.Build(canonicalEventIdentity, familyProfileResolution), JsonOptions), cancellationToken);
         var semanticRegistryValidationReportPath = Path.Combine(narrationRoot, "semantic-registry-validation-report.json");
         var semanticRegistryCoverage = SemanticDefaults.SemanticCapabilitySourceRegistry.ValidateCoverageDetailed([familyProfile]);
         var invalidSemanticRegistrations = semanticRegistryCoverage.Where(r => !r.ResolutionPathValid).Select(r => new
@@ -213,7 +212,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             longDocumentaryContract,
             shortDocumentaryContract,
             contract,
-            ReadFirstJson(Path.Combine(outputRoot, "editorial", "story-graph.json")),
+            storyGraph,
             productionEventIntelligence,
             observationMetadata,
             ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
@@ -821,7 +820,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(narrationValidationDiagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, narrationValidationDiagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath]);
+        return new NarrationGeneratorV5Result([sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, narrationValidationDiagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath, eventIdentityDiagnosticsPath]);
     }
 
     private static Task WriteAllTextUtf8Async(string path, string contents, CancellationToken cancellationToken = default)
@@ -2333,10 +2332,78 @@ public sealed record ResolvedFamilyProfile(string ResolvedEventFamily, string Re
 public sealed record AstronomyFamilyProfileResolutionInput(string? EventType, string? ContentCategory, string? DocumentaryArchetype, string? ObservationMode, JsonElement? EditorialContract = null, JsonElement? CreativeStoryboard = null, JsonElement? LongDocumentaryContract = null, JsonElement? ShortDocumentaryContract = null, JsonElement? ProductionEventIntelligence = null, JsonElement? ObservationMetadata = null);
 public sealed record AstronomyFamilyProfileResolutionResult(AstronomyFamilyProfile Profile, ResolvedFamilyProfile Resolved, object Diagnostics);
 public sealed record FamilyProfileResolutionStage(string Stage, string? InputValue, string? ResolvedEventFamily, string? ResolvedProfileId, string ResolutionSource, bool FallbackUsed);
+public sealed record CanonicalEventIdentity(string EventType, string? EventFamily, string? StrategyId, string? SourceEventType, string NormalizedEventType, string ResolutionSource, bool AliasApplied, IReadOnlyDictionary<string, string?> InspectedSources, IReadOnlyList<string> StoryFrameEventTypes, IReadOnlyList<string> Conflicts, IReadOnlyList<string> BlockingErrors);
+public sealed record CanonicalEventIdentityResolutionInput(string? RequestEventType, string? ProductionIntelligenceEventType, string? DocumentaryContractEventType, IReadOnlyList<string> StoryFrameEventTypes, string? NarrationContextEventType);
 public sealed record RealizedSemanticFact(string IntentType, string FactType, string Label, string Value, string? Unit = null);
 public sealed record TransitionIntent(string FromConcept, string ToConcept, string Relationship);
 public sealed record NarrationRealizationResult(string Format, string SceneId, string BeatRole, string FamilyProfileId, string ContentNature, string NarrativeRole, string NarrativePurpose, IReadOnlyList<RealizedSemanticFact> SpeakableFacts, IReadOnlyList<string> ScientificBoundaries, IReadOnlyList<RealizedSemanticFact> ObservationDetails, TransitionIntent? TransitionIntent, string Tone, string Rhythm, int WordBudget, string? PriorBeatSummary, string? NextBeatPurpose, IReadOnlyList<string> ForbiddenNarrationPatterns, string OpeningGuidance, bool CanRealize = true, IReadOnlyList<string>? MissingRequiredFacts = null);
 public sealed record NarrationRealizationIssue(string FamilyProfile, string Format, string SceneId, string BeatRole, string Field, string DetectedIssue, string SourceArtifact, string SourceField, string NormalizationStep, string RealizationStep);
+
+public static class CanonicalEventIdentityResolver
+{
+    public static CanonicalEventIdentity Resolve(CanonicalEventIdentityResolutionInput input)
+    {
+        var sources = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ProductionPipelineRequest.EventType"] = Clean(input.RequestEventType),
+            ["ProductionEventIntelligence.EventType"] = Clean(input.ProductionIntelligenceEventType),
+            ["Phase6DocumentaryContract.EventType"] = Clean(input.DocumentaryContractEventType),
+            ["StoryFrame.EventType"] = Clean(input.StoryFrameEventTypes.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s))),
+            ["NarrationContext.EventType"] = Clean(input.NarrationContextEventType)
+        };
+        var selected = sources.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.Value));
+        var conflicts = sources.Where(p => !string.IsNullOrWhiteSpace(p.Value) && !string.Equals(p.Value, selected.Value, StringComparison.OrdinalIgnoreCase)).Select(p => $"{p.Key}={p.Value} differs from {selected.Key}={selected.Value}").ToArray();
+        if (string.IsNullOrWhiteSpace(selected.Value))
+            return new(string.Empty, null, null, null, string.Empty, "Missing", false, sources, input.StoryFrameEventTypes, conflicts, ["Canonical event identity missing. Inspected sources: " + string.Join(", ", sources.Select(s => $"{s.Key}={(string.IsNullOrWhiteSpace(s.Value) ? "<missing>" : s.Value)}"))]);
+
+        var normalized = Normalize(selected.Value!, out var aliasApplied);
+        return new(normalized, MapFamily(normalized), normalized, selected.Value, normalized, selected.Key, aliasApplied, sources, input.StoryFrameEventTypes, conflicts, []);
+    }
+
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string Normalize(string value, out bool aliasApplied)
+    {
+        var text = value.Trim();
+        var normalized = text.ToUpperInvariant() switch
+        {
+            "PLANET_GROUPING" => "PlanetGrouping",
+            "PLANET_PAIRING" => "PlanetPairing",
+            "METEOR_SHOWER" => "MeteorShower",
+            "FULL_MOON" => "FullMoon",
+            "NAMED_FULL_MOON" => "NamedFullMoon",
+            "SOLAR_ECLIPSE" => "SolarEclipse",
+            "LUNAR_ECLIPSE" => "LunarEclipse",
+            "DEEP_SKY_OBJECT" => "DeepSkyObject",
+            _ => text
+        };
+        aliasApplied = !string.Equals(text, normalized, StringComparison.Ordinal);
+        return normalized;
+    }
+
+    private static string? MapFamily(string eventType) => AstronomyFamilyProfileCatalog.TryMapToProfileId(eventType, out var profileId) ? profileId : null;
+}
+
+public static class CanonicalEventIdentityDiagnosticsBuilder
+{
+    public static object Build(CanonicalEventIdentity identity, AstronomyFamilyProfileResolutionResult? resolution = null) => new
+    {
+        requestEventType = identity.InspectedSources.GetValueOrDefault("ProductionPipelineRequest.EventType"),
+        productionIntelligenceEventType = identity.InspectedSources.GetValueOrDefault("ProductionEventIntelligence.EventType"),
+        documentaryContractEventType = identity.InspectedSources.GetValueOrDefault("Phase6DocumentaryContract.EventType"),
+        storyFrameEventTypes = identity.StoryFrameEventTypes,
+        narrationContextEventType = identity.InspectedSources.GetValueOrDefault("NarrationContext.EventType"),
+        selectedCanonicalEventType = string.IsNullOrWhiteSpace(identity.EventType) ? null : identity.EventType,
+        selectedEventFamily = identity.EventFamily,
+        selectedStrategyId = identity.StrategyId,
+        resolutionSource = identity.ResolutionSource,
+        aliasApplied = identity.AliasApplied,
+        profileId = resolution?.Resolved.ResolvedProfileId,
+        profileResolved = resolution is not null,
+        conflicts = identity.Conflicts,
+        blockingErrors = identity.BlockingErrors
+    };
+}
 
 public static class AstronomyFamilyProfileCatalog
 {
@@ -2348,6 +2415,8 @@ public static class AstronomyFamilyProfileCatalog
         ["Occultation"] = new("Occultation", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["OccultingObject", "HiddenObject", "StartTime", "VisibilityRegion", "Mechanism"], ["EndTime", "Duration", "ReappearanceTime", "TelescopeGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Orientation", "Science", "Observation", "Closing"], "Region and object pairing required.", "Start time required; end time or duration preferred.", ["ForegroundBody", "Reappearance"], ["Global visibility", "Instantaneous everywhere"], ["Mechanism must be stated"]),
         ["Eclipse"] = new("Eclipse", "TimedObservationEvent", "TimedMechanismExplainer", "SkyWatchShort", ["EclipseType", "EventDateOrWindow", "VisibilityRegion", "SafetyGuidance", "Mechanism"], ["StartTime", "PeakTime", "EndTime", "Magnitude"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Safety", "Timing", "Science", "Observation", "Closing"], "Safety guidance required for solar eclipses.", "Window or date required.", ["ShadowGeometry", "OrbitalAlignment"], ["Unsafe solar viewing", "Worldwide visibility"], ["Safety must not be omitted"]),
         ["MeteorShower"] = new("MeteorShower", "TimedObservationEvent", "ObservationGuide", "SkyWatchShort", ["Name", "EventDateOrWindow", "Radiant", "PeakWindow"], ["MoonPhase", "Zhr", "DarkSkyGuidance"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Observation", "Science", "Closing"], "Dark sky and patience guidance when verified.", "Peak window required.", ["CometDebris", "Radiant"], ["Guaranteed counts"], ["No guaranteed meteors"]),
+        ["NamedFullMoon"] = new("NamedFullMoon", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["Name", "EventDateOrWindow", "MoonPhase"], ["MoonriseTime", "VisibilityRegion", "CulturalNameContext"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Science", "Observation", "Closing"], "Moonrise/location guidance only when verified.", "Full Moon date or window is required.", ["LunarPhase", "SunEarthMoonGeometry"], ["Unverified folklore", "Guaranteed horizon visibility"], ["Named Moon identity must come from event type or verified metadata"]),
+        ["FullMoon"] = new("FullMoon", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["EventDateOrWindow", "MoonPhase"], ["MoonriseTime", "VisibilityRegion"], ["Hook", "Orientation", "Timing", "Observation", "Science", "Closing"], ["Hook", "Timing", "Science", "Observation", "Closing"], "Moonrise/location guidance only when verified.", "Full Moon date or window is required.", ["LunarPhase", "SunEarthMoonGeometry"], ["Unverified folklore", "Guaranteed horizon visibility"], ["Full Moon identity must come from event type or verified metadata"]),
         ["Constellation"] = new("Constellation", "EducationalObjectProfile", "ObjectProfile", "ConstellationShort", ["Name", "SkyRegion", "IdentificationPattern", "MajorStars", "ScientificIdentity"], ["Mythology", "BestSeason", "DeepSkyObjects"], ["Hook", "Orientation", "Science", "Significance", "Closing"], ["Hook", "Orientation", "Science", "Significance", "Closing"], "Identification pattern replaces event viewing direction.", "No event date required.", ["StarPattern", "CelestialCoordinates"], ["Required event date"], ["Do not force event structure"]),
         ["PlanetProfile"] = new("PlanetProfile", "EducationalObjectProfile", "PlanetProfile", "PlanetShort", ["Name", "PlanetType", "ScientificIdentity"], ["Distance", "Visibility", "Moons", "Atmosphere"], ["Hook", "Science", "Significance", "Closing"], ["Hook", "Science", "Significance", "Closing"], "Observation details optional.", "Timing optional.", ["Orbit", "Composition"], ["Current visibility unless verified"], ["No fabricated live sky facts"]),
         ["Comet"] = new("Comet", "ScientificObjectProfile", "CometProfile", "CometShort", ["Name", "ObjectType", "Orbit", "ScientificImportance"], ["Perihelion", "Visibility", "TelescopeGuidance"], ["Hook", "Science", "Observation", "Significance", "Closing"], ["Hook", "Science", "Observation", "Closing"], "Observation optional unless visibility story.", "Timing optional unless observing event.", ["IcyBody", "TailFormation"], ["Guaranteed naked-eye visibility"], ["Visibility must be verified"]),
@@ -2377,6 +2446,27 @@ public static class AstronomyFamilyProfileCatalog
         return new(profile, resolved, diagnostics);
     }
 
+    public static AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(CanonicalEventIdentity identity)
+    {
+        if (string.IsNullOrWhiteSpace(identity.EventType))
+            throw new InvalidOperationException("Canonical event identity missing. " + string.Join("; ", identity.BlockingErrors.DefaultIfEmpty("No event type was present in inspected sources.")));
+        if (!TryMapToProfileId(identity.EventType, out var profileId) || string.IsNullOrWhiteSpace(profileId))
+            throw new InvalidOperationException($"Unsupported astronomy event type: {identity.EventType}");
+        if (!Profiles.TryGetValue(profileId, out var profile))
+            throw new InvalidOperationException($"Unsupported astronomy event type: {identity.EventType}");
+        var resolved = new ResolvedFamilyProfile(profileId, profileId, identity.ResolutionSource, identity.AliasApplied, identity.AliasApplied ? $"Normalized {identity.SourceEventType} to {identity.NormalizedEventType}." : null, ProfileVersion);
+        var diagnostics = new
+        {
+            canonicalEventIdentity = identity,
+            familyProfileResolved = resolved.ResolvedProfileId,
+            familyProfileSource = resolved.ResolutionSource,
+            fallbackApplied = false,
+            fallbackReason = (string?)null,
+            resolvedProfileVersion = ProfileVersion
+        };
+        return new(profile, resolved, diagnostics);
+    }
+
     private static IEnumerable<FamilyProfileResolutionStage> BuildStages(AstronomyFamilyProfileResolutionInput input)
     {
         yield return Stage("ProductionPipelineRequest.EventType", input.EventType, "ProductionPipelineRequest.EventType");
@@ -2396,10 +2486,19 @@ public static class AstronomyFamilyProfileCatalog
         return new(stage, value, family, family, source, false);
     }
 
+    public static bool TryMapToProfileId(string? value, out string? profileId)
+    {
+        profileId = MapToProfileId(value);
+        return profileId is not null;
+    }
+
     private static string? MapToProfileId(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         var text = value.Trim();
+        if (text.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase)) return "NamedFullMoon";
+        if (text.Equals("FullMoon", StringComparison.OrdinalIgnoreCase)) return "FullMoon";
+        if (text.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
         if (text.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase)) return "PlanetaryConjunction";
         if (Regex.IsMatch(text, "PlanetPairing|planetary encounter|close apparent meeting of two planets|conjunction|close pairing", RegexOptions.IgnoreCase)) return "PlanetPairing";
         if (Regex.IsMatch(text, "SolarEclipse|LunarEclipse|Eclipse", RegexOptions.IgnoreCase)) return "Eclipse";
