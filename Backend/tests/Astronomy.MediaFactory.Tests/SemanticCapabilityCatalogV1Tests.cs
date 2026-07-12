@@ -8,6 +8,35 @@ public sealed class SemanticCapabilityCatalogV1Tests
 {
     private readonly SemanticCapabilityCatalogV1 _catalog = new();
 
+
+    [Fact]
+    public void Catalog_Constructs_Successfully()
+    {
+        var catalog = new SemanticCapabilityCatalogV1();
+        Assert.NotEmpty(catalog.Definitions);
+    }
+
+    [Fact]
+    public void Zhr_Terms_Are_Not_Both_Capability_Aliases_And_Legacy_Field_Mappings()
+    {
+        var meteor = _catalog.GetRequired(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.MeteorActivity));
+        Assert.DoesNotContain("Zhr", meteor.AcceptedAliases, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ZHR", meteor.AcceptedAliases, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ZenithalHourlyRate", meteor.AcceptedAliases, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Zenithal Hourly Rate", meteor.AcceptedAliases, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(LegacySemanticCapabilityMapV1.Entries, e => e.LegacyTerm == "ZHR" && e.CanonicalCapabilityId!.Value == SemanticCapabilityVocabularyV1.MeteorActivity && e.StructuredFieldPath == "MeteorActivity.zhr");
+        Assert.Contains(LegacySemanticCapabilityMapV1.Entries, e => e.LegacyTerm == "ZenithalHourlyRate" && e.CanonicalCapabilityId!.Value == SemanticCapabilityVocabularyV1.MeteorActivity && e.StructuredFieldPath == "MeteorActivity.zhr");
+    }
+
+    [Fact]
+    public void Synthetic_Duplicate_Structured_Field_Ownership_Fails_Validation()
+    {
+        var definitions = _catalog.Definitions.Select(d => d.CapabilityId == SemanticCapabilityVocabularyV1.MeteorActivity ? d with { AcceptedAliases = [d.CapabilityId, "ZHR"] } : d).ToArray();
+        var result = SemanticCapabilityCatalogV1.Validate(definitions, LegacySemanticCapabilityMapV1.Entries);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("also registered as alias", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void Exactly_18_Canonical_V1_Capabilities_Are_Registered() => Assert.Equal(18, _catalog.Definitions.Count);
 

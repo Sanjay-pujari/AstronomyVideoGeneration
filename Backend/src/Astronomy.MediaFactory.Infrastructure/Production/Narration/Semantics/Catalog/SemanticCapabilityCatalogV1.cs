@@ -54,6 +54,8 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
         foreach (var a in aliasOwners.Where(x => defs.Any(d => d.CapabilityId.Equals(x.Alias, StringComparison.OrdinalIgnoreCase) && d.AcceptedAliases.Any(ra => ra.Equals(x.Owner, StringComparison.OrdinalIgnoreCase))))) errors.Add($"Reciprocal alias: {a.Owner}<->{a.Alias}");
         var map = legacy.ToArray();
         foreach (var g in map.GroupBy(e => Normalize(e.LegacyTerm)).Where(g => g.Count() > 1)) errors.Add($"Duplicate legacy mapping: {g.Key}");
+        var structuredMapTerms = map.Where(e => e.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField).Select(e => Normalize(e.LegacyTerm)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var a in aliasOwners.Where(x => structuredMapTerms.Contains(Normalize(x.Alias)))) errors.Add($"Legacy field mapping also registered as alias: {a.Alias}");
         foreach (var e in map) { if (e.MigrationDisposition == 0 && e.CanonicalCapabilityId is null) errors.Add($"Missing disposition: {e.LegacyTerm}"); if (e.CanonicalCapabilityId is { } id && !canon.Contains(Normalize(id.Value))) errors.Add($"Unknown canonical target: {e.LegacyTerm}->{id.Value}"); if (e.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField && (string.IsNullOrWhiteSpace(e.StructuredFieldPath) || !e.StructuredFieldPath.Contains('.', StringComparison.Ordinal))) errors.Add($"Invalid structured field path: {e.LegacyTerm}"); }
         return new(errors.Count == 0, errors);
     }
@@ -62,20 +64,20 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
     private static IEnumerable<SemanticCapabilityDefinitionV1> BuildDefinitions()
     {
         yield return Def("EventIdentity","Canonical event identity.","EventIdentityValue",["EventMetadata","EditorialContract"],80,true,true,true,["EventType","Title","SubjectIdentity"],"v1-policy-event-identity");
-        yield return Def("EventWindow","Observation or event time window.","EventWindowValue",["ObservationMetadata","Ephemeris"],80,true,true,true,["EventDate","EventTiming","ObservationTiming"],"v1-policy-event-window");
-        yield return Def("AstronomicalObjects","Primary astronomical objects.","AstronomicalObjectList",["EventIntelligence"],80,true,true,true,["PrimaryObjects","Objects"],"v1-policy-objects");
-        yield return Def("SecondaryAstronomicalObjects","Secondary astronomical objects.","AstronomicalObjectList",["EventIntelligence"],70,true,true,true,["SecondaryObjects"],"v1-policy-secondary-objects");
+        yield return Def("EventWindow","Observation or event time window.","EventWindowValue",["ObservationMetadata","Ephemeris"],80,true,true,true,[],"v1-policy-event-window");
+        yield return Def("AstronomicalObjects","Primary astronomical objects.","AstronomicalObjectList",["EventIntelligence"],80,true,true,true,[],"v1-policy-objects");
+        yield return Def("SecondaryAstronomicalObjects","Secondary astronomical objects.","AstronomicalObjectList",["EventIntelligence"],70,true,true,true,[],"v1-policy-secondary-objects");
         yield return Def("AngularSeparation","Apparent angular separation.","AngularMeasure",["Ephemeris"],70,true,true,true,["AngularRelationship","Separation"],"v1-policy-angular-separation");
         yield return Def("ObservationDirection","Where to look in the sky.","SkyDirection",["ObservationMetadata"],70,true,true,true,["Direction","SkyDirection","Radiant"],"v1-policy-direction");
         yield return Def("ObservationLocation","Observer location context.","LocationContext",["Request","ObservationMetadata"],70,true,true,true,["LocationContext","Region","VisibilityRegion"],"v1-policy-location");
-        yield return Def("ObservationConditions","Sky visibility conditions.","ObservationConditions",["ObservationMetadata"],60,true,true,true,["VisibilityConditions","DarkSkyGuidance","Visibility"],"v1-policy-conditions");
-        yield return Def("ObservationEquipment","Viewing equipment guidance.","ObservationEquipment",["ObservationMetadata"],60,true,true,true,["ObservationMode","VisibilityMethod","NakedEye","BinocularGuidance","TelescopeGuidance"],"v1-policy-equipment");
-        yield return Def("MeteorActivity","Meteor shower activity metrics.","MeteorActivity",["EventIntelligence"],75,true,true,true,["Zhr","ZHR","ZenithalHourlyRate","Zenithal Hourly Rate"],"v1-policy-meteor");
-        yield return Def("FullMoonObservation","Full moon observing facts.","FullMoonObservation",["Ephemeris"],70,true,true,true,["MoonPhase","MoonriseTime"],"v1-policy-full-moon");
-        yield return Def("EclipseCircumstances","Eclipse type and circumstances.","EclipseCircumstances",["Ephemeris"],75,true,true,true,["EclipseType","Magnitude"],"v1-policy-eclipse");
-        yield return Def("OccultationContacts","Occultation contact timings.","OccultationContacts",["Ephemeris"],75,true,true,true,["Duration","ReappearanceTime"],"v1-policy-occultation");
-        yield return Def("ObjectKnowledge","Knowledge about astronomical objects.","ObjectKnowledge",["DomainKnowledge"],60,true,true,false,["Name","ObjectName","ObjectType","ScientificIdentity"],"v1-policy-object-knowledge");
-        yield return Def("DomainScientificKnowledge","Scientific explanation knowledge.","DomainScientificKnowledge",["DomainKnowledge"],80,true,true,false,["ScientificMechanism","Mechanism","ApparentAlignmentExplanation"],"v1-policy-science");
+        yield return Def("ObservationConditions","Sky visibility conditions.","ObservationConditions",["ObservationMetadata"],60,true,true,true,["VisibilityConditions","Visibility"],"v1-policy-conditions");
+        yield return Def("ObservationEquipment","Viewing equipment guidance.","ObservationEquipment",["ObservationMetadata"],60,true,true,true,[],"v1-policy-equipment");
+        yield return Def("MeteorActivity","Meteor shower activity metrics.","MeteorActivity",["EventIntelligence"],75,true,true,true,[],"v1-policy-meteor");
+        yield return Def("FullMoonObservation","Full moon observing facts.","FullMoonObservation",["Ephemeris"],70,true,true,true,[],"v1-policy-full-moon");
+        yield return Def("EclipseCircumstances","Eclipse type and circumstances.","EclipseCircumstances",["Ephemeris"],75,true,true,true,[],"v1-policy-eclipse");
+        yield return Def("OccultationContacts","Occultation contact timings.","OccultationContacts",["Ephemeris"],75,true,true,true,[],"v1-policy-occultation");
+        yield return Def("ObjectKnowledge","Knowledge about astronomical objects.","ObjectKnowledge",["DomainKnowledge"],60,true,true,false,[],"v1-policy-object-knowledge");
+        yield return Def("DomainScientificKnowledge","Scientific explanation knowledge.","DomainScientificKnowledge",["DomainKnowledge"],80,true,true,false,[],"v1-policy-science");
         yield return Def("CulturalContext","Cultural naming and mythology context.","CulturalContext",["DomainKnowledge","EditorialContract"],60,true,true,false,["CulturalNameContext","Mythology","WolfMoon","SnowMoon"],"v1-policy-cultural");
         yield return Def("EditorialContext","Editorial framing context.","EditorialContext",["EditorialContract"],60,true,true,false,[],"v1-policy-editorial");
         yield return Def("SafetyGuidance","Safe observing guidance.","SafetyGuidance",["DomainKnowledge"],90,true,true,true,[],"v1-policy-safety");

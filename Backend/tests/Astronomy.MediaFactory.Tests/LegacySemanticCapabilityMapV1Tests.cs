@@ -10,7 +10,7 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     public void Every_Current_Legacy_Term_Maps_Exactly_Once()
     {
         Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => e.LegacyTerm, StringComparer.OrdinalIgnoreCase), g => Assert.Single(g));
-        Assert.Equal(72, LegacySemanticCapabilityMapV1.Entries.Length);
+        Assert.Equal(70, LegacySemanticCapabilityMapV1.Entries.Length);
     }
 
     [Theory]
@@ -27,6 +27,41 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     {
         var result = AssertMaps(term, SemanticCapabilityVocabularyV1.MeteorActivity);
         Assert.Equal("MeteorActivity.zhr", result.StructuredFieldPath);
+        Assert.Equal(LegacySemanticCapabilityMigrationDisposition.StructuredField, result.MigrationDisposition);
+        Assert.Equal(LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration, result.Status);
+    }
+
+    [Fact]
+    public void All_Zhr_Forms_Resolve_To_Same_Canonical_Capability_And_Field()
+    {
+        var results = new[] { "Zhr", "ZHR", "ZenithalHourlyRate", "Zenithal Hourly Rate" }.Select(term => _catalog.ResolveLegacyTerm(term)).ToArray();
+        Assert.All(results, result => Assert.Equal(SemanticCapabilityVocabularyV1.MeteorActivity, result.CanonicalCapabilityId!.Value.Value));
+        Assert.All(results, result => Assert.Equal("MeteorActivity.zhr", result.StructuredFieldPath));
+        Assert.Single(results.Select(result => result.CanonicalCapabilityId!.Value.Value).Distinct(StringComparer.OrdinalIgnoreCase));
+        Assert.Single(results.Select(result => result.StructuredFieldPath).Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Every_Legacy_Normalized_Term_Is_Unique()
+    {
+        static string Normalize(string value) => value.Trim().Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+        Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => Normalize(e.LegacyTerm)), Assert.Single);
+    }
+
+    [Fact]
+    public void Case_Only_Duplicate_Mappings_Fail_Validation()
+    {
+        var result = SemanticCapabilityCatalogV1.Validate(_catalog.Definitions, [LegacySemanticCapabilityMapV1.Path("CaseOnly", SemanticCapabilityVocabularyV1.MeteorActivity, "MeteorActivity.zhr"), LegacySemanticCapabilityMapV1.Path("caseonly", SemanticCapabilityVocabularyV1.MeteorActivity, "MeteorActivity.zhr")]);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("Duplicate legacy", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Whitespace_Equivalent_Duplicate_Mappings_Fail_Validation()
+    {
+        var result = SemanticCapabilityCatalogV1.Validate(_catalog.Definitions, [LegacySemanticCapabilityMapV1.Path("ZenithalHourlyRate", SemanticCapabilityVocabularyV1.MeteorActivity, "MeteorActivity.zhr"), LegacySemanticCapabilityMapV1.Path("Zenithal Hourly Rate", SemanticCapabilityVocabularyV1.MeteorActivity, "MeteorActivity.zhr")]);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("Duplicate legacy", StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory][InlineData("CulturalNameContext")][InlineData("Mythology")][InlineData("WolfMoon")][InlineData("SnowMoon")]
