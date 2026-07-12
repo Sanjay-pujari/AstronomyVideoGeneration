@@ -1,0 +1,337 @@
+using System.Text.Json.Serialization;
+
+namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
+
+/// <summary>Identifies the verification status for a resolved semantic fact.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<SemanticVerificationStatus>))]
+public enum SemanticVerificationStatus
+{
+    /// <summary>The fact has not been verified.</summary>
+    Unverified,
+    /// <summary>The fact was verified against an approved source or derivation rule.</summary>
+    Verified,
+    /// <summary>The fact was derived from verified inputs.</summary>
+    Derived,
+    /// <summary>The fact is unavailable from approved sources.</summary>
+    Missing
+}
+
+/// <summary>Identifies whether a semantic fact is required for a contract.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<SemanticFactRequiredness>))]
+public enum SemanticFactRequiredness
+{
+    /// <summary>The fact is mandatory for the target beat or profile.</summary>
+    Required,
+    /// <summary>The fact is optional but may improve narration quality.</summary>
+    Optional
+}
+
+/// <summary>Identifies the resolution status for a semantic capability.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<SemanticCapabilityResolutionStatus>))]
+public enum SemanticCapabilityResolutionStatus
+{
+    /// <summary>A canonical capability value was selected.</summary>
+    Resolved,
+    /// <summary>No approved source produced a value.</summary>
+    Missing,
+    /// <summary>Sources produced values, but all were rejected.</summary>
+    Rejected,
+    /// <summary>A configured substitute was applied.</summary>
+    Substituted
+}
+
+/// <summary>Identifies the strictness policy for a semantic capability.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<SemanticCapabilityStrictness>))]
+public enum SemanticCapabilityStrictness
+{
+    /// <summary>Only approved sources or rules may satisfy the capability.</summary>
+    Strict,
+    /// <summary>The capability is event-specific and optional when absent.</summary>
+    OptionalEventSpecific,
+    /// <summary>Approved substitutions may satisfy the capability.</summary>
+    Substitutable
+}
+
+/// <summary>Defines an approved semantic capability and its permitted resolution paths.</summary>
+public sealed record SemanticCapabilityDefinition
+{
+    /// <summary>Creates an immutable semantic capability definition.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityDefinition(string capabilityId, IReadOnlyList<string> acceptedAliases, int minimumStrength, SemanticCapabilityStrictness strictness, bool localizable, bool narratable, IReadOnlyList<string> approvedSourceAdapterIds, IReadOnlyList<string> approvedDerivationRuleIds, IReadOnlyList<string> approvedDomainKnowledgeFactTypes, bool eventSpecific = false)
+    {
+        CapabilityId = SemanticContractValidation.RequireText(capabilityId, nameof(capabilityId));
+        AcceptedAliases = SemanticContractValidation.CopyNonEmpty(acceptedAliases, nameof(acceptedAliases));
+        MinimumStrength = minimumStrength >= 0 ? minimumStrength : throw new ArgumentOutOfRangeException(nameof(minimumStrength), "Minimum strength must be non-negative.");
+        Strictness = strictness;
+        Localizable = localizable;
+        Narratable = narratable;
+        ApprovedSourceAdapterIds = SemanticContractValidation.Copy(approvedSourceAdapterIds, nameof(approvedSourceAdapterIds));
+        ApprovedDerivationRuleIds = SemanticContractValidation.Copy(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds));
+        ApprovedDomainKnowledgeFactTypes = SemanticContractValidation.Copy(approvedDomainKnowledgeFactTypes, nameof(approvedDomainKnowledgeFactTypes));
+        EventSpecific = eventSpecific;
+    }
+
+    /// <summary>Canonical stable capability identifier.</summary>
+    public string CapabilityId { get; init; }
+    /// <summary>Accepted stable aliases for deserializing or matching equivalent facts.</summary>
+    public IReadOnlyList<string> AcceptedAliases { get; init; }
+    /// <summary>Minimum source strength required before a candidate may satisfy the capability.</summary>
+    public int MinimumStrength { get; init; }
+    /// <summary>Strictness policy used by resolvers.</summary>
+    public SemanticCapabilityStrictness Strictness { get; init; }
+    /// <summary>Whether the selected value may be localized.</summary>
+    public bool Localizable { get; init; }
+    /// <summary>Whether the selected value is safe for narration.</summary>
+    public bool Narratable { get; init; }
+    /// <summary>Approved source adapter identifiers.</summary>
+    public IReadOnlyList<string> ApprovedSourceAdapterIds { get; init; }
+    /// <summary>Approved deterministic derivation rule identifiers.</summary>
+    public IReadOnlyList<string> ApprovedDerivationRuleIds { get; init; }
+    /// <summary>Approved domain knowledge fact types.</summary>
+    public IReadOnlyList<string> ApprovedDomainKnowledgeFactTypes { get; init; }
+    /// <summary>Whether the capability applies only to matching event families.</summary>
+    public bool EventSpecific { get; init; }
+}
+
+/// <summary>Represents a candidate value extracted for a semantic capability.</summary>
+public sealed record SemanticCapabilityCandidate
+{
+    /// <summary>Creates an immutable semantic capability candidate.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityCandidate(string source, string sourceField, object value, string strength)
+    {
+        Source = SemanticContractValidation.RequireText(source, nameof(source));
+        SourceField = SemanticContractValidation.RequireText(sourceField, nameof(sourceField));
+        Value = value ?? throw new ArgumentNullException(nameof(value));
+        Strength = SemanticContractValidation.RequireText(strength, nameof(strength));
+    }
+    /// <summary>Approved source identifier.</summary>
+    public string Source { get; init; }
+    /// <summary>Source field or path that produced the value.</summary>
+    public string SourceField { get; init; }
+    /// <summary>Extracted candidate value.</summary>
+    public object Value { get; init; }
+    /// <summary>Candidate strength classification.</summary>
+    public string Strength { get; init; }
+}
+
+/// <summary>Represents a rejected semantic capability source.</summary>
+public sealed record SemanticCapabilityRejection
+{
+    /// <summary>Creates an immutable semantic capability rejection.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityRejection(string source, string sourceField, string reason)
+    {
+        Source = SemanticContractValidation.RequireText(source, nameof(source));
+        SourceField = SemanticContractValidation.RequireText(sourceField, nameof(sourceField));
+        Reason = SemanticContractValidation.RequireText(reason, nameof(reason));
+    }
+    /// <summary>Rejected source identifier.</summary>
+    public string Source { get; init; }
+    /// <summary>Rejected source field or path.</summary>
+    public string SourceField { get; init; }
+    /// <summary>Reason the source was rejected.</summary>
+    public string Reason { get; init; }
+}
+
+/// <summary>Represents an immutable semantic capability resolution result.</summary>
+public sealed record SemanticCapabilityResolution
+{
+    /// <summary>Creates an immutable semantic capability resolution result.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityResolution(string capability, SemanticCapabilityResolutionStatus status, string? selectedSource, object? canonicalValue, string? speakableValue, IReadOnlyList<string> alternativesConsidered, IReadOnlyList<string> warnings, string capabilityStrength, IReadOnlyList<SemanticCapabilityCandidate> candidates, IReadOnlyList<SemanticCapabilityRejection> rejectedSources, IReadOnlyList<string> substitutionsApplied)
+    {
+        Capability = SemanticContractValidation.RequireText(capability, nameof(capability));
+        Status = status;
+        SelectedSource = selectedSource;
+        CanonicalValue = canonicalValue;
+        SpeakableValue = speakableValue;
+        AlternativesConsidered = SemanticContractValidation.Copy(alternativesConsidered, nameof(alternativesConsidered));
+        Warnings = SemanticContractValidation.Copy(warnings, nameof(warnings));
+        CapabilityStrength = SemanticContractValidation.RequireText(capabilityStrength, nameof(capabilityStrength));
+        Candidates = SemanticContractValidation.Copy(candidates, nameof(candidates));
+        RejectedSources = SemanticContractValidation.Copy(rejectedSources, nameof(rejectedSources));
+        SubstitutionsApplied = SemanticContractValidation.Copy(substitutionsApplied, nameof(substitutionsApplied));
+    }
+    /// <summary>Canonical capability identifier.</summary>
+    public string Capability { get; init; }
+    /// <summary>Resolution status.</summary>
+    public SemanticCapabilityResolutionStatus Status { get; init; }
+    /// <summary>Selected source identifier, when a source was selected.</summary>
+    public string? SelectedSource { get; init; }
+    /// <summary>Canonical resolved value, when available.</summary>
+    public object? CanonicalValue { get; init; }
+    /// <summary>Speakable resolved value, when available.</summary>
+    public string? SpeakableValue { get; init; }
+    /// <summary>Alternative values considered during resolution.</summary>
+    public IReadOnlyList<string> AlternativesConsidered { get; init; }
+    /// <summary>Non-blocking warnings produced during resolution.</summary>
+    public IReadOnlyList<string> Warnings { get; init; }
+    /// <summary>Selected capability strength.</summary>
+    public string CapabilityStrength { get; init; }
+    /// <summary>All accepted candidates considered by the resolver.</summary>
+    public IReadOnlyList<SemanticCapabilityCandidate> Candidates { get; init; }
+    /// <summary>Rejected sources considered by the resolver.</summary>
+    public IReadOnlyList<SemanticCapabilityRejection> RejectedSources { get; init; }
+    /// <summary>Substitutions applied during resolution.</summary>
+    public IReadOnlyList<string> SubstitutionsApplied { get; init; }
+}
+
+/// <summary>Represents a resolved canonical semantic fact for narration.</summary>
+public sealed record ResolvedSemanticFact
+{
+    /// <summary>Creates an immutable resolved semantic fact.</summary>
+    [JsonConstructor]
+    public ResolvedSemanticFact(string factType, string factKey, object canonicalValue, string? unit, string semanticMeaning, string sourceArtifact, string sourceField, string? sourceBeatId, SemanticVerificationStatus verificationStatus, decimal confidence, SemanticFactRequiredness requiredness, string? localizedDisplayValue, string? speakableValue, string language, bool safeForNarration, string factOrigin = "Source", string? derivationRuleId = null, IReadOnlyList<string>? sourceInputs = null)
+    {
+        FactType = SemanticContractValidation.RequireText(factType, nameof(factType));
+        FactKey = SemanticContractValidation.RequireText(factKey, nameof(factKey));
+        CanonicalValue = canonicalValue ?? throw new ArgumentNullException(nameof(canonicalValue));
+        Unit = unit;
+        SemanticMeaning = SemanticContractValidation.RequireText(semanticMeaning, nameof(semanticMeaning));
+        SourceArtifact = SemanticContractValidation.RequireText(sourceArtifact, nameof(sourceArtifact));
+        SourceField = SemanticContractValidation.RequireText(sourceField, nameof(sourceField));
+        SourceBeatId = sourceBeatId;
+        VerificationStatus = verificationStatus;
+        Confidence = confidence is >= 0m and <= 1m ? confidence : throw new ArgumentOutOfRangeException(nameof(confidence), "Confidence must be between 0 and 1.");
+        Requiredness = requiredness;
+        LocalizedDisplayValue = localizedDisplayValue;
+        SpeakableValue = speakableValue;
+        Language = SemanticContractValidation.RequireText(language, nameof(language));
+        SafeForNarration = safeForNarration;
+        FactOrigin = SemanticContractValidation.RequireText(factOrigin, nameof(factOrigin));
+        DerivationRuleId = derivationRuleId;
+        SourceInputs = sourceInputs is null ? null : SemanticContractValidation.Copy(sourceInputs, nameof(sourceInputs));
+    }
+    /// <summary>Canonical fact type.</summary>
+    public string FactType { get; init; }
+    /// <summary>Stable fact key.</summary>
+    public string FactKey { get; init; }
+    /// <summary>Canonical fact value.</summary>
+    public object CanonicalValue { get; init; }
+    /// <summary>Unit associated with the canonical value, when applicable.</summary>
+    public string? Unit { get; init; }
+    /// <summary>Semantic meaning conveyed by the fact.</summary>
+    public string SemanticMeaning { get; init; }
+    /// <summary>Source artifact name.</summary>
+    public string SourceArtifact { get; init; }
+    /// <summary>Source field or path.</summary>
+    public string SourceField { get; init; }
+    /// <summary>Source beat identifier, when applicable.</summary>
+    public string? SourceBeatId { get; init; }
+    /// <summary>Verification status.</summary>
+    public SemanticVerificationStatus VerificationStatus { get; init; }
+    /// <summary>Confidence from zero through one.</summary>
+    public decimal Confidence { get; init; }
+    /// <summary>Requiredness classification.</summary>
+    public SemanticFactRequiredness Requiredness { get; init; }
+    /// <summary>Localized display value, when available.</summary>
+    public string? LocalizedDisplayValue { get; init; }
+    /// <summary>Speakable value, when available.</summary>
+    public string? SpeakableValue { get; init; }
+    /// <summary>Language code for localized values.</summary>
+    public string Language { get; init; }
+    /// <summary>Whether the fact may be used in narration.</summary>
+    public bool SafeForNarration { get; init; }
+    /// <summary>Fact origin classification.</summary>
+    public string FactOrigin { get; init; }
+    /// <summary>Derivation rule identifier, when the fact was derived.</summary>
+    public string? DerivationRuleId { get; init; }
+    /// <summary>Source input identifiers used for derivation.</summary>
+    public IReadOnlyList<string>? SourceInputs { get; init; }
+}
+
+/// <summary>Represents semantic facts resolved for one narration beat.</summary>
+public sealed record ResolvedBeatFacts
+{
+    /// <summary>Creates immutable resolved beat facts.</summary>
+    [JsonConstructor]
+    public ResolvedBeatFacts(string beatId, string beatRole, IReadOnlyList<ResolvedSemanticFact> facts)
+    {
+        BeatId = SemanticContractValidation.RequireText(beatId, nameof(beatId));
+        BeatRole = SemanticContractValidation.RequireText(beatRole, nameof(beatRole));
+        Facts = SemanticContractValidation.Copy(facts, nameof(facts));
+    }
+    /// <summary>Stable beat identifier.</summary>
+    public string BeatId { get; init; }
+    /// <summary>Semantic beat role.</summary>
+    public string BeatRole { get; init; }
+    /// <summary>Resolved facts for the beat.</summary>
+    public IReadOnlyList<ResolvedSemanticFact> Facts { get; init; }
+}
+
+/// <summary>Represents the full required semantic fact resolution output.</summary>
+public sealed record RequiredSemanticFactResolutionResult
+{
+    /// <summary>Creates an immutable required semantic fact resolution result.</summary>
+    [JsonConstructor]
+    public RequiredSemanticFactResolutionResult(IReadOnlyList<ResolvedBeatFacts> beats, object diagnostics)
+    {
+        Beats = SemanticContractValidation.Copy(beats, nameof(beats));
+        Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+    }
+    /// <summary>Resolved beat facts.</summary>
+    public IReadOnlyList<ResolvedBeatFacts> Beats { get; init; }
+    /// <summary>Serialization-safe diagnostics payload.</summary>
+    public object Diagnostics { get; init; }
+}
+
+/// <summary>Represents coverage validation for one family, format, beat role, and capability.</summary>
+public sealed record SemanticCapabilityCoverageRecord
+{
+    /// <summary>Creates an immutable semantic capability coverage record.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityCoverageRecord(string familyProfile, string format, string beatRole, string capability, bool required, bool catalogRegistrationFound, IReadOnlyList<string> registeredAdapterIds, IReadOnlyList<string> approvedDerivationRuleIds, IReadOnlyList<string> approvedDomainProviderIds, bool resolutionPathValid, string? failureReason)
+    {
+        FamilyProfile = SemanticContractValidation.RequireText(familyProfile, nameof(familyProfile));
+        Format = SemanticContractValidation.RequireText(format, nameof(format));
+        BeatRole = SemanticContractValidation.RequireText(beatRole, nameof(beatRole));
+        Capability = SemanticContractValidation.RequireText(capability, nameof(capability));
+        Required = required;
+        CatalogRegistrationFound = catalogRegistrationFound;
+        RegisteredAdapterIds = SemanticContractValidation.Copy(registeredAdapterIds, nameof(registeredAdapterIds));
+        ApprovedDerivationRuleIds = SemanticContractValidation.Copy(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds));
+        ApprovedDomainProviderIds = SemanticContractValidation.Copy(approvedDomainProviderIds, nameof(approvedDomainProviderIds));
+        ResolutionPathValid = resolutionPathValid;
+        FailureReason = failureReason;
+    }
+    /// <summary>Family profile identifier.</summary>
+    public string FamilyProfile { get; init; }
+    /// <summary>Output format.</summary>
+    public string Format { get; init; }
+    /// <summary>Beat role.</summary>
+    public string BeatRole { get; init; }
+    /// <summary>Capability identifier.</summary>
+    public string Capability { get; init; }
+    /// <summary>Whether the capability is required.</summary>
+    public bool Required { get; init; }
+    /// <summary>Whether catalog registration exists.</summary>
+    public bool CatalogRegistrationFound { get; init; }
+    /// <summary>Registered adapter identifiers.</summary>
+    public IReadOnlyList<string> RegisteredAdapterIds { get; init; }
+    /// <summary>Approved derivation rule identifiers.</summary>
+    public IReadOnlyList<string> ApprovedDerivationRuleIds { get; init; }
+    /// <summary>Approved domain provider identifiers.</summary>
+    public IReadOnlyList<string> ApprovedDomainProviderIds { get; init; }
+    /// <summary>Whether a resolution path exists.</summary>
+    public bool ResolutionPathValid { get; init; }
+    /// <summary>Failure reason, when invalid.</summary>
+    public string? FailureReason { get; init; }
+}
+
+/// <summary>Validation helpers shared by immutable semantic contracts.</summary>
+internal static class SemanticContractValidation
+{
+    /// <summary>Requires a non-empty text value.</summary>
+    internal static string RequireText(string? value, string parameterName) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be null, empty, or whitespace.", parameterName) : value;
+    /// <summary>Copies a required list into an immutable array snapshot.</summary>
+    internal static IReadOnlyList<T> Copy<T>(IReadOnlyList<T>? values, string parameterName) => values?.ToArray() ?? throw new ArgumentNullException(parameterName);
+    /// <summary>Copies a required non-empty string list into an immutable array snapshot.</summary>
+    internal static IReadOnlyList<string> CopyNonEmpty(IReadOnlyList<string>? values, string parameterName)
+    {
+        var copy = Copy(values, parameterName);
+        if (copy.Count == 0) throw new ArgumentException("At least one value is required.", parameterName);
+        if (copy.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Values must not contain null, empty, or whitespace entries.", parameterName);
+        return copy;
+    }
+}
