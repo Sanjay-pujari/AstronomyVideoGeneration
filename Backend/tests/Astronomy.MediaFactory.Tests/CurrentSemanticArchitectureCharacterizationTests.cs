@@ -55,7 +55,6 @@ public sealed class CurrentAstronomyFamilyProfileCharacterizationTests
     [InlineData("PlanetProfile", "PlanetProfile")]
     [InlineData("Comet", "Comet")]
     [InlineData("DeepSkyObject", "DeepSkyObject")]
-    [InlineData("BlackHoleOrScientificExplainer", "BlackHoleOrScientificExplainer")]
     [InlineData("SolarEclipse", "Eclipse")]
     [InlineData("LunarEclipse", "Eclipse")]
     public void Characterizes_CurrentFamilyProfileMappings(string eventType, string expectedProfile)
@@ -67,6 +66,7 @@ public sealed class CurrentAstronomyFamilyProfileCharacterizationTests
     [InlineData("Elongation", "Unsupported astronomy event type: Elongation")]
     [InlineData("Transit", "Unsupported astronomy event type: Transit")]
     [InlineData("LunarPhase", "Unsupported astronomy event type: LunarPhase")]
+    [InlineData("BlackHoleOrScientificExplainer", "Unsupported astronomy event type: BlackHoleOrScientificExplainer")]
     public void CurrentBehavior_UnsupportedOrAbsentFamilyProfilesThrow(string eventType, string message)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => ResolveProfile(eventType));
@@ -169,7 +169,15 @@ public sealed class CurrentSemanticSourceRegistryCharacterizationTests
         Assert.NotEmpty(_registry.GetAdapters("AngularRelationship"));
         Assert.NotEmpty(_registry.GetAdapters("VisibilityConditions"));
         Assert.NotEmpty(_registry.GetAdapters("PhysicalProximityClarification"));
-        Assert.Empty(_registry.GetAdapters("Mechanism"));
+
+        // Current generic catalog/alias defect: Mechanism resolves to the PrimaryObjects-approved adapters.
+        // Sprint 1 is expected to replace this with certified Mechanism-specific behavior.
+        var mechanismAdapters = _registry.GetAdapters("Mechanism");
+        Assert.NotEmpty(mechanismAdapters);
+        Assert.All(mechanismAdapters, adapter => Assert.Equal("PrimaryObjects", adapter.SupportedCapabilityId));
+        Assert.Equal(
+            ["ProductionEventIntelligencePrimaryObjectsAdapter", "EditorialContractPrimaryObjectsAdapter", "DocumentaryContractPrimaryObjectsAdapter"],
+            mechanismAdapters.Select(adapter => adapter.AdapterId).ToArray());
     }
 
     private ISemanticCapabilitySourceAdapter Adapter(string id) => Assert.Single(_registry.Adapters.Where(a => a.AdapterId == id));
@@ -201,14 +209,36 @@ public sealed class CurrentSemanticPolicyCharacterizationTests
     }
 
     [Fact]
-    public void CurrentBehavior_RequiredNoSourcePathInvalidCoverageButRawScannerCanResolve()
+    public void CurrentBehavior_EclipseCoverageMarksRequiredCapabilitiesValidWithoutRegisteredPath()
     {
         var registry = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog());
         var profile = AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"Eclipse\"}"), null);
-        Assert.Contains(registry.ValidateCoverageDetailed([profile]), r => r.Required && r.Capability == "EclipseType" && r.FailureReason == "NoApprovedSourceAvailable");
+        var rows = registry.ValidateCoverageDetailed([profile]);
 
+        foreach (var capability in new[] { "EclipseType", "SafetyGuidance", "Mechanism" })
+        {
+            var capabilityRows = rows.Where(r => r.Required && r.Capability == capability).ToArray();
+            Assert.NotEmpty(capabilityRows);
+            Assert.All(capabilityRows, row =>
+            {
+                Assert.True(row.ResolutionPathValid);
+                Assert.Empty(row.RegisteredAdapterIds);
+                Assert.Empty(row.ApprovedDerivationRuleIds);
+                Assert.Empty(row.ApprovedDomainProviderIds);
+                Assert.Null(row.FailureReason);
+            });
+        }
+    }
+
+    [Fact]
+    public void CurrentBehavior_RawJsonScannerCanSupplyEclipseFactsOutsideCertifiedAdapters()
+    {
+        var profile = AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"Eclipse\"}"), null);
         var resolution = TestResolver.Resolve(profile, eventIntel: "{\"eventType\":\"Eclipse\",\"eclipseType\":\"partial solar eclipse\",\"visibilityRegion\":\"Americas\",\"safetyGuidance\":\"Use certified filters\",\"mechanism\":\"Moon shadow crosses Earth\",\"eventDateOrWindow\":\"2026-08-12\"}");
+
         Assert.Contains(resolution.Beats, b => b.RequiredFacts.Any(f => f.FactType == "EclipseType"));
+        Assert.Contains(resolution.Beats, b => b.RequiredFacts.Any(f => f.FactType == "SafetyGuidance"));
+        Assert.Contains(resolution.Beats, b => b.RequiredFacts.Any(f => f.FactType == "Mechanism"));
     }
 
     [Fact]
@@ -268,17 +298,17 @@ public sealed class CurrentKnownSemanticFailureCharacterizationTests
     {
         Assert.Equal("Eclipse", AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"SolarEclipse\"}"), null).FamilyId);
         var rows = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog()).ValidateCoverageDetailed([AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"Eclipse\"}"), null)]);
-        Assert.Contains(rows, r => r.Capability == "EclipseType" && r.FailureReason == "NoApprovedSourceAvailable");
-        Assert.Contains(rows, r => r.Capability == "SafetyGuidance" && r.FailureReason == "NoApprovedSourceAvailable");
-        Assert.Contains(rows, r => r.Capability == "Mechanism" && r.FailureReason == "NoApprovedSourceAvailable");
+        Assert.Contains(rows, r => r.Capability == "EclipseType" && r.ResolutionPathValid && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0);
+        Assert.Contains(rows, r => r.Capability == "SafetyGuidance" && r.ResolutionPathValid && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0);
+        Assert.Contains(rows, r => r.Capability == "Mechanism" && r.ResolutionPathValid && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0);
     }
 }
 
-public sealed class CurrentCrossFamilyPhase7CharacterizationTests
+public sealed class CurrentRequiredSemanticFactCrossFamilyCharacterizationTests
 {
     [Theory]
     [InlineData("PlanetPairing", "{\"eventType\":\"PlanetPairing\",\"objectPair\":[\"Mars\",\"Jupiter\"],\"apparentPairingScience\":\"line of sight\"}", "{\"direction\":\"east\",\"localPeakTime\":\"dawn\",\"location\":\"global\"}")]
-    [InlineData("MeteorShower", "{\"eventType\":\"MeteorShower\",\"name\":\"Geminids\",\"eventDateOrWindow\":\"mid December\",\"radiant\":\"Gemini\",\"peakWindow\":\"pre-dawn\"}", "{\"direction\":\"northeast\"}")]
+    [InlineData("MeteorShower", "{\"eventType\":\"MeteorShower\",\"eventTitle\":\"Geminids Meteor Shower Peak\",\"name\":\"Geminids\",\"eventDate\":\"2026-12-14\",\"eventDateOrWindow\":\"2026-12-13 to 2026-12-14\",\"radiant\":\"Geminids\",\"peakWindow\":\"2026-12-14 00:00-05:00 IST\",\"bestViewingWindowLocal\":\"2026-12-14 00:00-05:00 IST\",\"localPeakTime\":\"2026-12-14 02:00 IST\",\"direction\":\"east to overhead\",\"location\":\"Udaipur, India\",\"timezone\":\"Asia/Kolkata\"}", "{\"bestViewingWindowLocal\":\"2026-12-14 00:00-05:00 IST\",\"localPeakTime\":\"2026-12-14 02:00 IST\",\"direction\":\"east to overhead\",\"location\":\"Udaipur, India\",\"timezone\":\"Asia/Kolkata\"}")]
     public void Characterizes_StructurallySuccessfulFamilies(string eventType, string intel, string observation)
     {
         var identity = CanonicalEventIdentityResolver.Resolve(new CanonicalEventIdentityResolutionInput(eventType, null, null, [], null));
@@ -292,6 +322,10 @@ public sealed class CurrentCrossFamilyPhase7CharacterizationTests
         Assert.NotEmpty(coverage);
         Assert.NotEmpty(resolution.Beats);
         Assert.Empty(issues);
+        if (eventType == "MeteorShower")
+        {
+            Assert.Contains(resolution.Beats.SelectMany(b => b.RequiredFacts), f => f.FactType == "ObservationTiming" && (f.SourceField.Contains("bestViewingWindowLocal", StringComparison.OrdinalIgnoreCase) || f.SourceField.Contains("localPeakTime", StringComparison.OrdinalIgnoreCase) || f.SourceField.Contains("peakWindow", StringComparison.OrdinalIgnoreCase)));
+        }
         Assert.Equal(resolution.Beats.Count, resolution.Beats.Select(b => (b.Format, b.DocumentaryBeatId)).Distinct().Count());
     }
 }
@@ -358,5 +392,30 @@ internal static class TestJson
 internal static class TestPaths
 {
     public static string Source(params string[] parts)
-        => Path.Combine(new[] { "..", "..", "..", "..", "src", "Astronomy.MediaFactory.Infrastructure" }.Concat(parts).ToArray());
+    {
+        var path = Path.Combine(new[] { RepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure" }.Concat(parts).ToArray());
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"Requested source file was not found under Backend/src/Astronomy.MediaFactory.Infrastructure: {Path.Combine(parts)}", path);
+        }
+
+        return path;
+    }
+
+    private static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "Backend", "src")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "Backend", "tests")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException($"Could not locate repository root from {AppContext.BaseDirectory}; expected parent containing Backend/src and Backend/tests.");
+    }
 }
