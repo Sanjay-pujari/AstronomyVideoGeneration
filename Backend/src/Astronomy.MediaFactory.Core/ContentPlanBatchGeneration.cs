@@ -486,7 +486,12 @@ public sealed record SuccessAggregationDiagnostics(
     bool AllExecutedPhasesSucceeded,
     IReadOnlyList<int> FailedExecutedPhases,
     IReadOnlyList<string> OutOfScopeOutputTypes,
-    string SuccessAggregationMode);
+    int? LastCompletedPhaseNo = null,
+    int? LastFailedPhaseNo = null,
+    bool Success = false,
+    bool PartialPhaseSuccess = false,
+    int FailedPlans = 0,
+    string SuccessAggregationMode = "PartialPhaseRange");
 
 public sealed record RequestedOutputCompletion(
     string OutputType,

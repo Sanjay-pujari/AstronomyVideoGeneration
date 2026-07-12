@@ -17,7 +17,7 @@ public sealed class Rc2NarrationGeneratorV5PreflightTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => generator.BuildAndWriteDiagnosticsAsync(Request("hi"), Response(root), CancellationToken.None));
         Assert.Contains("Phase 7 cannot start because creative/documentary-contract.long.json was not found", ex.Message);
         Assert.DoesNotContain("Sequence contains no elements", ex.Message);
-        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "validation", "phase-07-validation.json")));
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "generator-preflight-diagnostics.json")));
         Assert.True(validation.RootElement.GetProperty("unsafeSequenceOperationPrevented").GetBoolean());
         Assert.Equal("hi", validation.RootElement.GetProperty("languageResolved").GetString());
     }
@@ -32,7 +32,7 @@ public sealed class Rc2NarrationGeneratorV5PreflightTests
         WriteEditorialAndStoryboard(root, language);
         var generator = new NarrationGeneratorV5(NullLogger<NarrationGeneratorV5>.Instance);
         await Assert.ThrowsAsync<InvalidOperationException>(() => generator.BuildAndWriteDiagnosticsAsync(Request(language), Response(root), CancellationToken.None));
-        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "validation", "phase-07-validation.json")));
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "narration-v5", "generator-preflight-diagnostics.json")));
         Assert.Equal("hi", validation.RootElement.GetProperty("languageResolved").GetString());
         Assert.True(validation.RootElement.GetProperty("languageProfileFound").GetBoolean());
         Assert.False(validation.RootElement.GetProperty("languageProfileFallbackUsed").GetBoolean());

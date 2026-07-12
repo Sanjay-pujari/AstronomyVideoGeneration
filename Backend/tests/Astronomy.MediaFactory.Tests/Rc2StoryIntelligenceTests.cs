@@ -247,7 +247,6 @@ public sealed class Rc2NarrationV5OrchestrationTests
             new Rc2PipelinePhaseRegistry(),
             new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance),
             new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
-            new NarrationGeneratorV5(NullLogger<NarrationGeneratorV5>.Instance),
             NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
             .GenerateFromPlansAsync(request, CancellationToken.None);
 
@@ -375,7 +374,6 @@ public sealed class Rc2NarrationV5OrchestrationTests
             new Rc2PipelinePhaseRegistry(),
             new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance),
             new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
-            new NarrationGeneratorV5(NullLogger<NarrationGeneratorV5>.Instance),
             NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
             .GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(2026, "US", UseProductionPipeline: true, PlanId: planId, StartPhaseNo: 6, EndPhaseNo: 8), CancellationToken.None);
 

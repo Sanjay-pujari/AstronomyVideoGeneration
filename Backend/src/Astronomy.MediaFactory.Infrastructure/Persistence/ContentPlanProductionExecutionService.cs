@@ -125,15 +125,14 @@ public sealed class ContentPlanProductionExecutionService(
             var shortOk = File.Exists(shortVideo);
             var longOk = File.Exists(longVideo);
             var phase20Succeeded = PhaseSucceeded(pipelineResult.PhaseResults, 20);
-            var phaseFailed = pipelineResult.PhaseResults?.Any(p => p.Status == ProductionPhaseStatus.Failed) == true;
             var partialPhaseExecution = IsPartialPhaseExecution(request);
             var successDiagnostics = BuildSuccessAggregationDiagnostics(request, pipelineResult.PhaseResults, pipelineResult.RequestedOutputCompletion);
             await WritePipelinePhaseAggregationDiagnosticsAsync(outputRoot, pipelineResult, successDiagnostics, cancellationToken);
             var thumbnailOnlyExecution = IsThumbnailOnlyExecution(request, productionRequest);
-            var aggregationSuccess = successDiagnostics.AllExecutedPhasesSucceeded && !phaseFailed && errors.Count == 0 && pipelineResult.Success;
+            var aggregationSuccess = successDiagnostics.Success && errors.Count == 0 && pipelineResult.Success;
             var partialPhaseSuccess = partialPhaseExecution && aggregationSuccess;
             var productionCompleted = thumbnailOnlyExecution ? aggregationSuccess : partialPhaseExecution ? partialPhaseSuccess : aggregationSuccess && phase20Succeeded;
-            var productionFailed = !productionCompleted && (errors.Count > 0 || !pipelineResult.Success || phaseFailed || thumbnailOnlyExecution || partialPhaseExecution);
+            var productionFailed = !productionCompleted && (errors.Count > 0 || !pipelineResult.Success || successDiagnostics.FailedExecutedPhases.Count > 0 || thumbnailOnlyExecution || partialPhaseExecution);
             if (partialPhaseExecution)
             {
                 logger.LogDebug(
@@ -336,7 +335,10 @@ public sealed class ContentPlanProductionExecutionService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(output => output, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, "PartialPhaseRange");
+        var lastCompletedPhaseNo = CalculateLastCompletedPhaseNo(executedResults);
+        var lastFailedPhaseNo = failed.Cast<int?>().LastOrDefault();
+        var success = allSucceeded && failed.Length == 0;
+        return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, lastCompletedPhaseNo, lastFailedPhaseNo, success, success, success ? 0 : 1, "PartialPhaseRange");
     }
 
     public static IReadOnlyList<string> BuildAuthoritativeErrors(IReadOnlyList<string>? orchestrationErrors, IReadOnlyList<ProductionPhaseResult>? phaseResults)
@@ -354,26 +356,15 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static async Task WritePipelinePhaseAggregationDiagnosticsAsync(string outputRoot, ProductionPipelineExecutionResult pipelineResult, SuccessAggregationDiagnostics successDiagnostics, CancellationToken cancellationToken)
     {
-        var phaseResults = pipelineResult.PhaseResults ?? [];
-        var executedResults = phaseResults.Where(p => p.Status != ProductionPhaseStatus.Skipped).ToArray();
-        var failed = executedResults.Where(p => p.Status == ProductionPhaseStatus.Failed).Select(p => p.PhaseNo).Distinct().OrderBy(p => p).ToArray();
-        var allSucceeded = executedResults.Length > 0 && executedResults.All(p => p.Status == ProductionPhaseStatus.Succeeded);
-        var expectedLastCompleted = CalculateLastCompletedPhaseNo(phaseResults);
-        var expectedLastFailed = failed.Cast<int?>().LastOrDefault();
-        var mismatches = new List<string>();
-        if (successDiagnostics.AllExecutedPhasesSucceeded != allSucceeded) mismatches.Add("successDiagnostics.allExecutedPhasesSucceeded disagrees with phaseResults.");
-        if (!successDiagnostics.FailedExecutedPhases.SequenceEqual(failed)) mismatches.Add("successDiagnostics.failedExecutedPhases disagrees with phaseResults.");
-        if (pipelineResult.LastCompletedPhaseNo != expectedLastCompleted) mismatches.Add("top-level lastCompletedPhaseNo disagrees with phaseResults.");
-        if (pipelineResult.LastFailedPhaseNo != expectedLastFailed) mismatches.Add("top-level lastFailedPhaseNo disagrees with phaseResults.");
         var path = Path.Combine(outputRoot, "pipeline-phase-aggregation-diagnostics.json");
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
         {
-            allConsistent = mismatches.Count == 0,
-            mismatches,
+            authority = nameof(BuildSuccessAggregationDiagnostics),
+            observesAuthoritativeAggregation = true,
             overallSuccess = pipelineResult.Success,
-            failedPlans = pipelineResult.Success ? 0 : 1,
-            expected = new { allExecutedPhasesSucceeded = allSucceeded, failedExecutedPhases = failed, lastCompletedPhaseNo = expectedLastCompleted, lastFailedPhaseNo = expectedLastFailed },
-            actual = new { pipelineResult.LastCompletedPhaseNo, pipelineResult.LastFailedPhaseNo, successDiagnostics }
+            pipelineResult.LastCompletedPhaseNo,
+            pipelineResult.LastFailedPhaseNo,
+            successDiagnostics
         }, JsonOptions), cancellationToken);
     }
 
@@ -388,54 +379,6 @@ public sealed class ContentPlanProductionExecutionService(
         }
         return last;
     }
-
-    private static bool CalculatePartialPhaseSuccess(ContentPlanProductionExecutionRequest request, ContentPlanProductionPipelineRequest productionRequest, IReadOnlyList<ProductionPhaseResult>? phaseResults, IReadOnlyList<string> errors, bool pipelineSuccess)
-    {
-        if (phaseResults is null || phaseResults.Count == 0) return pipelineSuccess && errors.Count == 0;
-
-        var requestedStartPhase = Math.Clamp(request.StartPhaseNo!.Value, 1, 20);
-        var requestedEndPhase = Math.Clamp(request.EndPhaseNo!.Value, requestedStartPhase, 20);
-        var executedRequestedPhaseResults = phaseResults
-            .Where(result => result.PhaseNo >= requestedStartPhase && result.PhaseNo <= requestedEndPhase)
-            .ToArray();
-        if (executedRequestedPhaseResults.Length == 0) return false;
-
-        // Partial rebuild/rerun success is based only on phases that actually ran
-        // inside the caller-requested range. Dependency-expanded prerequisites and
-        // output diagnostics outside that range must not fail the partial request.
-        foreach (var result in executedRequestedPhaseResults)
-        {
-            if (result.Status == ProductionPhaseStatus.Failed) return false;
-            if (result.Status == ProductionPhaseStatus.Succeeded) continue;
-            if (result.Status == ProductionPhaseStatus.Skipped && IsValidPartialPhaseSkip(productionRequest, result)) continue;
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool IsValidPartialPhaseSkip(ContentPlanProductionPipelineRequest productionRequest, ProductionPhaseResult result)
-    {
-        if (string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase)) return true;
-        return !IsPhaseRequiredForRequestedOutputs(productionRequest, result.PhaseNo)
-            && string.Equals(result.Reason, "Output type not requested", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsPhaseRequiredForRequestedOutputs(ContentPlanProductionPipelineRequest productionRequest, int phaseNo)
-        => phaseNo switch
-        {
-            <= 10 => true,
-            11 => IsRequestedOutput(productionRequest, "HeroAsset"),
-            12 => IsRequestedOutput(productionRequest, "Thumbnail"),
-            13 => true,
-            14 or 16 or 18 => IsRequestedOutput(productionRequest, "ShortVideo"),
-            15 or 17 or 19 => IsRequestedOutput(productionRequest, "LongVideo"),
-            20 => true,
-            _ => true
-        };
-
-    private static bool IsRequestedOutput(ContentPlanProductionPipelineRequest productionRequest, string outputType)
-        => productionRequest.RequestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
 
     private async Task WritePlanInputAsync(string outputRoot, ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, CancellationToken cancellationToken)
     {
@@ -573,16 +516,21 @@ public sealed class ContentPlanProductionExecutionService(
 
     private ContentPlanProductionExecutionResult BuildResult(bool success, bool dryRun, ContentGenerationPlan plan, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, bool questionEngineCompleted, bool shortScenesGenerated, bool longScenesGenerated, bool? heroGenerated, bool? thumbnailsGenerated, bool shortNarrationGenerated, bool longNarrationGenerated, bool shortTtsGenerated, bool longTtsGenerated, bool? shortVideoGenerated, bool? longVideoGenerated, string finalShortVideoPath, string finalLongVideoPath, IReadOnlyList<string> generatedFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<ProductionPhaseResult> phaseResults, ContentPlanExecutionMode executionMode, bool completedPlanRerun, bool previousOutputArchived, string? archivePath, IReadOnlyList<string> deletedOutputFolders, int startPhaseNo, int endPhaseNo, IReadOnlyList<RequestedOutputCompletion>? requestedOutputCompletion = null, bool partialPhaseExecution = false, int? requestedStartPhase = null, int? requestedEndPhase = null, bool dependencyExpansionApplied = false, bool partialPhaseSuccess = false, SuccessAggregationDiagnostics? successDiagnostics = null)
     {
-        var lastCompletedPhaseNo = CalculateLastCompletedPhaseNo(phaseResults);
-        var lastFailedPhaseNo = phaseResults
+        var lastCompletedPhaseNo = successDiagnostics?.LastCompletedPhaseNo ?? CalculateLastCompletedPhaseNo(phaseResults);
+        var lastFailedPhaseNo = successDiagnostics?.LastFailedPhaseNo ?? phaseResults
             .Where(p => p.Status == ProductionPhaseStatus.Failed)
             .OrderByDescending(p => p.PhaseNo)
             .Select(p => (int?)p.PhaseNo)
             .FirstOrDefault();
 
+        if (successDiagnostics is not null)
+        {
+            success = successDiagnostics.Success && (!partialPhaseExecution || successDiagnostics.PartialPhaseSuccess);
+            partialPhaseSuccess = successDiagnostics.PartialPhaseSuccess;
+        }
+
         if (partialPhaseExecution)
         {
-            success = partialPhaseSuccess;
             heroGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "HeroAsset");
             thumbnailsGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "Thumbnail");
             shortVideoGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "ShortVideo");

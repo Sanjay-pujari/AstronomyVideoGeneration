@@ -10,7 +10,6 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     Rc2PipelinePhaseRegistry phaseRegistry,
     SceneIntentBuilder sceneIntentBuilder,
     CreativeStoryboardBuilder creativeStoryboardBuilder,
-    NarrationGeneratorV5 narrationGeneratorV5,
     ILogger<Rc2ContentPlanningBatchOrchestrator> logger)
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -97,25 +96,8 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 },
                 cancellationToken);
         }
-        if (IsRc2NarrationPhaseRequested(requestedPhases) && CanRunRc2Overlay(response, 7))
-        {
-            response = await ExecuteRc2OverlayPhaseAsync(
-                response,
-                7,
-                "Narration Studio V5",
-                [
-                    Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
-                    Combine(response.OutputRoot, "creative", "creative-storyboard.json")
-                ],
-                Combine(response.OutputRoot, "narration-v5", "narration-diagnostics.json"),
-                async () =>
-                {
-                    var narrationResult = await narrationGeneratorV5.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-                    response = await ApplyRc2Phase7ResponseAsync(response, narrationResult, cancellationToken);
-                    return narrationResult.GeneratedFiles;
-                },
-                cancellationToken);
-        }
+        // Phase 7 is owned exclusively by ProductionPipelineExecutionService; RC2 observes and maps the authoritative result without rerunning NarrationGeneratorV5.
+
 
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
 
@@ -525,57 +507,6 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 : result)
             .ToArray();
 
-        return response with { Steps = steps, Results = results };
-    }
-
-    private static bool IsRc2NarrationPhaseRequested(IReadOnlyList<int> requestedPhases)
-        => requestedPhases.Contains(7);
-
-    private static async Task<BatchGenerateFromPlansResponse> ApplyRc2Phase7ResponseAsync(BatchGenerateFromPlansResponse response, NarrationGeneratorV5Result narrationResult, CancellationToken cancellationToken)
-    {
-        var generatedFiles = narrationResult.GeneratedFiles;
-        var existingFailedPhase7 = response.Steps.OfType<ProductionPhaseResult>().FirstOrDefault(phase => phase.PhaseNo == 7 && phase.Status == ProductionPhaseStatus.Failed)
-            ?? response.Results?.OfType<ContentPlanProductionExecutionResult>().SelectMany(result => result.PhaseResults ?? []).FirstOrDefault(phase => phase.PhaseNo == 7 && phase.Status == ProductionPhaseStatus.Failed);
-        if (existingFailedPhase7 is not null)
-        {
-            await UpsertPhaseManifestAsync(response.OutputRoot, existingFailedPhase7, cancellationToken);
-            return UpsertResponsePhase(response, existingFailedPhase7);
-        }
-        if (generatedFiles.Count == 0) return response;
-
-        var phase7 = new ProductionPhaseResult(
-            7,
-            "Narration Studio V5",
-            ProductionPhaseStatus.Succeeded,
-            DateTimeOffset.UtcNow,
-            DateTimeOffset.UtcNow,
-            0,
-            [
-                Combine(response.OutputRoot, "editorial", "editorial-contract.json"),
-                Combine(response.OutputRoot, "creative", "creative-storyboard.json")
-            ],
-            generatedFiles,
-            Combine(response.OutputRoot, "narration-v5", "narration-diagnostics.json"),
-            [],
-            [],
-            false);
-
-        var steps = response.Steps
-            .OfType<ProductionPhaseResult>()
-            .Any(phase => phase.PhaseNo == 7)
-            ? response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 7 ? phase7 : step).ToArray()
-            : response.Steps.Concat([phase7]).ToArray();
-
-        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
-                ? execution with
-                {
-                    GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase7)
-                }
-                : result)
-            .ToArray();
-
-        await UpsertPhaseManifestAsync(response.OutputRoot, phase7, cancellationToken);
         return response with { Steps = steps, Results = results };
     }
 
