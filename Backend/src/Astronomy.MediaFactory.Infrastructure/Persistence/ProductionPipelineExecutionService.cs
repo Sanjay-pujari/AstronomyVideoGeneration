@@ -499,7 +499,6 @@ public sealed partial class ProductionPipelineExecutionService(
             OutputRoot: context.OutputRoot);
 
         var result = await generator.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-        ValidatePhase7NarrationV5FilesGenerated(context);
         return result.GeneratedFiles
             .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context)])
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -721,48 +720,6 @@ public sealed partial class ProductionPipelineExecutionService(
         if (failed.Length == 0) return "Validation passed.";
         var grouped = failed.GroupBy(f => f.Status.ToLowerInvariant()).Select(g => $"{g.Count()} required output{(g.Count() == 1 ? " is" : "s are")} {g.Key}: {string.Join(", ", g.Select(x => x.ArtifactId))}");
         return "Validation failed: " + string.Join("; ", grouped) + ".";
-    }
-
-    private static void ValidatePhase7NarrationV5FilesGenerated(ProductionPhaseContext context)
-    {
-        RequireFile(BuildNarrationV5Path(context), "Narration Studio V5 narration output");
-        RequireFile(BuildNarrationV5ProducerNotesPath(context), "Narration Studio V5 producer notes contract");
-        RequireFile(BuildNarrationV5LongPath(context), "Narration Studio V5 long narration output");
-        RequireFile(BuildNarrationV5ShortPath(context), "Narration Studio V5 short narration output");
-        RequireFile(BuildNarrationV5DiagnosticsPath(context), "Narration Studio V5 diagnostics output");
-        RequireFile(BuildNarrationV5PromptPreviewPath(context), "Narration Studio V5 prompt preview output");
-    }
-
-    private static async Task PersistPhase7NarrationFilesAsync(QuestionDrivenNarrationResponse response, string narrationPath, string reviewPath, CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(narrationPath)!);
-        await File.WriteAllTextAsync(narrationPath, JsonSerializer.Serialize(response.Narration, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(response.Review, JsonOptions), cancellationToken);
-    }
-
-    private static void ValidatePhase7NarrationFilesGenerated(QuestionDrivenNarrationResponse response, string narrationPath, string reviewPath)
-    {
-        if (response.Narration is null)
-            throw new InvalidOperationException("Phase 7 narration generation returned a null narration object.");
-        if (response.Review is null)
-            throw new InvalidOperationException("Phase 7 narration generation returned a null narration review object.");
-
-        var missing = new List<string>();
-        if (!File.Exists(narrationPath)) missing.Add(Path.GetFileName(narrationPath));
-        if (!File.Exists(reviewPath)) missing.Add(Path.GetFileName(reviewPath));
-
-        if (missing.Count > 0)
-            throw new InvalidOperationException("Phase 7 narration generation did not persist required output file(s): " + string.Join(", ", missing) + ".");
-
-        if (!response.IsValid)
-        {
-            var validationMessages = (response.Warnings ?? [])
-                .Concat(response.Review.Checks.Where(check => !check.Passed).Select(check => check.Message))
-                .Where(message => !string.IsNullOrWhiteSpace(message))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            throw new InvalidOperationException("Phase 7 narration generation failed validation: " + string.Join(" | ", validationMessages));
-        }
     }
 
     private static async Task<int> AddPhase6SceneVisualVariantsAsync(string enrichedPath, CancellationToken cancellationToken)

@@ -2600,36 +2600,11 @@ Second display cue.
 
 
     [Fact]
-    public void Phase7NarrationValidation_Fails_WhenRequiredLegacyFilesAreMissing()
+    public void Phase7LegacyNarrationValidationHelper_IsRemoved()
     {
-        var root = Path.Combine(Path.GetTempPath(), "astro-pulse-phase7-validation-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        var narrationPath = Path.Combine(root, "question-driven-narration.json");
-        var reviewPath = Path.Combine(root, "question-driven-narration-review.json");
-        var response = BuildValidNarrationResponse([]);
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase7NarrationFilesGenerated", BindingFlags.NonPublic | BindingFlags.Static);
-
-        var exception = Assert.Throws<TargetInvocationException>(() => method!.Invoke(null, [response, narrationPath, reviewPath]));
-
-        Assert.IsType<InvalidOperationException>(exception.InnerException);
-        Assert.Contains("question-driven-narration.json", exception.InnerException!.Message);
-        Assert.Contains("question-driven-narration-review.json", exception.InnerException.Message);
+        Assert.Null(typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase7NarrationFilesGenerated", BindingFlags.NonPublic | BindingFlags.Static));
     }
 
-    [Fact]
-    public async Task Phase7NarrationValidation_Passes_WhenRequiredLegacyFilesExist()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "astro-pulse-phase7-validation-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        var narrationPath = Path.Combine(root, "question-driven-narration.json");
-        var reviewPath = Path.Combine(root, "question-driven-narration-review.json");
-        await File.WriteAllTextAsync(narrationPath, "{}");
-        await File.WriteAllTextAsync(reviewPath, "{}");
-        var response = BuildValidNarrationResponse([narrationPath, reviewPath]);
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ValidatePhase7NarrationFilesGenerated", BindingFlags.NonPublic | BindingFlags.Static);
-
-        method!.Invoke(null, [response, narrationPath, reviewPath]);
-    }
 
     private static bool IsPhaseRequired(ProductionPhaseContext context, int phaseNo)
     {
