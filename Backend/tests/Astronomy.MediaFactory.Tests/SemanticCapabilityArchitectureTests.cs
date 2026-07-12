@@ -98,8 +98,8 @@ public sealed class SemanticCapabilityArchitectureTests
 
         var rows = registry.ValidateCoverageDetailed([profile]).Where(r => !r.ResolutionPathValid).ToArray();
 
-        Assert.Contains(rows, r => r.Capability == "MissingRequiredA" && r.FailureReason == "CatalogRegistrationMissing");
-        Assert.Contains(rows, r => r.Capability == "MissingRequiredB" && r.FailureReason == "CatalogRegistrationMissing");
+        Assert.Contains(rows, r => r.Capability == "MissingRequiredA" && r.FailureReason == "CapabilityNotRegistered");
+        Assert.Contains(rows, r => r.Capability == "MissingRequiredB" && r.FailureReason == "CapabilityNotRegistered");
         Assert.True(rows.Length >= 2);
     }
 
@@ -113,6 +113,96 @@ public sealed class SemanticCapabilityArchitectureTests
         var source = string.Join("\n", files.Select(File.ReadAllText));
         Assert.DoesNotContain("Mars and Jupiter", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Close Pairing", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+
+    [Fact]
+    public void ZhrExistsInCatalogAndAliasesResolveCanonicalCapability()
+    {
+        var catalog = new SemanticCapabilityCatalog();
+
+        Assert.True(catalog.TryGet("Zhr", out var zhr));
+        Assert.Equal("Zhr", zhr.CapabilityId);
+        Assert.True(zhr.Localizable);
+        Assert.True(zhr.Narratable);
+        Assert.True(zhr.EventSpecific);
+        Assert.Equal("OptionalEventSpecific", zhr.Strictness);
+        Assert.Contains("ZHR", zhr.AcceptedAliases);
+        Assert.True(catalog.TryGet("ZHR", out var alias));
+        Assert.Equal("Zhr", alias.CapabilityId);
+        Assert.True(catalog.TryGet("ZenithalHourlyRate", out alias));
+        Assert.Equal("Zhr", alias.CapabilityId);
+        Assert.True(catalog.TryGet("Zenithal Hourly Rate", out alias));
+        Assert.Equal("Zhr", alias.CapabilityId);
+    }
+
+    [Fact]
+    public void MeteorShowerProfileReferencesCanonicalOptionalZhr()
+    {
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
+
+        Assert.Contains("Zhr", profile.OptionalFactTypes);
+        Assert.DoesNotContain(profile.RequiredFactTypes, f => f.Equals("Zhr", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(profile.OptionalFactTypes, f => f == "ZHR" || f == "ZenithalHourlyRate" || f == "Zenithal Hourly Rate");
+    }
+
+    [Fact]
+    public void MeteorShowerCoverageTreatsOptionalZhrWithoutCurrentCandidateAsValid()
+    {
+        var catalog = new SemanticCapabilityCatalog();
+        var registry = new SemanticCapabilitySourceRegistry(catalog);
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
+
+        var rows = registry.ValidateCoverageDetailed([profile]).Where(r => r.Capability == "Zhr").ToArray();
+
+        Assert.NotEmpty(rows);
+        Assert.All(rows, r =>
+        {
+            Assert.False(r.Required);
+            Assert.True(r.CatalogRegistrationFound);
+            Assert.True(r.ResolutionPathValid);
+            Assert.Null(r.FailureReason);
+        });
+        Assert.Empty(registry.ValidateCoverage([profile]));
+    }
+
+    [Fact]
+    public void RequiredZhrWithNoResolutionPathBlocksCoverage()
+    {
+        var registry = new SemanticCapabilitySourceRegistry(new CatalogWithZhrWithoutSources());
+        var profile = new AstronomyFamilyProfile("Synthetic", "TimedObservationEvent", "ObservationExplainer", "SkyWatchShort", ["Zhr"], [], ["Hook"], ["Hook"], "", "", [], [], []);
+
+        var row = Assert.Single(registry.ValidateCoverageDetailed([profile]));
+
+        Assert.True(row.Required);
+        Assert.False(row.ResolutionPathValid);
+        Assert.Equal("NoApprovedSourceAvailable", row.FailureReason);
+    }
+
+    [Fact]
+    public void RegistryReportAndRuntimeAgreeForRegisteredOptionalZhr()
+    {
+        var catalog = new SemanticCapabilityCatalog();
+        var registry = new SemanticCapabilitySourceRegistry(catalog);
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
+        var resolver = new SemanticCapabilityResolver(catalog, registry);
+
+        var reportValid = registry.ValidateCoverageDetailed([profile]).Where(r => r.Capability == "Zhr").All(r => r.ResolutionPathValid);
+        var runtime = resolver.Resolve("Zhr", new SemanticCapabilitySourceContext("MeteorShower", "long", null, null, null, null, null, Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\"}"), null, null), English);
+
+        Assert.True(reportValid);
+        Assert.Equal("Unresolved", runtime.Status);
+        Assert.Null(runtime.SelectedSource);
+        Assert.Contains(runtime.Warnings, w => w.Contains("SourceValueMissing"));
+    }
+
+    private sealed class CatalogWithZhrWithoutSources : ISemanticCapabilityCatalog
+    {
+        private readonly SemanticCapabilityDefinition _zhr = new("Zhr", ["Zhr", "ZHR", "ZenithalHourlyRate", "Zenithal Hourly Rate"], 75, "OptionalEventSpecific", true, true, [], [], [], true);
+        public IReadOnlyList<SemanticCapabilityDefinition> Capabilities => [_zhr];
+        public SemanticCapabilityDefinition GetRequired(string capabilityId) => TryGet(capabilityId, out var definition) ? definition : throw new InvalidOperationException($"Capability registration invalid: Capability = {capabilityId}");
+        public bool TryGet(string capabilityId, out SemanticCapabilityDefinition definition) { definition = _zhr; return capabilityId.Equals("Zhr", StringComparison.OrdinalIgnoreCase) || _zhr.AcceptedAliases.Contains(capabilityId, StringComparer.OrdinalIgnoreCase); }
+        public void Validate() { }
     }
 
     private static ISemanticCapabilityResolver BuildResolver()
