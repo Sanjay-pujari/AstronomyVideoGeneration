@@ -91,9 +91,90 @@ public sealed class CanonicalSemanticContractsTests
         Assert.DoesNotContain("MutatedAlias", definition.AcceptedAliases);
     }
 
-    private static SemanticCapabilityDefinition Definition() => new(
+    [Fact]
+    public void IndependentlyAllocatedCollectionContents_AreStructurallyEqual()
+    {
+        var left = Definition(["ObservationTiming", "LocalPeakTime"]);
+        var right = Definition(new List<string> { "ObservationTiming", "LocalPeakTime" });
+
+        Assert.Equal(left, right);
+    }
+
+    [Fact]
+    public void DifferentCollectionContents_AreNotEqual()
+    {
+        var left = Definition(["ObservationTiming", "LocalPeakTime"]);
+        var right = Definition(["ObservationTiming", "TwilightWindow"]);
+
+        Assert.NotEqual(left, right);
+    }
+
+    [Fact]
+    public void EqualContracts_ProduceEqualHashCodes()
+    {
+        var left = Definition(["ObservationTiming", "LocalPeakTime"]);
+        var right = Definition(new List<string> { "ObservationTiming", "LocalPeakTime" });
+
+        Assert.Equal(left.GetHashCode(), right.GetHashCode());
+    }
+
+    [Fact]
+    public void SourceInputMutation_DoesNotAffectResolvedFactContract()
+    {
+        var sourceInputs = new List<string> { "metadata.localPeakTime" };
+        var fact = Fact(sourceInputs: sourceInputs);
+
+        sourceInputs.Add("metadata.mutated");
+
+        Assert.Equal(["metadata.localPeakTime"], fact.SourceInputs);
+    }
+
+    [Fact]
+    public void JsonRoundTrip_PreservesStructuralEqualityForCollectionContracts()
+    {
+        var result = new RequiredSemanticFactResolutionResult(
+            [new ResolvedBeatFacts("beat-1", "Observation", [Fact(sourceInputs: ["metadata.localPeakTime"])])],
+            new { warningCount = 0 });
+
+        var json = JsonSerializer.Serialize(result, JsonOptions);
+        var roundTrip = JsonSerializer.Deserialize<RequiredSemanticFactResolutionResult>(json, JsonOptions);
+
+        Assert.Equal(result, roundTrip);
+    }
+
+    [Fact]
+    public void NestedCandidateAndRejectionCollections_AreStructurallyEqual()
+    {
+        static SemanticCapabilityResolution Resolution() => new(
+            "ObservationTiming",
+            SemanticCapabilityResolutionStatus.Rejected,
+            null,
+            null,
+            null,
+            ["civil dawn"],
+            ["weak source"],
+            "Weak",
+            [new SemanticCapabilityCandidate("ObservationMetadata", "localPeakTime", "civil dawn", "Weak")],
+            [new SemanticCapabilityRejection("QuestionAnswerSet", "answer[0]", "Unapproved source")],
+            ["astronomical dawn"]);
+
+        Assert.Equal(Resolution(), Resolution());
+        Assert.Equal(Resolution().GetHashCode(), Resolution().GetHashCode());
+    }
+
+    [Fact]
+    public void CollectionOrder_IsSemanticAndPreservedInEquality()
+    {
+        var left = Definition(["ObservationTiming", "LocalPeakTime"]);
+        var right = Definition(["LocalPeakTime", "ObservationTiming"]);
+
+        Assert.NotEqual(left, right);
+        Assert.Equal(["ObservationTiming", "LocalPeakTime"], left.AcceptedAliases);
+    }
+
+    private static SemanticCapabilityDefinition Definition(IReadOnlyList<string>? acceptedAliases = null) => new(
         "ObservationTiming",
-        ["ObservationTiming", "LocalPeakTime"],
+        acceptedAliases ?? ["ObservationTiming", "LocalPeakTime"],
         75,
         SemanticCapabilityStrictness.Strict,
         localizable: true,
@@ -103,7 +184,7 @@ public sealed class CanonicalSemanticContractsTests
         approvedDomainKnowledgeFactTypes: [],
         eventSpecific: false);
 
-    private static ResolvedSemanticFact Fact(SemanticVerificationStatus status = SemanticVerificationStatus.Verified, decimal confidence = 0.9m) => new(
+    private static ResolvedSemanticFact Fact(SemanticVerificationStatus status = SemanticVerificationStatus.Verified, decimal confidence = 0.9m, IReadOnlyList<string>? sourceInputs = null) => new(
         "ObservationTiming",
         "observation.localPeakTime",
         "before dawn",
@@ -118,5 +199,6 @@ public sealed class CanonicalSemanticContractsTests
         "before dawn",
         "before dawn",
         "en-US",
-        safeForNarration: true);
+        safeForNarration: true,
+        sourceInputs: sourceInputs);
 }
